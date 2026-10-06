@@ -91,7 +91,9 @@ class ReadOnlyRecallTests(WebTestCase):
         from nippou.db.connection import connect
         from nippou.db.repository import NippouRepository
 
-        return NippouRepository(connect(SETTINGS.sqlite_path))
+        conn = connect(SETTINGS.sqlite_path)
+        self.addCleanup(conn.close)   # 開いたままでは、Windows で一時フォルダを消せない
+        return NippouRepository(conn)
 
     def today(self) -> str:
         from app.routes.entry import build_shift_calculator

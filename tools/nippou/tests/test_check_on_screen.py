@@ -133,6 +133,7 @@ class ServiceTests(WebTestCase):
         from nippou.db.repository import NippouRepository
 
         self.repo = NippouRepository(connect(SETTINGS.sqlite_path))
+        self.addCleanup(self.repo.conn.close)   # 開いたままでは、Windows で一時フォルダを消せない
         day, line, shift = self.KEY
         self.header = HeaderRecord(report_date=day, line=line, shift=shift, page=1,
                                    worker=WORKER)

@@ -307,6 +307,9 @@ class DesktopLockTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
+        # 起動の記録(guard.log)のハンドラは一時フォルダを開いたまま残る(Windows では消せない)
+        from tests._web import close_log_files_under
+        self.addCleanup(close_log_files_under, self.tmp)
         self._saved = {k: os.environ.get(k) for k in ("NIPPOU_LOCAL_DIR", "NIPPOU_APP_DIR")}
         os.environ["NIPPOU_LOCAL_DIR"] = str(self.tmp / "local")
         os.environ["NIPPOU_APP_DIR"] = str(self.tmp / "app")

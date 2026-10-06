@@ -343,6 +343,7 @@ class StopCsvTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
         self.repo = NippouRepository(connect(Path(self._tmpdir.name) / "t.sqlite3"))
+        self.addCleanup(self.repo.conn.close)   # 開いたままでは、Windows で一時フォルダを消せない
         # **参照先を仮の場所へ寄せる。**
         #
         # 「内訳名が読めなくても記号で出す」は、内訳マスタが**読めない**
