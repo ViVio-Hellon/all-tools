@@ -132,6 +132,10 @@ class _FakeOdbcHandle:
         self.calls.append(("SQLEndTran", completion_type))
         return access_odbc.SQL_ERROR if self._fail_end_tran else access_odbc.SQL_SUCCESS
 
+    def SQLGetDiagRecW(self, *args):
+        # 失敗の詳細を読む。代役なので詳細は無い(呼び出し順の記録には入れない)
+        return access_odbc.SQL_NO_DATA
+
 
 def _make_fake_access_connection(fake_odbc: "_FakeOdbcHandle") -> "access_odbc.AccessConnection":
     """`__init__`(Windows専用の実接続)を経由せずインスタンスを組み立てる。"""

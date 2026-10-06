@@ -552,6 +552,7 @@ class ReallyStartTwiceTests(unittest.TestCase):
         self.PORTS = range(base, base + 4)
 
         self.env = dict(os.environ)
+        self.env["PYTHONIOENCODING"] = "utf-8"   # 言い分を utf-8 で読む(下の Popen)
         self.env.update({
             "NIPPOU_LOCAL_DIR": str(self.tmp / "local"),
             "NIPPOU_APP_DIR": str(self.tmp / "app"),
@@ -643,7 +644,9 @@ class ReallyStartTwiceTests(unittest.TestCase):
                     [sys.executable, str(self.root / "start_app.py"),
                      "--no-browser"],
                     cwd=str(self.root), env=self.env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    # 言い分は日本語。Windows の既定(cp1252 など)で読むと読めずに落ちる
+                    encoding="utf-8", errors="replace")
                 for _ in range(3)]
         except OSError as exc:                     # noqa: BLE001
             self.skipTest(f"起動できない環境です: {exc}")

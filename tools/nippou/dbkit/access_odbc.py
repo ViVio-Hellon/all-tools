@@ -171,9 +171,14 @@ def _ok(ret: int) -> bool:
     return ret in (SQL_SUCCESS, SQL_SUCCESS_WITH_INFO)
 
 
-def _diagnostics(handle_type: int, handle: int) -> str:
-    """SQLGetDiagRecW でドライバ側のエラーメッセージを取り出す。"""
-    odbc = _odbc()
+def _diagnostics(handle_type: int, handle: int, odbc=None) -> str:
+    """SQLGetDiagRecW でドライバ側のエラーメッセージを取り出す。
+
+    `odbc` はその接続が使っている窓口(`AccessConnection._odbc`)。**接続と同じ
+    ものを使う** ── 別に開くと、試験の代役の接続で本物の odbc32 を呼び、偽の
+    ハンドルを渡して落ちる(Windows)。
+    """
+    odbc = odbc if odbc is not None else _odbc()
     messages: list[str] = []
     for rec in range(1, 6):
         state = ctypes.create_unicode_buffer(6)
@@ -293,7 +298,7 @@ class AccessConnection:
             if _ok(ret):
                 log.info("Access接続: %s (driver=%s)", self.path.name, name)
                 return
-            last = _diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0)
+            last = _diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0, odbc)
 
         self.close()
         raise AccessError(
@@ -358,7 +363,7 @@ class AccessConnection:
             ret = odbc.SQLExecDirectW(stmt, ctypes.c_wchar_p(sql), SQL_NTS)
             if not _ok(ret):
                 raise AccessError(
-                    f"SQLの実行に失敗しました: {_diagnostics(SQL_HANDLE_STMT, stmt.value or 0)}"
+                    f"SQLの実行に失敗しました: {_diagnostics(SQL_HANDLE_STMT, stmt.value or 0, odbc)}"
                     f"\nSQL: {sql}")
 
             col_count = ctypes.c_short()
@@ -372,7 +377,7 @@ class AccessConnection:
                 if not _ok(ret):
                     raise AccessError(
                         "行の取得に失敗しました: "
-                        f"{_diagnostics(SQL_HANDLE_STMT, stmt.value or 0)}")
+                        f"{_diagnostics(SQL_HANDLE_STMT, stmt.value or 0, odbc)}")
                 yield {names[i]: self._cell(stmt, i + 1) for i in range(col_count.value)}
         finally:
             odbc.SQLFreeHandle(SQL_HANDLE_STMT, stmt)
@@ -434,7 +439,7 @@ class AccessConnection:
             ret = odbc.SQLExecDirectW(stmt, ctypes.c_wchar_p(sql), SQL_NTS)
             if not _ok(ret):
                 raise AccessError(
-                    f"更新に失敗しました: {_diagnostics(SQL_HANDLE_STMT, stmt.value or 0)}"
+                    f"更新に失敗しました: {_diagnostics(SQL_HANDLE_STMT, stmt.value or 0, odbc)}"
                     f"\nSQL: {sql}")
             rows = ctypes.c_ssize_t()
             odbc.SQLRowCount(stmt, ctypes.byref(rows))
@@ -468,7 +473,7 @@ class AccessConnection:
         if not _ok(ret):
             raise AccessError(
                 f"トランザクションを開始できませんでした: "
-                f"{_diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0)}")
+                f"{_diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0, odbc)}")
         try:
             yield self
         except BaseException:
@@ -480,7 +485,7 @@ class AccessConnection:
                 odbc.SQLEndTran(SQL_HANDLE_DBC, self._dbc, SQL_ROLLBACK)
                 raise AccessError(
                     f"コミットに失敗しました(ロールバックしました): "
-                    f"{_diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0)}")
+                    f"{_diagnostics(SQL_HANDLE_DBC, self._dbc.value or 0, odbc)}")
         finally:
             odbc.SQLSetConnectAttr(
                 self._dbc, SQL_ATTR_AUTOCOMMIT, ctypes.c_void_p(SQL_AUTOCOMMIT_ON), 0)
