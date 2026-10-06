@@ -39,8 +39,8 @@ WINDOWS = os.name == "nt"
 TABS = {"nippou": "日報", "kanban": "看板", "calendar": "カレンダー", "inspection": "点検表"}
 
 
-def children(pid: int) -> list[int]:
-    """pid の子孫(孫も)。"""
+def process_pairs() -> list[tuple[int, int]]:
+    """いま動いているプロセスの (pid, 親の pid)。"""
     if WINDOWS:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
@@ -56,6 +56,18 @@ def children(pid: int) -> list[int]:
                     pairs.append((int(name), int(stat.rsplit(")", 1)[1].split()[1])))
                 except (OSError, ValueError, IndexError):
                     pass
+    return pairs
+
+
+def children(pid: int, *, before: frozenset[int] = frozenset()) -> list[int]:
+    """pid の子孫(孫も)。
+
+    `before` は exe を起こす前から居たプロセス。**子孫に数えない。** Windows の
+    「親の pid」は親が終わったあとも残り、その番号は使い回される。前から居たもの
+    (exe を作ったときの vctip.exe など)の親の番号が、たまたま exe の pid と同じに
+    なることがある。
+    """
+    pairs = [(child, ppid) for child, ppid in process_pairs() if child not in before]
     found, frontier = [], [pid]
     while frontier:
         parent = frontier.pop()
@@ -190,6 +202,7 @@ def main() -> int:
     # ---- 1・2: 起動して、大きなタブと4つのツールの画面が出るのを待つ ----
     started = time.monotonic()
     # --demo: 点検表は模擬の点検表で動く(共有フォルダの Excel を見に行かない)
+    before = frozenset(child for child, _ in process_pairs())
     app = subprocess.Popen([str(Path(args.exe).resolve()), "--demo"], env=env, cwd=str(ROOT))
     print(f"起動しました: pid={app.pid} 作業={work}", flush=True)
     joined = re.compile(r"大きなタブの画面がつながりました\(デスクトップ版\): (\S+)")
@@ -226,7 +239,7 @@ def main() -> int:
 
     if app.poll() is None:
         # ---- 3: 待ち受けが無い ----
-        tree = {app.pid, *children(app.pid)}
+        tree = {app.pid, *children(app.pid, before=before)}
         # py ランチャ経由だと py.exe と python.exe の2つずつ見える。少なくとも5つ
         pythons = [pid for pid in tree if "bridge.py" in command_line(pid)]
         result(len(pythons) >= len(TABS) + 1,
