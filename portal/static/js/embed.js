@@ -94,10 +94,20 @@
   }
   window.__ALLTOOLS__ = { tool: TOOL, shell: SHELL, embedded: embedded };
 
-  function tellShell(data) {
+  function tellShell(data, type) {
     if (!embedded || sameOriginParent) return;
-    data.type = "alltools:key";
+    data.type = type || "alltools:key";
     try { parentWin.postMessage(data, SHELL); } catch (e) { /* 大きなタブが居ない */ }
+  }
+
+  // ---- 画面が出た(大きなタブの画面が記録に残す。外枠の「起動しています」とは別) ----
+  function ready() {
+    tellShell({ title: String(document.title || ""), path: location.pathname }, "alltools:ready");
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ready);
+  } else {
+    ready();
   }
 
   // ---- キー(このツールの画面にいるとき) ----

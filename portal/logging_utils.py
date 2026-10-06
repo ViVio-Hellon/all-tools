@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,8 @@ def _setup() -> None:
         _prune(logs)
     except OSError:
         pass
-    if sys.stderr is not None:
+    # 試験では画面に混ぜない(`ALLTOOLS_LOG_QUIET=1`。ファイルへは書く)
+    if sys.stderr is not None and os.environ.get("ALLTOOLS_LOG_QUIET", "") != "1":
         stream = logging.StreamHandler(sys.stderr)
         stream.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S"))
         root.addHandler(stream)

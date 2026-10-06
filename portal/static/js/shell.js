@@ -164,12 +164,13 @@ function ensureFrame(id) {
     iframe.allow = "clipboard-read; clipboard-write; autoplay; fullscreen";
     iframe.src = entry.url;
     iframe.addEventListener("load", () => {
-      if (!entry.loaded && !entry.reported) {
+      entry.loaded = true;
+      // ブラウザ版は台本が入らないので、ここで残す(デスクトップ版はツールの画面が知らせてくる)
+      if (!desktop && !entry.reported) {
         entry.reported = true;
         // 宛先は合言葉(t=)を落として残す
         report("info", `${TOOLS.get(id).title} の画面が出ました`, String(entry.url).split("?")[0]);
       }
-      entry.loaded = true;
     });
     entry.iframe = iframe;
     entry.panel.replaceChildren(iframe);
@@ -184,6 +185,8 @@ function showNote(entry, title, text) {
   entry.iframe = null;
   entry.loaded = false;
   entry.reported = false;
+  entry.reports = 0;
+  entry.lastTitle = "";
   entry.missing = 0;
   const box = document.createElement("div");
   box.className = "panel--note";
@@ -338,6 +341,19 @@ window.addEventListener("message", async (event) => {
   if (!id || event.origin !== originOf(id)) return;
   if (data.type === "alltools:key") {
     keyFromTool(id, data);
+    return;
+  }
+  if (data.type === "alltools:ready") {
+    // ツールの画面そのものが出た(外枠の「起動しています」・理由の画面ではない)。
+    // ツールの待機画面 → 本体の画面と移るので、題名が変わったときに残す(1つの枠で5回まで)
+    const entry = frames.get(id);
+    const title = String(data.title || "").slice(0, 80);
+    if (entry && title !== entry.lastTitle && (entry.reports || 0) < 5) {
+      entry.lastTitle = title;
+      entry.reports = (entry.reports || 0) + 1;
+      entry.reported = true;
+      report("info", `${TOOLS.get(id).title} の画面が出ました: ${title}`, String(data.path || ""));
+    }
     return;
   }
   if (data.type !== "alltools:invoke" || !desktop) return;
