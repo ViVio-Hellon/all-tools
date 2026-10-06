@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja" data-edition="{{ edition }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ name }}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23153247'/%3E%3Crect x='5' y='5' width='10' height='10' rx='2' fill='%23265aa0'/%3E%3Crect x='17' y='5' width='10' height='10' rx='2' fill='%23b45309'/%3E%3Crect x='5' y='17' width='10' height='10' rx='2' fill='%232d6940'/%3E%3Crect x='17' y='17' width='10' height='10' rx='2' fill='%23923d23'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}?v={{ version }}">
+<script>window.SHELL = {{ shell | tojson }};</script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand" title="{{ name }} VER{{ version }}({{ '窓' if edition == 'desktop' else 'ブラウザ' }}で動いています)">
+    <span class="brand__name">{{ name }}</span>
+    <span class="brand__ver">VER{{ version }}</span>
+    {% if edition == 'browser' %}<span class="brand__ed">ブラウザ版</span>{% endif %}
+  </div>
+  <nav class="bigtabs" id="bigtabs" role="tablist" aria-label="ツール"></nav>
+  <div class="bar__end">
+    <button type="button" class="who" id="who" title="ログインID @ PC名(押すと写します)">{{ identity.label() }}</button>
+    <button type="button" class="quit" id="quit">終了</button>
+  </div>
+</header>
+
+<main class="stage" id="stage">
+  <section class="panel panel--note" id="panel-starting" data-panel="starting">
+    <div class="note"><span class="spin" aria-hidden="true"></span>タブを用意しています…</div>
+  </section>
+
+  {% include "settings.html" %}
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<dialog class="dialog" id="ended">
+  <h2>終了しました</h2>
+  <p id="ended-text">このタブは閉じてかまいません。もう一度使うときは Start.vbs を開いてください。</p>
+</dialog>
+
+<script type="module" src="{{ url_for('static', filename='js/shell.js') }}?v={{ version }}"></script>
+</body>
+</html>

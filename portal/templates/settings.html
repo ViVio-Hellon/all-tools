@@ -1,0 +1,135 @@
+<section class="panel panel--settings" id="panel-settings" data-panel="settings" hidden>
+  <div class="settings">
+    <header class="settings__head">
+      <div>
+        <h1>大設定</h1>
+        <p class="lead">どのツールのタブを、どの端末に出すかを決めます(タブ表示権限)。書き換えには管理者パスワードが要ります。</p>
+      </div>
+      <div class="lockbox" id="lockbox">
+        <span class="lockbox__state" id="lock-state">🔒 鍵が掛かっています</span>
+        <form class="lockbox__open" id="lock-open">
+          <input type="password" id="lock-pass" autocomplete="current-password" placeholder="管理者パスワード" aria-label="管理者パスワード">
+          <button type="submit" class="btn btn--primary">鍵を開ける</button>
+        </form>
+        <button type="button" class="btn" id="lock-close" hidden>鍵を掛ける</button>
+      </div>
+    </header>
+
+    <!-- この端末 -->
+    <article class="card">
+      <h2>この端末</h2>
+      <dl class="facts">
+        <dt>ログインID</dt><dd><code id="me-login"></code> <button type="button" class="btn btn--small" data-copy="me-login">写す</button></dd>
+        <dt>PC名</dt><dd><code id="me-pc"></code> <button type="button" class="btn btn--small" data-copy="me-pc">写す</button></dd>
+        <dt>出しているタブ</dt><dd id="me-tabs"></dd>
+        <dt>決め方</dt><dd id="me-reason"></dd>
+      </dl>
+      <div class="msg msg--warn" id="me-warn" hidden></div>
+    </article>
+
+    <!-- タブ表示権限 -->
+    <article class="card">
+      <div class="card__head">
+        <h2>タブ表示権限 <small>(共有の DB の表「<span id="rights-table">タブ表示権限</span>」)</small></h2>
+        <div class="card__tools">
+          <button type="button" class="btn" id="rights-sync">共有から読み直す</button>
+          <button type="button" class="btn btn--primary" id="rights-add" data-admin>+ 行を足す</button>
+        </div>
+      </div>
+      <p class="lead">
+        空欄は「問わない」。大文字小文字は区別しません。当てはまる行の表示タブを<strong>全部足します</strong>。
+        ログインIDもPC名も空の行は効きません(全員に効いてしまうため)。
+        登録の無い端末にはツールのタブを出しません(表がまだ無い・1行も無いうちは全部出します)。
+      </p>
+      <div class="sourceline" id="rights-source"></div>
+      <div class="msg msg--warn" id="rights-missing" hidden>
+        共有の DB にこの表がまだありません。
+        <button type="button" class="btn btn--small" id="rights-create" data-admin>表を作る</button>
+      </div>
+      <ul class="problems" id="rights-problems" hidden></ul>
+      <div class="tablewrap">
+        <table class="grid" id="rights-grid">
+          <thead><tr>
+            <th>管理番号</th><th>ログインID</th><th>PC名</th><th>表示タブ</th><th>既定タブ</th><th>有効</th><th>備考</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- 共有の DB の置き場所 -->
+    <article class="card">
+      <h2>共有の DB の置き場所</h2>
+      <p class="lead">python-web-tools(梱包資材総合ツール)と同じ DB に置くのが既定です。アクセス権限の表には混ぜず、別の表にします。</p>
+      <form class="pathform" id="loc-form">
+        <label>フォルダ<input type="text" id="loc-folder" spellcheck="false"></label>
+        <label>ファイル名<input type="text" id="loc-name" spellcheck="false"></label>
+        <div class="pathform__act">
+          <button type="submit" class="btn btn--primary" data-admin>変える</button>
+          <button type="button" class="btn" id="loc-default" data-admin>既定に戻す</button>
+        </div>
+      </form>
+      <p class="sub" id="loc-note"></p>
+    </article>
+
+    <!-- ツール -->
+    <article class="card">
+      <h2>ツール</h2>
+      <p class="lead">ツールの中身(業務・各ツールの設定)は、それぞれのタブの「設定」で行います。ここは名前と置き場所だけです。</p>
+      <div class="tablewrap">
+        <table class="grid" id="tools-grid">
+          <thead><tr><th>タブ</th><th>名前</th><th>版</th><th>状態</th><th>手元のデータ</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- 管理者パスワード -->
+    <article class="card">
+      <h2>管理者パスワード</h2>
+      <p class="lead" id="pw-lead">変えるには、いまのパスワードが要ります(4文字以上)。</p>
+      <form class="pwform" id="pw-form">
+        <input type="password" id="pw-current" autocomplete="current-password" placeholder="いまのパスワード" aria-label="いまのパスワード">
+        <input type="password" id="pw-new" autocomplete="new-password" placeholder="新しいパスワード" aria-label="新しいパスワード">
+        <input type="password" id="pw-confirm" autocomplete="new-password" placeholder="もう一度" aria-label="新しいパスワード(確認)">
+        <button type="submit" class="btn">変える</button>
+      </form>
+    </article>
+
+    <!-- このアプリ -->
+    <article class="card">
+      <h2>このアプリ</h2>
+      <dl class="facts" id="app-facts"></dl>
+    </article>
+  </div>
+
+  <dialog class="dialog dialog--form" id="row-dialog">
+    <form method="dialog" id="row-form">
+      <h2 id="row-title">タブ表示権限の行</h2>
+      <div class="fields">
+        <label>ログインID
+          <span class="pair"><input type="text" id="row-login" spellcheck="false">
+          <button type="button" class="btn btn--small" data-fill="login">この端末の値</button></span>
+        </label>
+        <label>PC名
+          <span class="pair"><input type="text" id="row-pc" spellcheck="false">
+          <button type="button" class="btn btn--small" data-fill="pc">この端末の値</button></span>
+        </label>
+        <fieldset>
+          <legend>表示タブ</legend>
+          <div class="checks" id="row-tabs"></div>
+        </fieldset>
+        <label>既定タブ(起動したときに開く)
+          <select id="row-default"></select>
+        </label>
+        <label class="inline"><input type="checkbox" id="row-enabled" checked> 有効</label>
+        <label>備考<input type="text" id="row-note"></label>
+      </div>
+      <p class="msg msg--warn" id="row-error" hidden></p>
+      <div class="dialog__act">
+        <button type="button" class="btn" id="row-cancel">やめる</button>
+        <button type="submit" class="btn btn--primary" id="row-save">保存する</button>
+      </div>
+    </form>
+  </dialog>
+</section>

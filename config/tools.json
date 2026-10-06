@@ -1,0 +1,65 @@
+{
+  "$comment": "1つの窓に載せるもの。外枠(src-tauri/src/catalog.rs)と入口(portal/catalog.py)が同じものを読む。並びが大きなタブの並び。宛先(scheme)は英小文字。env_prefix は各ツールが読む環境変数の頭(<頭>_TOKEN / <頭>_PYTHON / <頭>_LOCAL_DIR)",
+  "portal": {
+    "id": "portal",
+    "title": "大設定",
+    "name": "統合ツール",
+    "dir": ".",
+    "scheme": "portal",
+    "env_prefix": "ALLTOOLS",
+    "local_dir_name": "AllTools",
+    "exit_grace_sec": 5,
+    "quit_wait_sec": 2
+  },
+  "tools": [
+    {
+      "id": "nippou",
+      "title": "日報",
+      "name": "日報管理ツール",
+      "dir": "tools/nippou",
+      "scheme": "nippou",
+      "env_prefix": "NIPPOU",
+      "local_dir_name": "NippouTool",
+      "aliases": ["日報管理", "日報管理ツール"],
+      "exit_grace_sec": 15,
+      "quit_wait_sec": 8
+    },
+    {
+      "id": "kanban",
+      "title": "看板",
+      "name": "資材発注看板システム",
+      "dir": "tools/kanban",
+      "scheme": "kanban",
+      "env_prefix": "KANBAN",
+      "local_dir_name": "KanbanSystem",
+      "aliases": ["資材発注看板", "資材発注看板システム", "看板システム"],
+      "exit_grace_sec": 30,
+      "quit_wait_sec": 25
+    },
+    {
+      "id": "calendar",
+      "title": "カレンダー",
+      "name": "ライン管理カレンダー",
+      "dir": "tools/calendar",
+      "scheme": "calendar",
+      "env_prefix": "CALENDAR",
+      "local_dir_name": "LineCalendar",
+      "aliases": ["ライン管理カレンダー", "暦"],
+      "exit_grace_sec": 10,
+      "quit_wait_sec": 15
+    },
+    {
+      "id": "inspection",
+      "title": "点検表",
+      "name": "点検表 選択・印刷",
+      "dir": "tools/inspection",
+      "scheme": "inspection",
+      "env_prefix": "INSPECTION",
+      "local_dir_name": "InspectionSheetPrint",
+      "aliases": ["点検表選択印刷", "点検表印刷"],
+      "demo_env": "INSPECTION_DEMO",
+      "exit_grace_sec": 20,
+      "quit_wait_sec": 5
+    }
+  ]
+}
