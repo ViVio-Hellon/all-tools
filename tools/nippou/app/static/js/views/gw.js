@@ -17,6 +17,7 @@
   してください」と刷ってある)。
 */
 import { api, tokenUrl } from "../api.js";
+import { openPage } from "../desktop.js";
 import { toast, toastError } from "../toast.js";
 
 /* ---------------------------------------------------------------- */
@@ -578,7 +579,7 @@ function openPrint() {
   // Ctrl+P を知らない人にも刷れるように
   params.append("print", "1");
   // ヘッダを付けられない開き方なので、トークンはクエリに(紙の窓と同じ)
-  window.open(tokenUrl(`/report/gw?${params.toString()}`), "_blank", "noopener");
+  openPage(tokenUrl(`/report/gw?${params.toString()}`), "梱包資材重量計算の紙");
 }
 
 /*

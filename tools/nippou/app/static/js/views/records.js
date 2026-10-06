@@ -13,6 +13,7 @@
   その直に何ページあるかも、ここでは決めません。
 */
 import { api, tokenUrl } from "../api.js";
+import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
 
@@ -73,7 +74,7 @@ function paint(rows) {
 /** 紙の窓を開く。ヘッダを付けられない開き方なので、トークンはクエリに。 */
 function openPaper(params) {
   const q = new URLSearchParams(params).toString();
-  window.open(tokenUrl(`/report/nippou?${q}`), "_blank", "noopener");
+  openPage(tokenUrl(`/report/nippou?${q}`), "日報の紙");
 }
 
 /* この直にどのページがあるか。**ページ番号を当てずっぽうで打たせない。** */

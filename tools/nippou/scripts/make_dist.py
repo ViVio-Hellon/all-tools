@@ -45,6 +45,8 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
     "process_manager.py",
+    # デスクトップ版(統合ツールの窓)の入口。ポートを使わない(標準入出力)
+    "bridge.py",
     "app", "config", "dbkit", "nippou", "scripts",
     # VC長さ計算の仕様の記録(vc-calculator から移した VBA 解析)。README が指す
     "docs",

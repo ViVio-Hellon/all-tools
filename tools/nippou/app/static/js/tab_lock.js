@@ -284,8 +284,15 @@ function listen() {
 function signal(path) {
   try {
     const url = `${path}?t=${encodeURIComponent(window.APP.token)}`;
-    navigator.sendBeacon?.(url, new Blob([JSON.stringify({ tab: tabId })],
-                                         { type: "application/json" }));
+    const body = JSON.stringify({ tab: tabId });
+    const queued = navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }));
+    // デスクトップ版(統合ツールの窓)の中では、離れるページの `sendBeacon` が
+    // 届かないことがある(看板のデスクトップ版で実際に起きた)。送れなかったとき・
+    // 窓の中のときは、`keepalive` 付きの送り直しも出す(受ける側は2回来ても同じ)
+    if (!queued || window.__TAURI__) {
+      fetch(url, { method: "POST", body, keepalive: true,
+                   headers: { "Content-Type": "application/json" } }).catch(() => {});
+    }
   } catch (err) {
     /* 失敗しても何もできない(閉じたなら15秒で自然に外れる) */
   }

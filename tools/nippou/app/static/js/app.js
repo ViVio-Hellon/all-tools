@@ -30,6 +30,7 @@ import { startShiftEndWatch } from "./shift_end.js";
 import { startSoundWatch } from "./sound.js";
 import { toast, toastError } from "./toast.js";
 import * as busy from "./busy.js";
+import * as desktop from "./desktop.js";
 import * as nav from "./nav.js";
 import * as ribbon from "./ribbon.js";
 import * as theme from "./theme.js";
@@ -84,6 +85,8 @@ busy.watchClicks();
 // 画面のエラーを記録へ届ける(直前に押したものを添えて)。**いちばん先に** ──
 // このあとの起動で転んだものも拾うため
 startErrorReport();
+// デスクトップ版(統合ツールの窓)のときだけ、別窓・フォルダ選択を外枠に頼む
+desktop.install();
 checkVersion();
 
 startHeartbeat();
@@ -184,9 +187,12 @@ function wireQuit(button) {
       const body = await api.post("/api/shutdown", {});
       toast(body.message || "終了します", "ok");
       setTimeout(() => {
+        // デスクトップ版は外枠が窓を閉じる(ほかのタブのツールにも訊いてから)
+        const after = desktop.isDesktop
+          ? "<h1>終了しています…</h1><p>窓はこのあと閉じます。</p>"
+          : "<h1>終了しました</h1><p>このタブは閉じてかまいません。</p>";
         document.body.innerHTML =
-          '<main style="padding:48px;font-family:var(--sans)">' +
-          "<h1>終了しました</h1><p>このタブは閉じてかまいません。</p></main>";
+          '<main style="padding:48px;font-family:var(--sans)">' + after + "</main>";
       }, 700);
     } catch (err) {
       if (err.status === 409) {

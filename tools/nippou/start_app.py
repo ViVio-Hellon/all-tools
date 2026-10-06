@@ -37,6 +37,9 @@ MIN_PYTHON = (3, 9)
 # 無いと動かないパッケージ。(import名, pip名)
 REQUIRED_PACKAGES = (("flask", "Flask"), ("waitress", "waitress"))
 
+# デスクトップ版(`bridge.py`)は待ち受けないので waitress は要らない
+BRIDGE_PACKAGES = (("flask", "Flask"),)
+
 # 待ち受けの確認にかける上限(秒)
 LISTEN_TIMEOUT_SEC = 15
 
@@ -60,11 +63,16 @@ def check_python_version() -> None:
             "https://www.python.org/downloads/ から新しいPythonを入れてください。")
 
 
-def check_packages() -> None:
-    """必須パッケージの有無。**入れ方まで示す**(基盤仕様書 ステップ5)。"""
+def check_packages(packages=None) -> None:
+    """必須パッケージの有無。**入れ方まで示す**(基盤仕様書 ステップ5)。
+
+    既定(`None`)はブラウザ版の一覧。呼ぶたびに引く(定義のときに決めない)。
+    """
     import importlib.util
 
-    missing = [pip_name for module, pip_name in REQUIRED_PACKAGES
+    if packages is None:
+        packages = REQUIRED_PACKAGES
+    missing = [pip_name for module, pip_name in packages
                if importlib.util.find_spec(module) is None]
     if missing:
         raise StartupError(
@@ -157,10 +165,10 @@ def check_config() -> None:
         log().warning("%s", problem)
 
 
-def run_environment_checks() -> Path:
+def run_environment_checks(*, bridge: bool = False) -> Path:
     """順に確認する。落ちたところで理由が分かるように分けてある。"""
     check_python_version()
-    check_packages()
+    check_packages(BRIDGE_PACKAGES if bridge else None)
     root = check_writable()
     check_config()
     return root
@@ -219,6 +227,14 @@ def start(*, open_browser: bool = True) -> int:
     from nippou import app_config
 
     log_environment()
+
+    # --- デスクトップ版(統合ツールの窓)が動いていれば、こちらが止まる ---
+    #
+    # 同じ手元の SQLite と設定を、2つのプロセスが書きに行かないため。
+    # **後から開いたほうが止まる**(統合ツールの決まり。docs/統合_事前確認.md)
+    if launch_guard.desktop_running():
+        log().warning("デスクトップ版が動いているので、ブラウザ版は起動しません")
+        raise StartupError(DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
 
     # --- 多重起動の判定 (基盤仕様書 2.4) ---
     guard = launch_guard.check_existing()
@@ -317,6 +333,58 @@ def start(*, open_browser: bool = True) -> int:
         log().info("終了しました")
 
 
+# デスクトップ版(統合ツール)とブラウザ版は同時に動かさない。断るときの文言
+DESKTOP_RUNNING_MESSAGE = "日報管理ツールはデスクトップ版(統合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("統合ツールの窓の「日報」のタブをお使いください。"
+                        "ブラウザ版で開くときは、統合ツールの窓を閉じてからにしてください。")
+BROWSER_RUNNING_MESSAGE = "日報管理ツールのブラウザ版が動いています"
+BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
+                        "ブラウザの画面の「終了」で閉じてから、このタブの「もう一度開く」を押してください。")
+
+
+def start_bridge(*, token: str = "", server_factory) -> int:
+    """デスクトップ版の起動(`bridge.py` から)。**ポートもロックも使わない。**
+
+    多重起動の防止・窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのは
+    ブラウザ版と同じ「待機画面 → 本体を組み立てる → 重い初期化」だけで、その中身
+    (`_initialize`)は共有する ── 2本持つと片方だけ直すことになる。
+
+    ブラウザ版とは同時に動かさない: ブラウザ版が先に動いていれば**こちらが止まる**。
+    動き始めたら、ブラウザ版が見る錠(`runtime/desktop.lock`)を握り続ける。
+    """
+    import secrets
+
+    import launch_guard
+    import server as server_module
+
+    log_environment()
+    running = launch_guard.browser_running()
+    if running is not None:
+        log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません: "
+                      "pid=%s port=%s", running.pid, running.port)
+        raise StartupError(BROWSER_RUNNING_MESSAGE, BROWSER_RUNNING_HINT)
+    if not launch_guard.hold_desktop_lock():
+        raise StartupError("日報管理ツールがほかの窓で動いています",
+                           "開いている窓をお使いください。")
+
+    srv = server_factory(token or secrets.token_urlsafe(24))
+    thread = server_module.run_in_background(srv)
+    log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
+    srv.mark_stage("アプリを準備中", "prepare")
+    try:
+        srv.build()
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log().exception("アプリを組み立てられませんでした")
+        srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+        _hold_until_stopped(srv, thread)
+        return 1
+    # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
+    _initialize(srv, watch_idle=False)
+    _hold_until_stopped(srv, thread)
+    log().info("終了しました(デスクトップ版)")
+    return 0
+
+
 # 停止を頼んでから、受付の輪が終わるのを待つ上限(秒)。ここを過ぎたら
 # **確実に落とす** ── 残ったプロセスは次回の起動で「すでに起動しています」
 # と判定され、入れ替えた新しい版が動かない
@@ -356,7 +424,7 @@ def _hard_exit() -> None:
     os._exit(0)
 
 
-def _initialize(srv) -> None:
+def _initialize(srv, *, watch_idle: bool = True) -> None:
     """重い初期化。サーバが立ってから行う。
 
     ここで失敗しても**サーバは落とさない**。落とすと利用者のブラウザには
@@ -391,7 +459,7 @@ def _initialize(srv) -> None:
     # **ラインを決めてから控えを戻す**(戻すのはこの端末のラインのぶん)
     _read_access_rights(srv)
     _restore_from_backup(srv)
-    _watch_for_idle(srv)
+    _watch_for_idle(srv, watch_idle=watch_idle)
     srv.mark_ready(True)
     log().info("起動完了まで %.2f秒", time.monotonic() - _BOOT_AT)
 
@@ -519,7 +587,7 @@ def _restore_from_backup(srv) -> None:
         log().exception("控え(LocalBackup)の確認で予期しないエラー(起動は続けます)")
 
 
-def _watch_for_idle(srv) -> None:
+def _watch_for_idle(srv, *, watch_idle: bool = True) -> None:
     """画面が居なくなったら止める見張りを立てる(基盤仕様書 2.8)。
 
     止め方は `/api/shutdown` と同じ道(`srv.stop`)を通す ── 止め方が
@@ -529,11 +597,15 @@ def _watch_for_idle(srv) -> None:
     **先にスリープを数えない時計を立てる**(`nippou/awake_clock.py`)。
     Windows ではスリープ中も時計が進むので、立てずにおくとフタを開けた
     瞬間に「90秒 心拍がありません」で終わる。
+
+    デスクトップ版(`watch_idle=False`)では見張りを立てない ── 窓を閉じたら
+    外枠が終わらせる。**時計は立てる**(タブの取り合い `tab_lock` も使う)。
     """
     from nippou import awake_clock, idle_exit, running
 
     awake_clock.start()
-    idle_exit.install(srv.stop, running.busy)
+    if watch_idle:
+        idle_exit.install(srv.stop, running.busy)
 
 
 # ------------------------------------------------------------------

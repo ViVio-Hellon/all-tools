@@ -125,7 +125,12 @@ def _register_security(app: Flask) -> None:
         # 攻撃者のドメインを 127.0.0.1 に向けられても、Hostヘッダが
         # 一致しないので弾ける
         host = (request.host or "").split(":")[0]
-        if host not in ("127.0.0.1", "localhost"):
+        allowed = ("127.0.0.1", "localhost")
+        if app.config.get("BRIDGE"):
+            # デスクトップ版: 外枠(Tauri)の窓の宛先。TCP を通らないので
+            # リバインディングの心配は無いが、知らない宛先は今までどおり断る
+            allowed = allowed + app_config.BRIDGE_HOSTS
+        if host not in allowed:
             log.warning("Host不一致で拒否: %s", request.host)
             return jsonify(error_body("bad_host", "このアドレスからは利用できません")), 400
 
@@ -160,7 +165,9 @@ def _register_security(app: Flask) -> None:
     def _headers(response):                     # noqa: ANN202 - Flaskのフック
         # CORS ヘッダは**一切返さない**(返さないことが対策)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # 枠の中に出してよいのは、自分と、この PC の統合ツールの入口だけ
+        # (`X-Frame-Options: SAMEORIGIN` の代わり。統合ツールの大きなタブから出すため)
+        response.headers["Content-Security-Policy"] = app_config.FRAME_ANCESTORS
         response.headers["Referrer-Policy"] = "no-referrer"
         _apply_cache_policy(response)
         return response

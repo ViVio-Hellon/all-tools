@@ -5,6 +5,7 @@
   **押せるかどうかの判断はサーバが持つ**(管理者かどうか等)。
 */
 import { api, background } from "../api.js";
+import * as desktop from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
 import { refresh } from "../nav.js";
@@ -1736,11 +1737,22 @@ export function start() {
   for (const btn of document.querySelectorAll("[data-browse]")) {
     btn.addEventListener("click", async () => {
       browsingFor = btn.dataset.browse;
+      const current = document.getElementById(`path-${browsingFor}`).value;
+      // デスクトップ版は OS の標準の「フォルダの選択」(共有フォルダも辿れる)。
+      // 開けなかったときだけ、いつもの一覧へ
+      if (desktop.isDesktop) {
+        try {
+          const picked = await desktop.pickPath("folder", { start: current, title: "フォルダを選ぶ" });
+          if (picked) putPicked(browsingFor, picked);
+          return;
+        } catch (err) {
+          console.warn("フォルダの選択窓を開けませんでした。一覧で選びます", err);
+        }
+      }
       const box = document.getElementById("browse");
       const row = btn.closest(".path");
       if (box && row) row.append(box);
       if (box) box.hidden = false;
-      const current = document.getElementById(`path-${browsingFor}`).value;
       try {
         await browseTo(current);
       } catch (err) { toastError(err); }
@@ -1753,13 +1765,18 @@ export function start() {
 
   document.getElementById("browse-pick")?.addEventListener("click", () => {
     if (!browsingFor) return;
-    // **選んだだけでは保存しない。** 欄に入れて、保存ボタンを押させる ──
-    // 置き場所の変更にはパスワードが要るので、ここで確定させると
-    // 「見に行っただけなのに聞かれる」ことになる
-    const field = document.getElementById(`path-${browsingFor}`);
     const box = document.getElementById("browse");
-    if (field) field.value = browsingAt;
     if (box) box.hidden = true;
+    putPicked(browsingFor, browsingAt);
+  });
+
+  /* 選んだフォルダを欄に入れる(一覧からでも、OS の選択窓からでも同じ)。
+     **選んだだけでは保存しない。** 欄に入れて、保存ボタンを押させる ──
+     置き場所の変更にはパスワードが要るので、ここで確定させると
+     「見に行っただけなのに聞かれる」ことになる */
+  function putPicked(key, path) {
+    const field = document.getElementById(`path-${key}`);
+    if (field) field.value = path;
     const row = field?.closest(".path");
     if (row) {
       row.dataset.pathState = "dirty";
@@ -1768,7 +1785,7 @@ export function start() {
     }
     groupNote(field?.closest("[data-path-group]"),
               "欄に入れました。隣の「保存」を押すと反映します。", "info");
-  });
+  }
 
   document.getElementById("pw-change")?.addEventListener("click", async () => {
     try {

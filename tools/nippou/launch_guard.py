@@ -626,6 +626,131 @@ def request_shutdown(port: int, token: str) -> bool:
 
 
 # ------------------------------------------------------------------
+# デスクトップ版(統合ツールの窓)との取り合い
+# ------------------------------------------------------------------
+# ブラウザ版とデスクトップ版は**同時に動かさない**(同じ手元の SQLite・設定・
+# タブの取り合いの状態を、2つのプロセスが別々に持ってしまう)。決まりは
+# **後から開いたほうが止まる**(統合ツールの docs/統合_事前確認.md)。
+#
+# デスクトップ版の Python(`bridge.py`)は、動いているあいだ
+# `runtime/desktop.lock` を OS のファイルロックで握る。ブラウザ版はそれを
+# 取れるか試して、取れなければ止まる。錠を握るのも確かめるのも**同じ Python**
+# なので、Microsoft Store 版の Python がファイルの置き場所を振り替えても、
+# 両方が同じ場所を見る(外枠の Rust が握ると、振り替えのせいで見えない)。
+# 錠はプロセスが終われば OS が外すので、落ちても残らない。
+DESKTOP_LOCK_NAME = "desktop.lock"
+
+# 握っている錠(プロセスが終わるまで持っておく)
+_desktop_lock = None
+
+
+def desktop_lock_path() -> Path:
+    return app_config.local_dir("runtime") / DESKTOP_LOCK_NAME
+
+
+def _try_lock(fh) -> bool:
+    """開いたファイルの錠を取る(取れなければ `False`)。待たない。"""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fh) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def hold_desktop_lock() -> bool:
+    """デスクトップ版として動くあいだ、錠を握る。取れたら(握っていたら)`True`。"""
+    global _desktop_lock
+    if _desktop_lock is not None:
+        return True
+    path = desktop_lock_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(path, "a+b")
+    except OSError as exc:                        # noqa: BLE001
+        # 錠そのものが作れない(めったに無い)。止めずに進む ── 守りは
+        # 弱まるが、日報が打てないよりはよい
+        log.warning("デスクトップ版の錠を作れませんでした: %s", exc)
+        return True
+    if not _try_lock(fh):
+        fh.close()
+        return False
+    _desktop_lock = fh
+    log.info("デスクトップ版の錠を握りました: %s", path)
+    return True
+
+
+def release_desktop_lock() -> None:
+    """握っている錠を放す(試験用。ふだんはプロセスが終われば外れる)。"""
+    global _desktop_lock
+    fh, _desktop_lock = _desktop_lock, None
+    if fh is not None:
+        _unlock(fh)
+        fh.close()
+
+
+def desktop_running() -> bool:
+    """デスクトップ版がこの利用者のこの PC で動いているか。
+
+    錠を**取れるか試してすぐ放す**。取れなければ動いている。
+    """
+    if _desktop_lock is not None:
+        return True
+    path = desktop_lock_path()
+    if not path.is_file():
+        return False
+    try:
+        with open(path, "a+b") as fh:
+            if not _try_lock(fh):
+                return True
+            _unlock(fh)
+    except OSError as exc:
+        log.info("デスクトップ版の錠を確かめられませんでした: %s", exc)
+    return False
+
+
+def browser_running() -> Optional[LockInfo]:
+    """ブラウザ版がこの利用者のこの PC で動いていれば、その印。
+
+    印(`nippou.lock`)があり、その PID が生きていて、ポートがこのアプリと
+    答える(または起動の途中・応答が無いがコマンドラインがこのアプリ)とき。
+    **印が無ければポートは叩かない**(ソケットを開かない)。
+    """
+    info = read_lock()
+    if info is None or info.pid == os.getpid():
+        return None
+    if not is_process_alive(info.pid):
+        return None
+    if info.port and info.port > 0:
+        health = probe_health(info.port)
+        if health is not None:
+            return info if is_our_app(health) else None
+    return info if looks_like_our_process(info) else None
+
+
+# ------------------------------------------------------------------
 # ポート選び
 # ------------------------------------------------------------------
 def is_port_free(port: int, host: str = "") -> bool:

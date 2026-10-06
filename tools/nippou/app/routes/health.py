@@ -140,7 +140,8 @@ def shutdown():
     「中断して終了 / 完了を待つ / やめる」を選ばせるため。`force=true` を
     付けて呼び直すと中断して落とす。
     """
-    force = bool((request.get_json(silent=True) or {}).get("force"))
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
     running = _running_jobs()
     if running and not force:
         return jsonify({
@@ -149,6 +150,11 @@ def shutdown():
             "running": running,
             "message": "実行中の処理があります。中断して終了しますか?",
         }), 409
+    # `check` は**訊くだけ**(止めない)。統合ツールの外枠が、窓の × で全ツールに
+    # 「終わってよいか」を先に訊いてから、まとめて止めるために使う。1つでも
+    # 処理の途中なら、ほかのツールも止めずに確認を出す(先に止めてしまわない)
+    if body.get("check"):
+        return jsonify({"stopped": False, "can_stop": True})
 
     if _shutdown_hook is None:
         # サーバ抜きで組み立てた場合(テストなど)

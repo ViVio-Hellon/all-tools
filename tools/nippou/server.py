@@ -53,16 +53,21 @@ class AppServer:
         self._server = None
 
     # --------------------------------------------------------------
-    def build(self) -> None:
+    def build(self, **config) -> None:
         """本体を組み立てて、待ち受けを引き継ぐ。
 
         **待ち受けは開き直さない。** 開き直すと、その瞬間の問い合わせが
         落ちて、待機画面には「接続できません」と映る。
+
+        `config` は引き継ぐ**前に**本体の設定へ入れる(デスクトップ版の
+        `BRIDGE` など)。引き継いでから入れると、その一瞬に届いた要求が
+        入れる前の設定で断られる。
         """
         from app import create_app
         from app.routes import health
 
         self.app = create_app(token=self.token, port=self.port)
+        self.app.config.update(config)
         # 「どうやって止めるか」をルート側へ渡す。ルートが waitress を
         # 直接知らないようにするため、関数で注入する
         health.set_shutdown_hook(self.stop)

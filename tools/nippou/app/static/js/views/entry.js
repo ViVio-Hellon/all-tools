@@ -11,6 +11,7 @@
 */
 
 import { api, tokenUrl } from "../api.js";
+import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
 import { pageSignal, refresh } from "../nav.js";
@@ -2238,7 +2239,7 @@ export function start() {
         report_date: key.sheetsDate || "", line: key.sheetsLine || "",
         shift: tab.dataset.sheetShift || "", page: "all",
       }).toString();
-      window.open(tokenUrl(`/report/nippou?${q}`), "_blank", "noopener");
+      openPage(tokenUrl(`/report/nippou?${q}`), "日報の紙");
       return;
     }
     const wanted = Number(tab.dataset.sheetPage);
@@ -2473,7 +2474,7 @@ export function start() {
       report_date: b.reportDate || "", line: b.line || "",
       shift: b.shift || "", page: "all",
     }).toString();
-    window.open(tokenUrl(`/report/nippou?${q}`), "_blank", "noopener");
+    openPage(tokenUrl(`/report/nippou?${q}`), "日報の紙");
   });
 
   // 前の直の警告を閉じる。**覚えるのはサーバ** ── 画面に覚えさせると

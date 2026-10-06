@@ -21,6 +21,7 @@
   一度きり)。**要素は毎回引き直す**必要があるので、状態も配線もここに閉じる。
 */
 import { api, ApiError, background } from "../api.js";
+import { openWindow } from "../desktop.js";
 import { onLeave, pageSignal } from "../nav.js";
 import { attachAll, current, select as selectTab } from "../tabs.js";
 import { toast, toastError } from "../toast.js";
@@ -133,6 +134,9 @@ export function start() {
   $("vc-open-quick").addEventListener("click", () => {
     // VBA は UFquick をモードレスで開いた。計算画面と並べて見られるよう別の窓にする
     // **早見表だけの窓**(v4.16.0)。帯もレールも無いので、別窓から日報へ戻れない
+    // デスクトップ版は外枠の別窓(同じ名前の窓が開いていれば前に出す)
+    if (openWindow("/vc?window=quick&tab=quick",
+                   { title: "VC 早見表", label: "vc-quick", width: 1280, height: 860 })) return;
     window.open("/vc?window=quick&tab=quick", "vc-quick", "width=1280,height=860");
   }, { signal });
   linkHighlight(() => $("vc-roll")?.querySelector("svg"), $("vc-steps"));
