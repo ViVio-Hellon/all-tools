@@ -25,7 +25,7 @@ from typing import Any, Callable, Optional
 
 from flask import Flask, jsonify, render_template, request
 
-from . import admin_password, app_config, catalog as catalog_mod, identity as identity_mod
+from . import admin_password, app_config, catalog as catalog_mod, distribution, identity as identity_mod
 from . import shared_db, tab_rights
 from .logging_utils import get_logger, log_dir
 from .rights_store import store
@@ -226,6 +226,31 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         return jsonify({"ok": True, "sync": result.to_dict(), **_settings_view(catalog)})
 
     # ------------------------------------------------------------------
+    # 配布設定(置き場所・管理者パスワードを、配った先の端末で使う)
+    # ------------------------------------------------------------------
+    def distribution_action(action: Callable[[], Any]):
+        refused = need_admin()
+        if refused:
+            return refused
+        result = action()
+        if not result.ok:
+            return _error(result.reason or "failed", result.message, 422)
+        store.sync_in_background()
+        return jsonify({"ok": True, "message": result.message, **_settings_view(catalog)})
+
+    @app.post("/api/distribution/export")
+    def distribution_export():                    # noqa: ANN202
+        return distribution_action(distribution.export)
+
+    @app.post("/api/distribution/remove")
+    def distribution_remove():                    # noqa: ANN202
+        return distribution_action(distribution.remove)
+
+    @app.post("/api/distribution/reapply")
+    def distribution_reapply():                   # noqa: ANN202
+        return distribution_action(distribution.reapply)
+
+    # ------------------------------------------------------------------
     # タブ表示権限
     # ------------------------------------------------------------------
     @app.post("/api/rights/sync")
@@ -404,6 +429,7 @@ def _settings_view(catalog) -> dict:
         "problems": tab_rights.problems(rules, catalog),
         "catalog": [t.to_dict() for t in catalog.tools],
         "tools": tools,
+        "distribution": distribution.summary(),
         "app": {"name": app_config.display_name(), "version": app_config.version(),
                 "root": str(app_config.APP_ROOT), "local": str(app_config.local_root()),
                 "logs": str(log_dir())},

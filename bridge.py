@@ -66,6 +66,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         app_config.ensure_local_dirs()
         log = get_logger("bridge")
+        # 配布設定(置き場所・管理者パスワード)を、共有の DB を読みに行く前に
+        from portal import distribution
+        distribution.apply_on_start()
         app = web.create_app(token=os.environ.get(TOKEN_ENV, ""), bridge=True)
     except Exception as exc:                      # noqa: BLE001 - 理由を外枠へ渡す
         return fatal(f"入口を組み立てられませんでした: {exc}", "ログを確認してください。")

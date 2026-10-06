@@ -25,6 +25,8 @@ os.environ["ALLTOOLS_SETTINGS_PATH"] = os.path.join(_BASE, "local", "data", "use
 os.environ["ALLTOOLS_LOGIN_ID"] = "tester"
 os.environ["ALLTOOLS_PC_NAME"] = "TEST-PC"
 os.environ["ALLTOOLS_LOG_QUIET"] = "1"
+# 配布設定を一式のフォルダ(このリポジトリ)に書かせない
+os.environ["ALLTOOLS_DISTRIBUTION_DIR"] = os.path.join(_BASE, "配布設定")
 os.environ.pop("ALLTOOLS_SHARED_DB_NAME", None)
 os.environ.pop("ALLTOOLS_ADMIN_PASSWORD", None)
 os.makedirs(os.environ["ALLTOOLS_SHARED_DB_DIR"], exist_ok=True)

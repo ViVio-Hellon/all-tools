@@ -59,6 +59,11 @@ def _matches(password: str, stored: str) -> bool:
     return hmac.compare_digest(expected, stored)
 
 
+def hash_text(password: str) -> str:
+    """平文を、端末に持つ形(`pbkdf2$…`)にする(配布設定に手で平文が書かれていたとき)。"""
+    return _encode(str(password), secrets.token_bytes(SALT_BYTES))
+
+
 def _stored() -> Optional[str]:
     value = user_settings.get(user_settings.KEY_ADMIN_PASSWORD)
     return value if isinstance(value, str) and value.strip() else None

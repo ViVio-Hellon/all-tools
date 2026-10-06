@@ -9,7 +9,7 @@ r"""統合ツール一式の配布用フォルダを作る
     python scripts\make_dist.py                     # 一式の隣に「統合ツール_VERx.y.z」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
     python scripts\make_dist.py --zip               # zip も作る
-    python scripts\make_dist.py --no-settings       # 各ツールの配布設定を入れない
+    python scripts\make_dist.py --no-settings       # 配布設定(大設定・各ツール)を入れない
     python scripts\make_dist.py --exe D:\AllTools.exe  # 入れる exe を指定
 
 【中身】
@@ -22,11 +22,13 @@ r"""統合ツール一式の配布用フォルダを作る
       config\ portal\ docs\ scripts\
       tools\<ツール>\         各ツール。**そのツールの make_dist が配るもの**を、そのツールの
                               決まり(配ってはいけないもの・配布設定)のまま写す
+      配布設定\              大設定で書き出したもの(あれば)
       配布メモ.txt            版・入れたもの・配った先ですること
 
-各ツールの配布設定(各ツールの設定画面で書き出す `tools\<ツール>\配布設定\`)は、
-そのツールの決まりどおりに入れます(`--no-settings` で入れない)。
-大設定(タブ表示権限)は共有の DB にあるので、配る必要はありません。
+配布設定は、大設定で書き出したもの(一式の直下の `配布設定\`: 共有の DB の置き場所・
+管理者パスワード)と、各ツールの設定画面で書き出したもの(`tools\<ツール>\配布設定\`)を、
+それぞれの決まりどおりに入れます(`--no-settings` でどれも入れない)。
+タブ表示権限の表そのものは共有の DB にあるので、配る必要はありません。
 """
 from __future__ import annotations
 
@@ -96,7 +98,7 @@ GENERIC_INCLUDE: dict[str, tuple[str, ...]] = {
     ),
 }
 
-#: 各ツールの配布設定のフォルダ名(どのツールも同じ名前)
+#: 配布設定のフォルダ名(大設定も各ツールも同じ名前。大設定のものは一式の直下)
 SETTINGS = "配布設定"
 
 
@@ -122,6 +124,17 @@ def _tool_version(tool_dir: Path) -> str:
                    .get("version", ""))
     except (OSError, ValueError):
         return ""
+
+
+def _portal_settings_lines(folder: Path) -> list[str]:
+    """大設定の配布設定に入っている項目の名前(値は出さない。パスワードがあるので)。"""
+    labels = {"shared_db_dir": "共有の DB のフォルダ", "shared_db_name": "共有の DB のファイル名",
+              "admin_password": "管理者パスワード"}
+    try:
+        data = json.loads((folder / "統合ツール.json").read_text(encoding="utf-8-sig"))
+        return [labels.get(k, k) for k in (data.get("settings") or {})] or ["(中身がありません)"]
+    except (OSError, ValueError):
+        return ["(読めません)"]
 
 
 def _excluded(name: str) -> bool:
@@ -250,6 +263,16 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
 
     lines = [f"配布用フォルダを作りました: {out}", f"版: {display_name(root)} VER{version(root)}"]
 
+    # 大設定の配布設定(共有の DB の置き場所・管理者パスワード)。入れる/入れないを**はっきり決める**
+    settings_src = root / SETTINGS
+    if with_settings and settings_src.is_dir():
+        shutil.copytree(settings_src, out / SETTINGS, ignore=_ignore)
+        lines.append(f"大設定の{SETTINGS}を入れました(配った先が起動時に読み込みます): "
+                     + "・".join(_portal_settings_lines(out / SETTINGS)))
+    else:
+        lines.append(f"大設定の{SETTINGS}は入れていません(共有の DB の置き場所・管理者パスワードは既定。"
+                     "変えて配るときは、大設定の「配布設定を書き出す」のあと作り直してください)")
+
     # デスクトップ版の exe(あれば)。一式の直下に置く決まり(bridge.py・config と同じ所)
     exe = exe if exe is not None else find_exe(root)
     if exe is not None and exe.is_file():
@@ -321,7 +344,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="統合ツール一式の配布用フォルダを作る")
     parser.add_argument("--out", help="作る場所(既定: 一式の隣に「統合ツール_VER版」)")
     parser.add_argument("--no-settings", action="store_true",
-                        help="各ツールの配布設定(tools\\<ツール>\\配布設定)を入れない")
+                        help="配布設定(大設定の 配布設定 と、各ツールの tools\\<ツール>\\配布設定)を入れない")
     parser.add_argument("--force", action="store_true",
                         help="作る場所に中身があれば消して作り直す")
     parser.add_argument("--zip", action="store_true", help="zip も作る")

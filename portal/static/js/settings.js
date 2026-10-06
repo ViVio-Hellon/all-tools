@@ -62,6 +62,17 @@ export function install(options) {
     write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value });
   });
   $("loc-default").addEventListener("click", () => write("/api/settings/location", { folder: "", name: "" }));
+  $("dist-export").addEventListener("click", () => write("/api/distribution/export", {}));
+  $("dist-reapply").addEventListener("click", () => {
+    if (confirm("配布設定を読み込み直します。この端末の置き場所・管理者パスワードは、配布設定の値で上書きされます。よろしいですか?")) {
+      write("/api/distribution/reapply", {});
+    }
+  });
+  $("dist-remove").addEventListener("click", () => {
+    if (confirm("配布設定(一式のフォルダの直下の「配布設定」)を消します。この端末の設定はそのままです。よろしいですか?")) {
+      write("/api/distribution/remove", {});
+    }
+  });
   $("pw-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -139,6 +150,7 @@ function paint(body) {
   paintRights();
   paintSource();
   paintTools();
+  paintDistribution();
   paintApp();
   $("pw-lead").textContent = body.password_custom
     ? "この端末で変えたパスワードが効いています。変えるには、いまのパスワードが要ります(4文字以上)。"
@@ -330,6 +342,27 @@ function paintTools() {
     tr.append(tab, name, ver, state, local, act);
     body.append(tr);
   }
+}
+
+function paintDistribution() {
+  const d = view.distribution || {};
+  const state = $("dist-state");
+  if (d.exists) {
+    state.textContent = `置いてあります: ${d.path}(作成 ${d.created_at || "?"} / ${d.created_on || "?"}`
+      + `${d.version ? ` / VER${d.version}` : ""})`
+      + (d.applied_at ? `。この端末が最後に読み込んだ・書き出したのは ${d.applied_at}` : "");
+  } else {
+    state.textContent = `置いてありません(書き出すと ${d.path || "配布設定"} にできます)`;
+  }
+  const list = $("dist-contents");
+  list.replaceChildren();
+  for (const item of d.contents || []) {
+    const li = document.createElement("li");
+    li.textContent = `${item.label}: ${item.value}`;
+    list.append(li);
+  }
+  $("dist-reapply").hidden = !d.exists;
+  $("dist-remove").hidden = !d.exists;
 }
 
 function paintApp() {

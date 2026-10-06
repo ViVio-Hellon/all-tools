@@ -134,6 +134,8 @@ button,input,select{font:inherit;color:inherit}
 .card h2 small{font-weight:400;color:var(--muted);font-size:var(--fs-sm)}
 .card__head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .card__tools{display:flex;gap:8px}
+.dist-list{margin:4px 0 12px;padding-left:20px;font-size:var(--fs-md)}
+.dist-list:empty{display:none}
 .facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:6px 0 0}
 .facts dt{color:var(--muted);font-size:var(--fs-md)}
 .facts dd{margin:0}

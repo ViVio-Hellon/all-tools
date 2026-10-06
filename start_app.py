@@ -175,6 +175,10 @@ def start(*, open_browser: bool = True) -> int:
         raise StartupError(f"使えるポートがありません(試した番号: {app_config.port_candidates()})",
                            "config/app.json の port を変えるか、そのアプリを終了してください。")
 
+    # 配布設定(置き場所・管理者パスワード)を、共有の DB を読みに行く前に
+    from portal import distribution
+    distribution.apply_on_start()
+
     token = secrets.token_urlsafe(24)
     app = web.create_app(token=token, bridge=False)
     tools = BrowserTools(catalog.load())

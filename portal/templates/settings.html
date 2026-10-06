@@ -96,6 +96,22 @@
       </form>
     </article>
 
+    <!-- 配布設定 -->
+    <article class="card">
+      <h2>配布設定</h2>
+      <p class="lead">この端末で決めた<b>共有の DB の置き場所</b>と<b>管理者パスワード</b>を、配った先の端末でも使います。
+        書き出すと、一式のフォルダの直下に「配布設定」フォルダができます。配った先は起動したときに読み込み、
+        <b>その端末にすでにある設定は上書きしません</b>(揃えたいときは「読み込み直す」)。
+        各ツールの設定は、それぞれのタブの設定画面の配布設定で配ります。</p>
+      <div class="msg msg--info" id="dist-state"></div>
+      <ul class="dist-list" id="dist-contents"></ul>
+      <div class="card__tools">
+        <button type="button" class="btn btn--primary" id="dist-export" data-admin>配布設定を書き出す</button>
+        <button type="button" class="btn" id="dist-reapply" data-admin>読み込み直す</button>
+        <button type="button" class="btn btn--danger" id="dist-remove" data-admin>消す</button>
+      </div>
+    </article>
+
     <!-- このアプリ -->
     <article class="card">
       <h2>このアプリ</h2>
