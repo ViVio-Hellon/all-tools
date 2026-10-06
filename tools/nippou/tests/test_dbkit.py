@@ -11,6 +11,7 @@
 import sqlite3
 import sys
 import unittest
+from unittest import mock
 from datetime import date, datetime
 from pathlib import Path
 
@@ -79,7 +80,16 @@ class AccessOdbcErrorClassificationTests(unittest.TestCase):
 
 
 class AccessOdbcAvailabilityTests(unittest.TestCase):
-    """Windows以外(=このCI環境)で安全にフォールバックすることを確認する。"""
+    """Windows以外で安全にフォールバックすることを確認する。
+
+    Windows の上で流しても同じことを確かめられるよう、`sys.platform` を
+    Windows以外(linux)に見せかけて試す。
+    """
+
+    def setUp(self) -> None:
+        patcher = mock.patch.object(access_odbc.sys, "platform", "linux")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_is_available_false_on_linux(self) -> None:
         self.assertFalse(access_odbc.is_available())

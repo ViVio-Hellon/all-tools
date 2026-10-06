@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import glob
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -174,7 +175,13 @@ class GuardTests(WebTestCase):
 
     def test_読み直して名乗り直せば通る(self) -> None:
         self.taken_over()
-        self.call("/api/tab/claim", "B", {"loaded": self.now() + 0.01})
+        # 書いたあとに描き直した。**時計が書いた時刻を越えるまで待つ** ── Windows の
+        # 時計は 15ms ほどの刻みで進むので、すぐ読むと書いた時刻と並ぶ(先の時刻を
+        # 渡しても、アプリは「いま」より先の時刻を「いま」に直す)
+        written = self.desk().last_write[1]
+        while self.now() <= written:
+            time.sleep(0.005)
+        self.call("/api/tab/claim", "B", {"loaded": self.now()})
         res = self.call("/api/entry/save", "B", {"rows": {"1": {"LOT": ""}},
                                                  "silent": True})
         self.assertNotEqual(res.status_code, 409)

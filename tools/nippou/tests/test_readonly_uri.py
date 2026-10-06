@@ -52,7 +52,9 @@ class UriTests(unittest.TestCase):
 
     def test_本当に開けて_書けない(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            for name in ("日報 控え.sqlite3", "a#1?.sqlite3", "100%.sqlite3"):
+            # Windows のファイル名には「?」を使えない(その道は Windows の上には無い)
+            odd = "a#1.sqlite3" if sys.platform == "win32" else "a#1?.sqlite3"
+            for name in ("日報 控え.sqlite3", odd, "100%.sqlite3"):
                 with self.subTest(name=name):
                     path = Path(tmp) / name
                     with sqlite3.connect(path) as conn:

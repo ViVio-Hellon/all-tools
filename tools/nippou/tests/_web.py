@@ -9,6 +9,7 @@ Flask が入っていない環境では、Web版のテストをまとめてス�
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
@@ -32,6 +33,24 @@ HEADERS = {"Host": "127.0.0.1", "X-Tool-Token": TOKEN}
 NO_TOKEN_HEADERS = {"Host": "127.0.0.1"}
 
 
+def close_log_files_under(folder: Path) -> None:
+    """`folder` の中へ書いているログのハンドラを閉じて外す。
+
+    ロガーはプロセスに1つずつ残るので、付けたファイルのハンドラも次の
+    テストまで開いたまま残る。**開いたままのファイルは Windows では消せない**
+    ので、一時フォルダを消す前に閉じる。
+    """
+    root = str(Path(folder).resolve())
+    loggers = [logging.getLogger()] + [
+        lg for lg in logging.root.manager.loggerDict.values() if isinstance(lg, logging.Logger)]
+    for logger in loggers:
+        for handler in list(logger.handlers):
+            name = getattr(handler, "baseFilename", "")
+            if name and str(Path(name).resolve()).startswith(root):
+                logger.removeHandler(handler)
+                handler.close()
+
+
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
 class WebTestCase(unittest.TestCase):
     """Flask のテストクライアントを1件ごとに作り直す。"""
@@ -44,7 +63,12 @@ class WebTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
+        # **一時フォルダは一番最後に消す。** 後片付け(`addCleanup`)は tearDown の
+        # あとに、登録と逆の順で走る。`repo()` の接続を閉じるのもそこなので、
+        # tearDown で消すと開いたままのファイルを消そうとする(Windows は断る)
+        self.addCleanup(self._tmpdir.cleanup)
         self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(close_log_files_under, self.tmp)
 
         # ローカル領域と実行時ファイルを、この1件ぶんの一時フォルダへ寄せる。
         #
@@ -97,7 +121,6 @@ class WebTestCase(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        self._tmpdir.cleanup()
 
     # -- 短く書くための助け --------------------------------------------
     def get(self, path: str, **kwargs):

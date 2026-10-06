@@ -235,7 +235,7 @@ class Distribution:
             staging.mkdir(parents=True)
             (staging / SETTINGS_NAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                                  encoding="utf-8")
-            (staging / README_NAME).write_text(self._readme(meta), encoding="utf-8-sig")
+            (staging / README_NAME).write_text(self._readme(meta), encoding="utf-8-sig", newline="")
             if self.dir.exists():
                 shutil.rmtree(self.dir)
             staging.rename(self.dir)

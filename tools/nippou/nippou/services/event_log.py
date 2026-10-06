@@ -503,7 +503,9 @@ def export_csv(records: list[dict], notes: dict[str, dict],
         path = folder / EXPORT_DIR / name
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(buf.getvalue(), encoding="utf-8-sig")
+            # **newline="" で書く。** 行の終わりはもう \r\n。Windows で文字のまま書くと
+            # \r\r\n になり、Excel に空の行が挟まる
+            path.write_text(buf.getvalue(), encoding="utf-8-sig", newline="")
             return path
         except OSError:
             continue

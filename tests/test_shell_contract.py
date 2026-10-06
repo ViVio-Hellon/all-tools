@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -67,7 +68,8 @@ class OriginTests(unittest.TestCase):
         catalog_rs = rust("catalog.rs")
         self.assertIn('format!("http://{scheme}.localhost")', catalog_rs)
         self.assertIn('format!("{scheme}://localhost")', catalog_rs)
-        self.assertEqual(app_config.origin_of("kanban"), "kanban://localhost")   # ここ(Linux)
+        expected = "http://kanban.localhost" if sys.platform == "win32" else "kanban://localhost"
+        self.assertEqual(app_config.origin_of("kanban"), expected)
 
     def test_ツールへ渡すHostは各ツールが受け付ける名前(self) -> None:
         relay = rust("relay.rs")
