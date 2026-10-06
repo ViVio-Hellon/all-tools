@@ -58,22 +58,14 @@ class MakeDistTest(unittest.TestCase):
         self.assertFalse(list(out.rglob("__pycache__")))
         self.assertTrue(any("取り込み間隔" in line for line in lines), lines)
 
-    def test_desktop_exe_goes_in_with_a_plain_name_when_present(self):
-        """デスクトップ版の exe は、置いてあれば利用者に分かる名前で入る(無ければ入らないと書く)。"""
+    def test_desktop_is_the_integrated_window(self):
+        """看板だけの exe は無い。デスクトップ版は統合ツールの窓で使うと書く(bridge.py は入る)。"""
         out, lines = self.make_dist.build(self.dir / "out")
-        self.assertTrue((out / "bridge.py").is_file(), "exe は bridge.py と同じフォルダで動く")
-        self.assertFalse((out / self.make_dist.DESKTOP_EXE_NAME).exists())
-        self.assertTrue(any("デスクトップ版は入れていません" in line for line in lines), lines)
-
-        root = self.dir / "app"
-        root.mkdir()
-        for name in self.make_dist.INCLUDE:
-            (root / name).symlink_to(ROOT / name)
-        (root / self.make_dist.DESKTOP_EXE).write_bytes(b"MZ-fake")
-        out, lines = self.make_dist.build(self.dir / "out2", root=root)
-        self.assertEqual((out / self.make_dist.DESKTOP_EXE_NAME).read_bytes(), b"MZ-fake")
-        self.assertTrue(any("デスクトップ版を入れました" in line for line in lines), lines)
-        self.assertIn(self.make_dist.DESKTOP_EXE_NAME, (out / "配布メモ.txt").read_text(encoding="utf-8-sig"))
+        self.assertTrue((out / "bridge.py").is_file(), "統合ツールの外枠が子として起動する")
+        self.assertFalse(list(out.glob("*.exe")))
+        self.assertFalse((out / "src-tauri").exists())
+        self.assertTrue(any("統合ツール" in line for line in lines), lines)
+        self.assertIn("Start.vbs", (out / "配布メモ.txt").read_text(encoding="utf-8-sig"))
 
     def test_no_settings_leaves_the_bundle_out(self):
         self.put_bundle()

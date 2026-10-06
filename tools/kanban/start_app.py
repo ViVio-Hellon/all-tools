@@ -256,7 +256,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- デスクトップ版が動いていないか -----------------------------------
     # 同じ端末の手元の SQLite と共有DBへ、2 つのプロセスが書きに行かないようにする。
-    # デスクトップ版は OS のファイルロックを握っている(src-tauri/src/main.rs)
+    # デスクトップ版(統合ツールの窓の「看板」)は OS のファイルロックを握っている
+    # (``start_bridge`` → ``launch_guard.hold_desktop_lock``)
     import launch_guard
 
     if launch_guard.desktop_running():

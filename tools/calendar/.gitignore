@@ -29,8 +29,4 @@ Thumbs.db
 /配布設定/
 /配布設定.作成中/
 
-# デスクトップ版(Tauri)を作ったときにできるもの。`cargo build` で作り直せる
-src-tauri/target/
-src-tauri/gen/
-# GitHub Actions から取ってきて直下に置いた exe(配布のときに make_dist が入れる)
-/LineCalendar.exe
+# デスクトップ版は統合ツールの外枠(一式のフォルダの src-tauri/)。ここには置かない

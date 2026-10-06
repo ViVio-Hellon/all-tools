@@ -26,6 +26,4 @@ venv/
 # 社内の共有フォルダのパスが入るので、リポジトリへは上げない
 /配布設定/
 
-# デスクトップ版(Rust/Tauri)の作りかけ。`cargo build` で作り直せる
-src-tauri/target/
-src-tauri/gen/
+# デスクトップ版は統合ツールの外枠(一式のフォルダの src-tauri/)。ここには置かない

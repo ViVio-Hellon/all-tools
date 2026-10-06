@@ -223,7 +223,7 @@ def host() -> str:
 
 #: デスクトップ版(Rust/Tauri)の窓が読む宛先の名前。**TCP を通らない**
 #: (外枠が受けて Python の標準入力へ渡す。``bridge.py``)。
-#: 外枠の ``SCHEME``(``src-tauri/src/main.rs``)と揃える
+#: 統合ツールの外枠(``../../src-tauri/src/relay.rs`` の ``TOOL_HOST``)と揃える
 BRIDGE_HOSTS = ("app.localhost", "localhost")
 
 

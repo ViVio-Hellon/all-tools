@@ -4,7 +4,7 @@
   ブラウザ版では何もしない(ボタンも出さない)。どちらで動いているかは
   `window.__TAURI__` があるかで分かる(python-web-tools の desktop.js と同じ)。
 
-    pickFolder   … Windows の「フォルダーの選択」窓(src-tauri/src/main.rs の pick_folder)
+    pickFolder   … Windows の「フォルダーの選択」窓(統合ツールの外枠 services.rs の pick_folder)
     openExternal … アプリの外のページを既定のブラウザで開く
 */
 

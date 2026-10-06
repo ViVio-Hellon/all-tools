@@ -11,8 +11,4 @@ Thumbs.db
 配布設定/
 配布設定.作成中*/
 
-# デスクトップ版(Rust/Tauri)の作業ファイル
-src-tauri/target/
-src-tauri/gen/
-# 配るときにアプリのフォルダの直下に置く exe(リポジトリには入れない)
-/InspectionSheet.exe
+# デスクトップ版は統合ツールの外枠(一式のフォルダの src-tauri/)。ここには置かない

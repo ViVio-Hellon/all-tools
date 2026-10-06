@@ -81,25 +81,19 @@ class MakeDistTests(unittest.TestCase):
                               text=True, encoding="utf-8", check=True)
         tracked = {line.split("/")[0].strip('"') for line in done.stdout.splitlines()}
         tracked = {name for name in tracked if not name.startswith("docs")} | {"docs"}
-        dev_only = {"tests", ".gitignore", ".gitattributes"} | set(make_dist.DEV_ONLY)
+        dev_only = {"tests", ".gitignore", ".gitattributes"}
         self.assertEqual(set(make_dist.INCLUDE), tracked - dev_only)
 
-    def test_デスクトップ版のexeは作ってあれば入れる(self) -> None:
-        exe = self.tmp / "LineCalendar.exe"
-        exe.write_bytes(b"MZ")
-        out, lines = make_dist.build(self.out, with_settings=False, exe=exe)
-        self.assertEqual((out / make_dist.EXE_NAME).read_bytes(), b"MZ")
+    def test_デスクトップ版は統合ツールの窓と書く(self) -> None:
+        """カレンダーだけの exe は無い。bridge.py は入る(統合ツールの外枠が子として起動する)。"""
+        out, lines = make_dist.build(self.out, with_settings=False)
         self.assertTrue((out / "bridge.py").exists())
+        self.assertFalse(list(out.glob("*.exe")))
+        self.assertIn("統合ツール", "\n".join(lines))
         memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
-        self.assertIn(make_dist.EXE_NAME, memo)
-        # 外枠のソースと作る仕組みは配らない(配るのは exe だけ)
+        self.assertIn("Start.vbs", memo)
         self.assertFalse((out / "src-tauri").exists())
         self.assertFalse((out / ".github").exists())
-
-    def test_exeが無ければブラウザ版だけと書く(self) -> None:
-        out, lines = make_dist.build(self.out, with_settings=False, exe=self.tmp / "無い.exe")
-        self.assertFalse((out / make_dist.EXE_NAME).exists())
-        self.assertIn("デスクトップ版(exe)は入っていません", "\n".join(lines))
 
     def test_バッチは英字だけ(self) -> None:
         """cmd.exe はコンソールのコードページで読むので、日本語を入れない。"""

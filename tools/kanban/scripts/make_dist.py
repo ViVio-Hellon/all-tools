@@ -54,10 +54,11 @@ EXCLUDE_NAMES: tuple[str, ...] = (
     "*.sqlite3", "*.sqlite3-*", "*.accdb", "*.laccdb",
 )
 
-#: デスクトップ版(Rust/Tauri)の exe。GitHub Actions の成果物 ``KanbanSystem-windows`` から
-#: 取ってきてアプリの直下に置いてあれば、利用者に分かる名前で入れる(無ければ入れない)
-DESKTOP_EXE = "KanbanSystem.exe"
-DESKTOP_EXE_NAME = "資材発注看板システム.exe"
+#: デスクトップ版は**統合ツールの窓**で使う(看板だけの exe は無い)。
+#: 統合ツールごと配るときは、一式のフォルダの ``scripts\make_dist.bat`` を使う
+INTEGRATED_NOTE = ("デスクトップ版は統合ツール(統合ツール.exe)の窓の「看板」のタブで使います。"
+                   "この配布は看板だけのブラウザ版です。統合ツールごと配るときは、"
+                   "統合ツールのフォルダの scripts\\make_dist.bat を使ってください")
 
 #: 配布設定のフォルダ(``kanban/distribution.py`` の置き場所と同じ)。
 #: **INCLUDE には入れない** ── 入れるかどうかは --no-settings で決める
@@ -144,15 +145,7 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
         shutil.rmtree(out, ignore_errors=True)
         raise SystemExit("配るはずのファイルがありません: " + ", ".join(missing))
 
-    # デスクトップ版の exe(あれば)。bridge.py と同じフォルダに置く決まり
-    exe = root / DESKTOP_EXE
-    desktop_line = ""
-    if exe.is_file():
-        shutil.copy2(exe, out / DESKTOP_EXE_NAME)
-        desktop_line = f"デスクトップ版を入れました: {DESKTOP_EXE_NAME}(ポートを使わない窓。ブラウザ版の Start.vbs も使えます)"
-    else:
-        desktop_line = (f"デスクトップ版は入れていません({DESKTOP_EXE} がアプリの直下にありません。"
-                        "docs/デスクトップ版.md の「作り方」)")
+    desktop_line = INTEGRATED_NOTE
 
     # 配布設定: 入れる/入れないを**はっきり決める**(--no-settings)
     from kanban import distribution
@@ -198,10 +191,9 @@ def _memo(lines: list[str]) -> str:
         "",
         "配った先ですること",
         "  1. このフォルダを好きな場所に置く(以前の版のフォルダに上書きしない)",
-        "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる(デスクトップ版は Flask だけでよい)",
+        "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる",
         "     (入っていなければ: python -m pip install -r requirements.txt)",
-        f"  3. {DESKTOP_EXE_NAME}(デスクトップ版。無ければ Start.vbs)で起動する。"
-        "配布設定があれば、このとき読み込みます",
+        "  3. Start.vbs で起動する(ブラウザ版)。配布設定があれば、このとき読み込みます",
         "  4. 設定画面の「この端末」で担当ラインとモードを選ぶ(端末ごとに違います)",
         "",
         "入れていないもの: data(端末ごとの設定)・tests",

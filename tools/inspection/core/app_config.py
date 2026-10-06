@@ -240,9 +240,10 @@ def local_root() -> Path:
     return Path.home() / ".local" / "share" / name
 
 
-# デスクトップ版(Tauri)の窓が画面を読み込む宛先のホスト名。外枠
-# (`src-tauri/src/main.rs` の `SCHEME`)と揃える。Windows の WebView2 は
-# `http://app.localhost/`、ほかの OS は `app://localhost/` になる
+# デスクトップ版(統合ツールの窓)で、外枠がこのツールへ要求を渡すときのホスト名。
+# 統合ツールの外枠(`../../src-tauri/src/relay.rs` の `TOOL_HOST`)と揃える
+# (画面の宛先は `inspection://localhost/`、Windows は `http://inspection.localhost/`。
+# 外枠が単体のデスクトップ版のときと同じ `app.localhost` に読み替えて渡す)
 BRIDGE_HOSTS = ("app.localhost", "localhost")
 
 

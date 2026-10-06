@@ -3,7 +3,7 @@
 
   ブラウザ版では今までどおり `window.open` などを使う。デスクトップ版の画面は
   外枠の窓の中にあるので、別の窓を開く・閉じる・ファイルに保存する は外枠の仕事に
-  なる(`src-tauri/src/main.rs` の `open_window` ほか)。
+  なる(統合ツールの外枠 `../../src-tauri/src/services.rs` の `open_window` ほか)。
   どちらで動いているかは `window.__TAURI__` があるかで分かる。
   作りは梱包資材総合ツール(python-web-tools)の desktop.js と同じ。
 */
