@@ -325,9 +325,12 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
 
     @app.get("/api/tools/status")
     def tools_status():                           # noqa: ANN202
+        """ブラウザ版: 各ツールのブラウザ版が動いているか(`ids=a,b` で絞る)。"""
         if _browser_tools is None:
             return jsonify({"ok": True, "tools": []})
-        return jsonify({"ok": True, "tools": _browser_tools.status()})
+        raw = request.args.get("ids", "")
+        ids = [i for i in raw.split(",") if catalog.by_id(i)] if raw else None
+        return jsonify({"ok": True, "tools": _browser_tools.status(ids)})
 
     # ------------------------------------------------------------------
     # 終わる

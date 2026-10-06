@@ -166,7 +166,8 @@ function ensureFrame(id) {
     iframe.addEventListener("load", () => {
       if (!entry.loaded && !entry.reported) {
         entry.reported = true;
-        report("info", `${TOOLS.get(id).title} の画面が出ました`, entry.url);
+        // 宛先は合言葉(t=)を落として残す
+        report("info", `${TOOLS.get(id).title} の画面が出ました`, String(entry.url).split("?")[0]);
       }
       entry.loaded = true;
     });
@@ -177,27 +178,37 @@ function ensureFrame(id) {
   return entry.starting;
 }
 
-function showProblem(entry, tool, err) {
+/** 枠の代わりに知らせを出す(開けなかった・終了した)。「もう一度開く」で起こし直す */
+function showNote(entry, title, text) {
+  const id = entry.panel.dataset.panel;
+  entry.iframe = null;
+  entry.loaded = false;
+  entry.reported = false;
+  entry.missing = 0;
   const box = document.createElement("div");
   box.className = "panel--note";
   box.style.cssText = "position:absolute;inset:0";
   const card = document.createElement("div");
   card.className = "card note-card";
   const h = document.createElement("h1");
-  h.textContent = `${tool ? tool.name : ""}を開けませんでした`;
+  h.textContent = title;
   const p = document.createElement("p");
-  p.textContent = (err && err.message) || String(err);
+  p.textContent = text;
   const retry = document.createElement("button");
   retry.type = "button";
   retry.className = "btn btn--primary";
   retry.textContent = "もう一度開く";
   retry.addEventListener("click", () => {
     entry.panel.replaceChildren();
-    ensureFrame(entry.panel.dataset.panel);
+    ensureFrame(id).then(() => { if (current === id) showPanel(id); });
   });
   card.append(h, p, retry);
   box.append(card);
   entry.panel.replaceChildren(box);
+}
+
+function showProblem(entry, tool, err) {
+  showNote(entry, `${tool ? tool.name : ""}を開けませんでした`, (err && err.message) || String(err));
 }
 
 function showPanel(id) {
@@ -399,7 +410,10 @@ window.__shell = {
 // 状態の印
 // ------------------------------------------------------------------
 async function pollStatus() {
-  if (!desktop) return;
+  if (!desktop) {
+    await watchBrowserTools();
+    return;
+  }
   try {
     const list = await invoke("shell_status");
     for (const item of list || []) {
@@ -408,6 +422,36 @@ async function pollStatus() {
     }
     settingsView.statusChanged(list || []);
   } catch (err) { /* 次で */ }
+}
+
+/**
+ * ブラウザ版: 開いたツールのブラウザ版が動いているか(数秒ごと)。
+ * そのツールの画面の「終了」で止まったら、タブに「終了しました / もう一度開く」を出す
+ * (枠の中に「接続できません」を出したままにしない)。2回続けて居なければ、とする。
+ */
+async function watchBrowserTools() {
+  const ids = [...frames.entries()].filter(([, e]) => e.iframe && e.loaded).map(([id]) => id);
+  if (!ids.length) return;
+  let body;
+  try { body = await api.get(`/api/tools/status?ids=${encodeURIComponent(ids.join(","))}`); }
+  catch (err) { return; }
+  for (const item of body.tools || []) {
+    const entry = frames.get(item.id);
+    if (!entry || !entry.iframe) continue;
+    const dot = document.querySelector(`#tab-${item.id} .bigtab__dot`);
+    if (item.running) {
+      entry.missing = 0;
+      if (dot) dot.dataset.phase = "started";
+      continue;
+    }
+    entry.missing = (entry.missing || 0) + 1;
+    if (entry.missing < 2) continue;
+    if (dot) dot.dataset.phase = "quit";
+    const tool = TOOLS.get(item.id);
+    report("info", `${tool.title} のブラウザ版が終わりました`);
+    showNote(entry, `${tool.name}は終了しました`,
+             "このツールのブラウザ版は止まっています。ほかのタブはそのまま使えます。");
+  }
 }
 
 // ------------------------------------------------------------------
@@ -460,7 +504,6 @@ function heartbeat() {
 settingsView.install({ desktop, invoke, tools: TOOLS, reloadTabs: followTabs });
 heartbeat();
 start();
-if (desktop) {
-  pollStatus();
-  setInterval(pollStatus, S.statusPollMs || 2000);
-}
+// デスクトップ版は外枠に訊く(安い)。ブラウザ版は入口がツールの待ち受けを叩くので間を空ける
+pollStatus();
+setInterval(pollStatus, desktop ? (S.statusPollMs || 2000) : 5000);

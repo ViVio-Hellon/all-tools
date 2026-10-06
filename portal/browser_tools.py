@@ -91,8 +91,12 @@ class Running:
         return f"{self.base}/?t={self.token}"
 
 
-def find_running(tool: Tool) -> Optional[Running]:
-    """そのツールのブラウザ版が動いていれば、その印(番号・トークン)。"""
+def find_running(tool: Tool, *, check_pid: bool = True) -> Optional[Running]:
+    """そのツールのブラウザ版が動いていれば、その印(番号・トークン)。
+
+    `check_pid=False` は PID を確かめない(Windows の tasklist を起こさない)。
+    待ち受けが自分(app_id)と答えるかだけで見る。画面の見張り(数秒ごと)向け。
+    """
     runtime = tool.local_root() / "runtime"
     try:
         locks = sorted(runtime.glob("*.lock"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -109,7 +113,7 @@ def find_running(tool: Tool) -> Optional[Running]:
         if app_id and info.get("app_id") and info.get("app_id") != app_id:
             continue
         running = Running(tool, info)
-        if not is_alive(running.pid):
+        if check_pid and not is_alive(running.pid):
             continue
         try:
             status, health = _request(f"{running.base}/api/health")
@@ -211,5 +215,7 @@ class BrowserTools:
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 log.warning("%s のブラウザ版を止められませんでした: %s", running.tool.name, exc)
 
-    def status(self) -> list[dict]:
-        return [{"id": t.id, "running": find_running(t) is not None} for t in self.catalog.tools]
+    def status(self, ids: Optional[list[str]] = None) -> list[dict]:
+        """各ツールのブラウザ版が動いているか(`ids` だけ。画面の見張り用に軽く見る)。"""
+        tools = [t for t in self.catalog.tools if ids is None or t.id in ids]
+        return [{"id": t.id, "running": find_running(t, check_pid=False) is not None} for t in tools]
