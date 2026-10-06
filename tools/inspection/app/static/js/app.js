@@ -51,7 +51,11 @@ function ended() {
 
 // 「終了」ボタン (基盤仕様書 2.8)。印刷中はサーバが 409 を返す。勝手に中断しない
 document.getElementById("quit").addEventListener("click", async () => {
-  const ok = await confirmDialog({ title: "アプリの終了", message: "点検表システムを終了しますか?",
+  // デスクトップ版は統合ツールの窓の中で動く。終えると、ほかのツールのタブも閉じる
+  const message = desktop.isDesktop
+    ? "統合ツールを終了しますか?(ほかのツールのタブもまとめて閉じます)"
+    : "点検表システムを終了しますか?";
+  const ok = await confirmDialog({ title: "アプリの終了", message,
                                    okText: "終了する", danger: true });
   if (!ok) return;
   try {

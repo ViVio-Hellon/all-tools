@@ -158,7 +158,9 @@ def _register_security(app: Flask) -> None:
     def _headers(response):                     # noqa: ANN202 - Flaskのフック
         # CORS ヘッダは**一切返さない**(返さないことが対策)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # 枠の中に出してよいのは、自分と、この PC の統合ツールの入口だけ
+        # (`X-Frame-Options: SAMEORIGIN` の代わり。統合ツールの大きなタブから出すため)
+        response.headers["Content-Security-Policy"] = app_config.FRAME_ANCESTORS
         response.headers["Referrer-Policy"] = "no-referrer"
         if getattr(g, "ref", ""):
             response.headers["X-Request-Ref"] = g.ref

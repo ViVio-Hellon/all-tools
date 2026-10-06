@@ -76,9 +76,12 @@ if (syncNow) {
 const quit = document.getElementById("quit");
 if (quit) {
   quit.addEventListener("click", async () => {
+    // デスクトップ版は統合ツールの窓の中で動く。終えると、ほかのツールのタブも閉じる
     if (!await confirm("終了しますか?",
-                       "このアプリを終了します。\n"
-                       + "続けて使う場合は、もう一度 Start.vbs から起動してください。",
+                       isDesktop
+                         ? "統合ツールを終了します(ほかのツールのタブもまとめて閉じます)。"
+                         : "このアプリを終了します。\n"
+                           + "続けて使う場合は、もう一度 Start.vbs から起動してください。",
                        { okLabel: "終了する", danger: true })) return;
     await requestShutdown(false);
   });

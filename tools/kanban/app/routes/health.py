@@ -198,6 +198,12 @@ def shutdown():
             409,
         )
 
+    # `check` は**訊くだけ**(止めない)。統合ツールの外枠が、窓の × で全ツールに
+    # 「終わってよいか」を先に訊いてから、まとめて止めるために使う。1つでも
+    # 処理の途中なら、ほかのツールも止めずに確認を出す(先に止めてしまわない)
+    if body.get("check"):
+        return jsonify({"stopped": False, "can_stop": True})
+
     if _shutdown_hook is None:
         log.warning("停止の手段が登録されていません")
         return (

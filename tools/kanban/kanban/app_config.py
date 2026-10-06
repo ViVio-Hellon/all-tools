@@ -227,6 +227,13 @@ def host() -> str:
 BRIDGE_HOSTS = ("app.localhost", "localhost")
 
 
+#: ブラウザ版(予備)で、この画面を**枠の中に出してよい**相手。統合ツールの
+#: 大きなタブ(入口のページ。この PC の 127.0.0.1 の別の番号)から出すため。
+#: ほかのサイトからは出させない(クリックの乗っ取り対策。`X-Frame-Options` の代わり)。
+#: デスクトップ版(統合ツールの窓)では、外枠がこの見出しを外して渡す
+FRAME_ANCESTORS = "frame-ancestors 'self' http://127.0.0.1:* http://localhost:*"
+
+
 def _mode_conf(mode: str) -> dict[str, Any]:
     table = load()["server"]["roles"]
     if mode in table:
