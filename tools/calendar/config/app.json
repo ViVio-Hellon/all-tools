@@ -1,0 +1,19 @@
+{
+  "app_id": "nlm.line-calendar",
+  "display_name": "ライン管理カレンダー",
+  "version": "4.0.0",
+  "monitor_level": 1,
+
+  "local_dir_name": "LineCalendar",
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8730,
+    "port_retry": 3
+  },
+
+  "monitoring": {
+    "health_poll_seconds": 15,
+    "sync_poll_ms": 1000
+  }
+}

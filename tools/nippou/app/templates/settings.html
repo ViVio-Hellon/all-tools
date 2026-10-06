@@ -1,0 +1,1913 @@
+{% extends "base.html" %}
+{% import "_settings_parts.html" as parts %}
+{% block title %}設定・管理者 — {{ display_name }}{% endblock %}
+
+{#
+  設定画面は14枚のカードが1本に積まれていて、「機能を確かめたいのに
+  どこに何があるか分からない」状態でした。**縦に積んだものは、下に
+  あるほど無いものとして扱われます** ── スクロールしないと見えない
+  ということは、見えていないあいだは思い出せないということです。
+
+  面(タブ)で分けます。並び・見出し・鍵の要否を決めるのはサーバ
+  (`presenters/settings.TABS`)で、ここは写すだけ。
+
+  【分け方 ── やることで切り、パスは1枚にまとめる】
+  一度は「置き場は、それを使う機能と同じ面へ」で散らしました。実際に
+  触ってもらうと**逆でした** ── 「カテゴリで分けてあるのはいいけど、
+  設定の仕方が全部違うじゃん」。面ごとに保存ボタンがあり、欄の並びも
+  揃っていないので、同じ種類の操作なのに毎回やり方を探し直すことに
+  なっていました。パスを決めるのは**据え付けのときの1つの作業**なので、
+  場所も1つにします。
+
+      保存と出力    … 共有へ保存・月替わりの書き出し
+      マスタ        … 表を見る・直す / ライン毎目標 / 停止内訳(鍵なし) / 直の境界時刻
+      音            … 出来事ごとに何を鳴らすか(鳴らさない/音声ファイル)
+      取り込みと直し… 過去の日報の取り込み・当直の復旧・集計の作り直し
+      参照設定      … **パスはここだけ。** 読みに行く先 / 書き出す先
+      この端末      … 管理者モード・ライン・この端末に残すファイル/共有するファイル・版と置き場所
+#}
+{% block content %}
+<div class="page-head">
+  <h1>設定・管理者</h1>
+  <span class="lead">共有の日報管理への保存と、環境を整える設定</span>
+  {% if admin %}<span class="badge badge--done">管理者モード</span>{% endif %}
+</div>
+
+{# 直ひと回りの動線。**3つの画面で同じ帯**(`presenters/flow.py`) #}
+{% with flow_here = "settings" %}
+  {% include "_flow.html" %}
+{% endwith %}
+
+{# ================================================================
+   呼出中の逃げ道。**面の外に置きます** ── どの面を開いていても
+   目に入らないと、設定画面を開いたまま入力画面を閉じてしまった人が
+   戻れません。
+   ================================================================ #}
+{% if recall.active %}
+<div class="card">
+  <div class="card__head">
+    <h2>いま開いているもの</h2>
+    <button class="btn btn--sm" type="button" id="back">いまの直に戻る</button>
+  </div>
+  <div class="msg msg--warn">
+    {{ recall.report_date }} {{ recall.line | line_label }} {{ recall.shift }} 第{{ recall.page }}ページ を開いています。
+    <strong>「最新のページに戻る」を押すまで、共有への保存はできません。</strong>
+  </div>
+  <p class="lead">
+    ページの切り替えは <a href="/">日報入力</a> の保存ボタンの並びにあります。
+    過去の直を呼び出すのは <a href="/records">記録を見る</a> です。
+  </p>
+</div>
+{% endif %}
+
+<div class="tabs" data-tabs="settings" id="settingsTabs">
+  <div class="tabs__bar" role="tablist" aria-label="設定の面">
+    {% for t in tabs %}
+    {% set badge = tab_badges.get(t.key) %}
+    <button class="tab" type="button" role="tab" data-key="{{ t.key }}"
+            {% if t.key == default_tab %}data-default="1"{% endif %}
+            {% if badge and badge.level %}data-level="{{ badge.level }}"{% endif %}
+            id="tab-{{ t.key }}" aria-controls="panel-{{ t.key }}"
+            aria-selected="false" title="{{ t.note }}">
+      <span class="tab__label">{{ t.label }}</span>
+      <span class="tab__badge"
+            {% if badge and badge.level %}data-level="{{ badge.level }}"{% endif %}
+            {% if not badge %}hidden{% endif %}>{{ badge.text if badge else "" }}</span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <div class="tabs__panels">
+
+  {# ==============================================================
+     1. 保存と出力
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "output") | first %}
+  <section class="tabpanel" data-panel="output" id="panel-output" role="tabpanel"
+           aria-labelledby="tab-output"
+           {% if default_tab != "output" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+
+    {# ------------------------------------------------------------
+       共有の日報管理へ保存
+
+       もとは「Accessへ反映」という名前でしたが、**何をする操作なのかが
+       名前から読めませんでした。** やることは1つです ── この端末に
+       溜まっている日報を、みんなが見る側の日報管理へ書き写す。つまり
+       **保存**です。「反映」はソースの中の言い方(③反映)で、押す人の
+       言葉ではありません。
+
+       保存先が2つある(手元 / 共有)ことも、名前だけでは分かりません
+       でした。**書き先を表にして、どちらへいつ書くのかを先に出します。**
+       ------------------------------------------------------------ #}
+    {% set target = files | selectattr("key", "equalto", "access_db") | first %}
+    {% set to_sqlite = target and target.kind == "sqlite3" %}
+    <div class="card">
+      <div class="card__head">
+        <h2>共有の日報管理へ保存</h2>
+        <span class="lead">この端末に溜まった日報を、みんなが見る側へ書き写します</span>
+      </div>
+
+      {# **保存先は2つある。押すたびに書くのは下の1つだけ。** ここを混ぜると
+         「入力したのに共有に出ていない」が説明できない #}
+      <table class="list">
+        <thead>
+          <tr><th>どこへ</th><th>ファイル</th><th>種類</th><th>いつ書くか</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>手元</b><br><span class="lead">この端末だけ</span></td>
+            <td><code>{{ diagnostics.sqlite }}</code></td>
+            <td><span class="badge">sqlite3</span></td>
+            <td>入力するたび<br><span class="lead">(保存(確定)・自動保存)</span></td>
+          </tr>
+          <tr>
+            <td><b>共有</b><br><span class="lead">みんなが見る</span></td>
+            <td><code>{{ diagnostics.access_db }}</code></td>
+            <td>
+              <span class="badge">{{ "sqlite3" if to_sqlite else "Access(.accdb)" }}</span>
+              {% if not to_sqlite %}
+              <br><span class="badge badge--todo">接続方式: {{ diagnostics.access_backend }}</span>
+              {% endif %}
+            </td>
+            <td><b>下のボタンを押したときだけ</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="lead">
+        <strong>共有へ書くのは、この2行目の1つだけです。</strong>
+        Access と sqlite3 の<b>両方へ書くことはありません</b> ──
+        下の「日報データのファイル名」の拡張子で、どちらか一方に
+        決まります(<code>.sqlite3</code> なら sqlite3、<code>.accdb</code> なら
+        Access)。いまは <b>{{ "sqlite3" if to_sqlite else "Access" }}</b> です。
+        {% if to_sqlite %}
+        sqlite3 なら Windows も ODBCドライバも要らず、ファイルが無ければ
+        初回の保存で作られます。
+        {% endif %}
+      </p>
+      <p class="lead">
+        手元の <code>nippou_local.sqlite3</code> は<b>この端末の作業用</b>で、
+        どちらを選んでも必ず使います。共有の書き先とは別のファイルです。
+      </p>
+
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <button class="btn btn--primary" type="button" id="push">共有へ保存</button>
+        <span class="lead">
+          共有へ未送信
+          {% if pending_count %}
+          <b>{{ pending_count }}直ぶん</b> ── まだ共有の日報管理へ
+          届いていません。<b>手元(この端末)には保存済み</b>です。
+          消えてはいません。
+          <b>このボタンを1回押せば、{{ pending_count }}直ぶんがまとめて
+          出ます</b>(ページごとに押す必要はありません)。
+          <b>取り込んだぶんもここに出ます</b> ── 「共有へ送る」を選んで
+          取り込んだか、取り込んだあとに保存(確定)を押したときです
+          {% else %}
+          <b>0直ぶん</b> ── 共有の日報管理へ渡していない直はありません
+          {% endif %}
+        </span>
+      </div>
+      <p class="lead">
+        入力するたびに共有へ書きに行くことはしません。<strong>手元に貯めて、
+        まとめて書きます</strong> ── 共有ファイルは誰かが開いていることがあり、
+        そのたびに待たされると入力が止まります。ここを押すまで、共有側は
+        古いままです。<strong>直の終わりに押してください。</strong>
+        (呼出モード中は断ります。過去のページが「今日の帳票」として共有へ
+        行かないようにするためです)
+      </p>
+
+      {# ---- 出す前の関門 (VBA `ExecutePrintProcess` の5つの手続き = 7項目) ----
+
+         押したときに断られた理由を、**どの直の・どの行か**まで並べます。
+         トーストに畳んでしまうと、直すために何度も押し直すことになります。
+
+         逃げ道は VBA と同じ範囲だけ ── 「設備移動のため保存」と打つと、
+         最終時間と休憩の2本だけ通ります。打たせるのは、ボタン1つだと
+         押し流されるからです(VBA も `UF印刷` に打たせていました)。 #}
+      <div class="check" id="push-check" hidden>
+        <div class="msg msg--error" id="push-check-head" role="alert"></div>
+        <ul class="check__list" id="push-check-list"></ul>
+        <div class="check__skip" id="push-check-skip" hidden>
+          <label for="skip-phrase">
+            設備移動などで途中までのときは、下に
+            <b id="skip-phrase-text">設備移動のため保存</b> と打つと、
+            <b>最終時間と休憩のぶんだけ</b>通せます
+          </label>
+          <div class="btn-row">
+            <input id="skip-phrase" type="text" size="24" autocomplete="off">
+            <button class="btn" type="button" id="push-skip">このまま共有へ保存</button>
+          </div>
+        </div>
+      </div>
+      <div class="msg msg--info" id="access-note" hidden style="margin-top:var(--sp-2)"></div>
+
+      {# パスは「参照設定」の面だけで決めます。ここでは**いまどこへ書くか**
+         を出すだけ ── 同じ設定が2か所にあると、どちらが効くのか分からない #}
+      <p class="lead" style="margin-top:var(--sp-4)">
+        書き先のフォルダは
+        <a href="#" data-goto-tab="paths"><b>参照設定</b></a> の面で決めます。
+        いまは <code>{{ path_map[keys.access_dir].resolved }}</code> です。
+      </p>
+    </div>
+
+    {# ------------------------------------------------------------
+       月替わり (VBA 月替わりチェック実行 → シートコピー保存処理)
+
+       **ふだんは押しません。** 共有への保存が済んだところで、月が
+       替わっていれば自動で走ります(VBA も手動印刷の最後だけでした)。
+       ここに置いてあるのは、月初に端末を触らなかった・途中で失敗した、
+       というときに追いかけられるようにするためです。
+
+       VBA の3番目(`月初削除`)は移植していません。あちらが消していたのは
+       Excelのシート(見た目の写し)で、元データは Access に残っていました。
+       ------------------------------------------------------------ #}
+    <div class="card">
+      <div class="card__head">
+        <h2>月替わりの書き出し</h2>
+        <span class="lead">1か月ぶんを月別フォルダへCSVで出す(手元は消しません)</span>
+      </div>
+
+      <p class="lead">
+        月が替わると、その月ぶんを
+        <code>ライン名 / yyyy.mm</code> の下へ<b>3本のCSV</b>で書き出します
+        ── 集計・停止集計・<b>明細</b>。このツールが無くても、Excelでも
+        メモ帳でも開ける形にしておくためのものです。
+      </p>
+      <p class="lead">
+        <b>手元のデータは消えません。</b>
+        VBA が消していたのは Excel のシート(見た目の写し)で、元データは
+        Access の <code>日報データ</code> に残っていました。このツールの
+        手元DBはその元データにあたるので、消す理由がありません ──
+        過ぎた月の紙を出し直すのも、グラフを引き直すのも、値が手元に
+        残っているからできることです。
+      </p>
+      <p class="lead">
+        過ぎた月を出し直すときは、<code>2026-08</code> のように月を入れて
+        から押してください。空のままなら、いま書き出すべき月を自分で
+        見つけます。
+      </p>
+      {% if not path_map[keys.report_out_dir_2].off %}
+      <p class="lead">
+        「集計CSVの出力パス(2つ目)」を決めてあるので、同じ月を
+        <code>{{ path_map[keys.report_out_dir_2].resolved }}\自動集計\ライン名\yyyy.mm</code>
+        にも出します(共有へ保存の直後に走るときも、ここで押したときも)。
+      </p>
+      {% endif %}
+
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <button class="btn" type="button" id="rollover">月替わりを確かめる</button>
+        <input class="input" type="text" id="rollover-month" placeholder="2026-08"
+               size="9" aria-label="書き出す月(空なら自動)">
+        <button class="btn" type="button" id="rollover-export">書き出す</button>
+        <span class="lead" id="rollover-state">…</span>
+      </div>
+      <div class="msg msg--info" id="rollover-note" hidden style="margin-top:var(--sp-2)"></div>
+
+      <p class="lead" style="margin-top:var(--sp-4)">
+        書き出し先は <a href="#" data-goto-tab="paths"><b>参照設定</b></a>
+        の面で決めます。いまは
+        <code>{{ path_map[keys.monthly_dir].resolved }}</code> です。
+      </p>
+    </div>
+  </section>
+
+  {# ==============================================================
+     2. マスタ
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "master") | first %}
+  <section class="tabpanel" data-panel="master" id="panel-master" role="tabpanel"
+           aria-labelledby="tab-master"
+           {% if default_tab != "master" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+
+    <div class="tabs tabs--inner" data-tabs="settings.master">
+      <div class="tabs__bar" role="tablist" aria-label="マスタの面">
+        <button class="tab" type="button" role="tab" data-key="tables" data-default="1"
+                id="tab-master-tables" aria-controls="panel-master-tables"
+                aria-selected="false">表を見る / 直す</button>
+        <button class="tab" type="button" role="tab" data-key="files"
+                id="tab-master-files" aria-controls="panel-master-files"
+                aria-selected="false">ファイルの状態</button>
+        <button class="tab" type="button" role="tab" data-key="targets"
+                id="tab-master-targets" aria-controls="panel-master-targets"
+                aria-selected="false">ライン毎目標(45度線)</button>
+        <button class="tab" type="button" role="tab" data-key="stops"
+                id="tab-master-stops" aria-controls="panel-master-stops"
+                aria-selected="false">停止内訳</button>
+        <button class="tab" type="button" role="tab" data-key="shift"
+                id="tab-master-shift" aria-controls="panel-master-shift"
+                aria-selected="false">直の境界時刻</button>
+      </div>
+      <div class="tabs__panels">
+
+      {# ---- 表を見る / 直す ------------------------------------
+         **相手は sqlite3 です。** Access なら現場のPCで開いて直せましたが、
+         sqlite3 は開く道具が入っていない前提で考えるほかありません
+         (テキストエディタでも開けないバイナリ形式です)。確かめる場所と
+         直す場所を、このツールの中で完結させます。
+
+         **見るのは誰でも、直すのは鍵を開けた人だけ。** 参照マスタは
+         他のラインも同じものを見ているので、押し間違いが全員に届きます。
+         鍵は面の上に1つ(上の帯)で、ここには置きません ── 同じ合言葉の
+         入力欄が画面に2つあると、どちらを使うのか分かりません。
+         -------------------------------------------------------- #}
+      <section class="tabpanel" id="panel-master-tables" role="tabpanel"
+               aria-labelledby="tab-master-tables">
+        <div class="card" id="tables">
+          {# 見出しは内側の面の札が兼ねる。**同じ言葉を2つ並べない** #}
+          <p class="lead">
+            sqlite3 は他に開く道具がないので、ここで完結させます。
+            <strong>見るのは誰でも、直すのは上の鍵を開けた人だけ</strong>です。
+          </p>
+
+          <div class="masterwrap">
+            {# 左: 何があるか。**選ぶ前に、どれが直せてどれが見るだけかが読める** #}
+            <aside>
+              <div class="mlist" id="m-list">
+                <p class="lead">読み込み中…</p>
+              </div>
+            </aside>
+
+            {# 右: 選んだ表の中身 #}
+            <div>
+              <div class="mbar">
+                <div class="field">
+                  <label for="tbl-q">絞り込み</label>
+                  <input id="tbl-q" type="search" size="22"
+                         placeholder="どの列でもよい(例: 0 / 待ち / 08:00)">
+                </div>
+                <button class="btn btn--sm" type="button" id="tbl-reload">読み直す</button>
+                <button class="btn btn--sm" type="button" id="tbl-add" hidden>1行足す</button>
+                {# 列を足す(v4.14.0)。**マスタ管理で直せる表だけ**・鍵が開いているときだけ。戻せない #}
+                <button class="btn btn--sm" type="button" id="tbl-add-col" hidden>+ 列を足す…</button>
+                <span class="lead" id="tbl-count"></span>
+                <span class="lead" id="tbl-sort"></span>
+              </div>
+
+              {# 直せない理由は**先に**言う。押してから断られるのは手戻り #}
+              <p class="lead" id="tbl-why"></p>
+              {# 表ぜんぶの点検(いまはアクセス権限だけ)。**読まれない行に、直す前に気づく** #}
+              <div class="msg msg--warn msg--prose" id="tbl-checks" hidden></div>
+              <div class="msg" id="table-note" hidden></div>
+
+              {# **高さを切って、枠の中だけを流す。** 200行をそのまま積むと、
+                 絞り込みも表の選び直しも画面の遥か上へ行ってしまう #}
+              <div class="grid-edit__box">
+                <table class="list grid-edit" id="tbl-grid">
+                  <thead><tr id="tbl-head"></tr></thead>
+                  <tbody id="tbl-body"><tr><td class="empty">読み込み中…</td></tr></tbody>
+                </table>
+              </div>
+              <p class="lead" id="tbl-source"></p>
+              <p class="lead" id="tbl-added" hidden></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {# ---- ファイルの状態 -------------------------------------- #}
+      <section class="tabpanel" id="panel-master-files" role="tabpanel"
+               aria-labelledby="tab-master-files" hidden>
+        <div class="card">
+          <div class="card__head">
+            <h2>マスタ管理</h2>
+            <span class="lead">参照するファイルの状態。中身も見られます(sqlite3 のみ)</span>
+          </div>
+          <table class="list">
+            <thead>
+              <tr><th>マスタ</th><th>ファイル(フルパス)</th><th>種類</th><th class="num">大きさ</th>
+                  <th>使いみち</th><th>状態</th><th></th></tr>
+            </thead>
+            <tbody id="master-rows">
+              {% for f in files %}
+              <tr data-file="{{ f.key }}">
+                <td>{{ f.label }}<br>
+                  <span class="lead">{{ f.source_label }}から</span></td>
+                <td><code>{{ f.path }}</code></td>
+                <td>{{ "sqlite3" if f.kind == "sqlite3" else "Access" }}</td>
+                <td class="num">{{ "{:,}".format(f.size) if f.exists else "" }}</td>
+                <td>
+                  {% for u in f.uses %}
+                  <div><code>{{ u.table }}</code> → {{ u.purpose }}</div>
+                  {% else %}<span class="lead">—</span>{% endfor %}
+                </td>
+                <td>
+                  {% if f.is_write_target and not f.exists and f.writable %}
+                    <span class="badge">初回の保存で作られます</span>
+                  {% elif not f.exists %}<span class="badge badge--alert">ありません</span>
+                  {% elif f.readable %}<span class="badge badge--done">読めます</span>
+                  {% else %}<span class="badge badge--alert">{{ f.error }}</span>{% endif %}
+                  {% if f.is_write_target %}
+                    {% if f.writable %}<span class="badge badge--done">書けます</span>
+                    {% else %}<span class="badge badge--todo">要ドライバ</span>{% endif %}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if f.kind == "sqlite3" and f.readable %}
+                  <button class="btn btn--sm" type="button" data-master="{{ f.key }}">表を見る</button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <p class="lead" style="margin-top:var(--sp-2)">
+            <strong>既定はどれも .sqlite3 です。</strong> 同じ名前の
+            <code>.accdb</code> しか置いていないフォルダでは、そちらを拾って
+            これまでどおり動きます ── 切り替えの日に設定を触る必要はありません。
+          </p>
+          <p class="lead">
+            <strong>日報管理</strong>だけが書き込み先です。sqlite3 なら Windows も
+            ODBCドライバも要らず、ファイルが無ければ初回の保存で作られます。
+            ここは<strong>写しを作りません</strong>(自分が書く先なので、写すと
+            いま保存したものが見えません)。
+          </p>
+          <p class="lead">
+            参照用マスタは、<strong>共有のファイルを開かずに</strong>手元へ写してから
+            読みます(写しの置き場所: <code>{{ state.cache_dir }}</code>)。
+            別の人が書いている最中でも、そちらに手を出しません。
+          </p>
+
+          <p class="lead" style="margin-top:var(--sp-4)">
+            読みに行くフォルダは
+            <a href="#" data-goto-tab="paths"><b>参照設定</b></a> の面で決めます。
+            いまは <code>{{ path_map[keys.reference_dir].resolved }}</code> です。
+          </p>
+        </div>
+      </section>
+
+      {# ---- ライン毎目標(45度線) --------------------------------
+         **ここは「いま何が効いているか」を見る面。** 値を直すのはCSVの
+         ほうで、画面からは触らせない ── 共有に1つ置いたファイルが正で、
+         端末ごとに直せると、どれが本当か分からなくなる。
+
+         グラフ画面の「目標が設定されていません」からここへ飛んでくるので、
+         `id` を変えると行き先が切れる(`app/templates/graph.html`)。
+         -------------------------------------------------------- #}
+      <section class="tabpanel" id="panel-master-targets" role="tabpanel"
+               aria-labelledby="tab-master-targets" hidden>
+        <div class="card" id="line-targets">
+          <div class="card__head">
+            <h2>ライン毎目標(45度線)</h2>
+            <span class="lead">グラフに引く目標線。1日あたりの枚数で書きます</span>
+          </div>
+
+          {% set lt = state.line_targets %}
+          {# **出どころは2つ。同じラインならCSVが勝ちます。**
+             「DBの書き換えよりCSVの書き換えのほうが簡単だから」──
+             マスタは共有のDBで直すのに道具と権限が要りますが、CSVは
+             メモ帳で開けます。勝ち負けは**ラインごと**なので、直したい
+             1行だけCSVに書けば済みます #}
+          <div class="msg msg--info msg--prose">
+            目標は<b>2か所</b>から読みます。同じラインが両方にあれば
+            <b>CSVを採ります</b>(ラインごと)。
+            <ul class="check__list">
+              <li>マスタ: <code>{{ lt.master }}</code> の「{{ lt.master_table }}」
+                ── いま <b>{{ lt.master_count }}</b>ライン ぶんが効いています
+                {% if lt.master_error %}
+                <span class="badge badge--todo">読めません: {{ lt.master_error }}</span>
+                {% endif %}</li>
+              <li>CSV: <code>{{ lt.source }}</code>
+                ── いま <b>{{ lt.csv_count }}</b>ライン ぶんが効いています
+                {% if not lt.exists %}
+                <span class="badge badge--todo">まだありません(マスタの値がそのまま効きます)</span>
+                {% endif %}</li>
+            </ul>
+          </div>
+          <p class="lead">
+            <strong>このファイルをメモ帳で直せば、次にグラフを開いたときから効きます</strong>
+            ── ツールを開き直す必要はありません。
+            {# **置き場所は「参照設定」の「ライン毎目標の置き場所」。**
+               ここを「下の欄で変えられます」と書いていた時期があり、
+               その欄はもう下にありませんでした。さらに参照設定にも
+               出していなかったので、**画面から変える道が1つも無い**まま
+               「変えられます」と書いてありました ── 書いてあるとおりに
+               できないのは、書いていないより悪い #}
+            置き場所は<a href="/settings?tab=paths">参照設定</a>の
+            「ライン毎目標の置き場所」で変えられます(名前は
+            <code>ライン毎目標.csv</code> で固定です)。
+          </p>
+
+          {# **どちらが勝ったかを出す。** 出さないと「マスタを直したのに
+             変わらない」(CSVが勝っている)の理由が読めません #}
+          <table class="list">
+            <thead><tr><th>ライン</th><th>目標(1日あたりの枚数)</th>
+              <th>出どころ</th></tr></thead>
+            <tbody>
+              {% for r in lt.rows %}
+              <tr>
+                <td>{{ r.line | line_label }}</td>
+                <td>
+                  {% if r.text %}<b>{{ r.text }}</b> 枚
+                  {% else %}<span class="lead">未設定(このラインには目標線を引きません)</span>{% endif %}
+                </td>
+                <td>
+                  {% if r.origin %}{{ r.origin }}
+                    {% if r.origin == "CSV" and r.master_text %}
+                    <span class="lead">(マスタの {{ r.master_text }} 枚に勝っています)</span>
+                    {% endif %}
+                  {% else %}<span class="lead">―</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+              {% for r in lt.unknown %}
+              <tr>
+                <td><code>{{ r.line }}</code>
+                  <span class="badge badge--todo">知らないライン名</span></td>
+                <td><span class="lead">{{ r.text }} 枚 ── どのラインにも当たりません</span></td>
+                <td>{{ r.origin }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          {% if lt.error %}
+          <div class="msg msg--error" style="margin-top:var(--sp-2)" role="alert">
+            このファイルを読めませんでした: {{ lt.error }}
+          </div>
+          {% endif %}
+
+          {% if lt.problems %}
+          <div class="msg msg--error msg--prose" style="margin-top:var(--sp-2)">
+            <b>読めなかった行があります。</b>
+            <ul class="check__list">
+              {% for p in lt.problems %}
+              <li>{% if p.line_no %}{{ p.line_no }}行目: <code>{{ p.text }}</code> ── {% endif %}{{ p.reason }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+
+          {% if lt.master_problems %}
+          <div class="msg msg--warn msg--prose" style="margin-top:var(--sp-2)" id="line-target-master-problems">
+            <b>マスタ「{{ lt.master_table }}」に、読まなかった行があります</b>(ライン名が正規ではありません)
+            <ul class="check__list">
+              {% for p in lt.master_problems %}
+              <li>{{ p.line_no }}行目: {{ p.reason }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+
+          <div class="btn-row" style="margin-top:var(--sp-3)">
+            {# **いちばん早い道。** 全ラインぶんの行を書き出すので、
+               数字を書き換えて保存すれば終わります #}
+            <button class="btn btn--primary" type="button" id="line-target-template"
+                    {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}>
+              見本を出す(これを書き換えれば済みます)
+            </button>
+            <span class="lead">
+              全ラインぶんの行を、いまの値を入れた状態で書き出します。
+              既にファイルがあるときは<b>上書きせず</b>、隣に
+              <code>.見本.csv</code> を作ります
+            </span>
+          </div>
+          {# **見本を出したあとの戻り道。**
+
+             「マスタから読み取りしかないけど CSVから読む は必要ですよ
+             (見本を出す意味がないよ)」── そのとおりでした。見本は、
+             いまのファイルがあると隣に `.見本.csv` として出るので、
+             書き換えても**それを本物にする道がありません**でした。
+
+                 見本を出す → 数字を書き換える → ここで渡す → 効く
+             #}
+          <div class="btn-row" style="margin-top:var(--sp-2)">
+            <label class="btn {% if not admin %}btn--disabled{% endif %}"
+                   for="line-target-file"
+                   {% if not admin %}title="上の鍵を開けると使えます"{% endif %}>
+              CSVから読む(書き換えたファイルを渡す)
+            </label>
+            <input type="file" id="line-target-file" accept=".csv,text/csv"
+                   hidden {% if not admin %}disabled{% endif %}>
+            <span class="lead">
+              見本を書き換えたら、ここで渡してください。
+              <b>渡しただけでは書きません</b> ── 中身を出したあと、
+              「決定」で <code>{{ lt.source }}</code> を書き換えます
+            </span>
+          </div>
+          <div class="msg" id="line-target-preview" hidden
+               style="margin-top:var(--sp-2)"></div>
+          <div class="btn-row" id="line-target-apply-row" hidden
+               style="margin-top:var(--sp-2)">
+            <button class="btn btn--primary" type="button" id="line-target-apply">
+              決定(このファイルの値にする)
+            </button>
+            <button class="btn" type="button" id="line-target-cancel">やめる</button>
+          </div>
+
+          <div class="btn-row" style="margin-top:var(--sp-2)">
+            <button class="btn" type="button" id="line-target-reload">
+              いまのCSVを読み直す
+            </button>
+            <span class="lead">
+              メモ帳で直したあと、<b>効いたかどうかをここで確かめられます</b>
+              ── グラフを開くまで分からないと、直したつもりで終わります
+            </span>
+          </div>
+          <div class="btn-row" style="margin-top:var(--sp-2)">
+            <button class="btn" type="button" id="import-line-targets"
+                    {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}>
+              マスタから取り込む
+            </button>
+            <span class="lead">
+              マスタの値で上のCSVを<strong>作り直します(上書き)</strong>。
+              <b>押さなくてもマスタの値は効いています</b> ── 全ラインぶんを
+              書いたCSVが欲しいとき(そこから何行か書き換えたいとき)の
+              下地づくり用です
+            </span>
+          </div>
+          <div class="msg" id="line-target-note" hidden style="margin-top:var(--sp-2)"></div>
+
+          <details style="margin-top:var(--sp-3)">
+            <summary class="lead">CSVの書き方</summary>
+            <pre class="codeblock"># 行頭 # は覚え書き。空行は飛ばします
+L-1,12
+LVC,119
+機側,100</pre>
+            <p class="lead">
+              ライン名は<strong>正規の呼び名</strong>で書いてください
+              ({{ lt.rows | map(attribute="line") | join(" / ") }})。
+              半角の「ﾄｯﾄ」「ﾊﾞﾗﾝｻｰ」も読みます。前の名前(LS・TOT など)で書いたCSVも、
+              そのまま読みます。
+            </p>
+            <p class="lead">
+              目標は<strong>1日あたりの枚数</strong>です。累積枚数のグラフには
+              「目標×日数」で伸びる線(=45度線)を、直枚数のグラフには
+              同じ値の横ばいの線を引きます ── VBA の
+              <code>目標値抜き取り</code> と同じ引き方です。
+            </p>
+          </details>
+
+        </div>
+      </section>
+
+      {# ---- 停止内訳 --------------------------------------------
+         **鍵は要りません。** 「停止内訳も管理者以外が触れるようにしたい」
+         ── 停止理由を足すたびに管理者(マスタ管理の鍵)を呼ばなくて済む
+         ように、停止内訳.csv を置けばそちらを読みます。見本を出す・渡して
+         効かせる・読み直すは誰でも押せます(上の鍵の帯はこの面には効きません)。
+
+         出どころは**分類ごと**: CSVに行があればCSV、1行も無ければ
+         伝送用ファイルの表。重ねない(`logic/stop_csv`)。
+         -------------------------------------------------------- #}
+      <section class="tabpanel" id="panel-master-stops" role="tabpanel"
+               aria-labelledby="tab-master-stops" hidden>
+        <div class="card" id="stop-reasons">
+          <div class="card__head">
+            <h2>停止内訳</h2>
+            <span class="lead">日報入力の停止理由・全停入力・集計の名前に使う一覧</span>
+          </div>
+
+          {% set sr = state.stop_reasons %}
+          <div class="msg msg--info msg--prose">
+            <b>鍵(管理者パスワード)は要りません。</b>
+            停止内訳.csv を置けば、<b>そちらを先に</b>読みます。
+            <ul class="check__list">
+              <li>CSV: <code id="stop-reason-source">{{ sr.source }}</code>
+                <span class="badge {% if sr.exists %}badge--done{% else %}badge--todo{% endif %}"
+                      id="stop-reason-exists">
+                  {% if sr.exists %}あります{% else %}まだありません(表をそのまま使っています){% endif %}
+                </span></li>
+              <li>表: <code>{{ sr.master }}</code> の
+                「作業停止時間内訳_1〜3」</li>
+            </ul>
+            分類ごとに、<b>CSVに行があればCSVだけ</b>を、1行も無ければ表を使います
+            (重ねません ── CSVから消した理由が、表から戻ってこないように)。
+          </div>
+          <p class="lead">
+            <strong>CSVをメモ帳で直せば、次に日報入力を開いたときから効きます。</strong>
+            置き場所は<a href="/settings?tab=paths">参照設定</a>の
+            「停止内訳の置き場所」で変えられます(名前は
+            <code>停止内訳.csv</code> で固定です)。
+          </p>
+
+          <table class="list">
+            <thead><tr><th>分類</th><th>出どころ</th><th>理由(記号 内訳)</th></tr></thead>
+            <tbody id="stop-reason-body">
+              {% for g in sr.groups %}
+              <tr>
+                <td><b>{{ g.number }}</b> {{ g.call }}<br>
+                  <span class="lead">{{ g.table }}・記号は{{ g.kind }}</span></td>
+                <td>
+                  {% if g.origin %}{{ g.origin }}{% else %}<span class="lead">―</span>{% endif %}
+                  {% if g.origin == "CSV" and g.master_count %}
+                  <br><span class="lead">(表の {{ g.master_count }}件は使っていません)</span>
+                  {% endif %}
+                  {% if g.master_error and g.origin != "CSV" %}
+                  <br><span class="badge badge--todo">表を読めません</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% for r in g.reasons %}<div><code>{{ r.code }}</code> {{ r.label }}</div>
+                  {% else %}<span class="lead">ありません(この分類は選べません)</span>{% endfor %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <div class="msg msg--error msg--prose" id="stop-reason-error" role="alert"
+               style="margin-top:var(--sp-2)" {% if not sr.error %}hidden{% endif %}>
+            このファイルを読めませんでした: {{ sr.error }}
+          </div>
+          <div class="msg msg--error msg--prose" id="stop-reason-problems"
+               style="margin-top:var(--sp-2)" {% if not sr.problems %}hidden{% endif %}>
+            <b>使えなかった行があります。</b>
+            <ul class="check__list">
+              {% for p in sr.problems %}
+              <li>{{ p.line_no }}行目: <code>{{ p.text }}</code> ── {{ p.reason }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          <div class="msg msg--warn msg--prose" id="stop-reason-warnings"
+               style="margin-top:var(--sp-2)" {% if not sr.warnings %}hidden{% endif %}>
+            <b>使っていますが、確かめてください。</b>
+            <ul class="check__list">
+              {% for p in sr.warnings %}
+              <li>{{ p.line_no }}行目: <code>{{ p.text }}</code> ── {{ p.reason }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="btn-row" style="margin-top:var(--sp-3)">
+            <button class="btn btn--primary" type="button" id="stop-reason-template">
+              見本を出す(これを書き換えれば済みます)
+            </button>
+            <span class="lead">
+              いま使っている一覧を、そのまま書き出します。既にファイルがあるときは
+              <b>上書きせず</b>、隣に <code>停止内訳.見本.csv</code> を作ります
+            </span>
+          </div>
+          <div class="btn-row" style="margin-top:var(--sp-2)">
+            <label class="btn" for="stop-reason-file">
+              CSVから読む(書き換えたファイルを渡す)
+            </label>
+            <input type="file" id="stop-reason-file" accept=".csv,.txt,.tsv,text/csv" hidden>
+            <span class="lead">
+              <b>渡しただけでは書きません</b> ── 増える・消える理由を出したあと、
+              「決定」で <code>{{ sr.source }}</code> を書き換えます
+              (前のファイルは <code>停止内訳.前回.csv</code> に残します)
+            </span>
+          </div>
+          <div class="msg" id="stop-reason-preview" hidden style="margin-top:var(--sp-2)"></div>
+          <div class="btn-row" id="stop-reason-apply-row" hidden style="margin-top:var(--sp-2)">
+            <button class="btn btn--primary" type="button" id="stop-reason-apply">
+              決定(このファイルの一覧にする)
+            </button>
+            <button class="btn" type="button" id="stop-reason-cancel">やめる</button>
+          </div>
+          <div class="btn-row" style="margin-top:var(--sp-2)">
+            <button class="btn" type="button" id="stop-reason-reload">いまのCSVを読み直す</button>
+            <span class="lead">メモ帳で直したあと、<b>効いたかどうかをここで確かめられます</b></span>
+          </div>
+          <div class="msg" id="stop-reason-note" hidden style="margin-top:var(--sp-2)"></div>
+
+          <details style="margin-top:var(--sp-3)">
+            <summary class="lead">CSVの書き方</summary>
+            <pre class="codeblock"># 行頭 # は覚え書き。空行は飛ばします
+分類,内訳番号,内訳,備考
+1,0,休憩食事,
+2,イ,突発停止(機械),
+3,A,段取り変更,</pre>
+            <ul class="lead">
+              <li><b>分類</b> … 1=管理ロス(記号は数字)/ 2=突発・待ち(記号は片仮名)/
+                3=ハンドリング(記号は英字)。<code>作業停止時間内訳_1</code> の
+                <code>_1</code> に当たります</li>
+              <li><b>内訳番号</b> … 日報に残る記号です。<b>昔の日報と同じ記号を
+                使ってください</b> ── 変えると、昔の日報の停止が「内訳にない記号」に
+                なります。記号は分類をまたいで1つずつ</li>
+              <li><b>記号の文字の種類</b> … 集計(管理ロス/突発・待ち/ハンドリング)は
+                <b>記号の文字</b>で分けます(VBA <code>CheckCharType</code>)。
+                数字の記号を 2 に書くと、選ぶときは突発・待ちなのに集計では
+                管理ロスに数えられます(読めますが、上に注意を出します)</li>
+              <li>1つの分類だけ書いても構いません。書かなかった分類は表のままです</li>
+            </ul>
+          </details>
+        </div>
+      </section>
+
+      {# ---- 直の境界時刻 ----------------------------------------
+         **見せるためだけの表ではありません。** ここに出ている時刻が、
+         日報のあちこちを決めています ── 何直か、どの日の日報か、
+         終了時刻を次の行へ引き継ぐか、いつ印刷を催促するか、作業時間の
+         上限をいくつにするか。値そのものは伝送用ファイルの「時間用」表
+         から来ます。直すのは隣の「表を見る / 直す」で、直せばこの表にも
+         すぐ写ります(`master_admin.after_write`)。
+         -------------------------------------------------------- #}
+      <section class="tabpanel" id="panel-master-shift" role="tabpanel"
+               aria-labelledby="tab-master-shift" hidden>
+        <div class="card">
+          <div class="card__head">
+            <h2>直の境界時刻</h2>
+            <span class="lead">出どころ: 伝送用ファイルの「時間用」表(直すのは「表を見る / 直す」から。直せばすぐここに写ります)</span>
+          </div>
+          <table class="list">
+            <thead><tr><th>直</th><th>開始</th><th>終了</th></tr></thead>
+            {# 「表を見る / 直す」で時間用を直すと、`views/master.js` がここを描き直す #}
+            <tbody id="shift-times-body">
+              {% for key, pair in shift_times.items() %}
+              <tr><td>{{ key }}</td><td>{{ pair[0] }}</td><td>{{ pair[1] }}</td></tr>
+              {% else %}
+              <tr><td colspan="3" class="empty">既定値で動いています(未取り込み)。</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="btn-row" style="margin-top:var(--sp-3)">
+            <button class="btn" type="button" id="sync-shift">時間マスタを取り込む</button>
+            <span class="lead">伝送用ファイルの「時間用」表 → この表</span>
+          </div>
+          <div class="msg" id="shift-note" hidden style="margin-top:var(--sp-2)"></div>
+
+          <p class="lead" style="margin-top:var(--sp-3)">
+            <strong>この時刻が決めているもの(見せるためだけの表ではありません):</strong>
+          </p>
+          <ul class="lead uses">
+            <li><b>いま何直か</b> ── 帯の「直」と、保存するときの直
+              (<code>TimeCheck</code>)</li>
+            <li><b>どの日の日報か</b> ── 3直の 00:00〜終了は<b>前の日</b>の日報に
+              なります(<code>TodayCheck</code>)</li>
+            <li><b>終了時刻の引き継ぎ</b> ── 直の正規の終了時刻を打つと、次の行の
+              開始へ送ります(<code>Same_Text</code>)</li>
+            <li><b>直の終わりの催促と自動確定</b> ── 終了15分前から催促(画面の帯と音)、
+              <b>5分前になると、打ってあるぶんを自動で確定します</b>
+              ── チェック → 集計の作り直し、まで。確定するとその直の催促は
+              止まります。<b>紙は1枚も出ません</b> ── 刷るのは「印刷」ボタンから、
+              作業者が欲しいときだけです(刷っても確定したことにはなりません)
+              (<code>PrintCheck</code> / <code>ExecuteAutoPrint</code>)</li>
+            <li><b>作業時間の上限</b> ── 直の長さを超える作業時間を断ります
+              (<code>GetShiftLimitMin</code>)</li>
+          </ul>
+          <p class="lead">
+            マスタから読めない直は<strong>控えの時刻({{ shift_defaults }})</strong>で
+            動きます。現場の時刻と違うと、上の5つが全部ずれます。
+          </p>
+        </div>
+      </section>
+      </div>
+    </div>
+  </section>
+
+  {# ==============================================================
+     3. 音
+
+     **音は補助。** 伝えたいことは文言のほうにあり、ファイルが無くても
+     催促そのものは画面に出ます。鳴らすのはブラウザで、鳴らすかどうかを
+     決めるのはサーバ(`nippou/logic/sound.py`)。
+
+     置き場所を別の面に置いていたせいで、「ファイル名を直したのに鳴らない
+     (置き場所が違う)」が分かりませんでした。ここでは一緒に出します。
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "sound") | first %}
+  <section class="tabpanel" data-panel="sound" id="panel-sound" role="tabpanel"
+           aria-labelledby="tab-sound"
+           {% if default_tab != "sound" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+    <div class="card">
+      <div class="card__head">
+        <h2>音</h2>
+        <span class="lead">いつ何を鳴らすか。置き場所もこの面にあります</span>
+      </div>
+      {# **出来事ごとに選ぶ**(v4.4.0)。選べるのは「鳴らさない」と、音声フォルダに
+         置いてある音声ファイル。**新しい音を使うときは、フォルダに置いてから
+         ここで選ぶだけ**です(コードは触らない)。一覧に無い出来事を足すときだけ
+         コードを直します(`logic/sound.SOUNDS`)。 #}
+      <p class="lead">
+        音声フォルダ <code>{{ state.sound_folder.dir }}</code> の音声ファイルから選びます
+        {%- if state.sound_folder.files %}(いま {{ state.sound_folder.files | length }} 個){% endif %}。
+        新しい音は、まずこのフォルダへ置いてください。
+      </p>
+      {% if state.sound_folder.error %}
+      <div class="msg msg--warn">{{ state.sound_folder.error }}</div>
+      {% endif %}
+      <table class="list sound-events">
+        <thead>
+          <tr><th>出来事</th><th>鳴らす音</th><th>状態</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for s in state.sounds %}
+          <tr data-sound="{{ s.key }}">
+            <td>{{ s.label }}<br><span class="lead">{{ s.when }}</span></td>
+            <td>
+              <select id="sound-{{ s.key }}" data-sound-file="{{ s.setting_key }}"
+                      aria-label="{{ s.label }}で鳴らす音">
+                {% for o in s.options %}
+                <option value="{{ o.value }}" {% if o.selected %}selected{% endif %}>{{ o.label }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              {% if s.off %}<span class="badge">鳴らしません</span>
+              {% elif s.exists %}<span class="badge badge--done">鳴らします</span>
+              {% else %}<span class="badge badge--todo">ファイルがありません(文言だけ出ます)</span>{% endif %}
+            </td>
+            <td>
+              <button class="btn btn--sm" type="button" data-preview="{{ s.key }}">試聴</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="btn-row" style="margin-top:var(--sp-2)">
+        <button class="btn btn--primary" type="button" id="save-sounds">音の設定を保存</button>
+      </div>
+      <div class="msg" id="sound-note" hidden style="margin-top:var(--sp-2)"></div>
+      <p class="lead">
+        音が鳴らなくても催促は画面に出ます。ブラウザは画面を一度も触っていない
+        あいだ音を鳴らせないので、<strong>最初のクリックのあと</strong>から
+        鳴るようになります。
+      </p>
+
+      <p class="lead" style="margin-top:var(--sp-4)">
+        置き場所は <a href="#" data-goto-tab="paths"><b>参照設定</b></a> の面で
+        決めます。いまは <code>{{ path_map[keys.sound_dir].resolved }}</code>
+        です ── <b>この面で決めるのは、出来事ごとに何を鳴らすかだけ</b>です。
+        同じファイルを複数の出来事に選んでもかまいません。
+      </p>
+    </div>
+  </section>
+
+  {# ==============================================================
+     4. 取り込みと直し
+
+     **ふだんは押しません。** 手元が壊れたとき・過去ぶんを載せるとき・
+     計算の決まりが変わったときの3つだけです。日々使うものと混ざって
+     いると、探すときに毎回このへんを読むことになります。
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "data") | first %}
+  <section class="tabpanel" data-panel="data" id="panel-data" role="tabpanel"
+           aria-labelledby="tab-data"
+           {% if default_tab != "data" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+
+    {# ---- 過去の日報をCSV/Excelから取り込む ----
+
+       このツールに切り替える前の日報は、VBAのブックの中にしかありません。
+       紙もグラフも集計も `daily_header` / `daily_detail` から作るので、
+       **そこに戻せなければ過去は一生出てきません。**
+
+       **押すまで書きません。** 取り込みは今あるものを黙って置き換え
+       られる操作なので、下見で「何ページ入るか / どれが置き換わるか」を
+       出してから押させます(`services/csv_import.py`)。 #}
+    <div class="card" id="import">
+      <div class="card__head">
+        <h2>過去の日報を取り込む</h2>
+        <span class="lead">Excelにしか無いぶんを、この道具に載せる</span>
+      </div>
+      <p class="lead">
+        Excelの日付シート(<code>.xlsx</code>)かCSVを読んで、<strong>日報そのもの</strong>
+        として入れます。<strong>やることは「保存(確定)」と同じ</strong>です ──
+        日報を入れ、その直の集計を作り直し、<strong>その日の集計CSVまで書きます</strong>。
+        紙・グラフ・集計管理・集計CSVの<strong>全部に出ます</strong>。
+      </p>
+      <p class="lead">
+        集計CSVは<strong>入れた日報の作業日</strong>のフォルダ
+        (<code>{{ path_map[keys.report_out_dir].resolved }}\ライン名\集計\年月\日</code>)へ
+        出ます ── 今日のフォルダではありません。何日ぶん出るかは
+        「中身を見る」で先に出します。
+        {% if not path_map[keys.report_out_dir_2].off %}
+        「そのままにする」で入れた日は、「集計CSVの出力パス(2つ目)」
+        (<code>{{ path_map[keys.report_out_dir_2].resolved }}</code>)にも同じ形で出ます
+        (「共有にも入れる」で入れた日は、あとで「共有へ保存」を押したときに出ます)。
+        {% endif %}
+      </p>
+      {# **掴んで落とせるようにします。**
+         道を打つのは、共有フォルダの深いところだと現実的ではありません。
+         10本あれば10回打つことになります。ブラウザは落とされたファイルの
+         本当の道を教えないので(安全のため)、中身のほうを送ります。 #}
+      <div class="drop" id="import-drop"
+           {% if not admin %}data-locked="1"{% endif %}>
+        <p class="drop__head">
+          ここへ<strong>ファイルを落として</strong>ください
+          <span class="lead">.xlsx / .csv ── <b>何本でもまとめて</b>渡せます</span>
+        </p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="import-pick"
+                  {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}
+                  >ファイルを選ぶ…</button>
+          <input id="import-files" type="file" multiple accept=".xlsx,.xlsm,.csv"
+                 hidden {% if not admin %}disabled{% endif %}>
+          <span class="lead" id="import-picked"></span>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field field--wide">
+          <label for="import-path">道を打って渡すこともできます</label>
+          <input id="import-path" type="text"
+                 placeholder="C:\…\2026.08.26.3直.コイル梱包.xlsx"
+                 {% if not admin %}disabled{% endif %}>
+        </div>
+        {#
+          **入れる先のラインは人が選びます。**
+
+          過去のシートの呼び名は書き方が揃っていないので、読むときに
+          選んでもらいます ── 当たりは付けて既定に出しますが、外したときに
+          気づけるよう、最後は人が決めます。
+        #}
+        <div class="field">
+          <label for="import-line">入れる先のライン</label>
+          <select id="import-line" {% if not admin %}disabled{% endif %}>
+            <option value="">(ファイルに書いてあるとおり)</option>
+            {% for name in lines %}
+            <option value="{{ name }}">{{ name | line_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn" type="button" id="import-preview"
+                {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}
+                >中身を見る(まだ入れない)</button>
+        <button class="btn" type="button" id="import-template"
+                {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}
+                >見本を出す</button>
+      </div>
+      {#
+        もとは「共有へは送らない(送信済みとして入れる)」と書いていました。
+        **何のことか読めません** ── 「送信済み」が何を指すのか、外すと
+        何が起きるのかが、どちらも書いていませんでした。
+
+        やっていることは1つです: 取り込んだぶんを、次の「共有へ保存」で
+        **共有の日報管理へ書きに行くかどうか。** 既定は行きません
+        ── 古いぶんはVBAの頃に既に共有へ入っているので、もう一度送ると
+        同じものを上書きしに行くことになります。
+      #}
+      <h3 style="margin-top:var(--sp-4)">共有の日報管理はどうするか</h3>
+      <label class="check">
+        <input type="radio" name="import-share" value="keep" checked
+               {% if not admin %}disabled{% endif %}>
+        <span>
+          <b>そのままにする(おすすめ)</b><br>
+          <span class="lead">
+            取り込むのは<strong>この端末の中だけ</strong>。共有の日報管理には
+            書きに行きません ── 古いぶんは<strong>VBAの頃に既に共有へ
+            入っている</strong>のがふつうだからです。紙もグラフも集計CSVも
+            出ます(それらは手元のデータから作ります)。
+          </span>
+        </span>
+      </label>
+      <label class="check" style="margin-top:var(--sp-2)">
+        <input type="radio" name="import-share" value="send"
+               {% if not admin %}disabled{% endif %}>
+        <span>
+          <b>共有にも入れる</b><br>
+          <span class="lead">
+            次に「共有へ保存」を押したとき、取り込んだぶんも
+            <strong>まとめて共有の日報管理へ書きます</strong>。共有側に
+            そのぶんが無い(または間違っている)と分かっているときだけ。
+          </span>
+        </span>
+      </label>
+      {# **押すものを、選ぶものの並びの中に置く。**
+         下見の一番下にしか無かったので、「ファイルを選んでラインも選んで
+         そのままにするを選んで、そのあとは？」と探させていました。
+         渡すまでは押せません(何を入れるのか決まっていないので) #}
+      <div class="btn-row" style="margin-top:var(--sp-4)">
+        <button class="btn btn--primary btn--lg" type="button" id="import-go"
+                disabled>取り込む</button>
+        <span class="lead" id="import-go-why">
+          上でファイルを渡すと押せます
+        </span>
+      </div>
+
+      {# ---- 進み具合 ----
+
+             件数が多いときはプログレス表示させてください
+
+         何百ページもあると何十秒もかかります。そのあいだ画面は押した
+         まま止まって見える ── 止まっているのか動いているのかが
+         分からないと、人はもう一度押すか、閉じるかします。
+
+         **段・いくつ目・いま何を**の3つを出します(`logic/progress.py`
+         が言葉を作り、画面は写すだけ)。数はサーバに置いてあるので、
+         画面は 0.4 秒ごとに `/api/settings/import/progress` を見に来ます。 #}
+      <div class="job" id="import-progress" hidden aria-live="polite">
+        <div class="job__head" id="import-progress-head"></div>
+        <progress class="job__bar" id="import-progress-bar"
+                  max="100" value="0"></progress>
+        <div class="lead job__note" id="import-progress-note"></div>
+      </div>
+
+      {# 下見の結果。**押す前に、何が起きるかを全部出す** #}
+      <div id="import-plan" hidden style="margin-top:var(--sp-3)"></div>
+      <div class="msg" id="import-note" hidden style="margin-top:var(--sp-2)"></div>
+      <p class="lead">
+        <b>Excelの日付シート(.xlsx)はそのまま読めます</b> ──
+        VBAの頃の「梱包実績日報表」1ファイルが1日ぶん(3直まとめて)です。
+        直の切れ目・停止・用途コード・コイル縦割まで、書いてあるとおりに入ります。
+      </p>
+      <p class="lead">
+        CSVで入れるときは見出しが<strong>1行目</strong>に要ります。この道具が
+        出した <code>集計明細_….csv</code> や月別の <code>〜_明細.csv</code> は
+        そのまま読めます。手持ちの表から作るときは「見本を出す」で見出しだけの
+        CSVを作り、その下に貼ってください。
+        <strong>日付・ライン・直</strong>が無い行は入りません。
+      </p>
+    </div>
+
+    {# ---- 当直をDBから復旧 ---- #}
+    <div class="card">
+      <div class="card__head"><h2>当直をDBから復旧</h2>
+        <span class="lead">手元のデータが壊れたときだけ</span></div>
+      <p class="lead">
+        保存した記録を<strong>見る・呼び出す</strong>のは
+        <a href="/records">記録を見る</a>に移しました。ここに残っているのは、
+        <strong>手元のデータが壊れて入れ直したとき</strong>の直し方だけです。
+      </p>
+      <div class="btn-row">
+        <button class="btn" type="button" id="restore-shift"
+                {% if not admin %}disabled title="上の鍵を開けると使えます"{% endif %}
+                >当直をDBから復旧</button>
+      </div>
+      <p class="lead">
+        いまの直の<strong>全ページ</strong>をDBから読み直して、印刷用HTMLを
+        作り直します。
+      </p>
+      <div class="msg" id="db-note" hidden style="margin-top:var(--sp-2)"></div>
+    </div>
+
+    {# ---- 集計の作り直し ----
+
+       **ふだんは押しません。** 集計は日報を保存するたびに作り直して
+       います。ここに置いてあるのは、この仕組みが入る前に保存したぶんと、
+       共有DBの表を直に書き換えたぶんのためです。 #}
+    <div class="card">
+      <div class="card__head">
+        <h2>集計を作り直す</h2>
+        <span class="lead">明細から、直ごとの集計を計算し直す</span>
+      </div>
+
+      {# 「集計を作り直す：何してるのかよくわかりません」と言われた
+         ところです。**何を読んで、何を書き換えて、何が変わるのか**を
+         この順で書きます。押す前に分かるのが要点なので、出す場所は
+         ボタンの上です。 #}
+      <p class="lead">
+        <b>何をするボタンか</b> ──
+        打った12行(明細)から<b>足し算をやり直して</b>、その直の
+        <b>集計の値を上書き</b>します。
+      </p>
+      <div class="scroll-x">
+        <table class="list">
+          <tbody>
+            <tr><th>読むもの</th>
+                <td>打った12行そのもの(<code>daily_header</code> /
+                    <code>daily_detail</code>)。<b>手元のDB</b>です</td></tr>
+            <tr><th>書き換えるもの</th>
+                <td>直ごとの集計(<code>packing_report</code> /
+                    <code>packing_report_detail</code>)。<b>手元のDBだけ</b>で、
+                    共有へは送りません</td></tr>
+            <tr><th>変わって見えるところ</th>
+                <td>集計・グラフの数字 / 集計管理の表 / 紙の頭に載る集計</td></tr>
+            <tr><th>変わらないもの</th>
+                <td>打った12行は<b>1文字も触りません。</b>
+                    集計CSVも書き直しません(欲しければ
+                    「集計CSVを出力」を押してください)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="lead">
+        <b>ふだんは押しません。</b> 集計は日報を保存するたびに作り直して
+        いるので、いつもの使い方では常に最新です。押すのは次の2つの
+        ときだけです。
+      </p>
+      <ul class="lead">
+        <li>この仕組みが入る<b>前に</b>保存したぶんを、出し直したいとき</li>
+        <li>負荷係数のマスタ(<code>用途名負荷係数算出</code>)を差し替えたとき
+            ── <b>過ぎた直の集計は当時の係数のまま</b>なので、今の係数で
+            出し直すにはここから走らせます</li>
+      </ul>
+
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <label class="lead" for="rebuild-start">開始</label>
+        <input class="input" type="date" id="rebuild-start">
+        <label class="lead" for="rebuild-end">終了</label>
+        <input class="input" type="date" id="rebuild-end">
+        <button class="btn" type="button" id="rebuild-summary">作り直す</button>
+      </div>
+      <div class="msg msg--info" id="rebuild-note" hidden style="margin-top:var(--sp-2)"></div>
+    </div>
+
+    {# ------------------------------------------------------------
+       中身の無い紙を片付ける
+
+           残っているのか見えなければ消せないですよね
+
+       v3.61.2 より前は、作業者を選んだだけで1行も打っていない紙が
+       保存されていました(自動保存が走るため)。作らないようには
+       しましたが、**すでにできてしまったぶんは残ったまま**です。
+
+       数が出るだけでは消せません ── どの日の・どの直の・どのページ
+       なのかが見えて、そこから消せて初めて片付きます。
+       ------------------------------------------------------------ #}
+    <div class="card">
+      <div class="card__head">
+        <h2>中身の無いページを片付ける</h2>
+        <span class="lead">1行も打っていないページだけを消せます</span>
+      </div>
+      <p class="lead">
+        1行も打っていないページは、<b>共有へ未送信に数えられ</b>、直の終わりに
+        「まだ共有へ渡していません」と全画面が出る元になります。ところが
+        休憩60分が入っていないので<b>共有へは出せません</b> ── 片付け
+        ようのない宿題として残ります。
+      </p>
+      <p class="lead">
+        <b>打ってあるページはこの一覧に出ません。</b> 消してよいかは押した
+        瞬間にもう一度サーバが確かめます ── 一覧を出してから押すまでの
+        あいだに、誰かが打っているかもしれないので。
+        <b>共有へ渡したものは消せません</b>(手元だけ消すと、どちらが
+        本当か分からなくなります)。
+      </p>
+
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <button class="btn" type="button" id="empty-pages-find">探す</button>
+        <span class="lead" id="empty-pages-head">押すと一覧が出ます</span>
+      </div>
+      <div class="scroll-x" id="empty-pages-box" hidden style="margin-top:var(--sp-2)">
+        <table class="list">
+          <thead>
+            <tr><th>報告日</th><th>ライン</th><th>直</th><th>ページ</th>
+                <th>作業者</th><th>保存日時</th><th></th></tr>
+          </thead>
+          <tbody id="empty-pages-rows"></tbody>
+        </table>
+      </div>
+      <div class="msg msg--info" id="empty-pages-note" hidden
+           style="margin-top:var(--sp-2)"></div>
+    </div>
+
+    {# ---- コンバート(v4.13.0)── VBA の前の名前の表を、正規の名前の表へ写す ----
+
+       「ラインごと・並行になるので本ツールは正規名、VBAは旧で蓄積されてしまう」
+       「これがあれば任意のタイミングで変えれるんですよね？」
+
+       **押したときだけ動きます。** 何度押しても同じ結果(写し済みは飛ばす)。
+       前の表には触らないので、VBA はそのまま動きます(`services/line_rename.py`)。
+       ------------------------------------------------------------ #}
+    <div class="card" id="line-rename">
+      <div class="card__head">
+        <h2>ライン名のコンバート</h2>
+        <span class="lead">VBA が前の名前で貯めた日報を、このツールの表へ写す</span>
+      </div>
+      <p class="lead">
+        共有の日報データの <code>T_日報ヘッダー_LS</code> などを
+        <code>T_日報ヘッダー_機側</code> などへ写します。<b>前の表には触りません</b>
+        (VBA はそのまま使えます)。<b>何回押しても大丈夫</b>です ── 押すたびに、まだ写していない分と
+        VBA で直した分だけを写します。このツールで書いたページは上書きしません。
+      </p>
+      <p class="lead" id="line-rename-path">
+        対象のファイル: <code>{{ state.line_rename.path }}</code><br>
+        「共有へ保存」と同じ、共有の日報データです(VBA が書いているファイル)。
+        置き場所は 参照設定 の「{{ state.line_rename.path_label }}」で決まります。
+      </p>
+      <details>
+        <summary class="lead">写すライン・写さないライン</summary>
+        <p class="lead">写すのは前と正規で名前が違う5ライン
+          ({% for n in state.line_rename.renamed %}{{ n.old }} → {{ n.official }}{% if not loop.last %}・{% endif %}{% endfor %})です。
+          {{ state.line_rename.same_name | join("・") }} は名前が同じなので、写すものがありません
+          (VBA とこのツールが同じ表を使います)。</p>
+      </details>
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <button class="btn" type="button" id="line-rename-survey"
+                {% if not editor %}disabled title="上の鍵を開けると使えます"{% endif %}>書かずに試す</button>
+        <button class="btn btn--primary" type="button" id="line-rename-run"
+                {% if not editor %}disabled title="上の鍵を開けると使えます"{% endif %}>コンバートする</button>
+        <span class="lead" id="line-rename-head">{% if editor %}まず「書かずに試す」で数を見てください{% else %}管理者(または Administrator)だけが使えます{% endif %}</span>
+      </div>
+      <div class="scroll-x" id="line-rename-box" hidden style="margin-top:var(--sp-2)">
+        <table class="list rename__table">
+          <thead>
+            <tr><th>ライン</th><th>前の表のページ</th>
+                {% for kind in state.line_rename.kinds %}<th>{{ kind }}</th>{% endfor %}
+                <th>確かめ</th></tr>
+          </thead>
+          <tbody id="line-rename-rows"></tbody>
+        </table>
+      </div>
+      <div class="msg msg--info" id="line-rename-note" hidden
+           style="margin-top:var(--sp-2)"></div>
+    </div>
+  </section>
+
+  {# ==============================================================
+     5. 参照設定 ── パスはここだけで決める
+
+     「参照パス設定は専用でタブ置きましょう」「XXXの参照パス /
+     zzzzの出力パス と分かりやすく」「ダイレクトにパス入力は可能に」
+     「ファイル名までの入力は不要」── そのとおりに組み直した面です。
+
+     **並ぶのはフォルダだけ**です(`SHOWN_PATH_KEYS`)。ファイル名は
+     既定で足りるので出しません ── 音のファイル名だけは「音」の面に
+     あります(鳴らすものを選ぶのは設定ではなく好みなので)。
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "paths") | first %}
+  <section class="tabpanel" data-panel="paths" id="panel-paths" role="tabpanel"
+           aria-labelledby="tab-paths"
+           {% if default_tab != "paths" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+    <p class="lead" id="paths-shared-note">
+      ここで決めるのは<b>複数のPCで共有する置き場所</b>です(既定のままだとこのPCの中を
+      指すものもあります ── 集計CSVの出力先など)。
+      <b>このPCだけに残すファイル</b>(手元の日報 <code>nippou_local.sqlite3</code>・この端末の設定
+      <code>user_config.json</code> など)は、置き場所が決まっていて変えられません ──
+      一覧は <a href="/settings?tab=terminal" data-goto-tab="terminal">この端末と配布</a> の面にあります。
+    </p>
+
+    <div class="card" id="paths">
+      <div class="card__head">
+        <h2>参照設定</h2>
+        <span class="lead">このツールが読みに行くフォルダと、書き出すフォルダ</span>
+        {# **最初に失敗したままにしない。** 下に出ている「あります /
+           ありません」は画面を描いたときの結果です。共有が後から繋がった・
+           ファイルを置いた、のときに確かめる先が要ります #}
+        <button class="btn" type="button" id="paths-recheck">
+          いまの状態を読み直す</button>
+      </div>
+      <p class="lead">
+        <strong>パスを決めるのはこの面だけ</strong>です。欄に直接打っても、
+        「フォルダを選ぶ…」で辿ってもかまいません。空にすると既定に戻ります。
+        ファイル名は決めなくて構いません ── 既定の名前を使い、
+        <code>.accdb</code> しか置いていないフォルダでは自動でそちらを拾います。
+      </p>
+
+      {% for group in path_groups %}
+      <h3 style="margin-top:var(--sp-5)">{{ group.label }}</h3>
+      {{ parts.path_group(group.rows, files, admin,
+                          group.label + "を保存") }}
+      {% endfor %}
+    </div>
+  </section>
+
+  {# ==============================================================
+     5. この端末
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "terminal") | first %}
+  <section class="tabpanel" data-panel="terminal" id="panel-terminal" role="tabpanel"
+           aria-labelledby="tab-terminal"
+           {% if default_tab != "terminal" %}hidden{% endif %}>
+    {{ parts.lockbar(tab, admin) }}
+
+    <div class="card">
+      <div class="card__head"><h2>管理者モード</h2></div>
+      {# **何が開くのかを先に書く。** 押せないボタンが並んでいる理由が
+         分からないと、「効いていない」としか見えない #}
+      <p class="lead">
+        鍵(管理者パスワード)は<strong>どの面でも同じもの</strong>です。
+        各面のいちばん上にある帯から開けます。開くと、
+        <strong>過去の直を呼び出す</strong>(<a href="/records">記録を見る</a>)・
+        <strong>ページを移る</strong>・<strong>当直をDBから復旧</strong>・
+        <strong>過去の日報を取り込む</strong>・<strong>マスタを直す</strong>・
+        <strong>この端末のラインを変える</strong>・
+        <strong>守られた参照パスを変える</strong>が使えます。
+      </p>
+      <p class="lead">
+        合言葉はこの端末で変えられます(下の「管理者パスワードを変える」)。
+        まだ変えていなければ<strong>VBA版と同じ合言葉</strong>です
+        ── ソースでは <code>nippou/config.py</code> の
+        <code>admin_password</code> に書いてあります。
+      </p>
+
+      {# パスワードを変えられるようにする。変えられないパスワードは、
+         実質「変えない」と同じ ── 人が入れ替わっても直せない #}
+      <details style="margin-top:var(--sp-3)">
+        <summary>管理者パスワードを変える
+          {% if state.admin_origin == "terminal" %}<span class="badge">この端末で変更済み</span>
+          {% elif state.admin_origin == "site" %}<span class="badge">配布設定の値</span>
+          {% else %}<span class="badge badge--todo">既定のまま</span>{% endif %}
+        </summary>
+        <div class="row" style="margin-top:var(--sp-2)">
+          <div class="field"><label for="pw-current">いまの</label>
+            <input id="pw-current" type="password" size="12"></div>
+          <div class="field"><label for="pw-new">新しい</label>
+            <input id="pw-new" type="password" size="12"></div>
+          <div class="field"><label for="pw-confirm">確認</label>
+            <input id="pw-confirm" type="password" size="12"></div>
+          <button class="btn" type="button" id="pw-change">変える</button>
+          <button class="btn" type="button" id="pw-reset">既定に戻す</button>
+        </div>
+        <p class="lead">
+          {{ state.admin_min_length }}文字以上。値は保存も表示もしません(撹拌して持ちます)。
+          忘れたときは <code>user_config.json</code> の <code>admin_password</code> の行を消すと既定に戻ります
+          (配布設定に入れてあれば、そちらのパスワードに戻ります)。
+        </p>
+        <div class="msg" id="pw-note" hidden></div>
+      </details>
+    </div>
+
+    {# ---- この端末のライン ----
+
+       **据え付けのときに1度決めるもの。** 日報入力の1番目に並んでいると
+       「まず選ぶもの」に見えて、押し間違えたまま打ち始められる ── ラインが
+       違えば保存先のキーごと変わるので、気づくのは翌日の集計になる。 #}
+    <div class="card" id="line-setting">
+      <div class="card__head">
+        <h2>この端末のライン</h2>
+        <span class="lead">据え付けのときに決めます。日報入力からは変えられません</span>
+      </div>
+      {# **見せるのは正規の呼び名**(マスタと同じ書き方。v4.12.4)。コードは小さく添える。
+         並びは定義の表の順(`logic/line_names.DEFINITIONS`) #}
+      <div class="path__now">
+        <span class="lead">いま:</span>
+        <b class="line-now">{{ state.line.current_official }}</b>
+        {% if state.line.origin == "access" %}
+        <span class="badge badge--done">アクセス権限の表で決まりました ── この端末に覚えています</span>
+        {% elif state.line.origin == "manual" %}
+        <span class="badge" data-hint="アクセス権限の表の値が変わったときは、表のほうに戻ります">管理者モードで選びました ── この端末に覚えています</span>
+        {% else %}<span class="badge badge--todo">まだ決めていません(決めるまで日報は打てません)</span>{% endif %}
+      </div>
+      <div class="btn-row line-choices" id="line-choices" style="margin-top:var(--sp-2)">
+        {% for c in state.line.choices %}
+        <button class="btn btn--sm{% if c.code == state.line.current %} btn--primary{% endif %}"
+                type="button" data-line="{{ c.code }}" data-label="{{ c.official }}"
+                {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}
+                >{{ c.official }}</button>
+        {% endfor %}
+      </div>
+      <div class="btn-row" id="maru-subs"
+           {% if not state.line.is_maru %}hidden{% endif %}
+           style="margin-top:var(--sp-2)">
+        <span class="lead">{{ state.line.maru_official }}の ラインNO</span>
+        {% for i in state.line.maru_choices %}
+        <button class="btn btn--sm{% if i == state.line.maru_sub %} btn--primary{% endif %}"
+                type="button" data-maru="{{ i }}" data-line="{{ state.line.maru_official }}"
+                {% if not admin %}disabled{% endif %}>{{ state.line.maru_official }}{{ i }}</button>
+        {% endfor %}
+      </div>
+      <div class="msg" id="line-note" hidden style="margin-top:var(--sp-2)"></div>
+      {# アクセス権限の表(v4.12.0)。**表で決まるのが既定**で、パスワードで変えたラインは
+         表の値が変わるまでそのまま(`logic/access_rights.should_apply`) #}
+      {% set acc = state.line.access %}
+      <div class="access" id="access-rights">
+        <p class="lead">
+          <b>アクセス権限の表:</b>
+          <span id="access-summary">{{ acc.summary }}</span>
+          {% if acc.admin %}<span class="badge badge--done">Administrator</span>{% endif %}
+          <button class="btn btn--sm" type="button" id="access-reload"
+                  data-hint="マスタの「アクセス権限」の表を読み直して、ラインが変わっていれば当てます">読み直す</button>
+        </p>
+        <p class="lead access__detail">
+          このPC: <code id="access-identity">{{ acc.identity or "(分かりません)" }}</code>
+          {% if acc.source %}── 読んだ表: {{ acc.source }}{% endif %}
+          {% if acc.rows %}── 当たった行: {{ acc.rows | join("、") }}{% endif %}
+        </p>
+        <p class="lead access__detail">
+          読むのは<b>ログインIDとPC名がこのPCと同じ行</b>(有効が0の行は読みません)。
+          「権限」が正規のライン名(下の表)ならこの端末のラインに、<b>Administrator</b> なら
+          どのラインの記録も「記録を見る」で見て直せます。それ以外の字は読みません。
+          ラインは<b>表の値が変わったときだけ</b>当てるので、管理者モードで変えたラインは
+          表を書き換えるまでそのままです。
+        </p>
+        {# 表ぜんぶの点検(v4.12.3)。**ほかのPCの行の書き間違いにも気づけるように** #}
+        {% if acc.checked %}
+        {% if acc.findings %}
+        <div class="msg msg--warn msg--prose" id="access-findings">
+          <b>アクセス権限の表に、読めない行が{{ acc.findings | length }}行あります</b>
+          (マスタ管理の「{{ acc.source }}」で直せます)
+          <ul class="check__list">{% for f in acc.findings %}<li>{{ f }}</li>{% endfor %}</ul>
+        </div>
+        {% else %}
+        <p class="lead" id="access-findings">表の点検: {{ acc.checked }}行を確かめました ── 読めない行はありません</p>
+        {% endif %}
+        {% endif %}
+        {# 正規の呼び名(v4.12.2)。**この表に無い書き方は読みません**(L1・l-1 など) #}
+        <details class="access__names" id="line-names">
+          <summary class="lead">ライン名の書き方(マスタには「正規」で書きます)</summary>
+          <table class="list">
+            <thead><tr><th>正規(マスタ・このツール)</th><th>前(VBA)</th></tr></thead>
+            <tbody>
+              {% for n in acc.line_names %}<tr><td>{{ n.official }}</td><td>{{ n.old }}</td></tr>{% endfor %}
+            </tbody>
+          </table>
+          <p class="lead">中板は <code>中板3</code> のようにラインNO を続けて書きます。
+            前の名前(L1 など)や、記号・大文字小文字の違う書き方は読みません(全角半角の違いだけは同じ字として読みます)。</p>
+        </details>
+        <div class="msg" id="access-note" hidden></div>
+      </div>
+      <p class="lead">
+        <strong>打ちかけがあるうちは変えないでください。</strong> ラインを変えると
+        保存先のキーが変わるので、いま画面にある値は別のラインの日報として
+        保存されます ── 先に「保存(確定)」を済ませてから変えてください。
+      </p>
+    </div>
+
+    {# ---- ファイルの置き場所 ── この端末だけに残すもの / 複数のPCで共有するもの ----
+
+       「ローカルに保存してそのPCで引き継いで使用するものは、設定部にそういう
+       ファイルがあると明記してください(複数PCで共有するものと該当PCで引き継ぐ
+       ものは違いますよね)」── 違います。**2つを並べて見せます**
+       (`presenters/storage.py`)。いちばん大事なのは手元の日報で、共有へ保存を
+       押すまでこのPCにしかありません。 #}
+    {% set st = state.storage %}
+    <div class="card" id="storage">
+      <div class="card__head">
+        <h2>ファイルの置き場所 ── この端末だけ / みんなで共有</h2>
+        <span class="lead">このツールが使うファイルは2種類です</span>
+      </div>
+
+      <h3>この端末だけに残すもの(このPCで次に起動したときに引き継ぐ)</h3>
+      <div class="msg msg--warn msg--prose">
+        置き場所は <code>{{ st.local_root }}</code>(利用者ごとのローカル領域)。
+        <b>ほかのPCからは見えません。</b>アプリのフォルダを入れ替えても消えません。
+        打った日報は保存のたびに<b>控え(LocalBackup)</b>へも書きます(手元と両方)。
+        <b>控えに届いていないあいだは、このPCの中にしかありません</b>
+        ── PCを替える・初期化する前に、控えに届いていること(下)か、共有へ保存を済ませてください。
+      </div>
+      <p class="lead" id="backup-status">
+        控え: <code>{{ backup.root }}</code>
+        {% if backup.reachable %}<span class="badge badge--done">届きます</span>
+        {% else %}<span class="badge badge--alert">届きません(届くようになったら写します)</span>{% endif %}
+        {% if backup.pending %}<span class="badge badge--todo">まだ写せていないページ {{ backup.pending }}</span>
+        {% else %}<span class="badge">写す待ちはありません</span>{% endif %}
+      </p>
+      <table class="list storage">
+        <thead><tr><th>もの</th><th>置き場所</th><th>いま</th><th>中身</th><th>消したら・PCを替えたら</th></tr></thead>
+        <tbody id="storage-local">
+          {% for f in st.local %}
+          <tr{% if f.important %} class="storage__important"{% endif %}>
+            <td><b>{{ f.label }}</b>
+              {% if f.important %}<br><span class="badge badge--alert">消すと戻りません</span>{% endif %}</td>
+            <td><code>{{ f.path }}</code></td>
+            <td>{% if f.exists %}<span class="badge badge--done">あり</span>
+                <br><span class="lead">{{ f.size }}{% if f.updated %} / {{ f.updated }}{% endif %}</span>
+                {% else %}<span class="lead">まだありません</span>{% endif %}</td>
+            <td class="lead">{{ f.holds }}</td>
+            <td class="lead">{{ f.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3 style="margin-top:var(--sp-4)">複数のPCで共有するもの(参照設定のパスで指す先)</h3>
+      <p class="lead">
+        全端末が同じものを読み書きします。置き場所は
+        <a href="/settings?tab=paths" data-goto-tab="paths">参照設定</a> で決めます。
+        <span class="badge badge--todo">いまはこの端末の中</span> が付いているものは、
+        共有のつもりの置き場所が<b>このPCの中を指しています</b>(ほかのPCからは見えません)。
+      </p>
+      <table class="list storage">
+        <thead><tr><th>もの</th><th>置き場所</th><th>いま</th><th>中身</th><th>どの設定で決まるか</th></tr></thead>
+        <tbody id="storage-shared">
+          {% for f in st.shared %}
+          <tr>
+            <td><b>{{ f.label }}</b>
+              {% if f.local_now %}<br><span class="badge badge--todo">いまはこの端末の中</span>{% endif %}</td>
+            <td><code>{{ f.path }}</code></td>
+            <td>{% if f.exists %}<span class="badge badge--done">あり</span>
+                {% if f.updated %}<br><span class="lead">{{ f.updated }}</span>{% endif %}
+                {% else %}<span class="lead">この場所にありません</span>{% endif %}</td>
+            <td class="lead">{{ f.holds }}</td>
+            <td class="lead">{{ f.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="lead">
+        <b>設定をほかのPCへ持っていく</b>には、下の「配布設定」で書き出します
+        (この端末の設定 <code>user_config.json</code> そのものは写しません)。
+        共有するファイルは、同じパスを指せばどのPCからも同じものが見えます。
+      </p>
+    </div>
+
+    {# ---- 配布設定(`nippou/distribution.py`)。python-web-tools の「配布設定」と同じ ----
+
+       1台で決めた設定を、ツールのフォルダごと配った先でそのまま使う。
+       **起動用の Start.vbs / start.bat と同じフォルダ**に `配布設定` を作る。
+       書き出し・読み込み直し・消すは、どれも管理者パスワードが要る
+       (面の鍵を開けてあれば、もう一度は聞かない)。 #}
+    {% set dist = state.distribution %}
+    <div class="card" id="dist-state">
+      <div class="card__head">
+        <h2>いま置いてある配布設定</h2>
+        {% if dist.error %}<span class="badge badge--alert" id="dist-exists">読めません</span>
+        {% elif dist.exists %}<span class="badge badge--done" id="dist-exists">あり</span>
+        {% else %}<span class="badge badge--todo" id="dist-exists">なし</span>{% endif %}
+      </div>
+      <p class="lead" id="dist-meta">
+        {% if dist.exists and dist.legacy %}前の版の置き場所(<code>{{ dist.source }}</code>)を読んでいます。
+          下で書き出すと「配布設定」フォルダが勝ちます。
+        {% elif dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成
+        {% else %}まだありません。下で書き出すと、起動用の Start.vbs と同じフォルダに「配布設定」フォルダができます。{% endif %}
+      </p>
+      {% if dist.error %}
+      <div class="msg msg--error">{{ dist.error }} ── このままでは配布設定は効きません。下で書き出し直すと直ります。</div>
+      {% endif %}
+      {% if dist.contents %}
+      <table class="list">
+        <thead><tr><th>項目</th><th>値</th></tr></thead>
+        <tbody id="dist-rows">
+          {% for c in dist.contents %}<tr><td>{{ c.label }}</td><td><code>{{ c.value }}</code></td></tr>{% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      <p class="lead">置き場所: <code id="dist-path">{{ dist.path }}</code>
+        ── 起動用の {{ dist.launchers | join(" / ") }} と同じフォルダです。
+        <strong>配布先に関わるものはすべてこのフォルダ</strong>に入ります
+        (設定.json・音・はじめに読む.txt)。音声ファイルはファイルを置き換えれば差し替えられます。</p>
+
+      {% if dist.exists %}
+      <h3 style="margin-top:var(--sp-4)">この端末での読み込み</h3>
+      <p class="lead">
+        起動したときに読み込みます(この端末にまだ無い項目だけ)。
+        {% if dist.applied_at %}最後に読み込んだとき: {{ dist.applied_at }}{% endif %}
+      </p>
+      <p class="lead">配布設定の値で動いている:
+        {% if dist.reading.applied %}{{ dist.reading.applied | join("・") }}{% else %}(なし){% endif %}</p>
+      {% if dist.reading.kept %}
+      <p class="lead"><span class="badge badge--todo">既存が優先</span>
+        {{ dist.reading.kept | join("・") }}
+        ── この端末ですでに決めてあった値を使っています。揃えたいときは下の「配布設定を読み込み直す」。</p>
+      {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="card" id="dist-export-card">
+      <div class="card__head">
+        <h2>この端末の設定を配布設定にする</h2>
+      </div>
+      <p class="lead">
+        <strong>いまこの端末に入っている値をそのまま書き出します</strong>(前の中身は置き換えます)。
+        値は参照設定や音の面で先に決めておいてください。配った先は<strong>起動したときに
+        読み込みます</strong>。ただし<strong>その端末にすでにある設定は読み込みません</strong>(上書きしない)。
+      </p>
+      <fieldset class="distchecks" id="dist-items">
+        <legend>設定(右は、書き出すと入る この端末の値)</legend>
+        {% for it in dist["items"] %}
+        <label class="check"><input type="checkbox" data-dist-item="{{ it.key }}" {% if it.default %}checked{% endif %}>
+          {{ it.label }}
+          {% if it.value %}<code class="distchecks__value">{{ it.value }}</code>
+          {% else %}<span class="lead">(この端末は既定のまま ── 入りません)</span>{% endif %}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="distchecks" id="dist-files">
+        <legend>一緒に配るファイル</legend>
+        {% for f in dist.files %}
+        <label class="check"><input type="checkbox" data-dist-file="{{ f.key }}"> {{ f.label }}
+          <span class="lead">(配った先は、音の置き場所を決めていなければ端末の中へ写して使います。
+            入れると「音声ファイルの参照パス」は入れません)</span></label>
+        {% endfor %}
+      </fieldset>
+
+      {% if dist.warnings %}
+      <h3 style="margin-top:var(--sp-3)">このまま配ると</h3>
+      <ul class="site-warnings" id="dist-warnings">
+        {% for w in dist.warnings %}
+        <li><span class="badge {% if w.level == 'alert' %}badge--alert{% elif w.level == 'warn' %}badge--todo{% endif %}">
+          {% if w.level == 'alert' %}このままでは困る{% elif w.level == 'warn' %}端末で違う{% else %}知っておく{% endif %}</span>
+          {{ w.text }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <div class="row" style="margin-top:var(--sp-2)">
+        <div class="field"><label for="dist-password">管理者パスワード</label>
+          <input id="dist-password" type="password" size="14" autocomplete="current-password"
+                 placeholder="{% if admin %}鍵が開いているので不要{% endif %}"></div>
+      </div>
+      <div class="msg" id="dist-why" hidden style="margin-top:var(--sp-2)"></div>
+      <div class="btn-row" style="margin-top:var(--sp-2)">
+        <button class="btn btn--primary" type="button" id="dist-export">配布設定を書き出す</button>
+        <button class="btn" type="button" id="dist-reapply"
+                {% if not dist.exists %}disabled title="配布設定が置かれていません"{% endif %}>配布設定を読み込み直す</button>
+        <button class="btn btn--danger" type="button" id="dist-remove"
+                {% if not dist.exists or dist.legacy %}disabled{% endif %}>配布設定を消す</button>
+      </div>
+      <p class="lead">
+        <strong>この端末のラインは既定で入れません。</strong>ラインごとに違うので、入れたまま配ると
+        全端末が同じラインになります。配った先で上の「この端末のライン」から選んでください
+        (決めるまでは日報入力の画面に知らせが出ます)。
+        「読み込み直す」は、この端末にすでにある設定も上書きします。
+        配るときは <code>scripts\make_dist.bat</code> で配布用フォルダを作ると、手元の物が紛れません。
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card__head"><h2>この端末の状態</h2></div>
+      {# 「入れ替えたのに古いまま」を電話で調べられるようにする #}
+      <table class="list">
+        <tbody>
+          <tr><td>アプリ本体</td><td><code>{{ diagnostics.app_root }}</code></td></tr>
+          <tr><td>ローカル領域</td><td><code>{{ diagnostics.local_root }}</code></td></tr>
+          <tr><td>ローカルDB</td><td><code>{{ diagnostics.sqlite }}</code>
+            <span class="lead">(共有へ保存する前の日報もここ)</span></td></tr>
+          <tr><td>この端末の設定</td><td><code>{{ diagnostics.user_config }}</code></td></tr>
+          <tr><td>配布設定</td><td><code>{{ state.distribution.path }}</code>
+            {% if not state.distribution.exists %}<span class="lead">(まだありません)</span>{% endif %}</td></tr>
+          <tr><td>Accessファイル</td><td><code>{{ diagnostics.access_db }}</code></td></tr>
+          <tr><td>Access接続方式</td><td>{{ diagnostics.access_backend }}</td></tr>
+          <tr><td>版</td><td><b>{{ version_label }}</b></td></tr>
+          {# **印(build)まで出す。** 版は上げ忘れると同じ値のまま入れ替わる
+             ので、「入れ替えたのに古いまま」を確かめるにはこちらが要る #}
+          <tr><td>サーバの印</td>
+            <td><code id="server-stamp">{{ static_stamp }}</code></td></tr>
+          <tr><td>画面(JS)の印</td>
+            <td><code id="client-stamp">—</code>
+              <span id="stamp-verdict" class="badge">確かめています…</span></td></tr>
+        </tbody>
+      </table>
+      <p class="lead">
+        <strong>2つの印が同じなら、画面もサーバも同じものが動いています。</strong>
+        違うときは、ブラウザが古い画面を控えたままです ──
+        <strong>Ctrl+Shift+R</strong> で読み直してください。
+      </p>
+      {% if diagnostics.config_error %}
+      <div class="msg msg--warn" style="margin-top:var(--sp-2)">{{ diagnostics.config_error }}</div>
+      {% endif %}
+      {% if diagnostics.version_problem %}
+      <div class="msg msg--warn" style="margin-top:var(--sp-2)">{{ diagnostics.version_problem }}</div>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ==============================================================
+     6. ログ ── エラーの後追いとなぜなぜ分析(v4.1.0)
+
+       エラー等の後追いが現状できないと感じている
+       ログを残しなぜなぜで分析できるようにしておいてほしい
+
+     中身は JS が `/api/log/events` から読みます(開いたときだけ。設定画面を
+     開くたびに半年ぶんを読むと待たせるので)。**判断はサーバ**
+     (`nippou/logic/event_log.py`)── ここは並べるだけです。
+     ============================================================== #}
+  {% set tab = tabs | selectattr("key", "equalto", "logs") | first %}
+  <section class="tabpanel" data-panel="logs" id="panel-logs" role="tabpanel"
+           aria-labelledby="tab-logs"
+           {% if default_tab != "logs" %}hidden{% endif %}>
+    <div class="card">
+      <div class="card__head">
+        <h2>エラーと操作の記録</h2>
+        <span class="lead">画面に出たエラー番号(例: E1001-1253-7KX)で探せます</span>
+      </div>
+      <p class="lead log-where" id="log-where">
+        書いている先: <code id="log-dir">{{ path_map[keys.log_dir].resolved }}</code>
+        (<a href="/settings?tab=paths">参照設定の「ログの出力パス」</a>で変えられます)
+      </p>
+      <div class="msg msg--warn" id="log-fallback" hidden></div>
+
+      <div class="row log-filters">
+        <div class="field">
+          <label for="log-start">いつから</label>
+          <input id="log-start" type="date">
+        </div>
+        <div class="field">
+          <label for="log-end">いつまで</label>
+          <input id="log-end" type="date">
+        </div>
+        <div class="field">
+          <label for="log-scope">見るもの</label>
+          <select id="log-scope"></select>
+        </div>
+        <div class="field">
+          <label for="log-terminal">端末</label>
+          <select id="log-terminal"><option value="">全部</option></select>
+        </div>
+        <div class="field">
+          <label for="log-q">番号・文言で探す</label>
+          <input id="log-q" type="search" size="18" placeholder="E1001-… / 保存">
+        </div>
+        <button class="btn" type="button" id="log-reload">読み直す</button>
+        <button class="btn" type="button" id="log-csv"
+                title="いまの絞り込みのまま、ログの出力パスの「書き出し」フォルダへ出します">CSVに出す</button>
+      </div>
+      <p class="lead" id="log-counts" aria-live="polite"></p>
+      <div class="msg" id="log-msg" hidden></div>
+      <div class="scroll-x log-table-wrap">
+        <table class="list list--nowrap log-table" id="log-table">
+          <thead><tr><th>いつ</th><th>番号</th><th>種類</th><th>端末</th><th>画面</th>
+            <th>何をした</th><th>何と出た</th><th>なぜなぜ</th></tr></thead>
+          <tbody id="log-rows"></tbody>
+        </table>
+      </div>
+      <p class="lead log-tip">
+        行を押すと<b>なぜなぜシート</b>が開きます。記録から言えること(起きたこと・直接の原因・
+        そのときの状態・それまでの経過)は自動で入っています。<b>なぜ1〜5と対策は人が書きます</b>
+        ── 書いたものはログの置き場所に残るので、共有のフォルダにしておけばどの端末からも見られます。
+        記録は半年(180日)残します。
+      </p>
+    </div>
+
+    <div class="card why-sheet" id="log-sheet" hidden>
+      <div class="card__head">
+        <h2>なぜなぜシート <code id="ls-id"></code></h2>
+        <button class="btn btn--sm" type="button" id="ls-close">閉じる</button>
+      </div>
+      <div class="why-sheet__facts">
+        <section><h3>起きたこと</h3><dl class="kv" id="ls-facts"></dl></section>
+        <section><h3>直接の原因(記録から)</h3><dl class="kv" id="ls-cause"></dl></section>
+        <section><h3>そのときの状態</h3><dl class="kv" id="ls-state"></dl></section>
+      </div>
+      <h3>それまでの経過 <span class="lead">同じタブ・同じ端末の前30分とその後5分。太字がこの件です</span></h3>
+      <ol class="why-steps" id="ls-steps"></ol>
+      <details class="why-more" id="ls-input-box"><summary>送った中身(打った値)</summary>
+        <dl class="kv" id="ls-input"></dl></details>
+      <details class="why-more" id="ls-crumbs-box"><summary>画面で直前に押したもの</summary>
+        <ol class="why-steps" id="ls-crumbs"></ol></details>
+      <details class="why-more" id="ls-trace-box"><summary>エラーの通り道(作った人向け)</summary>
+        <pre class="why-trace" id="ls-trace"></pre></details>
+
+      <h3>なぜなぜ <span class="lead">「なぜそうなったか」を、答えの答えへ5回まで掘ります</span></h3>
+      <p class="lead" id="ls-hint"></p>
+      <ol class="why-list" id="ls-whys"></ol>
+      <div class="field why-field">
+        <label for="ls-measure">対策(同じことを起こさないために)</label>
+        <textarea id="ls-measure" rows="2" maxlength="400"></textarea>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="ls-status">状態</label>
+          <select id="ls-status"></select>
+        </div>
+        <div class="field">
+          <label for="ls-by">書いた人</label>
+          <input id="ls-by" type="text" size="14" maxlength="40">
+        </div>
+        <button class="btn btn--primary" type="button" id="ls-save">残す</button>
+        <span class="lead" id="ls-saved"></span>
+      </div>
+    </div>
+  </section>
+
+  </div>
+</div>
+
+{# ---- フォルダを選ぶ窓。**押した欄の真下へ移して出します**
+   (面をまたいで1つだけ持つ。ブラウザのダイアログはサーバ側の
+   フォルダを選べないので、自前で辿ります) ---- #}
+<div class="browse" id="browse" hidden>
+  <div class="browse__head">
+    <code id="browse-path"></code>
+    <button class="btn btn--sm" type="button" id="browse-close">閉じる</button>
+  </div>
+  {# **どのドライブの、どこに居るか。** 一段ずつ上へ辿るだけだと、
+     共有(Z:)へ移りたいのに行き着けない #}
+  <div class="browse__where" id="browse-where"></div>
+  <div class="browse__body" id="browse-body"></div>
+  <div class="btn-row">
+    <button class="btn btn--primary btn--sm" type="button" id="browse-pick">このフォルダにする</button>
+  </div>
+</div>
+
+{# ---- マスタの1行を直す / 足す ---- #}
+<div class="modal" id="row-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="row-title">
+  <div class="modal__box">
+    <div class="modal__head">
+      <h2 id="row-title">行を直す</h2>
+      <button class="btn btn--sm" type="button" data-close="row-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="row-why"></p>
+      <div class="stack-fields" id="row-fields"></div>
+      <div class="msg msg--error" id="row-error" hidden
+           style="margin-top:var(--sp-2)"></div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--danger" type="button" id="row-delete" hidden>この行を消す</button>
+      <button class="btn" type="button" data-close="row-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="row-save">書き込む</button>
+    </div>
+  </div>
+</div>
+{# 列を足す(v4.14.0)。**列は消せない**ので、足す前に何に効くかを言う(`col-note`) #}
+<div class="modal" id="col-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="col-title">
+  <div class="modal__box">
+    <div class="modal__head">
+      <h2 id="col-title">列を足す</h2>
+      <button class="btn btn--sm" type="button" data-close="col-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="col-note"></p>
+      <div class="stack-fields">
+        <label class="stack-field stack-field--wide">
+          <span class="stack-field__label">列の名前 *</span>
+          <input type="text" id="col-name" maxlength="40" spellcheck="false"
+                 autocomplete="off" placeholder="例: 電話番号">
+        </label>
+        <label class="stack-field stack-field--wide">
+          <span class="stack-field__label">型</span>
+          <select id="col-kind">
+            <option value="text">文字</option>
+            <option value="int">整数</option>
+            <option value="real">小数</option>
+          </select>
+        </label>
+        <label class="stack-field stack-field--wide">
+          <span class="stack-field__label">最初の値</span>
+          <input type="text" id="col-initial" spellcheck="false" autocomplete="off">
+          <span class="stack-field__unit">いまある行すべてに入ります。空なら空のまま</span>
+        </label>
+      </div>
+      <div class="msg msg--error" id="col-error" hidden
+           style="margin-top:var(--sp-2)"></div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="col-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="col-save">元のファイルに列を足す</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" data-view="{{ url_for('static', filename='js/views/settings.js') }}"></script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/master.js') }}"></script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/logs.js') }}"></script>
+{% endblock %}

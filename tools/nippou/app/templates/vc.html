@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% block title %}VC長さ計算 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{# ================================================================
+   VC長さ計算 ── vc-calculator(VCフィルム長さ計算 Python Web版)の移植
+
+   紙管に巻かれた VC フィルムの**肉厚から残りの長さ**を出し、定尺ごとに
+   何枚の製品に貼れるかを出す(VBA `UFVC計算` / `UFquick`)。
+   面の並びはサーバ(`presenters/vc.TABS`)。欄を作り直すのもサーバで、
+   画面は欄の文字を送って、返ってきたものを描くだけ(`views/vc.js`)。
+   ================================================================ #}
+{% if not bare %}
+<div class="page-head">
+  <h1>VC長さ計算</h1>
+  <span class="lead">VCフィルムの残り長さ・枚数・早見表 / コイル・平板の重量</span>
+</div>
+{% endif %}
+
+<div class="msg msg--warn" id="vc-master-note" hidden></div>
+
+<div class="tabs" data-tabs="vc" id="vcTabs">
+  {# 別窓では面の札を出さない(早見表だけ) #}
+  <div class="tabs__bar" role="tablist" aria-label="VC長さ計算の面"{% if bare %} hidden{% endif %}>
+    {% for t in tabs %}
+    <button class="tab" type="button" role="tab" data-key="{{ t.key }}"
+            {% if t.key == default_tab %}data-default="1"{% endif %}
+            id="tab-{{ t.key }}" aria-controls="panel-{{ t.key }}"
+            aria-selected="false" title="{{ t.note }}">
+      <span class="tab__label">{{ t.label }}</span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <div class="tabs__panels">
+
+  {# ==============================================================
+     計算(VBA `UFVC計算`)── 左に結果、右に操作(作業の順)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="calc" id="panel-calc" role="tabpanel"
+           aria-labelledby="tab-calc" {% if default_tab != "calc" %}hidden{% endif %}>
+    <p class="lead">品種を選び、肉厚を測って入れて「計算」。VC長さと、定尺ごとの枚数を出します。</p>
+    <div class="vc-calc">
+      <section class="vc-card vc-result" aria-labelledby="vc-result-title">
+        <header>
+          <h2 id="vc-result-title">結果</h2>
+          <span class="badge badge--todo" id="vc-result-state" hidden></span>
+        </header>
+        <div class="vc-pad">
+          <div class="vc-picked">
+            <span class="vc-picked__vendor" id="vc-picked-vendor"></span>
+            <b class="vc-picked__name" id="vc-picked-name">品種を選んでください</b>
+            <span class="vc-picked__spec" id="vc-picked-spec"></span>
+          </div>
+
+          <div class="vc-hero">
+            <span class="vc-hero__label">VC長さ</span>
+            <output class="vc-hero__value" id="vc-out-length" for="vc-vclen">—</output>
+            <span class="vc-hero__unit">m</span>
+          </div>
+
+          <h3 class="vc-sub">枚数(VC長さ ÷ 製品の丈)</h3>
+          <div class="vc-counts" id="vc-counts"></div>
+
+          <div class="msg msg--error" id="vc-calc-error" hidden></div>
+          <ul class="vc-notes" id="vc-notes" hidden></ul>
+          <section class="vc-explain" id="vc-explain" hidden aria-labelledby="vc-explain-title">
+            <h3 class="vc-sub" id="vc-explain-title">図と計算の経過
+              <span class="lead">段にカーソルを当てると、図のその部分が光ります</span></h3>
+            <div class="vc-explain__grid">
+              <figure class="vc-roll" id="vc-roll"></figure>
+              <ol class="vc-steps" id="vc-steps"></ol>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="vc-card vc-ops" aria-labelledby="vc-ops-title">
+        <header>
+          <span class="vc-step-no" aria-hidden="true">1</span>
+          <h2 id="vc-ops-title">品種</h2>
+          <span class="lead" id="vc-product-count"></span>
+        </header>
+        <div class="vc-pad">
+          <div class="vc-products" id="vc-products" role="group" aria-label="品種"></div>
+          <div class="vc-insides" id="vc-insides" hidden>
+            <span class="vc-insides__label">内径(紙管の外径)を選ぶ</span>
+            <div class="vc-seg" id="vc-inside-choices" role="radiogroup" aria-label="内径"></div>
+          </div>
+        </div>
+
+        <header>
+          <span class="vc-step-no" aria-hidden="true">2</span>
+          <h2>入力</h2>
+        </header>
+        <div class="vc-pad">
+          <form class="vc-fields" id="vc-form" autocomplete="off" novalidate>
+            <label for="vc-coatu">肉厚</label>
+            <div class="vc-field"><input id="vc-coatu" type="text" name="coatu" inputmode="decimal" spellcheck="false"><span class="vc-unit">mm</span>
+              <small class="vc-err" id="vc-err-coatu" hidden></small></div>
+
+            <label for="vc-vcatu">VC厚</label>
+            <div class="vc-field"><input id="vc-vcatu" type="text" name="vcatu" inputmode="decimal" spellcheck="false"><span class="vc-unit">mm</span>
+              <small class="vc-err" id="vc-err-vcatu" hidden></small></div>
+
+            <label for="vc-inside">内径</label>
+            <div class="vc-field"><input id="vc-inside" type="text" name="inside" inputmode="decimal" spellcheck="false"><span class="vc-unit">mm</span>
+              <small class="vc-err" id="vc-err-inside" hidden></small></div>
+
+            <label for="vc-vclen">VC長さ</label>
+            <div class="vc-field"><input id="vc-vclen" type="text" name="vclen" inputmode="decimal" spellcheck="false"><span class="vc-unit">m</span>
+              <small class="vc-hint" id="vc-hint-vclen">空欄なら肉厚から計算。入れてあればその長さで枚数を出し、肉厚が空なら肉厚を逆算します。</small>
+              <small class="vc-err" id="vc-err-vclen" hidden></small></div>
+
+            <label for="vc-prolen">経寸丈</label>
+            <div class="vc-field"><input id="vc-prolen" type="text" name="prolen" inputmode="decimal" spellcheck="false"><span class="vc-unit">mm</span>
+              <small class="vc-hint">任意。入れると、その丈での枚数も出します。</small></div>
+
+            <div class="vc-go">
+              <button class="btn btn--primary btn--lg" type="submit" id="vc-run">計算</button>
+              <button class="btn" type="button" id="vc-open-quick">早見表を別の窓で開く</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  {# ==============================================================
+     早見表(VBA `UFquick`)── 計算と同じ式から出す。A4 横で印刷
+     ============================================================== #}
+  <section class="tabpanel" data-panel="quick" id="panel-quick" role="tabpanel"
+           aria-labelledby="tab-quick" {% if default_tab != "quick" %}hidden{% endif %}>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <p class="lead" id="vc-quick-note">長さは VC品種 の VC厚 から式で出しています。</p>
+      <button class="btn" type="button" id="vc-print">印刷(A4 横)</button>
+    </div>
+    <section class="vc-quick" aria-labelledby="vc-quick-title">
+      <header class="vc-quick__head">
+        <h2 id="vc-quick-title">VCフィルム長さ早見表</h2>
+        <span class="vc-quick__rev" id="vc-quick-rev"></span>
+      </header>
+      <div class="vc-quick__blocks" id="vc-quick-blocks">
+        <p class="lead">読み込んでいます…</p>
+      </div>
+      <p class="vc-quick__foot">肉厚 mm / 長さ m</p>
+    </section>
+
+    {% if not bare %}
+    <p class="lead" style="margin-top:var(--sp-2)">
+      早見表のマスを足すのは <a href="?tab=settings" data-vc-tab="settings">設定</a> の面(管理者)です。
+    </p>
+    {% endif %}
+  </section>
+
+  {# ==============================================================
+     コイル・平板 ── 別に作られたツールを枠で載せる(見た目を混ぜない)。
+     計算はブラウザの中だけ(マスタもサーバも使わない)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="coil" id="panel-coil" role="tabpanel"
+           aria-labelledby="tab-coil" {% if default_tab != "coil" %}hidden{% endif %}>
+    <iframe class="vc-coilframe" id="vc-coil-frame" title="コイル・平板 重量計算ツール"
+            data-src="{{ url_for('static', filename='vc/coil/index.html') }}"></iframe>
+  </section>
+
+  {# ==============================================================
+     設定 ── マスタの置き場所と、早見表のマスをまとめて作る(管理者)
+
+     置き場所は参照設定の「VC計算マスタの置き場所」と同じ設定です
+     (ここで変えても、参照設定で変えても同じ)。変えるには管理者パスワード。
+     ============================================================== #}
+  <section class="tabpanel" data-panel="settings" id="panel-settings" role="tabpanel"
+           aria-labelledby="tab-settings" {% if default_tab != "settings" %}hidden{% endif %}>
+    <section class="card vc-place" id="vc-place" data-key="{{ place.key }}">
+      <div class="card__head">
+        <h2>マスタの置き場所</h2>
+        <span class="lead">品種・定尺・早見表を読むファイル</span>
+      </div>
+      <div class="msg msg--{{ place.level }}" id="vc-place-status">{{ place.status }}</div>
+
+      <table class="list vc-place__names" style="margin-top:var(--sp-2)">
+        <thead><tr><th>優先</th><th>ファイル名</th><th>いま</th><th>どういう名前か</th></tr></thead>
+        <tbody id="vc-place-names">
+          {% for n in place.names %}
+          <tr>
+            <td class="num"><b>{{ n.rank }}</b></td>
+            <td><code>{{ n.name }}</code></td>
+            <td>
+              {% if n.used %}<span class="badge badge--done">読んでいます</span>
+              {% elif n.exists %}<span class="badge badge--todo">あるが読んでいません</span>
+              {% else %}<span class="lead">ありません</span>{% endif %}
+            </td>
+            <td class="lead">{{ n.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="lead">
+        同じフォルダで <b>上から順に</b>探します。1 があれば 1、無ければ 2、どちらも無ければ
+        初めて使うときに 1 を VBA の初期値で作ります。<b>2つともあると 2 は読みません</b>
+        ── vc-calculator と1つのマスタを使うなら、フォルダには1つだけ置いてください。
+      </p>
+
+      <div class="out-dir">
+        <div>いま読むファイル: <code class="out-dir__path" id="vc-place-used">{{ place.used }}</code></div>
+      </div>
+      <div class="row vc-place__edit">
+        <label for="vc-place-dir">置き場所(フォルダ)</label>
+        <input id="vc-place-dir" type="text" size="48" autocomplete="off"
+               value="{{ place.value }}" placeholder="空なら参照用マスタと同じフォルダ({{ place.reference_dir }})">
+        <label for="vc-place-pw" id="vc-place-pw-label" hidden>管理者パスワード</label>
+        <input id="vc-place-pw" type="password" size="12" hidden>
+        <button class="btn" type="button" id="vc-place-save">置き場所を保存</button>
+        {% if not bare %}<a href="{{ place.settings_url }}">設定・参照設定(フォルダを選ぶ窓)</a>{% endif %}
+      </div>
+      <div class="msg" id="vc-place-note" hidden></div>
+      <p class="lead">
+        中身を直すのは 設定・管理者 → マスタ → 表を見る / 直す の「VC計算マスタ」です
+        (鍵は同じ管理者パスワード)。
+      </p>
+    </section>
+
+    {# 早見表の品種(管理者)。**マスタ管理と同じ鍵**
+       ── 「1行消すがないと追加したVCが永遠に消せない」「早見表に追加でVCを足すのも
+       わかりにくい」「固定値(式なし)に知らない間になっていた」(v3.97.0)。
+       マスタは VC品種 ← 早見表ブロック ← 早見表値 の鎖で、マスタ管理では子から
+       1行ずつ消すしかなかった。ここで鎖ごと1回で足す・消す・切り替える #}
+    <section class="card vc-grid" id="vc-grid" style="margin-top:var(--sp-3)">
+      <div class="card__head"><h2>早見表の品種(枠とマス)</h2><span class="lead">管理者</span></div>
+      <p class="lead">早見表は、品種ごとの<b>枠</b>と、その中の<b>マス</b>(内径 × 肉厚)でできています。
+        長さの出し方は枠ごとに2つ ──
+        <b>式</b>: 枠に結びつけた VC品種 の VC厚 から毎回出す(VC厚 を直せば早見表も変わる)/
+        <b>固定値</b>: マスに入れた長さをそのまま出す(VC品種と結びついていない枠)。
+        足す・消す・切り替えるは、ここで<b>1回ずつ</b>済みます(マスタ管理で1行ずつ消さなくてよい)。</p>
+      <div class="row vc-grid__key">
+        <label for="vc-grid-password" id="vc-grid-password-label">管理者パスワード</label>
+        <input id="vc-grid-password" type="password" size="14" autocomplete="off">
+        {# 1度開ければ、閉めるまで続けて直せる(マスタ管理と同じ鍵) #}
+        <button class="btn" type="button" id="vc-grid-unlock">鍵を開ける</button>
+        <button class="btn" type="button" id="vc-grid-relock" hidden>鍵を閉める</button>
+        <span class="lead" id="vc-grid-lock"></span>
+      </div>
+      <div class="msg" id="vc-grid-note" hidden></div>
+
+      <h3 class="vc-grid__title">いまの枠</h3>
+      <div class="vc-blocks-wrap">
+        <table class="list vc-blocks">
+          <thead><tr><th>枠(品種)</th><th>長さの出し方</th><th>内径</th><th>肉厚</th>
+            <th class="num">マス</th><th></th></tr></thead>
+          <tbody id="vc-blocks"></tbody>
+        </table>
+      </div>
+
+      <h3 class="vc-grid__title">早見表に品種を足す</h3>
+      <p class="lead">VC品種・枠・マスを<b>1回で</b>足します。新しい VC品種 なら VC厚 を入れると、
+        計算の品種一覧にも出ます。</p>
+      <div class="vc-grid__form" id="vc-add">
+        <label for="vc-add-product">VC品種</label>
+        <select id="vc-add-product"></select>
+        <span class="vc-grid__label" id="vc-add-new-label">新しい VC品種</span>
+        <div class="vc-grid__inline" id="vc-add-new">
+          <label>品種名 <input id="vc-add-name" type="text" size="18" autocomplete="off"></label>
+          <label>VC厚 <input id="vc-add-vcatu" type="text" size="7" inputmode="decimal"
+                             autocomplete="off" placeholder="0.10 / 100"
+                             title="mm なら 0.10、μm なら 100(どちらでも同じ厚さ)"> mm か μm</label>
+          <label>業者名 <input id="vc-add-vendor" type="text" size="10" autocomplete="off"></label>
+        </div>
+        <span class="vc-grid__label">長さ</span>
+        <div class="vc-grid__inline" role="radiogroup" aria-label="長さの出し方">
+          <label class="check"><input type="radio" name="vc-add-length" value="formula" checked>
+            式で出す(ふつうはこちら。VC厚 を直せば早見表も変わる)</label>
+          <label class="check"><input type="radio" name="vc-add-length" value="fixed">
+            固定値(紙の数に合わせたいとき。足すときだけ VC厚 から計算して入れる)</label>
+        </div>
+        <label for="vc-add-insides">内径 mm</label>
+        <input id="vc-add-insides" type="text" autocomplete="off" placeholder="例: 87, 95">
+        <label for="vc-add-thicknesses">肉厚 mm</label>
+        <input id="vc-add-thicknesses" type="text" autocomplete="off" placeholder="例: 5, 8, 10, 12, 14">
+        <label for="vc-add-block">枠の名前</label>
+        <input id="vc-add-block" type="text" autocomplete="off" placeholder="空なら VC品種の名前">
+        <label for="vc-add-tone">枠の色</label>
+        <select id="vc-add-tone">
+          <option value="">まだ使っていない色</option>
+          {% for t in tones %}<option value="{{ t.value }}">{{ t.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="row"><button class="btn btn--primary" type="button" id="vc-add-make">早見表に足す</button></div>
+
+      <h3 class="vc-grid__title">選んだ枠を直す</h3>
+      {# **長さは式で出す。** 計算品種のある枠は VC厚 から毎回出すので入れない。
+         計算品種の無い枠(固定値)は VC厚 を1つ決めれば、同じ式で出して入れる
+         ── 「計算値を当ててくれればいいのでは?」(v3.96.0) #}
+      <div class="vc-grid__form">
+        <label for="vc-grid-block">枠(品種)</label>
+        <select id="vc-grid-block"></select>
+        <span class="vc-grid__label">長さの出し方</span>
+        <div class="vc-grid__inline">
+          <span id="vc-edit-kind"></span>
+          <select id="vc-edit-source" aria-label="長さの出し方を変える"></select>
+          <button class="btn" type="button" id="vc-edit-source-save">切り替える</button>
+        </div>
+        <span class="vc-grid__label">いまのマス</span>
+        <div class="vc-edit-cells">
+          <div class="vc-grid__inline">内径 <span id="vc-edit-insides"></span></div>
+          <div class="vc-grid__inline">肉厚 <span id="vc-edit-thicknesses"></span></div>
+          <p class="lead">× を押すと、その内径の<b>行</b>(肉厚の<b>列</b>)のマスを消します。</p>
+        </div>
+        <label for="vc-grid-insides">足す内径 mm</label>
+        <input id="vc-grid-insides" type="text" autocomplete="off" placeholder="例: 87, 95">
+        <label for="vc-grid-thicknesses">足す肉厚 mm</label>
+        <input id="vc-grid-thicknesses" type="text" autocomplete="off" placeholder="例: 5, 8, 10, 12, 14">
+        <span class="vc-grid__label">長さ</span>
+        <div class="vc-grid__length">
+          <p class="lead" id="vc-grid-length-note"></p>
+          <div id="vc-grid-length-fixed" hidden>
+            <label for="vc-grid-length">VC厚 を</label>
+            <select id="vc-grid-length"></select>
+            <span id="vc-grid-vcatu-wrap" hidden>
+              <input id="vc-grid-vcatu" type="text" size="7" inputmode="decimal"
+                     autocomplete="off" placeholder="0.10 / 100"
+                     title="mm なら 0.10、μm なら 100(どちらでも同じ厚さ)"> mm か μm
+            </span>
+            <label class="check"><input type="checkbox" id="vc-grid-fill" checked>
+              長さが空のマスにも入れる(すでにあるマス)</label>
+            <label class="check"><input type="checkbox" id="vc-grid-overwrite">
+              入っている長さも計算値で置き換える</label>
+          </div>
+        </div>
+      </div>
+      <div class="row vc-grid__actions">
+        <button class="btn btn--primary" type="button" id="vc-grid-make">マスを足す(長さも入れる)</button>
+        <button class="btn btn--danger" type="button" id="vc-edit-delete">この枠を消す</button>
+      </div>
+
+      <h3 class="vc-grid__title">VC品種を消す</h3>
+      <p class="lead">VC品種を、<b>その品種を使っている早見表の枠・マス・内径の選択肢ごと</b>消します
+        (計算の品種一覧からも消えます)。何が一緒に消えるかは下に出ます。</p>
+      <div class="row">
+        <select id="vc-del-product" aria-label="消す VC品種"></select>
+        <button class="btn btn--danger" type="button" id="vc-del-product-go">VC品種を消す</button>
+      </div>
+      <p class="lead" id="vc-del-product-note"></p>
+      <p class="lead">消した中身は変更履歴(マスタ管理 → VC計算マスタ → 変更履歴)に残り、
+        その日の最初に書く前の控えもマスタの隣にあります。</p>
+    </section>
+  </section>
+
+  </div>
+</div>
+
+{# 早見表の印刷用の紙は、印刷するときに vc.js が body の直下に組む(`buildPrint`) #}
+{% endblock %}
+
+{% block scripts %}
+<script type="module" data-view="{{ url_for('static', filename='js/views/vc.js') }}"></script>
+{% endblock %}

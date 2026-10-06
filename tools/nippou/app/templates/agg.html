@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}集計管理 — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>集計管理</h1>
+  <span class="lead">{{ agg.start }} 〜 {{ agg.end }} / {{ agg.line | line_label }}</span>
+  {# いつ引いた表か(理由は graph.html と同じ) #}
+  <span class="asof" id="agg-asof"
+        data-at="{{ agg.generated_at }}"
+        data-opened-date="{{ ribbon.report_date }}"
+        data-opened-shift="{{ ribbon.shift }}"
+        data-opened-page="1">{{ agg.generated_at }}時点</span>
+</div>
+
+{# 「見る」は3通りある。**いま居る場所と、他の2つを常に見せる** ──
+   どれか1つに入り込むと、他の見方があることを忘れる #}
+<p class="lead views-switch">
+  見かた:
+  <a href="/records">ページ(印刷用)</a> ・
+  <b>表(この画面)</b> ・
+  <a href="/graph">グラフ(集計・グラフ)</a>
+</p>
+
+{# ================================================================
+   この画面は何か
+
+   VBA では `Agg_OutPut` が並べた「集計シート」そのものが見る場所
+   でした。シートを開けば、その日のロットが1行ずつ並んでいて、上の
+   帯に直ごとの合計が出ていた ── その見る場所をここへ移します。
+
+   **座標は捨てました。** 列の意味はセルの位置ではなく名前で決まり
+   ます。出す中身と計算は1つも減らしていません(紙に載らない用途
+   コード・納入先・包装仕様NOまで出ます)。
+   ================================================================ #}
+<div class="card">
+  <div class="row">
+    <div class="field">
+      <label for="start">開始日</label>
+      <input id="start" type="date" value="{{ agg.start }}">
+    </div>
+    <div class="field">
+      <label for="end">終了日</label>
+      <input id="end" type="date" value="{{ agg.end }}">
+    </div>
+    <button class="btn" type="button" id="reload">表示</button>
+    <button class="btn" type="button" id="csv">4本ともCSVに出す</button>
+    <a class="lead" href="#push-log">共有保存の履歴へ ↓</a>
+    <a class="lead" href="/standard-time">標準作業時間(別の画面) →</a>
+  </div>
+  {% include "_out_dir.html" %}
+  <p class="lead" style="margin-top:var(--sp-2)">
+    既定は<b>月初〜当日</b>です ── VBA の集計シートが常に
+    「月初〜出力タイミングまで」を描いていたのに合わせてあります。
+    出どころは日報を保存したときに残した集計で、明細を数え直しては
+    いません(<b>印刷した数字とそのまま同じ</b>)。
+  </p>
+  <div class="msg msg--info" id="agg-note" hidden style="margin-top:var(--sp-2)"></div>
+</div>
+
+{# 表4つ。**粗いほうから細かいほうへ** ── まず「今月どうなっているか」
+   を見て、気になったところへ降りていく順 #}
+<div id="tables">
+  {% for table in agg.tables %}
+  <div class="card" data-table="{{ table.key }}">
+    <div class="card__head">
+      <h2>{{ table.title }}</h2>
+      <span class="lead" data-table-note>{{ table.note }}（{{ table.count }}行）</span>
+    </div>
+    {% if table.key == 'by_key' %}
+    <p class="lead">
+      ロット№・用途コード・用途名・納入先・包装仕様NO を鍵にしてまとめた
+      ものです。<b>直をまたいだぶんは、終わった直に足します</b> ──
+      1直で始めて2直で終わったロットが2行に割れると、「この荷に何分
+      かかったか」がどちらを見ても出てきません。
+    </p>
+    {% endif %}
+    {% if table.key == 'lots' %}
+    <p class="lead">
+      <b>印刷に載らない欄もここに出ます</b>(用途コード・用途名・納入先・
+      包装仕様NO・コイル縦割/横縦割)。印刷範囲の外にあるので、
+      集計だけが残す場所です。
+    </p>
+    {% endif %}
+    {# **折り返さず横へ流す。** 28列ある表を折り返すと、1行が3段に
+       なって行の切れ目が読めなくなる(横スクロールのほうが読める) #}
+    <div class="scroll-x" data-table-body data-nowrap>
+      {% if table.rows %}
+      <table class="list list--nowrap">
+        <thead><tr>
+          {% for column in table.columns %}
+          <th{% if table.numeric[loop.index0] %} class="num"{% endif %}>{{ column }}</th>
+          {% endfor %}
+        </tr></thead>
+        <tbody>
+          {% for row in table.rows %}
+          <tr>
+            {% for cell in row %}
+            <td{% if table.numeric[loop.index0] %} class="num"{% endif %}>{{ cell }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="lead">{{ table.empty }}</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ================================================================
+   共有保存の履歴 ── **各直で「共有へ保存」を押した時刻と担当者**
+
+   組み立てはサーバ(`presenters/push_log.py`)。**画面を出してから取りに
+   行きます** ── 全端末の行は共有の日報データ.sqlite3 にしかなく、共有が
+   遅い・届かないときに、この画面ごと待たせないため。
+   ================================================================ #}
+<div class="card" id="push-log" data-table="push_log" style="margin-top:var(--sp-3)">
+  <div class="card__head">
+    <h2>共有保存の履歴</h2>
+    <span class="lead" data-table-note>押した時刻と担当者(読み込み中…)</span>
+  </div>
+  <p class="lead">
+    「共有へ保存」を押すたびに、<b>送った直ごとに1行</b>残しています
+    (送るものが無かった・関門で止めた、も残します)。期間は<b>報告日</b>で、
+    上の表とは別に選べます。<b>担当者</b>はその直の作業者名、<b>押した人</b>は
+    「共有へ保存」を押したときに作業者欄に入っていた名前です(前の直の残りを
+    まとめて送ったときに違います)。
+  </p>
+  {# **期間はこのカードだけで選ぶ**(v3.86.0)。上の開始日・終了日に
+     付いていくと、遠くの欄を探して打つことになる。よく見る幅は
+     1回押せば済む(並びと日付はサーバ `push_log.period_presets`) #}
+  <div class="row">
+    <div class="field">
+      <label for="push-log-start">開始日(報告日)</label>
+      <input id="push-log-start" type="date" value="{{ agg.start }}">
+    </div>
+    <div class="field">
+      <label for="push-log-end">終了日(報告日)</label>
+      <input id="push-log-end" type="date" value="{{ agg.end }}">
+    </div>
+    <div class="btn-row" id="push-log-presets" role="group" aria-label="期間をすぐ選ぶ">
+      {# **印は1つだけ**(30日ある月の30日は「今月」と「直近30日」が同じ幅になる)。
+         合うもののうち並びの先のほう #}
+      {% set marked = namespace(done=false) %}
+      {% for p in push_presets %}
+      {% set on = (not marked.done) and p.start == agg.start and p.end == agg.end %}
+      {% if on %}{% set marked.done = true %}{% endif %}
+      <button class="btn btn--sm preset" type="button" data-start="{{ p.start }}"
+              data-end="{{ p.end }}" data-preset="{{ p.key }}"
+              aria-pressed="{{ 'true' if on else 'false' }}"
+              title="{{ p.start }} 〜 {{ p.end }}">{{ p.label }}</button>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="row" style="margin-top:var(--sp-2)">
+    <div class="field">
+      <label for="push-log-scope">ライン</label>
+      <select id="push-log-scope">
+        <option value="line">このライン({{ agg.line | line_label }})</option>
+        <option value="all">全ライン</option>
+      </select>
+    </div>
+    <button class="btn" type="button" id="push-log-reload">表示</button>
+    <button class="btn" type="button" id="push-log-csv">CSVに出す</button>
+  </div>
+  <div class="msg msg--info" id="push-log-msg" hidden style="margin-top:var(--sp-2)"></div>
+  <div class="msg msg--warn" id="push-log-warning" hidden style="margin-top:var(--sp-2)"></div>
+  <p class="lead" id="push-log-counts" style="margin-top:var(--sp-2)"></p>
+  <div class="chart-skin timing-host" id="push-log-chart"></div>
+  <p class="lead" id="push-log-source"></p>
+  <div class="scroll-x" data-table-body data-nowrap></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script id="agg-data" type="application/json">{{ agg | tojson }}</script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/agg.js') }}"></script>
+{% endblock %}

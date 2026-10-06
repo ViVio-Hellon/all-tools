@@ -1,0 +1,112 @@
+"""配布用フォルダを作るスクリプト(`tools/make_dist.py`)"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from calendar_app import admin_password, distribution, settings as user_settings
+
+_ROOT = Path(__file__).resolve().parent.parent
+
+_spec = importlib.util.spec_from_file_location("make_dist", _ROOT / "tools" / "make_dist.py")
+make_dist = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(make_dist)
+
+
+class MakeDistTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.out = self.tmp / "dist"
+
+    def test_配るものだけを写す(self) -> None:
+        out, _lines = make_dist.build(self.out, with_settings=False)
+        names = {p.name for p in out.iterdir()}
+        self.assertTrue(set(make_dist.INCLUDE) <= names)
+        for bad in ("tests", ".git", "sync", "logs", "print", "settings.json"):
+            self.assertNotIn(bad, names)
+        self.assertFalse(list(out.rglob("__pycache__")))
+        self.assertFalse(list(out.rglob("*.pyc")))
+        self.assertTrue((out / "calendar_app" / "distribution.py").exists())
+        self.assertTrue((out / "配布メモ.txt").exists())
+
+    def test_配布設定フォルダは入れると決めたときだけ(self) -> None:
+        tool = self.tmp / "tool"
+        tool.mkdir()
+        for name in make_dist.INCLUDE:          # 写す元の形だけ作る(中身は要らない)
+            (tool / name).mkdir() if "." not in name else (tool / name).write_text("")
+        (tool / "config").mkdir(exist_ok=True)
+        (tool / "config" / "app.json").write_text(
+            json.dumps({"version": "9.9.9"}), encoding="utf-8")
+        src = tool / "配布設定"
+        src.mkdir()
+        distribution.settings_path(src).write_text(json.dumps({
+            "format": 1, "settings": {user_settings.KEY_DATA_DB_DIR: r"\\srv\共有",
+                                      admin_password.KEY: "pbkdf2$1$x$y"}},
+            ensure_ascii=False), encoding="utf-8")
+        with mock.patch.object(make_dist, "ROOT", tool):
+            out, _lines = make_dist.build(self.out)
+            out2, _ = make_dist.build(self.tmp / "dist2", with_settings=False)
+        self.assertTrue(distribution.settings_path(out / "配布設定").exists())
+        memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(r"保存用DBの置き場所: \\srv\共有", memo)
+        self.assertIn("管理者パスワード: (設定済み)", memo)
+        self.assertNotIn("pbkdf2$1$x$y", memo)
+        self.assertIn("VER9.9.9", memo)
+        self.assertFalse((out2 / "配布設定").exists())
+
+    def test_ツールのフォルダの中には作らない(self) -> None:
+        with self.assertRaises(SystemExit):
+            make_dist.build(_ROOT / "export" / "dist")
+
+    def test_中身のある場所は作り直すと言われたときだけ(self) -> None:
+        self.out.mkdir()
+        (self.out / "前の.txt").write_text("x", encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            make_dist.build(self.out, with_settings=False)
+        self.assertTrue((self.out / "前の.txt").exists())
+        make_dist.build(self.out, with_settings=False, force=True)
+        self.assertFalse((self.out / "前の.txt").exists())
+
+    def test_直下の一覧と食い違わない(self) -> None:
+        """直下に何かを足したら、**配るかどうかを決めさせる**。"""
+        done = subprocess.run(["git", "ls-files"], cwd=_ROOT, capture_output=True,
+                              text=True, encoding="utf-8", check=True)
+        tracked = {line.split("/")[0].strip('"') for line in done.stdout.splitlines()}
+        tracked = {name for name in tracked if not name.startswith("docs")} | {"docs"}
+        dev_only = {"tests", ".gitignore", ".gitattributes"} | set(make_dist.DEV_ONLY)
+        self.assertEqual(set(make_dist.INCLUDE), tracked - dev_only)
+
+    def test_デスクトップ版のexeは作ってあれば入れる(self) -> None:
+        exe = self.tmp / "LineCalendar.exe"
+        exe.write_bytes(b"MZ")
+        out, lines = make_dist.build(self.out, with_settings=False, exe=exe)
+        self.assertEqual((out / make_dist.EXE_NAME).read_bytes(), b"MZ")
+        self.assertTrue((out / "bridge.py").exists())
+        memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(make_dist.EXE_NAME, memo)
+        # 外枠のソースと作る仕組みは配らない(配るのは exe だけ)
+        self.assertFalse((out / "src-tauri").exists())
+        self.assertFalse((out / ".github").exists())
+
+    def test_exeが無ければブラウザ版だけと書く(self) -> None:
+        out, lines = make_dist.build(self.out, with_settings=False, exe=self.tmp / "無い.exe")
+        self.assertFalse((out / make_dist.EXE_NAME).exists())
+        self.assertIn("デスクトップ版(exe)は入っていません", "\n".join(lines))
+
+    def test_バッチは英字だけ(self) -> None:
+        """cmd.exe はコンソールのコードページで読むので、日本語を入れない。"""
+        raw = (_ROOT / "tools" / "make_dist.bat").read_bytes()
+        self.assertTrue(raw.isascii())
+        self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
+
+
+if __name__ == "__main__":
+    unittest.main()

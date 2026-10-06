@@ -1,0 +1,1124 @@
+{% extends "base.html" %}
+{% block title %}設定 — {{ display_name }}{% endblock %}
+
+{#
+  設定画面。**どのモードでも開ける** ── ここへ来られないと「なぜデータが
+  古いのか」を調べる手段が無くなる。
+
+  モードの切り替えは梱包資材マスタの「アクセス権限」(ログインID・PC名)で決める
+  (kanban/access_control.py)。接続先などの変更は管理者パスワードで守る(tkinter 版と同じ)。
+  パスワードの確認は `views/settings.js` が覆いを出して行う。
+
+  【タブに分けている理由】
+  8 つの用がここに集まっている。縦に並べると、マスタ管理の表を見ている
+  最中に「この端末の場所」まで巻き添えでスクロールすることになり、
+  **いま何をしているのかが分かりにくい**。1 ページに収めたまま、見る面だけを
+  切り替える。開いた面は端末に覚えさせる ── 同じ用で来る人が多いため。
+#}
+
+{% block content %}
+
+{% if state.app_config_error %}
+<div class="banner banner--bad">{{ state.app_config_error }} — 既定値で動作しています</div>
+{% endif %}
+{% if state.version_problem %}
+<div class="banner banner--warn">{{ state.version_problem }}</div>
+{% endif %}
+
+
+<nav class="tabs tabs--settings" role="tablist" aria-label="設定の項目">
+  <button class="tab" type="button" role="tab" id="tab-device"
+          data-tab="device" aria-selected="true"
+          aria-controls="panel-device">この端末</button>
+  <button class="tab" type="button" role="tab" id="tab-source"
+          data-tab="source" aria-selected="false"
+          aria-controls="panel-source">接続先</button>
+  <button class="tab" type="button" role="tab" id="tab-master"
+          data-tab="master" aria-selected="false"
+          aria-controls="panel-master">マスタ管理</button>
+  <button class="tab" type="button" role="tab" id="tab-stats"
+          data-tab="stats" aria-selected="false"
+          aria-controls="panel-stats">看板集計</button>
+  <button class="tab" type="button" role="tab" id="tab-import"
+          data-tab="import" aria-selected="false"
+          aria-controls="panel-import">取り込みの状態</button>
+  <button class="tab" type="button" role="tab" id="tab-trace"
+          data-tab="trace" aria-selected="false"
+          aria-controls="panel-trace">記録</button>
+  <button class="tab" type="button" role="tab" id="tab-about"
+          data-tab="about" aria-selected="false"
+          aria-controls="panel-about">ファイルの場所</button>
+  <button class="tab" type="button" role="tab" id="tab-auth"
+          data-tab="auth" aria-selected="false"
+          aria-controls="panel-auth">パスワード認証</button>
+  <button class="tab" type="button" role="tab" id="tab-dist"
+          data-tab="dist" aria-selected="false"
+          aria-controls="panel-dist">配布設定</button>
+</nav>
+
+{#
+  認証の状態。**どの面を開いていても見えるように**タブの下に置く。
+  認証済みのあいだは、守られた操作でパスワードを訊かない(kanban/admin_lock.py)
+#}
+<div class="lockbar{{ ' is-open' if state.admin_unlocked else '' }}{{ ' is-unset' if not state.has_admin_password else '' }}" id="lockbar">
+  <span id="lockbar-text">
+    {%- if not state.has_admin_password -%}
+      管理者パスワードが未設定です ── 「パスワード認証」で決めてください
+    {%- elif state.admin_unlocked -%}
+      認証済み ── 設定を変えるときにパスワードを訊きません
+    {%- else -%}
+      未認証 ── 設定を変えるときにパスワードを訊きます
+    {%- endif -%}
+  </span>
+  <button class="btn btn--sm" type="button" id="lockbar-lock"
+          {% if not state.admin_unlocked %}hidden{% endif %}>認証を解除</button>
+  <button class="btn btn--sm" type="button" id="lockbar-go"
+          {% if state.admin_unlocked %}hidden{% endif %}>パスワード認証へ</button>
+</div>
+
+<div class="panel" id="panel-device" role="tabpanel" aria-labelledby="tab-device">
+<section class="card">
+  <h2>この端末</h2>
+  {% if desktop %}
+  <p class="card__note">
+    モードを変えると、開ける画面と押せるボタンが入れ替わります。
+    <b>デスクトップ版は、その場で切り替えられます</b>(窓はそのままで、
+    共有DBへの書き戻しを済ませてから新しいモードで開き直します)。
+  </p>
+  {% else %}
+  <p class="card__note">
+    モードを変えると、開ける画面と押せるボタンが入れ替わります。
+    <b>変更は次にアプリを開いたときから効きます</b> ── モードはポート
+    (現場 8741 / 倉庫 8751 / 倉庫参照 8761)に結びついているので、
+    走ったままでは切り替わりません。開き直すと、古いモードは自動で
+    終わります。
+  </p>
+  {% endif %}
+
+  {# 変えたことを画面に残す。トーストは消えてしまう #}
+  <div class="banner banner--warn" id="mode-notice" hidden></div>
+
+  <div class="field">
+    <label for="mode">モード</label>
+    {# 権限の無いモードは選べない(理由は下の「この端末の権限」に出る)。JS が読み直して付け直す #}
+    <select id="mode">
+      {% for m in state.modes %}
+      <option value="{{ m.key }}" {% if m.current %}selected{% endif %}
+              {% if not m.allowed and not m.current %}disabled{% endif %}>
+        {{ m.label }}{% if not desktop %}(ポート {{ m.port }}){% endif %}{% if not m.allowed %}(権限なし){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    <small>
+      使えるモードは、梱包資材マスタの「アクセス権限」(ログインID・PC名)で決まります。
+      パスワードは要りません。
+    </small>
+  </div>
+
+  {% if state.mode == 'site' %}
+  <div class="field">
+    <label for="line">担当ライン</label>
+    <select id="line">
+      {% for l in state.lines %}
+      <option value="{{ l.code }}" {% if l.current %}selected{% endif %}>{{ l.label }}</option>
+      {% endfor %}
+    </select>
+    <small>現場モードで表示するラインです。変更には管理者パスワードが要ります。
+      アクセス権限の表でラインが決まっている端末は、次に起動すると表のラインに戻ります。</small>
+  </div>
+  {% endif %}
+</section>
+
+{#
+  この端末の権限(kanban/access_control.py)。梱包資材マスタの「アクセス権限」を
+  ログインID・PC名で引いた結果。**なぜ使えないのか・何を足せば使えるのか**を出す
+  (「権限がありません」だけでは、誰に何を頼めばよいか分からない)。
+#}
+<section class="card" id="access-card">
+  <h2>この端末の権限</h2>
+  <p class="card__note">
+    梱包資材マスタの「アクセス権限」の表で、<b>ログインID と PC名</b> が当てはまる行の権限を使えます
+    (python-web-tools と同じ表・同じ読み方)。このツールが読むのは
+    <code>mode:field</code>(現場モード)と <code>mode:material</code>(倉庫モード)、
+    <code>Administrator</code>(現場・倉庫の両方。日報と同じ書き方)です。
+    当てはまる行が無い端末は現場モードだけ使えます。倉庫参照はいつでも使えます。
+  </p>
+  <div class="access-id">
+    <span class="access-id__k">ログインID</span><code id="access-login">{{ state.access.grant.login_id if state.access.grant else '' }}</code>
+    <span class="access-id__k">PC名</span><code id="access-pc">{{ state.access.grant.pc_name if state.access.grant else '' }}</code>
+  </div>
+  <ul class="access-modes" id="access-modes"></ul>
+  {# 権限の列のライン名 → 担当ライン(kanban/line_names.py。日報と同じ定義) #}
+  <div class="access-line">
+    <span class="access-id__k">担当ライン(表から)</span>
+    <b id="access-line">—</b>
+  </div>
+  <div class="banner" id="access-line-note" hidden></div>
+  <div class="banner banner--warn" id="access-ignored" hidden></div>
+  <details class="access-names">
+    <summary>ライン名の書き方(正規の呼び名だけを読みます)</summary>
+    <div class="master-table-wrap" style="max-height:none;margin-top:.4rem">
+      <table class="master">
+        <thead><tr><th>正規(マスタに書く)</th><th>このツール</th><th></th></tr></thead>
+        <tbody>
+          {% for n in state.line_names %}
+          <tr><td><b>{{ n.official }}</b></td><td>{{ n.code }}</td>
+            <td>{% if not n.supported %}このツールに看板が無いので担当ラインにはしません{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="card__note" style="margin-top:.4rem"><small>
+      全角・半角の違いだけは同じ字として読みます(<code>ＬＶＣ</code> = <code>LVC</code>)。
+      <b>このツールの表の名前と違うのは 3 つ</b>: <code>L1</code> は「L-1」、<code>LS</code> は「機側」、
+      <code>大板小板</code> は「トット」か「バランサー」と書きます(表の名前のままでは読みません)。
+      <code>l-1</code> <code>ｌ―１</code> <code>L 1</code> のように記号・大文字小文字・空白が違うものも読みません。
+      1 つの欄に「、」「,」「/」で並べて書けます。
+      この端末の行にラインが 2 つ以上あれば決めません。<b>起動するたびに表のラインにします。</b>
+      管理者パスワードで変えた担当ラインは<b>その起動のあいだだけ</b>で、次に起動すると表のラインに戻ります
+      (変えたままにするには、マスタ管理でアクセス権限を書き換えてください)。
+    </small></p>
+  </details>
+  <div class="banner banner--warn" id="access-reason" hidden></div>
+  <div class="banner banner--warn" id="access-problems" hidden></div>
+  <div class="master-table-wrap" style="max-height:14rem" id="access-matched-wrap" hidden>
+    <table class="master">
+      <thead><tr><th>管理番号</th><th>条件</th><th>権限</th><th>このツールでは</th></tr></thead>
+      <tbody id="access-matched"></tbody>
+    </table>
+  </div>
+  <p class="card__note" style="margin-top:.5rem"><small id="access-source">読んでいます…</small></p>
+  <div class="toolbar">
+    <button class="btn" type="button" id="access-reload">読み直す</button>
+    <button class="btn" type="button" id="access-edit">アクセス権限を直す(マスタ管理)</button>
+  </div>
+</section>
+
+</div>
+
+<div class="panel" id="panel-source" role="tabpanel" aria-labelledby="tab-source" hidden>
+<section class="card">
+  <h2>接続先 <span class="scope scope--shared">全端末で共有</span></h2>
+  <p class="card__note">
+    正式なデータは共有フォルダの SQLite ファイルにあります。手元の SQLite は
+    その写しで、端末ごとに持っています。
+  </p>
+
+  {#
+    **いまどこに繋がっているかを、いつも見えるところに出す。** 以前は入力欄に
+    パスが入っているだけで、「変更」を押したあと受け付けられたのか分からず、
+    もう一度押すと「変更はありません」とだけ出た。結果も消えるトーストでは
+    なく、ここに残す(開き直したあとも出す)。
+  #}
+  <div class="source-now" id="source-now">
+    <div class="source-now__row">
+      <span class="source-now__label">いまの接続先</span>
+      <code id="source-now-path">{{ state.shared_db_path }}</code>
+    </div>
+    <div class="source-now__row">
+      <span class="source-now__label">状態</span>
+      <span id="source-now-state" class="source-state">確かめています…</span>
+    </div>
+  </div>
+  <div class="banner" id="source-result" hidden></div>
+
+  <div class="rowline">
+    <div class="field">
+      <label for="accdb">新しい接続先(共有 SQLite)</label>
+      <input type="text" id="accdb" value="{{ state.shared_db_path }}" spellcheck="false">
+      <small class="source-edit" id="source-edit" hidden></small>
+      <small>
+        動作確認・テストのときは本番を直接指さず、
+        <code>…\【■】_参照用ファイル\Test環境\</code> に複製したファイルを指してください。
+      </small>
+    </div>
+    {#
+      ブラウザのファイル選択ダイアログは**この PC(サーバ)から見たパス**を
+      返さないので使えない。代わりにサーバ側のフォルダを一覧する
+      (`/api/fs/list`)。直接打ってもよい。
+    #}
+    <button class="btn" type="button" id="browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="save-accdb">変更</button>
+  </div>
+
+  {# フォルダ参照。JS が開け閉めする #}
+  <div id="fs" hidden style="margin-top:.8rem">
+    <div class="rowline" style="margin-bottom:.5rem">
+      <div class="field">
+        <label for="fs-path">フォルダ</label>
+        <input type="text" id="fs-path" spellcheck="false">
+      </div>
+      <button class="btn" type="button" id="fs-up">上へ</button>
+      <button class="btn" type="button" id="fs-go">開く</button>
+      {# フォルダを選ぶとき(CSV の書き出し先・看板履歴を新しく作る場所)だけ出す #}
+      <button class="btn btn--primary" type="button" id="fs-pick-dir" hidden>このフォルダにする</button>
+      <button class="btn btn--ghost" type="button" id="fs-close">閉じる</button>
+    </div>
+    <div id="fs-roots" class="toolbar" style="margin-bottom:.5rem"></div>
+    <div id="fs-message" class="banner" hidden></div>
+    <div id="fs-list" class="fs-list"></div>
+  </div>
+</section>
+
+{#
+  アクセス権限の置き場所(梱包資材マスタ)。**看板マスタとは別のファイル**で、
+  python-web-tools と同じ表を読む。既定は共有DBと同じフォルダ。
+#}
+<section class="card" id="access-path-card">
+  <h2>アクセス権限の置き場所(梱包資材マスタ) <span class="scope scope--shared">全端末で共有</span></h2>
+  <p class="card__note">
+    誰がどのモードを使えるかは、梱包資材マスタ(python-web-tools と同じファイル)の
+    「アクセス権限」の表で決めます。<b>空欄なら共有DBと同じフォルダの
+    <code>梱包資材マスタ.sqlite3</code></b> を使います。表が無ければ作ります(ほかの表には触りません)。
+  </p>
+  <div class="source-now">
+    <div class="source-now__row">
+      <span class="source-now__label">いまの置き場所</span>
+      <code id="access-now-path">{{ state.access.path }}</code>
+    </div>
+    <div class="source-now__row">
+      <span class="source-now__label">状態</span>
+      <span id="access-now-state" class="source-state">確かめています…</span>
+    </div>
+  </div>
+  <div class="banner" id="access-path-result" hidden></div>
+  <div class="rowline">
+    <div class="field">
+      <label for="access-path">梱包資材マスタ(sqlite3)</label>
+      <input type="text" id="access-path" spellcheck="false"
+             value="{{ state.access.path if state.access.configured else '' }}"
+             placeholder="{{ state.access.default_path }}">
+      <small>空欄 = 既定({{ state.access.default_path }})</small>
+    </div>
+    <button class="btn" type="button" id="access-browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="access-save">変更</button>
+  </div>
+  <div id="access-fs-slot"></div>
+</section>
+
+{#
+  看板履歴の置き場所(kanban/db/history.py)。**全端末で同じファイルを指す**(違うと記録が
+  ばらばらのファイルに分かれ、集計が欠ける)。既定は共有DBと同じフォルダ。
+#}
+<section class="card" id="history-path-card">
+  <h2>看板履歴の置き場所(看板履歴.sqlite3) <span class="scope scope--shared">全端末で共有</span></h2>
+  <p class="card__note">
+    看板を出した・発送した・届いた記録を置くファイルです(看板集計はここを読みます)。
+    看板マスタとは<b>別のファイル</b>で、<b>空欄なら共有DBと同じフォルダの
+    <code>看板履歴.sqlite3</code></b> を使います。無ければ作ります。
+    <b>全端末で同じ場所を指してください</b>(配布設定で配れます)。
+    看板マスタの中にある以前の看板履歴は、起動するたびに、まだ写していない行だけ写します。
+  </p>
+  <div class="source-now">
+    <div class="source-now__row">
+      <span class="source-now__label">いまの置き場所</span>
+      <code id="history-now-path">{{ state.history.path }}</code>
+    </div>
+    <div class="source-now__row">
+      <span class="source-now__label">状態</span>
+      <span id="history-now-state" class="source-state">確かめています…</span>
+    </div>
+  </div>
+  <div class="banner" id="history-path-result" hidden></div>
+  <div class="rowline">
+    <div class="field">
+      <label for="history-path">看板履歴(sqlite3)</label>
+      <input type="text" id="history-path" spellcheck="false"
+             value="{{ state.history.path if state.history.configured else '' }}"
+             placeholder="{{ state.history.default_path }}">
+      <small>空欄 = 既定({{ state.history.default_path }})。まだ無いファイル名を入れると、そこに作ります。</small>
+    </div>
+    <button class="btn" type="button" id="history-browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="history-save">変更</button>
+  </div>
+  <div id="history-fs-slot"></div>
+</section>
+
+{# CSV の書き出し先。**この端末だけの設定**(端末ごとに違ってよい) #}
+<section class="card" id="csv-dir-card">
+  <h2>CSV の書き出し先 <span class="scope scope--local">この端末だけ</span></h2>
+  <p class="card__note">
+    「看板集計」タブの CSV(集計・看板履歴)を保存するフォルダです。
+    空欄なら<b>この端末のローカル領域の <code>export</code></b> に保存します。
+    共有フォルダを指定すれば、ほかの PC からも開けます。
+  </p>
+  <div class="source-now">
+    <div class="source-now__row">
+      <span class="source-now__label">いまの書き出し先</span>
+      <code id="csv-now-path">{{ state.csv_dir }}</code>
+    </div>
+  </div>
+  <div class="banner" id="csv-dir-result" hidden></div>
+  <div class="rowline">
+    <div class="field">
+      <label for="csv-dir">フォルダ</label>
+      <input type="text" id="csv-dir" spellcheck="false"
+             value="{{ state.csv_dir if state.csv_dir_configured else '' }}"
+             placeholder="{{ state.csv_dir if not state.csv_dir_configured else '' }}">
+      <small>空欄 = 既定(この端末のローカル領域の export)</small>
+    </div>
+    <button class="btn" type="button" id="csv-browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="csv-save">変更</button>
+  </div>
+  <div id="csv-fs-slot"></div>
+</section>
+
+{#
+  動作。この端末の設定(%APPDATA%\KanbanSystem\config.json)に入る。
+  配った先も同じにしたいときは「配布設定」で書き出す。
+#}
+<section class="card">
+  <h2>動作 <span class="scope scope--local">この端末だけ</span></h2>
+  <p class="card__note">
+    この端末の設定です。<b>効くのは次にアプリを開いたときから</b>です。
+    配った先も同じにしたいときは「配布設定」で書き出してください。
+  </p>
+  <form id="behavior-form" autocomplete="off">
+    <div class="rowline">
+      <div class="field">
+        <label for="behavior-import">取り込み間隔(秒)</label>
+        <input id="behavior-import" name="import_interval_sec" type="number"
+               min="0" max="86400" value="{{ state.behavior.import_interval_sec }}">
+        <small>他の端末の操作をこの間隔で取り込みます。0 で自動取り込みなし。</small>
+      </div>
+      <div class="field">
+        <label for="behavior-export">書き戻し間隔(秒)</label>
+        <input id="behavior-export" name="export_interval_sec" type="number"
+               min="0" max="86400" value="{{ state.behavior.export_interval_sec }}">
+        <small>押した操作を共有DBへ送る間隔です(押した直後にも送ります)。</small>
+      </div>
+    </div>
+    <label class="check">
+      <input id="behavior-autoprint" name="auto_print" type="checkbox"
+             {% if state.behavior.auto_print %}checked{% endif %}>
+      印刷画面を開いたら、自動で印刷ダイアログを出す
+    </label>
+    <div class="toolbar" style="margin-top:.6rem">
+      <button class="btn btn--primary" type="submit" id="behavior-save">保存</button>
+    </div>
+  </form>
+</section>
+</div>
+
+<div class="panel" id="panel-master" role="tabpanel" aria-labelledby="tab-master" hidden>
+<section class="card">
+  <h2>マスタ管理</h2>
+  <p class="card__note">
+    共有DBのテーブルを直接見て、<b>足す・直す・消す</b>ができます。Access をやめたことで
+    「Access を開いて目視する・手で直す」ができなくなったため、その受け皿です。
+    <b>読む以外は管理者パスワードが要ります。</b>
+  </p>
+
+  <div class="banner banner--warn">
+    ここで直した内容は<b>全端末に効きます</b>。発注・発送の状態は通常どおり
+    看板の画面から操作してください ── ここは<b>看板そのものを増やす・減らす</b>、
+    資材やサイズを直すための場所です。
+    一覧の最後の「アクセス権限(梱包資材マスタ)」では、<b>どの端末がどのモードを使えるか</b>を
+    足す・直す・消すことができます。
+  </div>
+
+  {# **どのファイルを読み書きしているか**をいつも出す(書いたあとに確かめやすいように) #}
+  <p class="card__note master-dest" id="master-dest" hidden>
+    <span id="master-dest-label">読み書きする共有DB</span>: <code id="master-dest-path"></code>
+  </p>
+  <div class="banner banner--ok" id="master-written" hidden></div>
+
+  <div id="master">
+    <div id="master-blocked" class="banner banner--bad" hidden></div>
+    <div class="rowline" id="master-pick" hidden>
+      <div class="field">
+        <label for="master-table">テーブル</label>
+        <select id="master-table"></select>
+      </div>
+      <button class="btn" type="button" id="master-open">開く</button>
+      {#
+        表を開くまでは押せない(どこに足すのかが決まらない)。**隠さずに
+        出しておく** ── 隠すと「看板を足せること」自体に気付けないうえ、
+        表示を差し替えるより、押せない理由を出すほうが親切。
+      #}
+      <button class="btn btn--primary" type="button" id="master-add"
+              disabled title="先にテーブルを開いてください">+ 行を追加</button>
+    </div>
+    <div id="master-form"></div>
+    <div id="master-view"></div>
+  </div>
+</section>
+
+{#
+  Access の最新で、表の中身だけを入れ替える(kanban/table_refresh.py。
+  python-web-tools の「中身を入れ替える」の移植)。Access をまるごと変換して
+  差し替えると、このツールが共有DBに足した表・列・行が消えるため。
+#}
+<section class="card" id="refresh-card">
+  <h2>Access の最新で表の中身を入れ替える</h2>
+  <p class="card__note">
+    Access で看板を足した・サイズを直したときに使います。<b>Access と共有DBの両方にある表</b>について、
+    <b>中身だけを Access の最新に入れ替え</b>ます。表の列・索引や、ほかの表には触りません。
+    Access をまるごと変換して差し替えると消えてしまう、このツールが足した表・列・行
+    (看板履歴・看板コメント・看板の状態)はそのまま残ります。
+  </p>
+  <ul class="card__note refresh-rules">
+    <li><b>看板の表</b>は、資材・サイズなどを Access の最新にし、<b>状態(赤・緑・注文中とその日時)はいまのまま</b>残します。
+        Access に無い看板のうち、発注中・発送済み・注文中のものは消しません。</li>
+    <li>このツールが書き込む表(看板履歴・看板コメント・Form状態管理)は入れ替えません。</li>
+    <li>同じ名前の列だけを写します。Access にしか無い列は写しません(表に出します)。</li>
+  </ul>
+
+  <div class="dropzone" id="rf-drop" tabindex="0">
+    <b>Access(.accdb)をここへ落とす</b>
+    <small>変換した sqlite3 でも構いません。落とすとすぐ中を読みます。</small>
+    <input type="file" id="rf-file" accept=".accdb,.mdb,.sqlite3,.sqlite,.db" hidden>
+  </div>
+  <div class="rowline" style="margin-top:.6rem">
+    <div class="field">
+      <label for="rf-path">または場所で選ぶ</label>
+      <input type="text" id="rf-path" spellcheck="false" placeholder="例: \\サーバ\共有\看板マスタ.accdb">
+    </div>
+    <button class="btn" type="button" id="rf-browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="rf-plan">中を見る</button>
+  </div>
+  <div id="rf-fs-slot"></div>
+
+  <div class="banner" id="rf-note" hidden></div>
+  <div class="master-table-wrap" style="max-height:none" id="rf-list" hidden>
+    <table class="master" id="rf-table"></table>
+  </div>
+  <div class="toolbar" style="margin-top:.6rem">
+    <button class="btn btn--danger" type="button" id="rf-run" disabled>選んだ表の中身を入れ替える</button>
+  </div>
+  <div class="banner" id="rf-result" hidden></div>
+  <p class="card__note" style="margin-top:.5rem"><small>
+    管理者パスワードが要ります。書く前に、共有DBの控えをこの端末の <code>backup</code> フォルダへ取ります
+    (新しい 10 個まで)。1 つの表は「消す+入れる」を 1 回で確定するので、途中で失敗してもその表は元のままです。
+    入れ替えたらこの端末は取り込み直し、ほかの端末には次の取り込みで届きます。
+  </small></p>
+</section>
+</div>
+
+{#
+  看板集計(kanban/presenters/stats.py)。**読むだけなのでパスワードは要らない。**
+  ボタンを押して状態が変わるたびに記録した出来事(共有DBの [看板履歴])から、
+  出した日 → 届いた日(赤を消した日)→ 次に出した日 を組み立てて数える。
+  中身はタブを初めて開いたときに読みにいく(開かない人に共有フォルダを往復させない)。
+#}
+<div class="panel" id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" hidden>
+<section class="card">
+  <h2>看板集計</h2>
+  <p class="card__note">
+    看板を<b>出した日・届いた日(赤を消した日)</b>を記録して数えます。
+    どの端末で押しても、書き戻しと一緒に共有DBの「看板履歴」へ集まります。
+  </p>
+  <form class="rowline stats-filter" id="stats-filter" autocomplete="off">
+    <div class="field">
+      <label for="stats-from">期間(から)</label>
+      <input id="stats-from" type="month" required>
+    </div>
+    <div class="field">
+      <label for="stats-to">期間(まで)</label>
+      <input id="stats-to" type="month" required>
+    </div>
+    <div class="field">
+      <label for="stats-line">ライン</label>
+      <select id="stats-line">
+        <option value="">すべてのライン</option>
+        {% for l in state.lines %}<option value="{{ l.code }}">{{ l.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn--primary" type="submit" id="stats-run">集計する</button>
+  </form>
+  <div class="banner banner--warn" id="stats-why" hidden></div>
+  {# 届くまでの日数は一番よく訊かれる数字なので、表を開かなくても見えるように #}
+  <div class="stats-overall" id="stats-overall" hidden>
+    <div><span>届くまでの平均</span><b id="ov-avg">—</b></div>
+    <div><span>最短</span><b id="ov-min">—</b></div>
+    <div><span>最長</span><b id="ov-max">—</b></div>
+    <div><span>届いた回数</span><b id="ov-n">—</b></div>
+  </div>
+  {# 倉庫の在庫切れ(注文中)と、倉庫の画面に出るまで。出した → 倉庫に出る → 発送 のどこで時間が掛かるか #}
+  <div class="stats-overall" id="stats-overall2" hidden>
+    <div><span>注文中(在庫切れ)</span><b id="ov-holds">—</b></div>
+    <div><span>注文中の平均</span><b id="ov-hold-days">—</b></div>
+    <div><span>倉庫の画面に出るまで(平均)</span><b id="ov-seen">—</b></div>
+    <div><span>出てから発送まで(平均)</span><b id="ov-seen-ship">—</b></div>
+  </div>
+  <p class="card__note" id="stats-since" style="margin:.6rem 0 0"></p>
+</section>
+
+<section class="card" id="stats-chart-card">
+  <div class="stats-head">
+    <h2 id="stats-chart-title">提出率(月ごと・ライン別)</h2>
+    <div class="seg" role="group" aria-label="グラフに出す値">
+      <button class="seg__btn" type="button" data-measure="rate" aria-pressed="true">提出率(%)</button>
+      <button class="seg__btn" type="button" data-measure="count" aria-pressed="false">出した回数</button>
+      <button class="seg__btn" type="button" data-measure="lead" aria-pressed="false">届くまで(平均日数)</button>
+    </div>
+  </div>
+  <p class="card__note" id="stats-chart-note"></p>
+  <div class="stats-legend" id="stats-legend"></div>
+  <div class="stats-chart" id="stats-chart"></div>
+  <details class="stats-table">
+    <summary>表で見る</summary>
+    <div class="master-table-wrap" style="max-height:none">
+      <table class="master" id="stats-rate-table"></table>
+    </div>
+  </details>
+</section>
+
+<section class="card">
+  <h2>ラインごとの要約(期間の中)</h2>
+  <div class="master-table-wrap" style="max-height:none;margin-top:0">
+    <table class="master stats-summary" id="stats-summary"></table>
+  </div>
+  <p class="card__note" style="margin-top:.5rem"><small>
+    日数は<b>日付の差</b>です(9/1 に出して 9/3 に届けば 2 日)。平均は届いた回だけで出します。
+    「未着」は、出したがまだ赤が消えていない回です。
+  </small></p>
+</section>
+
+<section class="card">
+  <h2>よく切れる資材(注文中にした看板。期間の中)</h2>
+  <p class="card__note">
+    倉庫が「注文中」(黄)にした = 倉庫の在庫が切れて仕入れ先へ注文した看板です。<b>回数の多い看板から</b>並べます。
+    付けて <span class="mistake-min">5</span> 分以内に外したものは押し間違いとして数えません。
+  </p>
+  <div class="master-table-wrap" style="max-height:22rem;margin-top:0">
+    <table class="master stats-summary" id="stats-holds"></table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>使用量(期間の中)</h2>
+  <p class="card__note">
+    1 回の量(サイズ欄の「:」の右。<code>2200 × 50M : 3本</code> なら 3 本)× 出した回数です。
+    <b>月あたりの多い看板から</b>並べます。在庫の量・仕入れ先への注文量を決める目安にしてください。
+    月ごとの内訳は CSV の「使用量」で出せます。
+  </p>
+  <div class="master-table-wrap" style="max-height:22rem;margin-top:0">
+    <table class="master stats-summary" id="stats-usage"></table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>看板ごとの届くまでの日数(期間の中)</h2>
+  <p class="card__note">出した日から届いた日(赤を消した日)までの日数です。平均の長い看板から並べます。</p>
+  <div class="master-table-wrap" style="max-height:26rem;margin-top:0">
+    <table class="master stats-summary" id="stats-kanbans"></table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>CSV で書き出す</h2>
+  <p class="card__note">
+    上で選んだ期間・ラインのまま書き出します。Excel でそのまま開けます。
+    「保存」は<b>書き出し先のフォルダ</b>に保存し(同じ名前があれば時刻を付けます)、
+    「ダウンロード」はブラウザで受け取ります。
+  </p>
+  <p class="card__note">書き出し先: <code id="csv-dest">{{ state.csv_dir }}</code>
+    <small>(変えるときは「接続先」タブの「CSV の書き出し先」)</small></p>
+  <div class="banner" id="csv-result" hidden></div>
+  <ul class="stats-csv">
+    {% for kind, label, note in [
+      ('cycles', '明細(1 回ずつ)', '出した日時・発送日時・届いた日時・何日で届いたか・次に出すまで何日か'),
+      ('weekly', '週ごとの回数', '看板ごとに、週(月曜日から)に何回出したか'),
+      ('monthly', '月ごとの回数', '看板ごとに、月に何回出したか'),
+      ('lead', '看板ごとの届くまでの日数', '看板ごとに、届くまでの平均日数・最短・最長・次に出すまでの平均日数'),
+      ('summary', 'ラインごとの要約', 'ラインごとの回数・週平均・月平均・届くまでの平均日数・最短・最長'),
+      ('rate', '提出率', 'ライン × 月の看板の枚数・出した看板の枚数・提出率・回数・届くまでの平均日数'),
+      ('holds', '注文中(在庫切れ)の明細', '注文中にした日時・外した日時・日数を 1 回ずつ'),
+      ('usage', '使用量(月ごと)', '看板ごと・月ごとの出した回数と数量の合計(単位つき)'),
+      ('history', '看板履歴(記録そのもの)', '看板履歴.sqlite3 の 1 件ずつ(日時・ライン・管理番号・出来事・資材・サイズ・出した日時・端末)。期間は日時の月'),
+    ] %}
+    <li><span class="stats-csv__name">{{ label }}</span>
+      <button class="btn btn--sm btn--primary" type="button" data-csv-save="{{ kind }}">保存</button>
+      <a class="btn btn--sm" data-csv="{{ kind }}" download>ダウンロード</a>
+      <small>{{ note }}</small></li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card" id="mistake-card">
+  <h2>押し間違いとみなす時間 <span class="scope scope--local">この端末の設定</span></h2>
+  <p class="card__note">
+    注文中(黄)を付けてこの時間より早く外したもの、発送の無いライン(NS1 など)で赤を付けてこの時間より
+    早く消したものは、押し間違いとして<b>数えません</b>(記録は残すので、変えれば過去の分も数え直します)。
+    0 にすると時間では除きません。配った先も同じにするときは「配布設定」で配ってください。
+  </p>
+  <div class="rowline">
+    <div class="field">
+      <label for="mistake-minutes">分</label>
+      <input id="mistake-minutes" type="number" min="0" max="1440" value="{{ state.mistake_minutes }}" style="max-width:8rem">
+    </div>
+    <button class="btn btn--primary" type="button" id="mistake-save">保存</button>
+  </div>
+  <div class="banner" id="mistake-result" hidden></div>
+</section>
+
+<section class="card">
+  <h2>数え方</h2>
+  <dl class="kv">
+    <dt>提出率</dt>
+    <dd>その月に 1 回以上出した看板の枚数 ÷ そのラインの看板の枚数(いまマスタにある、資材・サイズの入った行)。
+        同じ看板を月に 2 回出しても 1 枚と数えます(回数は「出した回数」で見ます)。</dd>
+    <dt>出した</dt><dd>赤(発注)が点いたとき。</dd>
+    <dt>届いた</dt><dd>発送済み(緑)のあとで赤を消したとき(一括リセットも含みます)。</dd>
+    <dt>数えないもの</dt><dd>発送される前に赤を消したとき(押し間違いの取り消し)。</dd>
+    <dt>届くまでの日数</dt>
+    <dd>出した日から届いた日(赤を消した日)までの日付の差。平均・最短・最長は届いた回だけで出します
+        (まだ届いていない回は入れません)。月ごとの平均は、その月に<b>出した</b>回で数えます。</dd>
+    <dt>週</dt><dd>月曜日から日曜日まで。</dd>
+    <dt>注文中(在庫切れ)</dt>
+    <dd>倉庫が黄を付けてから外すまで(発送して自動で外れたときも含みます)。日数は日付の差。
+        外していないものは「注文中のまま」として回数に入れ、平均の日数には入れません。</dd>
+    <dt>押し間違い</dt>
+    <dd>基本は状態で見分けます(発送前に赤を消した = 取消。時間は問いません)。状態だけでは
+        見分けられない次の 2 つは、<b><span class="mistake-min">5</span> 分以内</b>なら数えません:
+        注文中を付けてすぐ外した / 発送の無いライン(NS1 など)で赤を付けてすぐ消した。</dd>
+    <dt>使用量</dt>
+    <dd>その回のサイズ欄の「:」の右の数(1 回の量)を足したもの。読めない看板は回数だけ数えます。</dd>
+    <dt>倉庫の画面に出るまで</dt>
+    <dd>出してから、倉庫の端末に初めて取り込まれるまでの時間(倉庫の端末が閉じていれば、その分遅れます)。
+        「出てから発送まで」は倉庫の準備の時間です。倉庫の端末がこの版になってからの分だけ出ます。</dd>
+  </dl>
+  <p class="card__note" style="margin:.6rem 0 0"><small>
+    記録はこの版から始まります。それより前の分はありません。
+    各端末で押したものは、その端末の書き戻し(数秒〜60 秒)のあとで集計に入ります。
+  </small></p>
+</section>
+</div>
+
+<div class="panel" id="panel-import" role="tabpanel" aria-labelledby="tab-import" hidden>
+<section class="card">
+  <h2>取り込みの状態</h2>
+  <p class="card__note">
+    共有DBから手元へ読み込み直します。接続先を変えたときは自動で取り込むので、
+    通常は押す必要はありません。共有フォルダが一時的に落ちていたあとなどに使います。
+  </p>
+  <div class="toolbar">
+    <button class="btn btn--primary" type="button" id="reimport">↻ いま取り込む</button>
+  </div>
+  <dl class="kv">
+    <dt>取り込み済みライン</dt>
+    <dd id="imported">{{ state.imported_lines | join('、') or '(まだありません)' }}</dd>
+    <dt>共有DBへ未反映</dt>
+    <dd id="pending">{{ state.pending }} 件</dd>
+    <dt>要確認</dt>
+    <dd id="failures">{{ state.failures | length }} 件</dd>
+    {#
+      共有フォルダをどれだけ往復しているか。**見えないと調整のしようがない。**
+      読むときは共有ファイルを丸ごと写すので、費用は「大きさ × 回数」。
+      中身が変わっていなければ写さないため、回数が伸び続けるなら
+      誰かが書き続けている(心拍・書き戻しの間隔を見直す手がかり)。
+    #}
+    <dt>共有DBの大きさ</dt>
+    <dd>{{ '%.1f'|format(state.shared_db_size / 1024) }} KB</dd>
+    <dt>起動してから写した回数</dt>
+    <dd title="中身が変わっていなければ写しません。伸び続けるなら誰かが書き続けています">
+      {{ state.shared_db_copies }} 回
+    </dd>
+  </dl>
+
+  {#
+    **「未反映 8 件」とだけ出ても、何が届いていないのか確かめようがない。**
+    どの看板の・どの操作が・いつから残っているのかを並べる。
+    たいてい数件なので、畳まずにそのまま出す。
+  #}
+  {% if state.pending_items %}
+  <div class="pending-list">
+    <b>まだ共有DBへ届いていない操作</b>
+    <p class="card__note" style="margin:.2rem 0 .5rem">
+      通常は数秒〜60 秒で送られます。減らないときは「↻ いま取り込む」を押すか、
+      共有フォルダへ届いているかを確かめてください。
+    </p>
+    <div class="master-table-wrap" style="max-height:18rem;margin-top:0">
+      <table class="master">
+        <tr><th>ライン</th><th>管理番号</th><th>資材</th><th>サイズ</th>
+            <th>操作</th><th>押した時刻</th><th>状態</th></tr>
+        {% for p in state.pending_items %}
+        <tr>
+          <td>{{ p.line }}</td><td>{{ p.mgmt_no }}</td>
+          <td>{{ p.material }}</td><td>{{ p.size }}</td>
+          <td>{{ p.what }}</td><td>{{ p.at }}</td>
+          <td{% if p.given_up %} class="pending--stuck" title="{{ p.error }}"{% endif %}>
+            {%- if p.given_up %}要確認(送れません)
+            {%- elif p.attempts %}再送待ち({{ p.attempts }} 回失敗)
+            {%- else %}送信待ち{% endif -%}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if state.failures %}
+  <div class="banner banner--bad" style="margin-top:.8rem">
+    <b>書き戻せていない項目があります。</b>
+    <p style="margin:.3rem 0 0">
+      送りようが無いと分かっている行なので、待っても減りません。
+      アプリの終了は止めません。
+    </p>
+    <ul style="margin:.4rem 0 0; padding-left:1.2rem">
+      {% for f in state.failures[:10] %}
+      <li>{{ f.line }} / 管理番号 {{ f.mgmt_no }} — {{ f.error }}</li>
+      {% endfor %}
+    </ul>
+    {#
+      片付ける手段を画面に置く。以前は無く、共有DBの側で看板が消えた・接続先が
+      変わったあとの「要確認」は、減らす方法がどこにもなかった。
+    #}
+    <div class="toolbar" style="margin-top:.6rem">
+      <button class="btn" type="button" id="retry-failed"
+              title="共有DBの側を直した(看板を足し直した等)あとに">もう一度送る</button>
+      <button class="btn btn--danger" type="button" id="discard-failed">送れない操作を片付ける</button>
+    </div>
+    <p style="margin:.4rem 0 0; color: var(--fg)"><small>
+      「送れない操作を片付ける」は、この端末で押したが共有DBへ届かなかった操作を捨て、
+      共有DBの今の状態に戻します(共有DBにある看板は共有DBの状態に、無い看板は手元からも消えます)。
+      共有DBの側を直せる(消した看板を足し直す等)なら、直してから「もう一度送る」を押してください。
+    </small></p>
+  </div>
+  {% endif %}
+</section>
+</div>
+
+{#
+  記録(kanban/trace.py)。エラー・警告・断った操作・画面のエラーを、端末・モード・入力・
+  原因の連鎖・直前の操作つきで残している。**あとから「なぜ?」を重ねて調べるための場所。**
+  読むだけなのでパスワードは要らない(置き場所を変えるときだけ要る)
+#}
+<div class="panel" id="panel-trace" role="tabpanel" aria-labelledby="tab-trace" hidden>
+<section class="card">
+  <h2>記録を探す</h2>
+  <p class="card__note">
+    エラー・警告・断った操作・画面のエラーを、<b>いつ・どの端末で・誰が・どの画面の何の操作で・
+    どんな入力で・何が原因で</b>起きたかまで残しています。1 件を開くと、<b>直前の操作・原因の連鎖・
+    その時の状態</b>と、<b>なぜなぜ分析シート</b>の下書きが出ます。
+    画面のエラーに出た「<b>記録番号</b>」を入れると、その 1 件を直接開けます。
+  </p>
+  <form id="trace-filter" class="rowline" autocomplete="off">
+    <div class="field"><label for="trace-from">から</label><input type="date" id="trace-from"></div>
+    <div class="field"><label for="trace-to">まで</label><input type="date" id="trace-to"></div>
+    <div class="field">
+      <label for="trace-pc">端末</label>
+      <select id="trace-pc"><option value="@me">この端末</option><option value="">すべての端末</option></select>
+    </div>
+    <div class="field"><label for="trace-q">文字で絞る</label><input type="text" id="trace-q" placeholder="例: 看板_LVC / 届きません"></div>
+    <button class="btn btn--primary" type="submit">探す</button>
+  </form>
+  <div class="trace-kinds" id="trace-kinds">
+    <label class="check"><input type="checkbox" value="error" checked> エラー</label>
+    <label class="check"><input type="checkbox" value="warning" checked> 警告</label>
+    <label class="check"><input type="checkbox" value="refused" checked> 断った操作</label>
+    <label class="check"><input type="checkbox" value="client" checked> 画面のエラー</label>
+    <label class="check"><input type="checkbox" value="operation"> 操作(足跡)</label>
+    <label class="check"><input type="checkbox" value="startup"> 起動・終了</label>
+  </div>
+  <div class="rowline" style="margin-top:.4rem">
+    <div class="field"><label for="trace-ref">記録番号で開く</label>
+      <input type="text" id="trace-ref" placeholder="例: R-1001-091530-ab12" spellcheck="false"></div>
+    <button class="btn" type="button" id="trace-open-ref">開く</button>
+    <a class="btn" id="trace-csv" download>一覧を CSV で</a>
+  </div>
+  <p class="card__note" id="trace-summary" style="margin-top:.5rem"></p>
+  <div class="master-table-wrap" style="max-height:26rem;margin-top:0">
+    <table class="master trace-list">
+      <thead><tr><th>日時</th><th>種類</th><th>端末</th><th>どこで</th><th>何が</th><th>記録番号</th></tr></thead>
+      <tbody id="trace-rows"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" id="trace-detail" hidden>
+  <h2 id="trace-detail-title">記録</h2>
+  <dl class="kv" id="trace-facts"></dl>
+  <h3 class="trace-h">原因の連鎖 <small>(外側 → 内側。プログラムが残した事実)</small></h3>
+  <ol class="trace-chain" id="trace-chain"></ol>
+  <h3 class="trace-h">直前の操作 <small>(同じ端末・同じ起動のあいだ。古い順)</small></h3>
+  <ol class="trace-trail" id="trace-trail"></ol>
+  <h3 class="trace-h">その時の状態</h3>
+  <dl class="kv" id="trace-state"></dl>
+  <details class="trace-tech"><summary>技術的な詳細(入力・トレースバック)</summary>
+    <pre id="trace-raw"></pre></details>
+  <h3 class="trace-h">なぜなぜ分析シート <small>(下書き。確かめて書き直してから保存してください)</small></h3>
+  <textarea id="trace-sheet" rows="22" spellcheck="false"></textarea>
+  <div class="toolbar" style="margin-top:.4rem">
+    <button class="btn btn--primary" type="button" id="trace-sheet-save">テキストで保存</button>
+    <button class="btn" type="button" id="trace-sheet-copy">コピー</button>
+  </div>
+</section>
+
+{# 記録(ログ)の置き場所。共有フォルダにすると全端末の記録をここで見られる #}
+<section class="card" id="log-dir-card">
+  <h2>記録(ログ)の置き場所 <span class="scope scope--local">この端末の設定</span></h2>
+  <p class="card__note">
+    ログ(<code>DebugLog_*.txt</code>)と記録(<code>記録\年月\PC名_年月日.jsonl</code>)を書くフォルダです。
+    空欄なら<b>この端末のローカル領域の <code>logs</code></b>。<b>共有フォルダを指定すると、全端末の記録を
+    この画面で「すべての端末」として見られます</b>(ファイルは PC ごとに分かれます。配布設定で揃えられます)。
+    この端末の記録は <span id="log-keep-days">{{ 365 }}</span> 日で片付けます(ほかの PC の分には触りません)。
+  </p>
+  <div class="source-now">
+    <div class="source-now__row"><span class="source-now__label">いまの置き場所</span><code id="log-now-path"></code></div>
+    <div class="source-now__row"><span class="source-now__label">いまのログ</span><code id="log-now-file"></code></div>
+  </div>
+  <div class="banner" id="log-dir-result" hidden></div>
+  <div class="rowline">
+    <div class="field">
+      <label for="log-dir">フォルダ</label>
+      <input type="text" id="log-dir" spellcheck="false">
+      <small>空欄 = 既定(この端末のローカル領域の logs)</small>
+    </div>
+    <button class="btn" type="button" id="log-browse">参照...</button>
+    <button class="btn btn--primary" type="button" id="log-save">変更</button>
+  </div>
+  <div id="log-fs-slot"></div>
+</section>
+</div>
+
+<div class="panel" id="panel-about" role="tabpanel" aria-labelledby="tab-about" hidden>
+{#
+  **共有するファイルと、この端末だけのファイルは違う。** 共有するものは全端末が同じ
+  ファイルを読み書きする。この端末だけのものはローカルにあり、アプリを入れ替えても残って
+  この PC で引き継がれる(ほかの PC へは移らない)。どれがどちらかを 1 か所で見せる
+#}
+<section class="card">
+  <h2>複数の PC で共有するファイル <span class="scope scope--shared">全端末で共有</span></h2>
+  <p class="card__note">
+    共有フォルダに置き、<b>全端末が同じファイルを読み書きします</b>。置き場所は「接続先」タブで決め、
+    ほかの端末へは「配布設定」で揃えます。この PC を入れ替えても中身はそのままです。
+  </p>
+  {% set places = state.places.shared %}{% include "_places.html" %}
+</section>
+
+<section class="card">
+  <h2>この PC だけに置いて引き継ぐファイル <span class="scope scope--local">この端末だけ</span></h2>
+  <p class="card__note">
+    この PC のローカル(<code>%APPDATA%</code> / <code>%LOCALAPPDATA%</code>)にあり、<b>ほかの PC とは共有しません</b>。
+    アプリを新しい版に入れ替えても残り、<b>この PC で次に開いたときにそのまま引き継がれます</b>。
+    PC を替えるときは移りません(設定は「配布設定」で配り直し、担当ライン・モードは選び直してください)。
+    手元の SQLite に<b>まだ送れていない操作</b>が残っているうちは消さないでください。
+  </p>
+  {% set places = state.places.local %}{% include "_places.html" %}
+</section>
+
+<section class="card">
+  <h2>アプリのフォルダ <span class="scope">入れ替えると置き換わる</span></h2>
+  <p class="card__note">アプリの本体と一緒に配るものです。新しい版に入れ替えると置き換わります。</p>
+  {% set places = state.places.app %}{% include "_places.html" %}
+</section>
+
+<section class="card">
+  <h2>この端末の場所</h2>
+  <p class="card__note">
+    問い合わせのときに読み上げてもらう値です。
+  </p>
+  <dl class="kv">
+    <dt>アプリID</dt><dd>{{ state.app_id }}</dd>
+    <dt>バージョン</dt><dd>{{ state.version_label }}</dd>
+    <dt>監視レベル</dt><dd>{{ state.monitor_level }}</dd>
+    <dt>手元のSQLite</dt><dd>{{ state.sqlite_path }}</dd>
+    <dt>設定ファイル</dt><dd>{{ state.config_path }}</dd>
+    <dt>アプリ設定</dt><dd>{{ state.app_config_path }}</dd>
+    <dt>ローカル領域</dt><dd>{{ state.local_root }}</dd>
+  </dl>
+</section>
+</div>
+
+
+{#
+  パスワード認証。**認証するためだけの入口。** 以前は守られた操作を押した
+  ときに出る確認画面しか無く、「先にまとめて開けておく」ことができなかった
+  (python-web-tools の「マスタ編集の認証」と同じ形)。
+#}
+{% set has_pw = state.has_admin_password %}
+<div class="panel" id="panel-auth" role="tabpanel" aria-labelledby="tab-auth" hidden>
+<section class="card" id="auth-card">
+  <h2>パスワード認証
+    <span class="dist-state{{ ' is-ok' if state.admin_unlocked else '' }}" id="auth-state">
+      {{- '未設定' if not has_pw else '認証済み' if state.admin_unlocked else '未認証' -}}
+    </span>
+  </h2>
+
+  {# 未設定: ここで決める(決めたらそのまま認証済みになる) #}
+  <form id="setup-form" autocomplete="off"{% if has_pw %} hidden{% endif %}>
+    <p class="card__note">
+      管理者パスワードがまだありません。<b>ここで決めてください</b>
+      (決めるまでは、最初に設定を変えようとした人が決めることになります)。
+    </p>
+    <div class="rowline">
+      <div class="field">
+        <label for="setup-pw">新しいパスワード</label>
+        <input id="setup-pw" name="new_password" type="password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="setup-pw-confirm">新しいパスワード(確認)</label>
+        <input id="setup-pw-confirm" name="new_password_confirm" type="password" autocomplete="new-password">
+      </div>
+      <button class="btn btn--primary" type="submit" id="setup-save">決める</button>
+    </div>
+  </form>
+
+  {# 未認証: パスワードを入れて認証する #}
+  <form id="unlock-form" autocomplete="off"{% if not has_pw or state.admin_unlocked %} hidden{% endif %}>
+    <div class="rowline">
+      <div class="field">
+        <label for="unlock-pw">管理者パスワード</label>
+        <input id="unlock-pw" name="password" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn btn--primary" type="submit" id="unlock-save">認証する</button>
+    </div>
+  </form>
+
+  {# 認証済み #}
+  <div id="auth-ok"{% if not (has_pw and state.admin_unlocked) %} hidden{% endif %}>
+    <p class="card__note" id="unlock-status">
+      認証済みです。設定を変えるときにパスワードを訊きません
+      (あと {{ (state.admin_unlock_remaining_sec // 60) + 1 }} 分ほど。操作するたびに延びます)。
+    </p>
+    <button class="btn" type="button" id="unlock-lock">認証を解除する</button>
+  </div>
+
+  <p class="card__note" style="margin-top:.6rem"><small>
+    認証は「認証を解除する」のほか、設定の変更を {{ state.admin_idle_lock_min }} 分しなかったとき・
+    アプリを閉じたときにも解除されます。
+  </small></p>
+</section>
+
+<section class="card" id="password-card"{% if not has_pw %} hidden{% endif %}>
+  <h2>管理者パスワードを変える</h2>
+  <p class="card__note">
+    認証済みでも、変えるときは今のパスワードを訊きます。配った先も同じパスワードに
+    したいときは、変えたあとで「配布設定」を書き出し直してください。
+  </p>
+  <form id="password-form" autocomplete="off">
+    <div class="rowline">
+      <div class="field">
+        <label for="admin-pw-current">今のパスワード</label>
+        <input id="admin-pw-current" name="current_password" type="password" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label for="admin-pw-new">新しいパスワード</label>
+        <input id="admin-pw-new" name="new_password" type="password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="admin-pw-new-confirm">新しいパスワード(確認)</label>
+        <input id="admin-pw-new-confirm" name="new_password_confirm" type="password" autocomplete="new-password">
+      </div>
+      <button class="btn btn--primary" type="submit" id="password-save">変更する</button>
+    </div>
+  </form>
+</section>
+</div>
+
+{#
+  配布設定(kanban/distribution.py)。python-web-tools と同じつくり。
+  1 台で決めた設定を「配布設定」フォルダに書き出し、アプリのフォルダごと
+  配った先は起動したときにそれを読み込む(その端末にすでにある設定は上書き
+  しない)。書き出し・読み込み直し・消す・配布用フォルダを作る、はどれも
+  管理者パスワードが要る(認証済みなら訊かない)。
+#}
+{% set dist = state.distribution %}
+<div class="panel" id="panel-dist" role="tabpanel" aria-labelledby="tab-dist" hidden>
+<section class="card">
+  <h2>配布設定 <span class="dist-state {{ 'is-ok' if dist.exists else '' }}" id="dist-state">{{ 'あり' if dist.exists else 'なし' }}</span></h2>
+  <p class="card__note">
+    <b>1 台で決めた設定を、配った先の端末でそのまま使う</b>ためのものです。
+    書き出すと、アプリのフォルダの直下に<b>「配布設定」フォルダ</b>ができます。
+    アプリのフォルダごと配ると、配った先は<b>起動したときにこのフォルダを読み込みます</b>
+    (その端末にすでにある設定は上書きしません)。
+  </p>
+  <p class="card__note" id="dist-meta">
+    {%- if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% if dist.legacy %}(前の版の形){% endif %}
+    {%- else %}まだありません。下の「配布設定を書き出す」で作られます。{% endif -%}
+  </p>
+  <div class="master-table-wrap" style="max-height:none;margin-top:0" id="dist-contents-wrap"{% if not dist.exists %} hidden{% endif %}>
+    <table class="master" id="dist-contents">
+      <tr><th>いま入っている項目</th><th>値</th></tr>
+      {% for c in dist.contents %}<tr><td>{{ c.label }}</td><td>{{ c.value }}</td></tr>{% endfor %}
+    </table>
+  </div>
+  <p class="card__note" style="margin-top:.5rem">
+    置き場所: <code id="dist-path">{{ dist.path }}</code>
+    {%- if dist.applied_at %}<br>この端末が最後に読み込んだ(書き出した)日時: {{ dist.applied_at }}{% endif %}
+  </p>
+  <div id="dist-checks" class="deploy-checks" hidden>
+    <b id="dist-checks-title">書き出した直後の確認</b>
+    <ul id="dist-checks-list"></ul>
+  </div>
+</section>
+
+<section class="card">
+  <h2>この端末の設定を配布設定にする</h2>
+  <p class="card__note">
+    いまこの端末に入っている値をそのまま書き出します(前の中身は置き換えます)。
+    <b>この端末で変えていない項目は入れません</b>(配った先も同じ既定で動くため)。
+  </p>
+  <fieldset class="distchecks" id="dist-items">
+    <legend>入れる項目</legend>
+    {% for it in dist["items"] %}
+    <label>
+      <input type="checkbox" data-dist-item="{{ it.key }}" {% if it.default %}checked{% endif %}>
+      {{ it.label }}
+      <small>── {% if it.here %}この端末: <b>{{ it.here }}</b>{% else %}既定のまま({{ it.builtin }})。入れても書き出されません{% endif %}</small>
+    </label>
+    {% endfor %}
+  </fieldset>
+  <div class="toolbar" style="margin-top:.6rem">
+    <button class="btn btn--primary" type="button" id="dist-export">配布設定を書き出す</button>
+    <button class="btn" type="button" id="dist-reapply" {% if not dist.exists %}disabled{% endif %}>配布設定を読み込み直す</button>
+    <button class="btn btn--danger" type="button" id="dist-remove" {% if not dist.exists %}disabled{% endif %}>配布設定を消す</button>
+  </div>
+  <p class="card__note" style="margin-top:.6rem">
+    <b>担当ラインは既定で入れません。</b>端末ごとに違うので、入れたまま配ると全部の現場が
+    同じラインを名乗ります。配った先で「この端末」から選んでください。
+    「読み込み直す」は、この端末ですでに変えてある設定も配布設定の値で上書きします。
+  </p>
+</section>
+
+<section class="card">
+  <h2>配布用フォルダを作る</h2>
+  <p class="card__note">
+    配るものだけを、アプリのフォルダの<b>隣</b>に新しいフォルダとして写します
+    (いま置いてある配布設定も入ります)。できたフォルダをそのまま配ってください。
+  </p>
+  <div class="toolbar">
+    <button class="btn btn--primary" type="button" id="dist-build">配布用フォルダを作る</button>
+  </div>
+  <pre class="dist-build-result" id="dist-build-result" hidden></pre>
+  <p class="card__note" style="margin-top:.5rem">
+    同じものは <code>scripts\make_dist.bat</code> をダブルクリックしても作れます。
+    この端末の設定は利用者ごとのフォルダ(<code>%APPDATA%</code>)にあるので、
+    <b>アプリを新しい版に入れ替えても消えません</b>。
+  </p>
+</section>
+</div>
+
+{# パスワードの覆い。JS が出し入れする #}
+<div class="modal" id="pw" hidden>
+  <div class="modal__box" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+    <h2 id="pw-title">管理者パスワード</h2>
+    <p class="card__note" id="pw-note">この操作には管理者パスワードが要ります。</p>
+    <p class="card__note"><small>入れると認証済みになり、しばらく訊きません。</small></p>
+    <div class="field">
+      <label for="pw-input">パスワード</label>
+      <input type="password" id="pw-input" autocomplete="current-password">
+    </div>
+    <div class="field" id="pw-confirm-field" hidden>
+      <label for="pw-confirm">パスワード(確認)</label>
+      <input type="password" id="pw-confirm" autocomplete="new-password">
+    </div>
+    <div class="banner banner--bad" id="pw-error" hidden></div>
+    <div class="modal__actions">
+      <button class="btn" type="button" id="pw-cancel">やめる</button>
+      <button class="btn btn--primary" type="button" id="pw-ok">実行</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/settings.js') }}";
+  start({{ state | tojson }});
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+{
+  "app_id": "nlm.inspection-sheet-print",
+  "display_name": "点検表 選択・印刷",
+  "version": "2.0.0",
+  "monitor_level": 2,
+
+  "local_dir_name": "InspectionSheetPrint",
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8733,
+    "port_retry": 3
+  },
+
+  "monitoring": {
+    "health_poll_seconds": 15,
+    "job_poll_ms": 500
+  }
+}

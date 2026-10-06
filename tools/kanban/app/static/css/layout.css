@@ -1,0 +1,130 @@
+/* 外枠の配置(帯・レール・作業領域) */
+
+/* --- 上の帯 --------------------------------------------------------- */
+.ribbon {
+  height: var(--ribbon-h);
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 0 var(--gap);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.brand { display: flex; align-items: baseline; gap: .5rem; min-width: 0; }
+.brand__name { font-size: var(--fs-lg); white-space: nowrap; }
+.ver {
+  font-size: var(--fs-sm); color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* いま何を見ているか。**どの画面でも消えない** */
+.ribbon__slots { display: flex; gap: 1.1rem; margin-left: .5rem; min-width: 0; }
+.slot { display: flex; align-items: baseline; gap: .35rem; min-width: 0; }
+.slot .k { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.slot .v {
+  font-weight: 700; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 12rem;
+}
+
+/* 取り込みが止まっているときだけ出す枠。**順調なときは出ない**ので、
+   出ていること自体が知らせになる */
+.slot--bad .k, .slot--bad .v { color: var(--bad); font-weight: 700; }
+
+/* いま開いている他の端末。**目に留まるが、看板より強くない** ── 警戒の
+   ための添え物であって、看板の色より目立ってはいけない */
+#rb-open { display: inline-flex; gap: .3rem; max-width: 22rem; }
+.who {
+  display: inline-block; padding: .1rem .5rem; border-radius: 999px;
+  font-size: var(--fs-sm); font-weight: 700; white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* 印は立っているが、しばらく更新が無い(異常終了の疑い)。
+   **開いていると言い切らない** ── 一度でも嘘をつくと信じてもらえない */
+.who--stale {
+  background: transparent; color: var(--muted);
+  border-style: dashed; border-color: var(--line-strong);
+}
+
+.ribbon__end { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
+
+/* モードの札。色で取り違えを防ぐ */
+.mode-chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .2rem .6rem; border-radius: 999px;
+  font-size: var(--fs-sm); font-weight: 700;
+  color: var(--on-mode); text-decoration: none; white-space: nowrap;
+}
+.mode-chip--site { background: var(--mode-site); }
+.mode-chip--warehouse { background: var(--mode-warehouse); }
+.mode-chip--view { background: var(--mode-view); }
+
+/* 画面の明るさの切り替え。**目立たせない**(看板より強くしない)が、どの画面でも同じ場所 */
+.theme-toggle { color: var(--muted); font-weight: 700; min-width: 5.2rem; }
+.theme-toggle:hover:not(:disabled) { color: var(--fg); }
+
+/* --- 本体 ----------------------------------------------------------- */
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  min-height: calc(100vh - var(--ribbon-h));
+}
+
+.rail {
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: var(--gap) .5rem;
+}
+.rail ol { list-style: none; margin: 0; padding: 0; }
+.rail li + li { margin-top: .25rem; }
+.rail a {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .5rem .6rem; border-radius: var(--radius-sm);
+  color: inherit; text-decoration: none;
+}
+.rail a:hover { background: var(--surface-2); }
+.rail a[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rail .n {
+  flex: none; width: 1.35rem; height: 1.35rem; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-size: var(--fs-sm); font-variant-numeric: tabular-nums;
+}
+.rail a[aria-current="page"] .n {
+  background: var(--accent); border-color: var(--accent); color: var(--on-fill);
+}
+.rail__text { min-width: 0; display: flex; flex-direction: column; }
+.rail__text .label { font-weight: 700; }
+.rail__text small { color: var(--muted); font-size: var(--fs-sm); }
+
+.work { padding: var(--gap); min-width: 0; }
+
+/* --- 接続断の帯 (基盤仕様書 2.9) ------------------------------------ */
+/* 黙って古い表示を出し続けない。**上に固定して隠れないようにする** */
+.offline {
+  position: fixed; inset: 0 0 auto; z-index: 100;
+  display: flex; align-items: center; justify-content: center; gap: .75rem;
+  padding: .55rem 1rem;
+  background: var(--bad); color: var(--on-fill); font-weight: 700;
+  box-shadow: var(--shadow-2);
+}
+.offline .btn { background: var(--surface); color: var(--bad); border-color: var(--surface); }
+
+/* --- 画面が狭いとき ------------------------------------------------- */
+@media (max-width: 55rem) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail ol { display: flex; gap: .35rem; overflow-x: auto; }
+  .rail li + li { margin-top: 0; }
+  .rail__text small { display: none; }
+  .ribbon__slots { display: none; }
+}

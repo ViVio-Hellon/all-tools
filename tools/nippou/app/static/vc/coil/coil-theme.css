@@ -1,0 +1,116 @@
+/*
+  コイル・平板の背景(ライト / ダーク)
+
+  色は aluminum-coil-calculator.css の :root に変数で置いてあり(--page / --surface /
+  --input-bg / --well / --text / --text-2 と灰色3つ)、ダークはここで**変数だけ**
+  置き換える。選んだ方は html の data-theme に入る(coil-theme.js)。
+
+  地の色は日報管理ツールのダーク(tokens.css)に揃えている ── 枠で載せたときに
+  外と中で地の色が食い違わないように。
+  **印刷はいつも白い紙**: ダークの変数は画面(@media screen)にだけ効かせる。
+*/
+@media screen {
+    :root[data-theme="dark"] {
+        color-scheme: dark;     /* 入力欄・選択肢・スクロールバーもダークに */
+
+        --page: #0f1518;
+        --surface: #161f24;
+        --input-bg: #131b1f;
+        --well: #1d282e;
+        --text: #e6edf1;
+        --text-2: #c9d4da;
+
+        --light-gray: #1d282e;  /* 計算式の地・形状の切替の地 */
+        --medium-gray: #2a373e; /* 罫線 */
+        --dark-gray: #9fb0ba;   /* 添え書き */
+
+        /* 暗い地で 3:1 を超えるよう明るさだけ持ち上げる(色相はライトと同じ) */
+        --primary-color: #6b9cf7;
+        --secondary-color: #2fb27a;
+        --accent-color: #ef6b5e;
+        --warning-color: #f6c444;
+
+        --shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    }
+
+    :root[data-theme="dark"] .tab:hover,
+    :root[data-theme="dark"] .ptab:hover {
+        background-color: rgba(107, 156, 247, 0.12);
+    }
+
+    :root[data-theme="dark"] .control-btn:hover {
+        background-color: var(--light-gray);
+    }
+
+    :root[data-theme="dark"] .modal {
+        background-color: rgba(0, 0, 0, 0.65);
+    }
+
+    /* 3D の「詳細表示」の札(コイルは JS が style に色を書くので !important で上書き) */
+    :root[data-theme="dark"] .coil-viewer-info,
+    :root[data-theme="dark"] .plate-viewer-info {
+        color: var(--text) !important;
+        background-color: rgba(15, 21, 24, 0.78) !important;
+    }
+
+    /* 平板の寸法の図 */
+    :root[data-theme="dark"] .pf-top { fill: #4a5560; stroke: #8b98a3; }
+    :root[data-theme="dark"] .pf-front { fill: #3a444e; stroke: #8b98a3; }
+    :root[data-theme="dark"] .pf-side { fill: #313a43; stroke: #8b98a3; }
+    :root[data-theme="dark"] .pf-dim { stroke: #9fb0ba; }
+}
+
+/* --- 背景の切替(右上。形状の切替と同じ形の小さな2択) --- */
+.container {
+    position: relative;
+}
+
+.theme-switch {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 5;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--light-gray);
+    border-radius: 999px;
+}
+
+.theme-btn {
+    border: 0;
+    background: transparent;
+    color: var(--dark-gray);
+    padding: 4px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: var(--transition);
+}
+
+.theme-btn i {
+    font-size: 12px;
+    margin-right: 4px;
+}
+
+.theme-btn:hover {
+    color: var(--text);
+}
+
+.theme-btn[aria-pressed="true"] {
+    background: var(--surface);
+    color: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.theme-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+@media print {
+    .theme-switch {
+        display: none !important;
+    }
+}

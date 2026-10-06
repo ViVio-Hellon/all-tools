@@ -1,0 +1,193 @@
+/*
+  平板計算と形状の切替の見た目。
+  見た目の部品はコイル(aluminum-coil-calculator.css)をそのまま使い、ここには
+  平板だけのもの(タブの名前・図・札の色)と形状の切替を置く。
+*/
+
+/* --- 形状の切替(コイル / 平板) --- */
+.shape-switch {
+    display: flex;
+    gap: 4px;
+    align-self: center;
+    padding: 4px;
+    margin-bottom: 8px;
+    background: var(--light-gray);
+    border-radius: 999px;
+}
+
+.shape-btn {
+    border: 0;
+    background: transparent;
+    padding: 6px 22px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--dark-gray);
+    transition: var(--transition);
+}
+
+.shape-btn:hover {
+    color: var(--text);
+}
+
+.shape-btn.active {
+    background: var(--surface);
+    color: var(--primary-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.shape-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.shape-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.shape-section[hidden] {
+    display: none;
+}
+
+/* --- 平板のタブ(コイルの .tab と同じ見た目。名前を分けて互いに影響しない) --- */
+.ptab {
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 8px 8px 0 0;
+    border: 1px solid transparent;
+    transition: var(--transition);
+    font-weight: 500;
+    user-select: none;
+}
+
+.ptab:hover {
+    background-color: rgba(66, 133, 244, 0.05);
+}
+
+.ptab.active {
+    background-color: var(--surface);
+    border: 1px solid var(--medium-gray);
+    border-bottom: 1px solid var(--surface);
+    color: var(--primary-color);
+}
+
+.ptab-content {
+    display: none;
+    flex: 1;
+    overflow: hidden;
+    padding: 12px 0;
+}
+
+.ptab-content.active {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 材質プリセット(コイルは id で指定しているので同じものを平板にも) */
+select#plate-material-preset {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--medium-gray);
+    border-radius: var(--border-radius);
+    background-color: var(--input-bg);
+    font-size: 14px;
+    cursor: pointer;
+    transition: var(--transition);
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg fill='%23757575' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 20px;
+}
+
+select#plate-material-preset:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+}
+
+/* --- 寸法の図(A 赤・B 青・板厚 緑) --- */
+.plate-figure {
+    margin: 4px 0 12px;
+}
+
+.plate-figure__svg {
+    display: block;
+    width: 100%;
+    max-width: 260px;
+    margin: 0 auto;
+}
+
+.pf-top { fill: #d9dde2; stroke: #8b939c; stroke-width: 1; }
+.pf-front { fill: #b9c0c7; stroke: #8b939c; stroke-width: 1; }
+.pf-side { fill: #a4acb4; stroke: #8b939c; stroke-width: 1; }
+.pf-dim { stroke: #555; stroke-width: 1; }
+.pf-tag--a { fill: #b3121f; }
+.pf-tag--b { fill: #1030c8; }
+.pf-tag--t { fill: #128a2a; }
+.pf-label {
+    fill: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    text-anchor: middle;
+}
+
+/* 結果の見出しのアイコンの色 */
+.area-title i {
+    color: var(--secondary-color);
+}
+
+.volume-title i {
+    color: var(--accent-color);
+}
+
+/* 3D の情報(コイルの情報と同じ見た目) */
+.plate-viewer-info {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: var(--text);
+    background-color: rgba(255, 255, 255, 0.7);
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: bold;
+    font-family: Arial, sans-serif;
+}
+
+.plate-note {
+    margin-left: 8px;
+    color: var(--dark-gray);
+}
+
+.plate-modal-value {
+    text-align: right;
+    font-weight: 600;
+}
+
+/* --- 幅が狭いとき(1400px 以下) ---
+   元のツールは画面の高さに固定して、はみ出た分を隠している(overflow: hidden)。
+   この幅では 3D の枠が下へ回り込むので、隠れて見えなくなっていた。ページごと
+   縦に動かせるようにする(コイル・平板とも) */
+@media (max-width: 1400px) {
+    body {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+    }
+
+    .container,
+    .shape-section,
+    .tab-container,
+    .tab-content.active,
+    .ptab-content.active,
+    .content {
+        overflow: visible;
+    }
+}

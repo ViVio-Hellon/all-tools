@@ -1,0 +1,25 @@
+# ライン管理カレンダー — 実行に必要な追加パッケージ
+#
+# 画面は Flask + HTML/CSS/JS。詳細は docs/設計.md を参照。
+#
+#   pip install -r requirements.txt
+#
+# 【方針】依存はこの2つだけに抑える。
+# 社内端末での再インストール・更新の手間を増やさないため、
+# フロントエンド側にもビルド工程(npm / webpack など)を持ち込まない。
+#
+# データの読み書きに追加パッケージは要らない:
+#   取り込み元は共有フォルダ上の .sqlite3 で、読み書きとも標準の
+#   sqlite3 で行う (calendar_app/dbkit/source_db.py)。
+#   Access のドライバ (ACE / ODBC) はもう要らない。
+#
+#   既存の .accdb を移行するときだけ tools/convert_accdb.py を1回使う。
+#   こちらも .accdb を純Pythonで読む (calendar_app/accdb/reader.py) ので、
+#   追加パッケージは要らない。
+
+# Webフレームワーク本体
+Flask~=3.0
+
+# WSGIサーバ。Flask同梱の開発用サーバは本番利用を想定していないため、
+# Windowsで安定して動く純Python実装のこれを使う。
+waitress~=3.0

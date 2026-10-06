@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>コイル・平板 重量計算ツール</title>
+    <!-- ライブラリはアプリに同梱(ラインPCはインターネットに出られないため。app/static/vc/vendor/) -->
+    <link rel="stylesheet" href="../vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="aluminum-coil-calculator.css">
+    <link rel="stylesheet" href="plate-calculator.css">
+    <link rel="stylesheet" href="print-sheet.css">
+    <link rel="stylesheet" href="coil-theme.css">
+    <link rel="stylesheet" href="coil-fit.css">
+    <script src="../vendor/three/three.min.js"></script>
+    <script src="../vendor/three/OrbitControls.js"></script>
+    <script src="../vendor/chartjs/chart.min.js"></script>
+    <script src="../vendor/chartjs/chartjs-plugin-annotation.min.js"></script>
+    <!-- 背景(ライト/ダーク)は本文を描く前に決める(白く光ってから暗くならないように) -->
+    <script src="coil-theme.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 背景の切替(この PC のブラウザに覚える。まだ選んでいなければ Windows の設定に従う) -->
+        <div class="theme-switch" role="group" aria-label="背景">
+            <button type="button" class="theme-btn" data-theme-choice="light" aria-pressed="false" title="明るい背景にする">
+                <i class="fas fa-sun"></i>ライト
+            </button>
+            <button type="button" class="theme-btn" data-theme-choice="dark" aria-pressed="false" title="暗い背景にする">
+                <i class="fas fa-moon"></i>ダーク
+            </button>
+        </div>
+
+        <!-- 形状の切替(コイル / 平板)。平板はコイルと同じ仕組み(入力・3D・グラフ・詳細計算過程・詳細) -->
+        <div class="shape-switch" role="tablist" aria-label="形状">
+            <button type="button" class="shape-btn active" role="tab" aria-selected="true" data-shape="coil">
+                <i class="fas fa-toilet-paper"></i> コイル
+            </button>
+            <button type="button" class="shape-btn" role="tab" aria-selected="false" data-shape="plate">
+                <i class="fas fa-square"></i> 平板
+            </button>
+        </div>
+
+        <div id="coil-section" class="shape-section">
+        <header>
+            <h1><i class="fas fa-cog text-primary"></i> アルミニウムコイル重量・長さ計算ツール</h1>
+            <p>コイルの肉厚、内径、幅から重量、長さ、巻き数を計算します</p>
+        </header>
+
+        <div class="tab-container">
+            <div class="tabs">
+                <div class="tab active" data-tab="main-tab">
+                    <i class="fas fa-calculator"></i> 計算・表示
+                </div>
+                <div class="tab" data-tab="details-tab">
+                    <i class="fas fa-list-ol"></i> 詳細計算過程
+                </div>
+                <button type="button" class="print-btn" data-print="coil" id="coil-print">
+                    <i class="fas fa-print"></i> 印刷
+                </button>
+            </div>
+
+            <!-- メイン計算タブ -->
+            <div id="main-tab" class="tab-content active">
+                <div class="content">
+                    <!-- 入力パラメータ -->
+                    <div class="right-content">
+                        <section class="input-panel">
+                            <h2 class="panel-title"><i class="fas fa-sliders-h"></i> 入力パラメータ</h2>
+
+                            <div class="material-presets">
+                                <div class="preset-title"><i class="fas fa-tags"></i> 材質プリセット</div>
+                                <div class="preset-select-container">
+                                    <select id="material-preset" class="form-control">
+                                        <option value="aluminum" data-gravity="2.70" data-color="#AAAAAA">アルミニウム (2.70)</option>
+                                        <option value="steel" data-gravity="7.87" data-color="#71797E">鉄 (7.87)</option>
+                                        <option value="copper" data-gravity="8.96" data-color="#B87333">銅 (8.96)</option>
+                                        <option value="stainless" data-gravity="7.93" data-color="#C0C0C0">ステンレス (7.93)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="thickness">肉厚 (mm) <span class="text-accent">※0〜600</span></label>
+                                <input type="number" id="thickness" class="form-control" value="400" min="0" max="600" step="1">
+                                <div id="thickness-error" class="error-message" style="display: none;">0〜600の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="inner-diameter">内径 (mm) <span class="text-accent">※250〜610</span></label>
+                                <input type="number" id="inner-diameter" class="form-control" value="557" min="250" max="610" step="1">
+                                <div id="inner-diameter-error" class="error-message" style="display: none;">250〜610の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="coil-width">コイル幅 (mm) <span class="text-accent">※0〜1800</span></label>
+                                <input type="number" id="coil-width" class="form-control" value="1250" min="0" max="1800" step="1">
+                                <div id="coil-width-error" class="error-message" style="display: none;">0〜1800の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="specific-gravity">比重 (g/cm³) <span class="text-accent">※0.01〜100</span></label>
+                                <input type="number" id="specific-gravity" class="form-control" value="2.70" min="0.01" max="100" step="0.01">
+                                <div id="specific-gravity-error" class="error-message" style="display: none;">0.01〜100の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="plate-thickness">板厚 (mm) <span class="text-accent">※0.05〜20</span></label>
+                                <input type="number" id="plate-thickness" class="form-control" value="1.00" min="0.05" max="20" step="0.01">
+                                <div id="plate-thickness-error" class="error-message" style="display: none;">0.05〜20の範囲で入力してください</div>
+                            </div>
+                        </section>
+                    </div>
+                    
+                    <!-- 視覚表示パネル -->
+                    <section class="visual-panel">
+                        <h2 class="panel-title"><i class="fas fa-cube"></i> 3Dコイル表示</h2>
+                        
+                        <div class="controls-container">
+                            <div class="control-buttons">
+                                <button id="toggle-rotation" class="control-btn">
+                                    <i class="fas fa-sync"></i> 回転の切替
+                                </button>
+                                <button id="reset-camera" class="control-btn">
+                                    <i class="fas fa-home"></i> カメラリセット
+                                </button>
+                                <button id="toggle-details" class="control-btn">
+                                    <i class="fas fa-info-circle"></i> 詳細表示
+                                </button>
+                            </div>
+                            
+                            <div class="color-controls">
+                                <div class="color-option">
+                                    <label for="coil-color">コイル色:</label>
+                                    <input type="color" id="coil-color" value="#aaaaaa">
+                                </div>
+                                <div class="color-option">
+                                    <label for="bg-color">背景色:</label>
+                                    <input type="color" id="bg-color" value="#f5f5f5">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="3d-container" class="model-container"></div>
+                        
+                        <div class="tip-container">
+                            <p class="tip">
+                                <i class="fas fa-mouse"></i> マウス操作: ドラッグで回転、スクロールでズーム
+                            </p>
+                        </div>
+                    </section>
+                    
+                    <!-- 計算結果カード -->
+                    <div class="card-area">
+                        <div class="results">
+
+
+
+    <!-- グラフカード (新規追加) -->
+    <div class="result-card graph-card fade-in">
+        <h3 class="result-title graph-title">
+            <div><i class="fas fa-chart-line"></i> パラメータ影響グラフ</div>
+            <div class="graph-controls">
+                <select id="x-axis-param" class="graph-select">
+                    <option value="thickness">X軸: 肉厚 (mm)</option>
+                    <option value="inner-diameter">X軸: 内径 (mm)</option>
+                    <option value="coil-width">X軸: コイル幅 (mm)</option>
+                    <option value="plate-thickness">X軸: 板厚 (mm)</option>
+                </select>
+                <select id="y-axis-result" class="graph-select">
+                    <option value="weight">Y軸: 重量 (kg)</option>
+                    <option value="length">Y軸: 長さ (m)</option>
+                    <option value="windings">Y軸: 巻き数</option>
+                </select>
+            </div>
+        </h3>
+        <div class="chart-container">
+            <canvas id="parameter-chart"></canvas>
+        </div>
+    </div>
+
+
+
+
+
+                            <!-- 重量計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title weight-title">
+                                    <div><i class="fas fa-weight-hanging"></i> 重量計算</div>
+                                    <button class="details-btn" data-modal="weight-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="weight-result">2,189.8 kg</div>
+                            </div>
+
+                            <!-- 長さ計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title length-title">
+                                    <div><i class="fas fa-ruler-horizontal"></i> 長さ計算</div>
+                                    <button class="details-btn" data-modal="length-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="length-result">648.8 m</div>
+                            </div>
+
+                            <!-- 巻き数計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title windings-title">
+                                    <div><i class="fas fa-sync"></i> 巻き数計算</div>
+                                    <button class="details-btn" data-modal="windings-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="windings-result">400 巻</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 詳細計算過程タブ -->
+            <div id="details-tab" class="tab-content">
+                <div class="calculation-details">
+                    <!-- 基本寸法計算 -->
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-ruler-combined"></i> 基本寸法計算</h3>
+                        <div class="calculation-formula" id="dimensions-detailed">
+                            <div class="mb-2">大円柱半径 = (肉厚 × 2 + 内径) / 2 = (400 × 2 + 557) / 2 = <span class="value">678.5 mm</span></div>
+                            <div>小円柱半径 = 内径 / 2 = 557 / 2 = <span class="value">278.5 mm</span></div>
+                        </div>
+                    </div>
+
+                    <!-- 体積計算 -->
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-cube"></i> 体積計算</h3>
+                        <div class="calculation-formula" id="volume-detailed">
+                            <div class="mb-2">大円柱体積 = π × 大円柱半径² × コイル幅 = π × 678.5² × 1250 = <span class="value">1,809,647,835 mm³</span></div>
+                            <div class="mb-2">小円柱体積 = π × 小円柱半径² × コイル幅 = π × 278.5² × 1250 = <span class="value">303,596,529 mm³</span></div>
+                            <div class="mb-2">コイル体積 = 大円柱体積 - 小円柱体積 = 1,809,647,835 - 303,596,529 = <span class="value">1,506,051,306 mm³</span></div>
+                            <div>コイル体積(cm³) = コイル体積(mm³) / 1000 = 1,506,051,306 / 1000 = <span class="value">1,506,051.3 cm³</span></div>
+                        </div>
+                    </div>
+
+                    <!-- 重量計算 -->
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-weight-hanging"></i> 重量計算</h3>
+                        <div class="calculation-formula" id="weight-detailed">
+                            <div class="mb-2">重量(g) = 体積(cm³) × 比重(g/cm³) = 1,506,051.3 × 2.70 = <span class="value">4,066,338.5 g</span></div>
+                            <div>重量(kg) = 重量(g) / 1000 = 4,066,338.5 / 1000 = <span class="value">4,066.3 kg</span></div>
+                        </div>
+                    </div>
+
+                    <!-- 長さ計算 -->
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-ruler-horizontal"></i> 長さ計算</h3>
+                        <div class="calculation-formula" id="length-detailed">
+                            <div class="mb-2">断面積 = π × (大円柱半径² - 小円柱半径²) = π × (678.5² - 278.5²) = <span class="value">1,204,841.0 mm²</span></div>
+                            <div class="mb-2">面積 = コイル体積(mm³) / 板厚(mm) = 1,506,051,306 / 1.00 = <span class="value">1,506,051,306 mm²</span></div>
+                            <div class="mb-2">長さ(mm) = 面積(mm²) / コイル幅(mm) = 1,506,051,306 / 1250 = <span class="value">1,204,841 mm</span></div>
+                            <div>長さ(m) = 長さ(mm) / 1000 = 1,204,841 / 1000 = <span class="value">1,204.8 m</span></div>
+                        </div>
+                    </div>
+
+                    <!-- 巻き数計算 -->
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-sync"></i> 巻き数計算</h3>
+                        <div class="calculation-formula" id="windings-detailed">
+                            <div>巻き数 = 肉厚(mm) / 板厚(mm) = 400 / 1.00 = <span class="value">400.0 ≈ 400 巻</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div><!-- /coil-section -->
+
+        <!-- 平板(コイルと同じ仕組み。id は plate- で始める) -->
+        <div id="plate-section" class="shape-section" hidden>
+        <header>
+            <h1><i class="fas fa-square text-primary"></i> 平板重量計算ツール</h1>
+            <p>平板の寸法 A・B と板厚から、面積・体積・重量を計算します</p>
+        </header>
+
+        <div class="tab-container">
+            <div class="tabs">
+                <div class="ptab active" data-ptab="plate-main-tab">
+                    <i class="fas fa-calculator"></i> 計算・表示
+                </div>
+                <div class="ptab" data-ptab="plate-details-tab">
+                    <i class="fas fa-list-ol"></i> 詳細計算過程
+                </div>
+                <button type="button" class="print-btn" data-print="plate" id="plate-print">
+                    <i class="fas fa-print"></i> 印刷
+                </button>
+            </div>
+
+            <!-- メイン計算タブ -->
+            <div id="plate-main-tab" class="ptab-content active">
+                <div class="content">
+                    <!-- 入力パラメータ -->
+                    <div class="right-content">
+                        <section class="input-panel">
+                            <h2 class="panel-title"><i class="fas fa-sliders-h"></i> 入力パラメータ</h2>
+
+                            <div class="material-presets">
+                                <div class="preset-title"><i class="fas fa-tags"></i> 材質プリセット</div>
+                                <div class="preset-select-container">
+                                    <select id="plate-material-preset" class="form-control">
+                                        <option value="aluminum" data-gravity="2.70" data-color="#AAAAAA">アルミニウム (2.70)</option>
+                                        <option value="steel" data-gravity="7.87" data-color="#71797E">鉄 (7.87)</option>
+                                        <option value="copper" data-gravity="8.96" data-color="#B87333">銅 (8.96)</option>
+                                        <option value="stainless" data-gravity="7.93" data-color="#C0C0C0">ステンレス (7.93)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="plate-figure" aria-hidden="true">
+                                <svg viewBox="0 0 220 96" class="plate-figure__svg">
+                                    <polygon points="20,70 70,40 200,40 150,70" class="pf-top"/>
+                                    <polygon points="20,70 150,70 150,78 20,78" class="pf-front"/>
+                                    <polygon points="150,70 200,40 200,48 150,78" class="pf-side"/>
+                                    <line x1="12" y1="62" x2="62" y2="32" class="pf-dim"/>
+                                    <line x1="70" y1="30" x2="200" y2="30" class="pf-dim"/>
+                                    <line x1="208" y1="40" x2="208" y2="48" class="pf-dim"/>
+                                    <rect x="20" y="30" width="18" height="15" class="pf-tag pf-tag--a"/>
+                                    <text x="29" y="41.5" class="pf-label">A</text>
+                                    <rect x="126" y="15" width="18" height="15" class="pf-tag pf-tag--b"/>
+                                    <text x="135" y="26.5" class="pf-label">B</text>
+                                    <rect x="172" y="76" width="34" height="15" class="pf-tag pf-tag--t"/>
+                                    <text x="189" y="87.5" class="pf-label">板厚</text>
+                                </svg>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="plate-a">A (mm) <span class="text-accent">※0〜3000</span></label>
+                                <input type="number" id="plate-a" class="form-control" value="1000" min="0" max="3000" step="1">
+                                <div id="plate-a-error" class="error-message" style="display: none;">0〜3000の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="plate-b">B (mm) <span class="text-accent">※0〜10000</span></label>
+                                <input type="number" id="plate-b" class="form-control" value="2000" min="0" max="10000" step="1">
+                                <div id="plate-b-error" class="error-message" style="display: none;">0〜10000の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="plate-t">板厚 (mm) <span class="text-accent">※0.05〜1000</span></label>
+                                <input type="number" id="plate-t" class="form-control" value="1.00" min="0.05" max="1000" step="0.01">
+                                <div id="plate-t-error" class="error-message" style="display: none;">0.05〜1000の範囲で入力してください</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="plate-specific-gravity">比重 (g/cm³) <span class="text-accent">※0.01〜100</span></label>
+                                <input type="number" id="plate-specific-gravity" class="form-control" value="2.70" min="0.01" max="100" step="0.01">
+                                <div id="plate-specific-gravity-error" class="error-message" style="display: none;">0.01〜100の範囲で入力してください</div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- 視覚表示パネル -->
+                    <section class="visual-panel">
+                        <h2 class="panel-title"><i class="fas fa-cube"></i> 3D平板表示</h2>
+
+                        <div class="controls-container">
+                            <div class="control-buttons">
+                                <button id="plate-toggle-rotation" class="control-btn">
+                                    <i class="fas fa-sync"></i> 回転の切替
+                                </button>
+                                <button id="plate-reset-camera" class="control-btn">
+                                    <i class="fas fa-home"></i> カメラリセット
+                                </button>
+                                <button id="plate-toggle-details" class="control-btn">
+                                    <i class="fas fa-info-circle"></i> 詳細表示
+                                </button>
+                            </div>
+
+                            <div class="color-controls">
+                                <div class="color-option">
+                                    <label for="plate-color">平板色:</label>
+                                    <input type="color" id="plate-color" value="#aaaaaa">
+                                </div>
+                                <div class="color-option">
+                                    <label for="plate-bg-color">背景色:</label>
+                                    <input type="color" id="plate-bg-color" value="#f5f5f5">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="plate-3d-container" class="model-container"></div>
+
+                        <div class="tip-container">
+                            <p class="tip">
+                                <i class="fas fa-mouse"></i> マウス操作: ドラッグで回転、スクロールでズーム
+                                <span id="plate-exaggerated-note" class="plate-note" hidden>(板厚は見やすいように厚く描いています)</span>
+                            </p>
+                        </div>
+                    </section>
+
+                    <!-- 計算結果カード -->
+                    <div class="card-area">
+                        <div class="results">
+                            <!-- グラフカード -->
+                            <div class="result-card graph-card fade-in">
+                                <h3 class="result-title graph-title">
+                                    <div><i class="fas fa-chart-line"></i> パラメータ影響グラフ</div>
+                                    <div class="graph-controls">
+                                        <select id="plate-x-axis-param" class="graph-select">
+                                            <option value="a">X軸: A (mm)</option>
+                                            <option value="b">X軸: B (mm)</option>
+                                            <option value="t">X軸: 板厚 (mm)</option>
+                                        </select>
+                                        <select id="plate-y-axis-result" class="graph-select">
+                                            <option value="weight">Y軸: 重量 (kg)</option>
+                                            <option value="area">Y軸: 面積 (m²)</option>
+                                            <option value="volume">Y軸: 体積 (cm³)</option>
+                                        </select>
+                                    </div>
+                                </h3>
+                                <div class="chart-container">
+                                    <canvas id="plate-parameter-chart"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- 重量計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title weight-title">
+                                    <div><i class="fas fa-weight-hanging"></i> 重量計算</div>
+                                    <button class="details-btn" data-modal="plate-weight-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="plate-weight-result">5.40 kg</div>
+                            </div>
+
+                            <!-- 面積計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title area-title">
+                                    <div><i class="fas fa-vector-square"></i> 面積計算</div>
+                                    <button class="details-btn" data-modal="plate-area-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="plate-area-result">2.000 m²</div>
+                            </div>
+
+                            <!-- 体積計算結果 -->
+                            <div class="result-card fade-in">
+                                <h3 class="result-title volume-title">
+                                    <div><i class="fas fa-cube"></i> 体積計算</div>
+                                    <button class="details-btn" data-modal="plate-volume-modal">詳細</button>
+                                </h3>
+                                <div class="result-value" id="plate-volume-result">2,000.0 cm³</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 詳細計算過程タブ -->
+            <div id="plate-details-tab" class="ptab-content">
+                <div class="calculation-details">
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-vector-square"></i> 面積計算</h3>
+                        <div class="calculation-formula" id="plate-area-detailed"></div>
+                    </div>
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-cube"></i> 体積計算</h3>
+                        <div class="calculation-formula" id="plate-volume-detailed"></div>
+                    </div>
+                    <div class="detail-card">
+                        <h3 class="details-title"><i class="fas fa-weight-hanging"></i> 重量計算</h3>
+                        <div class="calculation-formula" id="plate-weight-detailed"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div><!-- /plate-section -->
+    </div>
+
+    <!-- モーダル：重量計算詳細 -->
+    <div id="weight-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-weight-hanging text-primary"></i> 重量計算詳細</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-ruler-combined"></i> 寸法の計算</h3>
+                    <div class="calculation-formula">
+                        <div>大円柱半径 = (肉厚 × 2 + 内径) / 2</div>
+                        <div id="modal-large-radius">= (400 × 2 + 557) / 2 = 678.5 mm</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>小円柱半径 = 内径 / 2</div>
+                        <div id="modal-small-radius">= 557 / 2 = 278.5 mm</div>
+                    </div>
+                </div>
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-cube"></i> 体積の計算</h3>
+                    <div class="calculation-formula">
+                        <div>大円柱体積 = π × 大円柱半径² × コイル幅</div>
+                        <div id="modal-large-volume">= π × 678.5² × 1250 = 1,809,647,835 mm³</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>小円柱体積 = π × 小円柱半径² × コイル幅</div>
+                        <div id="modal-small-volume">= π × 278.5² × 1250 = 303,596,529 mm³</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>コイル体積 = 大円柱体積 - 小円柱体積</div>
+                        <div id="modal-coil-volume">= 1,809,647,835 - 303,596,529 = 1,506,051,306 mm³</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>コイル体積(cm³) = コイル体積(mm³) / 1000</div>
+                        <div id="modal-coil-volume-cm">= 1,506,051,306 / 1000 = 1,506,051.3 cm³</div>
+                    </div>
+                </div>
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-balance-scale"></i> 重量の計算</h3>
+                    <div class="calculation-formula">
+                        <div>重量(g) = 体積(cm³) × 比重(g/cm³)</div>
+                        <div id="modal-weight-g">= 1,506,051.3 × 2.70 = 4,066,338.5 g</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>重量(kg) = 重量(g) / 1000</div>
+                        <div id="modal-weight-kg">= 4,066,338.5 / 1000 = 4,066.3 kg</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル：長さ計算詳細 -->
+    <div id="length-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-ruler-horizontal text-secondary"></i> 長さ計算詳細</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-square"></i> 断面積の計算</h3>
+                    <div class="calculation-formula">
+                        <div>断面積 = π × (大円柱半径² - 小円柱半径²)</div>
+                        <div id="modal-cross-section">= π × (678.5² - 278.5²) = 1,204,841.0 mm²</div>
+                    </div>
+                </div>
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-ruler"></i> 長さの計算</h3>
+                    <div class="calculation-formula">
+                        <div>面積 = コイル体積(mm³) / 板厚(mm)</div>
+                        <div id="modal-length-area">= 1,506,051,306 / 1.00 = 1,506,051,306 mm²</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>長さ(mm) = 面積(mm²) / コイル幅(mm)</div>
+                        <div id="modal-length-mm">= 1,506,051,306 / 1250 = 1,204,841 mm</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>長さ(m) = 長さ(mm) / 1000</div>
+                        <div id="modal-length-m">= 1,204,841 / 1000 = 1,204.8 m</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル：巻き数計算詳細 -->
+    <div id="windings-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-sync text-accent"></i> 巻き数計算詳細</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-layer-group"></i> 巻き数の計算</h3>
+                    <div class="calculation-formula">
+                        <div>巻き数 = 肉厚(mm) / 板厚(mm)</div>
+                        <div id="modal-windings">= 400 / 1.00 = 400.0 ≈ 400 巻</div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>※巻き数は整数値に四捨五入しています</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル：平板 重量計算詳細 -->
+    <div id="plate-weight-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-weight-hanging text-primary"></i> 重量計算詳細(平板)</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-cube"></i> 体積の計算</h3>
+                    <div class="calculation-formula">
+                        <div>体積(mm³) = A × B × 板厚</div>
+                        <div id="plate-modal-volume-mm" class="plate-modal-value"></div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>体積(cm³) = 体積(mm³) / 1000</div>
+                        <div id="plate-modal-volume-cm" class="plate-modal-value"></div>
+                    </div>
+                </div>
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-balance-scale"></i> 重量の計算</h3>
+                    <div class="calculation-formula">
+                        <div>重量(g) = 体積(cm³) × 比重(g/cm³)</div>
+                        <div id="plate-modal-weight-g" class="plate-modal-value"></div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>重量(kg) = 重量(g) / 1000</div>
+                        <div id="plate-modal-weight-kg" class="plate-modal-value"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル：平板 面積計算詳細 -->
+    <div id="plate-area-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-vector-square text-secondary"></i> 面積計算詳細(平板)</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-vector-square"></i> 面積の計算</h3>
+                    <div class="calculation-formula">
+                        <div>面積(mm²) = A × B</div>
+                        <div id="plate-modal-area-mm" class="plate-modal-value"></div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>面積(m²) = 面積(mm²) / 1,000,000</div>
+                        <div id="plate-modal-area-m" class="plate-modal-value"></div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>※片面の面積です(板厚の側面は含みません)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- モーダル：平板 体積計算詳細 -->
+    <div id="plate-volume-modal" class="modal" aria-hidden="true" role="dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title"><i class="fas fa-cube text-accent"></i> 体積計算詳細(平板)</h2>
+                <button class="modal-close" aria-label="閉じる">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calculation-section">
+                    <h3 class="calculation-title"><i class="fas fa-cube"></i> 体積の計算</h3>
+                    <div class="calculation-formula">
+                        <div>体積(mm³) = 面積(mm²) × 板厚(mm)</div>
+                        <div id="plate-modal-volume-mm2" class="plate-modal-value"></div>
+                    </div>
+                    <div class="calculation-formula">
+                        <div>体積(cm³) = 体積(mm³) / 1000</div>
+                        <div id="plate-modal-volume-cm2" class="plate-modal-value"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="aluminum-coil-calculator.js"></script>
+    <script src="3d-coil-viewer.js"></script>
+    <script src="coil-init.js"></script>
+    <script src="coil-parameter-chart.js"></script>
+    <script src="plate-calculator.js"></script>
+    <script src="plate-3d-viewer.js"></script>
+    <script src="plate-init.js"></script>
+    <script src="plate-parameter-chart.js"></script>
+    <script src="shape-switch.js"></script>
+    <script src="print-sheet.js"></script>
+    <!-- 画面に収める(形状の切替が済んでから、いまの中身の高さをはかる) -->
+    <script src="coil-fit.js"></script>
+    <!-- 印刷するときだけ出す計算書(print-sheet.js が中身を入れる) -->
+    <section id="print-sheet" class="print-sheet" aria-hidden="true"></section>
+</body>
+</html>

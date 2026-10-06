@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}記録を見る — {{ display_name }}{% endblock %}
+
+{#
+  記録 ── 保存したものを「見る」「呼び出す」
+
+  【なぜこの画面を作ったか】
+  VBA も本ツールも、日々やることが画面をまたいで散らばっていました。
+  とくに「過去の直を開く」は**設定・管理者の中**にあり、めったに触らない
+  参照パスやマスタ管理と同居していました。探す場所が分からないものは、
+  無いのと同じです。
+
+  この画面には **見る** と **呼び出す** だけを置きます。
+  保存(手元) は日報入力、保存(共有) は設定・管理者 ── 動詞ごとに
+  行き先が1つになるようにしました。
+#}
+
+{% block content %}
+<div class="page-head">
+  <h1>記録を見る</h1>
+  <span class="lead">保存したものを見る・過去の直を呼び出す</span>
+</div>
+
+{# 直ひと回りの動線。**3つの画面で同じ帯**(`presenters/flow.py`) #}
+{% with flow_here = "records" %}
+  {% include "_flow.html" %}
+{% endwith %}
+
+{# 「見る」は3通りある。**いま居る場所と、他の2つを常に見せる** ──
+   どれか1つに入り込むと、他の見方があることを忘れる #}
+<p class="lead views-switch">
+  見かた:
+  <b>紙(この画面)</b> ・
+  <a href="/agg">表(集計管理)</a> ・
+  <a href="/graph">グラフ(集計・グラフ)</a>
+</p>
+
+{# ================================================================
+   4つの動線の地図。**この画面だけ説明しても足りない。**
+   「保存」「呼び出し」「閲覧」「グラフ」がそれぞれどこにあるかを、
+   ここで1枚にまとめて見せる ── 迷ったらこの画面に来れば分かる
+   ================================================================ #}
+<div class="card">
+  <div class="card__head"><h2>やりたいことは、どの画面か</h2></div>
+  <div class="scroll-x">
+    <table class="list list--nowrap">
+      <thead><tr><th>やりたいこと</th><th>画面</th><th>どういう意味か</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>保存する</b>(この端末)</td>
+          <td><a href="/">日報入力</a> の「保存(確定)」</td>
+          <td>打ったものをこの端末に残す。<b>押すたび</b>(+自動保存)</td>
+        </tr>
+        <tr>
+          <td><b>保存する</b>(共有)</td>
+          <td><a href="/settings">設定・管理者</a> の「共有へ保存」</td>
+          <td>みんなが見る日報管理へ写す。<b>直の終わりに1回</b></td>
+        </tr>
+        <tr>
+          <td><b>呼び出す</b></td>
+          <td class="this">この画面(下の一覧)</td>
+          <td>過去の直を<b>日報入力に開き直して直す</b>。管理者モード</td>
+        </tr>
+        <tr>
+          <td><b>見る</b>(紙)</td>
+          <td class="this">この画面</td>
+          <td>印刷用の紙をそのまま見る。<b>直しません</b>・刷るのは任意</td>
+        </tr>
+        <tr>
+          <td><b>見る</b>(表)</td>
+          <td><a href="/agg">集計管理</a></td>
+          <td>ロット別・直別・日別の数字を表で。CSVにも出せる</td>
+        </tr>
+        <tr>
+          <td><b>見る</b>(グラフ)</td>
+          <td><a href="/graph">集計・グラフ</a></td>
+          <td>重量・枚数・稼働率・停止の推移を絵で</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="lead">
+    <strong>「見る」と「呼び出す」は別のことです。</strong>
+    見るのは<strong>読むだけ</strong>(何も動きません)。呼び出すのは
+    <strong>その直を入力画面に開いて直す</strong>ことで、直したら
+    「最新のページに戻る」を押すまで、いまの直の入力には戻れません。
+  </p>
+</div>
+
+{% if recall_note %}
+<div class="msg msg--warn">{{ recall_note }}
+  <button class="btn btn--sm" type="button" id="back-now">最新のページに戻る</button>
+</div>
+{% endif %}
+
+{# ---- いまの直 ── いちばんよく見るもの。1押しで3つの見方へ ---- #}
+<div class="card">
+  <div class="card__head">
+    <h2>いまの直</h2>
+    <span class="lead">{{ current.report_date }} / {{ current.line | line_label }} / {{ current.shift }}</span>
+  </div>
+  {% if current.pages %}
+  <p class="lead">保存されているのは
+    <strong>{{ current.pages | join("・") }}ページ</strong>です。</p>
+  <div class="btn-row">
+    <button class="btn btn--primary" type="button" data-open-all
+            data-date="{{ current.report_date }}" data-line="{{ current.line }}"
+            data-shift="{{ current.shift }}">紙を見る(全ページ)</button>
+    <a class="btn" href="/agg">表で見る</a>
+    <a class="btn" href="/graph">グラフで見る</a>
+  </div>
+  {% else %}
+  <p class="lead">まだ1ページも保存されていません。
+    <a href="/">日報入力</a>で打って「保存(確定)」を押すと、ここに出ます。</p>
+  {% endif %}
+</div>
+
+{# ---- 保存した直の一覧 ── 見る / 呼び出す の入口 ---- #}
+<div class="card">
+  <div class="card__head">
+    <h2>保存した直</h2>
+    <span class="lead">共有へ未送信が先・そのあと保存の新しい順</span>
+  </div>
+  {# ---- 並びの決まりを1行で ----
+
+         直してほしいといいつつないから直せないんですが
+
+     一覧は「保存の新しい順に20直」でした。取り込みで同じ時刻の紙が
+     何十枚も入ると、**古い未送信の直が溢れて出てこない** ── 名指しで
+     断られたページを探しに来た人が、行き止まりになります。 #}
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line"><b>共有へ未送信の直は、古くても必ず出します</b>
+      ── 上から順に片付けてください</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">「済」のほうは新しい順に20直までです
+      (それより古いものは<a href="/agg">集計管理</a>で日付から探せます)。
+      共有へ保存に断られたページは、その断りの中の
+      <b>「◯ページ目を開く」</b>からも直接開けます。</span>
+  </p>
+  {% if not admin %}
+  <p class="lead">
+    <strong>「呼び出す」は管理者モードでのみ使えます。</strong>
+    他の直の記録を書き換えられると、誰が入れた記録なのか分からなく
+    なるためです(<a href="/settings">設定・管理者</a>で切り替えます)。
+    <strong>「紙を見る」は誰でも押せます</strong> ── 読むだけなので。
+  </p>
+  {% endif %}
+  <div class="scroll-x">
+    <table class="list list--nowrap">
+      <thead><tr><th>報告日</th><th>ライン</th><th>直</th><th>ページ</th>
+        <th>最後の保存</th><th>共有へ</th><th></th></tr></thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td>{{ r.report_date }}</td><td>{{ r.line | line_label }}</td>
+          <td>{{ r.shift }}{% if r.backfill %}
+            <span class="badge badge--todo" title="{{ r.backfill }}">後日作成</span>{% endif %}</td>
+          <td>{{ r.pages | join("・") }}ページ</td>
+          <td>{{ r.saved_at or "―" }}</td>
+          <td>{% if r.synced %}済{% else %}<b>未</b>{% endif %}</td>
+          <td>
+            <button class="btn btn--sm" type="button" data-open-all
+                    data-date="{{ r.report_date }}" data-line="{{ r.line }}"
+                    data-shift="{{ r.shift }}">紙を見る</button>
+            {# **どのページを直すのかを選ばせる。** ページが複数あるのにページ1しか
+               開けないと、2ページ目の間違いは画面から直せない ── 一覧に
+               「1・2ページ」と出ているのに開けないのがいちばん困る #}
+            {# `r.own` は**いまの直・いまのライン**。そこは誰でも直せる
+               (日報入力のページ移動と同じこと)ので、管理者モードで縛らない。
+               判断はサーバが `recall_refusal` で出している #}
+            {% set can = admin or r.own %}
+            {% if r.pages | length > 1 %}
+            <select class="recall-page" data-recall-page
+                    aria-label="{{ r.report_date }} {{ r.shift }} のページ"
+                    {% if not can %}disabled{% endif %}>
+              {% for n in r.pages %}<option value="{{ n }}">ページ{{ n }}</option>{% endfor %}
+            </select>
+            {% endif %}
+            <button class="btn btn--sm" type="button" data-recall
+                    data-date="{{ r.report_date }}" data-line="{{ r.line }}"
+                    data-shift="{{ r.shift }}" data-page="{{ r.pages[0] }}"
+                    {% if not can %}disabled title="他の日・他の直を開くには管理者モードが要ります"{% endif %}
+                    >{% if r.own %}ページを直す{% else %}呼び出す{% endif %}</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">まだ保存データがありません。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="msg" id="recall-note" hidden style="margin-top:var(--sp-2)"></div>
+</div>
+
+{# ---- ほかのPCの日報(控え LocalBackup)── v4.12.0 ----
+
+       権限 が Administrator のユーザーは LocalBackup すべてのラインデータを
+       記録を見る で参照でき編集もできる(この機能がないと管理者が現地に行く必要がある)
+
+   **管理者だけに出す**(アクセス権限の表で Administrator か、管理者モード)。
+   説明は1行、手順は乗せたときに(長い説明は読まれない) #}
+{% if backup.shown %}
+<div class="card" id="backup-card">
+  <div class="card__head">
+    <h2>ほかのPCの日報(控え)</h2>
+    <span class="lead">{% if backup.administrator %}Administrator{% else %}管理者モード{% endif %}
+      ── どのラインも見て直せます</span>
+  </div>
+  <p class="lead" data-hint="「呼び出して直す」→ 日報入力で直して「保存(確定)」→「最新のページに戻る」→「共有へ保存」。
+共有へは、その日報のラインの表へ送られます。直したぶんは控えにも写るので、そのラインのPCは次の起動で受け取ります。">
+    各PCが保存のたびに書く控え(<code>{{ backup.root }}</code>)から読みます。
+    <span class="tip__mark">直し方</span></p>
+  {% if backup.lines %}
+  <div class="row">
+    <div class="field">
+      <label for="backup-line">ライン</label>
+      <select id="backup-line">
+        {% for ln in backup.lines %}<option value="{{ ln }}" {% if ln == backup.line %}selected{% endif %}>{{ ln | line_label }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn" type="button" id="backup-reload">表示</button>
+  </div>
+  <div class="scroll-x" style="margin-top:var(--sp-2)">
+    <table class="list list--nowrap">
+      <thead><tr><th>報告日</th><th>ライン</th><th>直</th><th>ページ</th><th>作業者</th>
+        <th>最後の保存</th><th>共有へ</th><th></th></tr></thead>
+      <tbody id="backup-rows"></tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="msg msg--warn">{% if backup.reachable %}まだどのPCの控えもありません(各PCが保存すると出てきます){% else %}控えの置き場所に届きません({{ backup.root }}){% endif %}</p>
+  {% endif %}
+  <div class="msg" id="backup-note" hidden style="margin-top:var(--sp-2)"></div>
+</div>
+{% endif %}
+
+{# ---- 一覧に無いものを、日付から探す ---- #}
+<div class="card">
+  <div class="card__head">
+    <h2>日付を指定して見る</h2>
+    <span class="lead">一覧より前のものはこちらから</span>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="p-date">報告日</label>
+      <input id="p-date" type="text" size="14" value="{{ default.report_date }}">
+    </div>
+    <div class="field">
+      <label for="p-line">ライン</label>
+      <select id="p-line">
+        {% for name in lines %}
+        {# 値はコード、見せる字は正規の呼び名(v4.12.5) #}
+        <option value="{{ name }}" {% if name == default.line %}selected{% endif %}>{{ name | line_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="p-shift">直</label>
+      <select id="p-shift">
+        {% for s in shifts %}
+        <option {% if s == default.shift %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="p-page">ページ</label>
+      <input id="p-page" type="number" min="1" value="{{ default.page }}" style="width:70px">
+    </div>
+    <button class="btn" type="button" id="load">中身を見る</button>
+    <button class="btn btn--primary" type="button" id="print" disabled>このページの紙</button>
+    {# **3ページある直を3回開かせない。** 1つ開いて1回 Ctrl+P でページの数だけ出る #}
+    <button class="btn" type="button" id="print-all">この直ぜんぶの紙</button>
+    {# 一覧に載らないほど古い直の、任意のページを直す道。**上の一覧と同じ
+       呼び出し**で、ページまで指定できるのがここだけの違い #}
+    <button class="btn" type="button" id="recall-here"
+            {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}
+            >このページを呼び出す</button>
+  </div>
+  {# ---- 後日作成(v4.0.0)── **保存の無い直を作る**。呼び出しは保存のある直しか
+         開けないので、丸ごと打ち忘れた直はここから(管理者) ---- #}
+  <div class="row backfill-row" style="margin-top:var(--sp-2)">
+    <div class="field">
+      <label for="backfill-reason">後から作る理由(任意)</label>
+      <input id="backfill-reason" type="text" size="20" maxlength="60" placeholder="例: 打ち忘れ">
+    </div>
+    <button class="btn" type="button" id="backfill-here"
+            {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}
+            >この直を後から作る</button>
+    <span class="lead tip" tabindex="0">
+      <span class="tip__line">打ち忘れて<b>保存の無い直</b>を、上の報告日・ライン・直で作ります(管理者)</span>
+      <span class="tip__mark" aria-hidden="true">くわしく</span>
+      <span class="tip__more">作れるのは<b>終わった直</b>の<b>空いているページ</b>だけです
+        (保存が無ければ1ページ目、あれば続きのページ)。いまの直は日報入力から打ちます。
+        共有に別のPCで打ったページが入っている直は作れません(上書きになるため)。
+        保存すると、記録の一覧と紙に<b>「後日作成」</b>の印が残り、共有へ保存したときの
+        履歴にも出ます。</span>
+    </span>
+  </div>
+  <div class="msg msg--info" id="note" hidden style="margin-top:var(--sp-2)"></div>
+  <p class="lead" style="margin-top:var(--sp-2)">
+    紙は<strong>保存してある明細からその場で作ります</strong>。
+    貯めたファイルを開いているのではないので、保存してある直なら
+    <strong>いつでも・何度でも</strong>同じものが出ます。開いた窓を
+    Ctrl+P で刷ってください(<strong>刷らずに見るだけでもかまいません</strong>)。
+  </p>
+</div>
+
+<div class="card">
+  <div class="card__head"><h2>中身の下見</h2>
+    <span class="lead">「中身を見る」を押すと出ます</span></div>
+  <table class="list">
+    <thead><tr><th>行</th><th>LOT</th><th>材質</th><th>サイズ</th>
+      <th class="num">枚数</th><th class="num">重量</th></tr></thead>
+    <tbody id="preview">
+      <tr><td colspan="6" class="empty">まだ何も読み込んでいません。</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" data-view="{{ url_for('static', filename='js/views/records.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,26 @@
+{
+  "root_folder": "\\\\nlmsrvngy03\\各課共有\\0130_日軽稲沢\\梱包課\\AIM\\【■】_参照用ファイル\\一括管理_点検表",
+  "extensions": [
+    "xlsm",
+    "xlsx",
+    "xls"
+  ],
+  "require_name_prefix": true,
+  "excel": {
+    "backend": "auto",
+    "disable_macros": true,
+    "block_password_prompt": true,
+    "preview_timeout_sec": 90,
+    "print_item_timeout_sec": 180,
+    "excel_exit_grace_sec": 15,
+    "keep_alive_sec": 120,
+    "preview_appearance": "screen",
+    "preview_scale": 2.0,
+    "preview_max_pixels": 3200,
+    "preview_max_rows": 40,
+    "preview_max_cols": 16
+  },
+  "print": {
+    "max_copies": 100
+  }
+}

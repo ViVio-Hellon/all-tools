@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ display_name }}{% endblock %}</title>
+{#
+  タブのアイコン。現場・倉庫・倉庫参照は別ポートで、同時に開いていることが
+  ある。タブの文字は途中で切れるので、**色と文字でどちらのタブか分かる**
+  ようにしておく(現=赤 / 倉=緑 / 見=灰)。
+#}
+<link rel="icon" href="data:image/svg+xml,{{ favicon | urlencode }}">
+{#
+  JS どうしの読み込み(``import './api.js'``)にも中身の指紋を付ける。
+  付かないと、アプリを入れ替えても入口の JS だけ新しく、中身が古いまま残る
+  (``app/__init__.py`` の ``_import_map``)。**どの module より先に置くこと。**
+#}
+<script type="importmap">{{ import_map | tojson }}</script>
+{#
+  画面の明るさ(ライト / ダーク)。**CSS より先に、描く前に**決める ──
+  あとから付けると、白く光ってから暗くなる。選び方は帯のボタンで変える(js/theme.js)
+#}
+<script>
+  (function () {
+    var c = 'auto';
+    try { c = localStorage.getItem('kanban.theme') || 'auto'; } catch (e) { /* 自動のまま */ }
+    var dark = c === 'dark' || (c === 'auto' && window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme-choice', c);
+  })();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<!--
+  アプリの外枠。
+
+  ・接続断の帯 … 基盤仕様書 2.9。黙って古い盤面を出し続けない
+  ・上の帯     … いま何を見ているか(モード・ライン・版)を常時見せる
+  ・左のレール … 行き先。番号は装飾ではなく順序が実在するから
+
+  色の意味(赤=発注中 / 緑=発送済み / 黄=注文中)は VBA から変えない。
+  現場が10年見てきた色なので、Web 化を理由に変えない。
+-->
+
+<div class="offline" id="offline" hidden role="alert">
+  <span>バックエンドに接続できません</span>
+  <button class="btn" type="button" id="reconnect">再接続</button>
+  <button class="btn" type="button" onclick="location.reload()">再読込</button>
+</div>
+
+<header class="ribbon">
+  <div class="brand">
+    <b class="brand__name">{{ display_name }}</b>
+    <span class="ver" title="このアプリの版">{{ version_label }}</span>
+  </div>
+
+  <div class="ribbon__slots">
+    {# いま何を見ているか。JS が動く前から読める #}
+    {% if line_label %}
+    <div class="slot"><span class="k">担当</span><span class="v">{{ line_label }}</span></div>
+    {% endif %}
+    <div class="slot">
+      <span class="k">未反映</span>
+      <span class="v" id="rb-pending" title="Access へまだ送れていない件数">-</span>
+    </div>
+    {#
+      いま開いている他の端末。倉庫が確認中に現場が開いていれば、これから
+      看板が出るかもしれないと身構えられる(VBA の Form状態管理)。
+
+      **看板の画面にだけ置く** ── 身構える相手は看板なので、ここ以外に
+      出しても見る理由がない。**誰も居なければ枠ごと消す** ── 常時
+      「0」が並ぶと帯が読みにくい。
+    #}
+    {% if active == 'board' %}
+    <div class="slot" id="rb-open-slot" hidden>
+      <span class="k">開いている端末</span>
+      <span class="v" id="rb-open"></span>
+    </div>
+    {#
+      取り込みが止まっていないか。**自動更新は、動かなくなったことが
+      見えて初めて信用できる** ── 共有フォルダが落ちていると、画面は
+      元気に動いているのに中身だけ古いままになる。
+      **順調なときは出さない**(いつも出ていると読まれなくなる)。
+    #}
+    <div class="slot slot--bad" id="rb-fresh-slot" hidden>
+      <span class="k">⚠ 取り込めていません</span>
+      <span class="v" id="rb-fresh"></span>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="ribbon__end">
+    {# モードの札。押すと設定画面(モードの変更はそこにある) #}
+    <a class="mode-chip mode-chip--{{ mode_tone }}" href="/settings"
+       title="いまのモード。押すと設定画面が開きます">{{ mode_label }}</a>
+    {# 画面の明るさ。押すたびに 自動 → ライト → ダーク(この端末に覚える。js/theme.js) #}
+    <button class="btn btn--ghost btn--sm theme-toggle" type="button" id="theme-toggle"
+            title="画面の明るさ">◐ 自動</button>
+    <button class="btn btn--danger" type="button" id="quit">■ 終了</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail" aria-label="画面">
+    <ol>
+      {% for item in nav %}
+      <li>
+        <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>
+          <span class="n" aria-hidden="true">{{ loop.index }}</span>
+          <span class="rail__text">
+            <b class="label">{{ item.label }}</b>
+            {% if item.note %}<small>{{ item.note }}</small>{% endif %}
+          </span>
+          {% if item.badge %}<span class="count">{{ item.badge }}</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+  </nav>
+
+  <main class="work" id="main">
+    {#
+      権限(梱包資材マスタの「アクセス権限」)が無くて、頼まれたのとは別のモードで
+      開いたとき。**黙って別のモードで開かない** ── 倉庫のつもりで現場の画面を
+      触らせないよう、どの画面でも上に出す
+    #}
+    {% if startup_notice %}
+    <div class="banner banner--warn startup-notice" id="startup-notice" role="status">{{ startup_notice }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  // サーバから渡す起動時の値。JS はここ以外から設定を読まない
+  window.APP = {
+    token: {{ token | tojson }},
+    mode: {{ mode | tojson }},
+    line: {{ line | tojson }},
+    readOnly: {{ read_only | tojson }},
+    desktop: {{ desktop | tojson }},
+    healthPollMs: {{ health_poll_ms }},
+    boardPollMs: {{ board_poll_ms }},
+    alivePollMs: {{ alive_poll_ms }}
+  };
+</script>
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

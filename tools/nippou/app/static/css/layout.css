@@ -1,0 +1,280 @@
+/*
+  layout.css — 画面の骨格
+
+  上の帯(リボン)/ 左のレール / 作業面 の3つ。
+  中身の部品は components.css。
+*/
+
+/* ==================================================================
+   上の帯 — いま何が決まっているか
+   ================================================================== */
+.ribbon{
+  display:flex; align-items:center; gap:var(--sp-4);
+  padding:0 var(--sp-4);
+  min-height:54px;
+  color:var(--bar-ink);
+  background:linear-gradient(115deg, var(--bar-a), var(--bar-b));
+  /* 画面が縦に短くても帯だけは残す。作業面がスクロールする */
+  flex:0 0 auto;
+}
+
+.brand{ display:flex; align-items:baseline; gap:var(--sp-2); flex:0 0 auto; }
+.brand__name{ font-size:var(--fs-lg); font-weight:700; white-space:nowrap; }
+/* 版。**どの画面でも消えない。** 端末はフォルダごとコピーして配るので、
+   「その端末に入っているのはどれか」を電話で聞かれたら左上を読んでもらう */
+.ver{
+  font-family:var(--mono); font-size:var(--fs-xs);
+  color:var(--bar-muted); white-space:nowrap;
+}
+/* 画面(JS)がサーバより古いとき。**色だけに頼らない**ので印も足す ──
+   帯はいちばん目に入る場所なので、ここで気づけると電話が1本減る */
+.ver[data-stale="1"]{
+  color:var(--bar-alert); font-weight:700;
+}
+.ver[data-stale="1"]::after{ content:" ⚠古い画面"; }
+
+/* いま何が決まっているか。画面を移っても消えない(サーバが持つ) */
+.ribbon__slots{
+  display:flex; align-items:center; gap:var(--sp-3);
+  flex:1 1 auto; min-width:0; overflow:hidden;
+}
+.slot{
+  display:flex; align-items:baseline; gap:var(--sp-1);
+  padding:var(--sp-1) var(--sp-2);
+  background:var(--bar-face); border-radius:var(--r-md);
+  white-space:nowrap; min-width:0;
+}
+.slot .k{ font-size:var(--fs-xs); color:var(--bar-muted); }
+.slot .v{
+  font-size:var(--fs-md); font-weight:700;
+  overflow:hidden; text-overflow:ellipsis; max-width:16ch;
+}
+/* 未設定。**色だけで運ばない**ので、値そのものを「—」にして出す */
+.slot .v[data-empty="1"]{ color:var(--bar-alert); font-weight:400; }
+/*
+  いま変わったばかりの枠。
+
+  帯は要求のたびに塗り直すようになったので、**黙って書き換わると
+  見ていた人には気づけません**(17:00 に「1直」が「2直」になる場面が
+  まさにそれ)。数秒だけ下線で目印を置きます ── 色だけでは運ばず、
+  線という形でも出しています。
+*/
+.slot .v[data-changed="1"]{
+  box-shadow:0 2px 0 0 var(--bar-alert);
+}
+@media (prefers-reduced-motion: no-preference){
+  .slot .v[data-changed="1"]{ transition:box-shadow .2s ease-in; }
+}
+
+/* 決まっていない値(ラインを決めていない端末の「未設定」)。**仮の値を
+   出さない** ── L1 と出すと、決まっているように読まれる */
+.slot .v[data-warn="1"]{ color:var(--bar-alert); }
+
+.ribbon__chips{ display:flex; gap:var(--sp-1); flex:0 0 auto; }
+.chip{
+  font-size:var(--fs-xs); padding:2px var(--sp-2);
+  border-radius:99px; background:var(--bar-face);
+  border:1px solid var(--bar-edge); white-space:nowrap;
+}
+.chip--ok{ color:var(--bar-ok); border-color:var(--bar-ok); }
+.chip--alert{ color:var(--bar-alert); border-color:var(--bar-alert); }
+/* 時計の直が、出している直と違う。**過去データを開いているあいだは
+   直の変わり目の見張りがわざと黙る**ので、ここで言う */
+.chip--warn{ color:var(--bar-alert); border-color:var(--bar-alert);
+             background:var(--bar-face-on); font-weight:600; }
+
+/* 押して、そのモードを終われる印。**状態の隣に出口を置く** ──
+   やめる場所が別の画面の奥にあると、入ったまま戻れません
+   (「過去データの終了方法 / 管理者モードの終了方法 これらがわからない」) */
+.chip--act{
+  display:inline-flex; align-items:center; gap:4px;
+  cursor:pointer; font-family:inherit;
+}
+.chip--act:hover{ background:var(--bar-face-on); }
+.chip--act:focus-visible{ outline:2px solid var(--bar-focus); outline-offset:2px; }
+.chip__x{ opacity:.7; font-size:10px; }
+
+/* いま動いているもの。**どの画面にいても見える。**
+   Accessへの反映は時間がかかることがあり、始めた画面を離れると
+   終わったかどうかが分からなくなる。帯に出しておけば離れたまま待てる */
+.running{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-1) var(--sp-3);
+  background:var(--bar-face); border-radius:var(--r-md);
+  flex:0 0 auto; max-width:280px;
+}
+.running__dot{
+  width:8px; height:8px; border-radius:50%;
+  background:var(--bar-focus); flex:0 0 auto;
+  animation:pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse{ 50%{ opacity:.3 } }
+.running__text{ display:flex; flex-direction:column; min-width:0; line-height:1.3; }
+.running__text b{ font-size:var(--fs-sm); }
+.running__text small{
+  font-size:var(--fs-xs); color:var(--bar-muted);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.running__track{
+  width:56px; height:4px; border-radius:99px;
+  background:var(--bar-face); overflow:hidden; flex:0 0 auto;
+}
+.running__track i{
+  display:block; height:100%; width:0;
+  background:var(--bar-focus); transition:width .3s ease;
+}
+
+.ribbon__end{ display:flex; align-items:center; gap:var(--sp-2); flex:0 0 auto; }
+
+/* 背景のライト / ダーク(v4.19.0 ── `static/js/theme.js`)。暗い帯の上に載るので
+   帯の色(`--bar-*`)で描く。押されているほう(いま効いているほう)だけ白く抜く */
+.theme-switch{
+  display:flex; gap:2px; padding:2px;
+  background:var(--bar-face); border:1px solid var(--bar-edge); border-radius:99px;
+}
+.theme-switch__btn{
+  display:inline-flex; align-items:center; gap:4px;
+  padding:3px 10px; border:0; border-radius:99px; cursor:pointer;
+  font:inherit; font-size:var(--fs-sm); line-height:1.4; white-space:nowrap;
+  color:var(--bar-muted); background:transparent;
+}
+.theme-switch__btn:hover{ color:var(--bar-ink); background:var(--bar-face-on); }
+.theme-switch__btn[aria-pressed="true"]{
+  color:var(--bar-a); background:var(--bar-ink); font-weight:700;
+}
+.theme-switch__btn:focus-visible{ outline:2px solid var(--bar-focus); outline-offset:1px; }
+/* 狭い画面では印だけ(名前は aria-label と title に残る) */
+@media (max-width:720px){
+  .theme-switch__text{ display:none; }
+  .theme-switch__btn{ padding:3px 8px; }
+}
+@media print{ .theme-switch{ display:none; } }
+
+/* ==================================================================
+   本体 — 左のレール + 作業面
+   ================================================================== */
+.shell{
+  display:grid;
+  grid-template-columns:var(--rail-w) 1fr;
+  /* 帯のぶんを引いた残り全部。作業面だけがスクロールする */
+  height:calc(100vh - 54px);
+}
+/* 別窓(早見表だけ ── v4.16.0)。帯もレールも無いので、作業面が窓いっぱい */
+.shell--bare{ grid-template-columns:1fr; height:100vh; }
+
+.rail{
+  background:var(--surface);
+  border-right:1px solid var(--rule);
+  overflow-y:auto;
+  padding:var(--sp-2) 0;
+}
+.rail ol{ list-style:none; margin:0; padding:0; }
+.rail a{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3);
+  color:var(--ink); text-decoration:none;
+  border-left:3px solid transparent;
+}
+.rail a:hover{ background:var(--sunken); text-decoration:none; }
+/* いま見ている場所。**骨格のティール**で、押せるものの色とは別系統 */
+.rail a[aria-current="page"]{
+  background:var(--accent-soft);
+  border-left-color:var(--accent);
+  font-weight:700;
+}
+/* 番号は装飾ではなく、順序が実在するから振っている(作業の順序) */
+.rail .n{
+  flex:0 0 auto; width:20px; height:20px; border-radius:50%;
+  display:grid; place-items:center;
+  font-size:var(--fs-xs); font-family:var(--mono);
+  background:var(--raised); color:var(--muted);
+}
+.rail a[aria-current="page"] .n{ background:var(--accent); color:#fff; }
+.rail__text{ display:flex; flex-direction:column; min-width:0; line-height:1.35; }
+.rail__text .label{ font-size:var(--fs-md); }
+/* 名前だけでは何をする画面か押すまで分からない。行き先に何があるかを
+   先に示すと、探して回る必要がなくなる(文言はサーバが持つ) */
+.rail__text small{ font-size:var(--fs-xs); color:var(--muted); }
+/* やり残しの数(「未保存 3」など)。説明の下に、左そろえで1つ */
+.rail__text .badge{ align-self:flex-start; margin-top:2px; }
+
+.work{
+  overflow-y:auto;
+  padding:var(--sp-4);
+  background:var(--ground);
+}
+.work[aria-busy="true"]{ opacity:.6; }
+
+/* 画面の見出し。作業面のいちばん上に1つだけ */
+.page-head{
+  display:flex; align-items:baseline; gap:var(--sp-3);
+  margin-bottom:var(--sp-3); flex-wrap:wrap;
+}
+.page-head h1{ font-size:var(--fs-xl); }
+.page-head .lead{ color:var(--muted); font-size:var(--fs-sm); }
+
+/* 「見かた」の切り替え帯 ── 紙 / 表 / グラフ。
+   **どれか1つに入り込むと、他の見方があることを忘れる**ので、
+   3つの画面すべてに同じ帯を出して、いま居る場所を太字にする */
+.views-switch{
+  display:flex; gap:var(--sp-2); align-items:baseline; flex-wrap:wrap;
+  margin:calc(var(--sp-2) * -1) 0 var(--sp-3);
+}
+.views-switch b{ color:var(--fg); }
+
+/* ==================================================================
+   接続断の帯 (基盤仕様書 2.9)
+   黙って古い表示を出し続けない
+   ================================================================== */
+.offline{
+  position:fixed; inset:0 0 auto 0; z-index:60;
+  display:flex; align-items:center; justify-content:center; gap:var(--sp-3);
+  padding:var(--sp-2);
+  background:var(--state-error-bg);
+  color:var(--state-error);
+  border-bottom:2px solid var(--state-error);
+  font-size:var(--fs-sm); font-weight:700;
+}
+
+/* ==================================================================
+   直が変わった、という帯
+
+   接続断の帯と**同じ場所・同じ作り**で、色だけ変えます(赤=繋がらない /
+   橙=気に留める)。同じ意味の知らせを2つの形で出すと、どちらが重いのかが
+   読めなくなります。
+
+   繋がらないほうが重いので、両方出たときは接続断を上に重ねます
+   (`z-index` を1つ下げる)。
+   ================================================================== */
+.shiftmoved{
+  position:fixed; inset:0 0 auto 0; z-index:59;
+  display:flex; align-items:center; justify-content:center; gap:var(--sp-3);
+  padding:var(--sp-2) var(--sp-3);
+  background:var(--state-warn-bg);
+  color:var(--state-warn);
+  border-bottom:2px solid var(--state-warn-line);
+  font-size:var(--fs-sm); font-weight:700;
+}
+/* **色だけに頼らない。** 記号を添えておけば、白黒でも意味が残る */
+.shiftmoved__mark{ font-size:var(--fs-sm); }
+.shiftmoved__text{ font-weight:700; }
+
+/* ==================================================================
+   トースト
+   ================================================================== */
+.toasts{
+  position:fixed; right:var(--sp-4); bottom:var(--sp-4); z-index:70;
+  display:flex; flex-direction:column; gap:var(--sp-2);
+  max-width:min(420px, calc(100vw - 32px));
+}
+
+/* ==================================================================
+   狭い画面
+   現場の端末は 1366x768 が多い。それより狭いときはレールを畳む
+   ================================================================== */
+@media (max-width: 1100px){
+  :root{ --rail-w:64px; }
+  .rail__text{ display:none; }
+  .rail a{ justify-content:center; }
+  .ribbon__slots .slot .k{ display:none; }
+}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}履歴 — {{ display_name }}{% endblock %}
+
+{#
+  履歴表示の器。過去の月を**見るだけ**の画面(`app/routes/history.py`)。
+  登録・削除のボタンも、書き込む API への道も置かない ── 昔の月を
+  調べている途中の押し間違いで、過去の記録が変わらないようにする。
+  マス目はカレンダー画面と同じ部品で描く(`grid.js`)。
+#}
+{% block content %}
+<section class="cal cal--history" aria-label="履歴">
+
+  <div class="cal__bar">
+    <button class="btn" type="button" id="his-prev" title="前の月へ">
+      <span class="gl" aria-hidden="true">&#8592;</span>前月
+    </button>
+    <button class="btn btn--primary" type="button" id="his-pick"
+            title="見たい年月を選びます">
+      <span class="gl" aria-hidden="true">&#128197;</span>年月を選ぶ
+    </button>
+    <button class="btn" type="button" id="his-next" title="次の月へ">
+      翌月<span class="gl" aria-hidden="true">&#8594;</span>
+    </button>
+
+    <span class="hist-tag" id="his-readonly">
+      <span aria-hidden="true">&#128214;</span>履歴・閲覧のみ
+    </span>
+    <h1 class="cal__title" id="his-title">&nbsp;</h1>
+
+    <span class="cal__spacer"></span>
+    <button class="btn" type="button" id="his-print" title="A4横1ページの印刷用ページを開きます">
+      <span class="gl" aria-hidden="true">&#9113;</span>印刷
+    </button>
+  </div>
+
+  <div class="note note--hist" id="his-note">
+    過去の月を<b>見るだけ</b>の画面です。ここからは登録も削除もできません
+    (今月以降と、登録・削除はカレンダー画面から)。
+  </div>
+  <div class="note note--warn" id="his-empty" hidden></div>
+
+  <div class="cal__grid" id="his-grid" aria-busy="true">
+    <div class="cal__week" id="his-headers"></div>
+  </div>
+
+  <p class="hint" style="font-size:11.5px;color:var(--muted)">
+    日付を押すと、その日の登録内容が出ます。セルにマウスを乗せると残業繋ぎ・早出繋ぎが出ます。
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/history.js') }}";
+  start();
+</script>
+{% endblock %}

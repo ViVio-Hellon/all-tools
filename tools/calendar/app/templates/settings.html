@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% block title %}設定 — {{ display_name }}{% endblock %}
+
+{#
+  設定の器。tkinter 版で上部のボタンに散らばっていた
+  [ライン設定] [同期設定] [取り込み] [今すぐ同期] をここに集めた。
+
+  並びは**決める順**:
+    1. この端末のライン(これが決まらないと表示が絞れない)
+    2. 参照パス(これが決まらないと他のラインへ届かない)
+    3. 取り込み
+    4. マスタ確認・管理(班員名簿が無いと休みを登録できない)
+    5. 管理者パスワード
+    6. 配布設定(配る人だけが使う。1台の設定を配った先で読み込ませる)
+    7. ファイルの置き場所(この端末だけのもの / 全端末で共有するもの)
+    8. いまの状態(調べるとき用。普段は読まない)
+#}
+{% block content %}
+
+{# 直すべきことがあれば、いちばん上にまとめて出す #}
+<div id="st-problems"></div>
+
+<section class="card">
+  <div class="card__head">
+    <h2>1. この端末のライン</h2>
+    <span class="sub">休み・連絡の表示を絞り込みます</span>
+  </div>
+  <div class="card__body">
+    <div class="row">
+      <div class="field">
+        <label for="st-line">ライン</label>
+        <select class="select" id="st-line"></select>
+      </div>
+      <button class="btn btn--primary" type="button" id="st-line-save">保存</button>
+    </div>
+    <p class="hint">
+      作業長は全ライン、コイルはコイルのみ、それ以外はコイル以外すべてが見えます。
+    </p>
+    {# どう切り替えるか(アクセス権限で決まっているか、パスワードか)。
+       文言はサーバが組む(`access_control.Grant.explain`) #}
+    <div class="note note--info" id="st-line-access"></div>
+    <p class="hint">
+      ラインを押し間違えると、その端末では<b>何も起きていないように見えたまま</b>
+      表示だけがずれます ── 気づくのは「あの連絡が来ていない」と
+      言われたときです。そのため、ラインを変えるには<b>管理者パスワード</b>が
+      要ります。アクセス権限に登録のある端末は、そのラインに固定されます。
+    </p>
+  </div>
+</section>
+
+{#
+  参照パス。**フォルダで持つ**(ファイルのフルパスではない)。
+  上流がファイル名を変えても拾えるようにするため。
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>2. 参照パス(取り込み元の置き場所)</h2>
+    <span class="sub" id="st-sync-pill"></span>
+  </div>
+  <div class="card__body">
+    <div class="field">
+      <label for="st-data-dir">保存用DB(連絡帳.sqlite3)のフォルダ</label>
+      <div class="row">
+        <input class="input" id="st-data-dir" type="text"
+               placeholder="\\サーバ名\共有\カレンダー" spellcheck="false">
+        <button class="btn" type="button" id="st-data-browse">参照</button>
+        <button class="btn btn--primary" type="button" id="st-data-save">保存</button>
+      </div>
+      <p class="hint" id="st-data-note"></p>
+    </div>
+
+    <div class="field">
+      <label for="st-master-dir">マスタDB(梱包資材マスタ.sqlite3)のフォルダ</label>
+      <div class="row">
+        <input class="input" id="st-master-dir" type="text"
+               placeholder="空欄なら保存用DBと同じフォルダを見ます" spellcheck="false">
+        <button class="btn" type="button" id="st-master-browse">参照</button>
+        <button class="btn btn--primary" type="button" id="st-master-save">保存</button>
+      </div>
+      <p class="hint" id="st-master-note"></p>
+    </div>
+
+    <p class="hint">
+      各PCのSQLiteは表示用の写しで、正式なデータはこの取り込み元です。
+      <b>参照パスが決まるまで、休み・連絡の登録はできません</b>
+      ── 送り先が無いまま登録すると、入力がこの端末に溜まったまま
+      他のラインに届かないためです。
+    </p>
+
+    <div class="row">
+      <div class="field" style="flex:0 0 auto">
+        <label for="st-auto">自動同期</label>
+        <select class="select" id="st-auto">
+          <option value="1">する</option>
+          <option value="0">しない</option>
+        </select>
+      </div>
+      <div class="field" style="flex:0 0 140px">
+        <label for="st-interval">取り込み間隔(秒)</label>
+        <input class="input num" id="st-interval" type="number" min="5" max="3600" step="5">
+      </div>
+      <button class="btn" type="button" id="st-auto-save">保存</button>
+    </div>
+
+    <div class="note note--info" id="st-transport"></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card__head">
+    <h2>3. 取り込む</h2>
+    <span class="sub" id="st-members"></span>
+  </div>
+  <div class="card__body">
+    <div class="row">
+      <button class="btn btn--primary" type="button" id="st-import-all">
+        参照パスから取り込む
+      </button>
+      <button class="btn" type="button" data-import="data">保存用DBだけ</button>
+      <button class="btn" type="button" data-import="master">マスタDBだけ</button>
+    </div>
+    <p class="hint">
+      休み管理・削除履歴は保存用DB、班員名簿はマスタDBにあります。
+      取り込みはテーブルを入れ替えるため、未送信の入力があるときは確認します。
+    </p>
+
+    <div class="field">
+      <label for="st-csv">班員名簿の CSV から取り込む(マスタDB が手元に無いとき)</label>
+      <div class="row">
+        <input class="input" id="st-csv" type="text"
+               placeholder="\\サーバ名\共有\班員名簿.csv" spellcheck="false">
+        <button class="btn" type="button" id="st-csv-browse">参照</button>
+        <button class="btn" type="button" id="st-csv-run">取り込む</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+{#
+  マスタ確認・管理。**直す先は取り込み元だけ。**
+  手元のDBは総入れ替えで取り込まれるので、直しても次の取り込みで消える。
+
+  端末一覧は**見るだけの表**で、同じ枠に並べる ── 確かめたいものと
+  直したいものを別の画面に分けると、探すところから始まる。
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>4. マスタ確認・管理</h2>
+    <span class="sub" id="st-master-pill"></span>
+  </div>
+  <div class="card__body">
+    <div class="note note--warn" id="st-master-why" hidden></div>
+
+    <div class="row">
+      <div class="field" style="flex:0 1 200px">
+        <label for="st-master-table-pick">表</label>
+        <select class="select" id="st-master-table-pick"></select>
+      </div>
+      <div class="field" style="flex:1 1 220px">
+        <label for="st-master-q">絞り込み</label>
+        <input class="input" id="st-master-q" type="text"
+               placeholder="出ている内容で絞る(名前・班・ライン・日付)" spellcheck="false">
+      </div>
+      <button class="btn" type="button" id="st-master-reload">再読込</button>
+      <button class="btn btn--primary" type="button" id="st-master-add">行を追加</button>
+    </div>
+
+    <p class="hint" id="st-master-source"></p>
+    <div id="st-master-table"></div>
+  </div>
+</section>
+
+{#
+  管理者パスワード。**値は画面に持たない**(撹拌して持つ)。
+  誤って押されないためのUIガードで、アクセス制御ではない。
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>5. 管理者パスワード</h2>
+    <span class="sub" id="st-pw-pill"></span>
+  </div>
+  <div class="card__body">
+    <p class="hint">
+      ライン設定と参照パスを変えるときに聞かれるものです。
+      この端末だけで変えられます。<b>忘れたときは</b>設定ファイル
+      (<code id="st-pw-file"></code>)の「管理者パスワード」の行を消すと
+      既定に戻ります。
+    </p>
+    <div class="note note--warn" id="st-pw-why" hidden></div>
+    <div class="row">
+      <div class="field">
+        <label for="st-pw-now">いまのパスワード</label>
+        <input class="input" id="st-pw-now" type="password" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="st-pw-new">新しいパスワード</label>
+        <input class="input" id="st-pw-new" type="password" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="st-pw-confirm">確認用</label>
+        <input class="input" id="st-pw-confirm" type="password" autocomplete="off">
+      </div>
+      <button class="btn btn--primary" type="button" id="st-pw-save">変える</button>
+      <button class="btn" type="button" id="st-pw-reset">既定に戻す</button>
+    </div>
+  </div>
+</section>
+
+{#
+  配布設定(`calendar_app/distribution.py`)。1台で決めた設定を、
+  ツールのフォルダごと配った先でそのまま使う。書き出し・読み込み直し・
+  消すは、どれも管理者パスワードが要る
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>6. 配布設定 ── いま置いてある配布設定</h2>
+    <span class="sub pill" id="st-dist-state"></span>
+  </div>
+  <div class="card__body">
+    <p class="hint" id="st-dist-meta"></p>
+    <dl class="kv" id="st-dist-rows"></dl>
+    <p class="hint">置き場所: <code id="st-dist-path"></code>
+      ── <b>配布先に関わるものはすべてこのフォルダ</b>に入ります
+      (設定.json・はじめに読む.txt)。<code>start.bat</code> と同じ階層です。</p>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card__head">
+    <h2>この端末の設定を配布設定にする</h2>
+  </div>
+  <div class="card__body">
+    <p class="hint">
+      いまこの端末に入っている値をそのまま書き出します(前の中身は置き換えます)。
+      配った先は<b>起動したときに読み込みます</b>。ただし<b>その端末にすでにある設定は
+      読み込みません</b>(上書きしない)。
+    </p>
+    <fieldset class="distchecks" id="st-dist-items">
+      <legend>設定</legend>
+    </fieldset>
+    <div class="field" style="max-width:16em">
+      <label for="st-dist-password">管理者パスワード</label>
+      <input class="input" id="st-dist-password" type="password" autocomplete="off">
+    </div>
+    <div class="note note--warn" id="st-dist-why" hidden></div>
+    <div class="row">
+      <button class="btn btn--primary" type="button" id="st-dist-export">配布設定を書き出す</button>
+      <button class="btn" type="button" id="st-dist-reapply">配布設定を読み込み直す</button>
+      <button class="btn btn--danger" type="button" id="st-dist-remove">配布設定を消す</button>
+    </div>
+    <p class="hint">
+      <b>ラインは既定で入れません。</b>端末ごとに違うので、入れたまま配ると
+      全端末が同じラインになります。配った先で「1. この端末のライン」から選ぶか、
+      マスタ確認の端末一覧で予約してください。
+      「読み込み直す」は、その端末にすでにある設定も上書きします。
+    </p>
+    <p class="hint">
+      配るときは <code>tools\make_dist.bat</code> で配布用フォルダを作ってください
+      (配ってはいけないものが紛れず、<code>配布設定</code> も一緒に入ります)。
+    </p>
+  </div>
+</section>
+
+{#
+  ファイルの置き場所。**この端末だけのもの(このPCで引き継ぐ)と、
+  全端末で共有するものは性質が違う。** 取り違えると、消してはいけない
+  ものを消す(送信待ちが消える)・1台で直したつもりが他に効かない、が起きる。
+  一覧はサーバが組む(`presenters/settings.storage`)
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>7. ファイルの置き場所</h2>
+    <span class="sub">この端末だけのもの / 全端末で共有するもの</span>
+  </div>
+  <div class="card__body">
+    <p class="hint">
+      <b>「この端末だけ」のファイルは、このPC・このWindows利用者で引き継いで使います。</b>
+      同じPCでも別の人がログインすると別のファイルになり、別のPCへは付いていきません
+      (配る前に決めたい値は「6. 配布設定」で)。
+      「全端末で共有」のファイルは、参照パスの先にある1つを全員が使います。
+    </p>
+    <div id="st-storage"></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card__head">
+    <h2>8. いまの状態</h2>
+    <span class="sub">問い合わせのときに読む値です</span>
+  </div>
+  <div class="card__body">
+    <dl class="kv" id="st-status"></dl>
+  </div>
+</section>
+
+{#
+  ログ(エラーの後追い)。記録番号から「なぜなぜ分析の材料」を1枚にまとめる
+  (`calendar_app/log_report.py`)。最近の記録の一覧はログを読むので重く、
+  **押したときだけ**取る(`GET /api/logs`)
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>9. ログ(エラーの後追い)</h2>
+    <span class="sub pill" id="st-log-pill"></span>
+  </div>
+  <div class="card__body">
+    <p class="hint">
+      思わぬエラーが起きると、画面に<b>記録番号</b>(E20261001-142233-K3Q のような形)が出ます。
+      その番号から、いつ・どの端末で・何をしていて・何が原因だったかを1枚にまとめます。
+      なぜなぜ分析の「事実」の欄にそのまま使えます(原因の推測は書きません)。
+    </p>
+
+    <div class="field">
+      <label for="st-log-dir">ログフォルダ</label>
+      <div class="row">
+        <input class="input" id="st-log-dir" type="text"
+               placeholder="空欄ならこの端末の既定の場所" spellcheck="false">
+        <button class="btn" type="button" id="st-log-browse">参照</button>
+        <button class="btn btn--primary" type="button" id="st-log-save">保存</button>
+        <button class="btn" type="button" id="st-log-default">既定に戻す</button>
+      </div>
+      <p class="hint" id="st-log-note"></p>
+    </div>
+    <p class="hint">
+      指定したフォルダの中に<b>PC名のフォルダ</b>を作って書きます。共有フォルダを指定すれば、
+      全端末のログを1か所で集められます(端末ごとに分かれるので混ざりません)。
+      指定先に書けないときは、この端末の既定の場所へ書き続けます。
+      ここは「この端末だけ」の設定です。全端末に配るときは「6. 配布設定」で。
+    </p>
+
+    <div class="row">
+      <div class="field" style="flex:0 1 280px">
+        <label for="st-log-ref">記録番号</label>
+        <input class="input" id="st-log-ref" type="text"
+               placeholder="E20261001-142233-K3Q" spellcheck="false" autocomplete="off">
+      </div>
+      <button class="btn btn--primary" type="button" id="st-log-report">まとめる</button>
+      <button class="btn" type="button" id="st-log-recent">最近の記録を読む</button>
+    </div>
+    <div id="st-log-list"></div>
+  </div>
+</section>
+
+{#
+  画面の見た目。選べるものはサーバが返す(`settings.THEME_CHOICES`)。
+  帯の「暗くする/明るくする」と同じ設定を、「自動」に戻せる形で出す
+#}
+<section class="card">
+  <div class="card__head">
+    <h2>10. 画面の見た目</h2>
+    <span class="sub">明るい背景 / 暗い背景</span>
+  </div>
+  <div class="card__body">
+    <fieldset class="theme-choices" id="st-theme">
+      <legend class="sr-only">画面の見た目</legend>
+    </fieldset>
+    <p class="hint">
+      上の帯の「暗くする / 明るくする」でも切り替えられます。<b>この端末だけ</b>の設定です
+      (他の端末には効きません)。印刷は見た目に関係なく、いつも白い紙の色で刷ります。
+    </p>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/settings.js') }}";
+  start();
+</script>
+{% endblock %}

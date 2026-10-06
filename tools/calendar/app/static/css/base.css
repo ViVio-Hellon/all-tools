@@ -1,0 +1,56 @@
+/*
+  base.css — 素の要素の見え方だけ。部品は components.css。
+
+  色は tokens.css からしか取らない(直値を書かない)。
+*/
+*,*::before,*::after{box-sizing:border-box}
+
+html,body{height:100%}
+body{
+  margin:0;
+  font-family:var(--sans);
+  font-size:14px;
+  line-height:1.6;
+  color:var(--ink);
+  background:var(--ground);
+  -webkit-font-smoothing:antialiased;
+  /* 画面の外枠は自分でスクロールを持つ。body は動かさない ──
+     カレンダーは1画面に収める前提なので、body が動くと帯まで流れる */
+  overflow:hidden;
+}
+
+h1,h2,h3,h4{margin:0; font-weight:700; line-height:1.35}
+h1{font-size:19px}
+h2{font-size:16px}
+h3{font-size:14px}
+p{margin:0}
+ul,ol{margin:0; padding:0; list-style:none}
+
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+
+button,input,select,textarea{font:inherit; color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed}
+
+/* 焦点は**必ず見える**。キーボードだけで使う人が現在地を見失わない */
+:focus-visible{outline:2px solid var(--focus); outline-offset:2px; border-radius:3px}
+:focus:not(:focus-visible){outline:none}
+
+/* 数字は桁を揃える。件数が1桁と2桁で行が揺れない */
+.num{font-family:var(--mono); font-variant-numeric:tabular-nums}
+
+/* 読み上げにだけ渡す文字 */
+.sr-only{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+}
+
+[hidden]{display:none !important}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important; animation-iteration-count:1 !important;
+    transition-duration:.01ms !important; scroll-behavior:auto !important;
+  }
+}

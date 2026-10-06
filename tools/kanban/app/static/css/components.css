@@ -1,0 +1,611 @@
+/* 部品(ボタン・看板・タブ・トースト・カード) */
+
+/* --- ボタン --------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  padding: .4rem .8rem;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: inherit;
+  font-size: var(--fs-base); cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--surface-2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-fill); }
+/* **地の色を指定し直す。** 上の `.btn:hover` が地を淡い色に塗り替えるので、
+   指定しないと白い文字が白い地に乗って、マウスを載せたあいだ文字が消える */
+.btn--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.btn--danger { background: var(--bad); border-color: var(--bad); color: var(--on-fill); }
+.btn--danger:hover:not(:disabled) { background: var(--bad); filter: brightness(1.08); }
+.btn--ghost { background: transparent; border-color: transparent; }
+.btn--sm { padding: .25rem .55rem; font-size: var(--fs-sm); }
+
+.toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+  margin-bottom: var(--gap);
+}
+.toolbar__spacer { margin-left: auto; }
+
+/* 押す前に何件動くかを見せる小さな数字 */
+.count {
+  display: inline-grid; place-items: center; min-width: 1.35rem;
+  padding: 0 .3rem; height: 1.35rem; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-size: var(--fs-sm); font-variant-numeric: tabular-nums;
+}
+.btn--primary .count, .btn--danger .count {
+  background: color-mix(in srgb, var(--on-fill) 25%, transparent); border-color: transparent; color: var(--on-fill);
+}
+
+/* --- ラインのタブ --------------------------------------------------- */
+.tabs {
+  display: flex; gap: .25rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line); margin-bottom: var(--gap);
+}
+.tab {
+  padding: .45rem .95rem; border: 1px solid transparent; border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent; cursor: pointer; font-weight: 700;
+  color: var(--muted);
+}
+.tab:hover { background: var(--surface-2); color: var(--fg); }
+.tab[aria-selected="true"] {
+  background: var(--surface); border-color: var(--line);
+  color: var(--fg); margin-bottom: -1px; padding-bottom: calc(.45rem + 1px);
+}
+/* 設定画面のタブ。看板のライン切り替えと同じ見た目にそろえる ──
+   同じ操作は同じ形にしておく */
+.tabs--settings { margin-bottom: 0; }
+.tabs--settings + .panel { margin-top: var(--gap); }
+
+/* --- 看板 ----------------------------------------------------------- */
+/* 資材フレームを敷き詰める。VBA は 1 行 4 枚に固定していたが、Web は
+   画面幅に合わせる ── 現場のモニタは端末ごとに違う */
+.board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.frame {
+  background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.frame__title {
+  padding: .45rem .7rem;
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+.frame__rows { padding: .4rem; display: flex; flex-direction: column; gap: .3rem; }
+
+/* 1 行 = サイズ + 発送 + 注文中 + コメント */
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: .3rem;
+  align-items: stretch;
+}
+
+/* 看板のボタン。**色は data-state が決める**(tokens.css) */
+.cell {
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  padding: .4rem .55rem;
+  font-size: var(--fs-base); text-align: left;
+  cursor: pointer; position: relative;
+  min-height: 2.1rem;
+  display: flex; align-items: center;
+}
+.cell--ship, .cell--hold {
+  justify-content: center; text-align: center;
+  font-size: var(--fs-sm); min-width: 3.6rem;
+}
+.cell:hover:not(:disabled) { filter: brightness(.96); }
+.cell:active:not(:disabled) { filter: brightness(.9); }
+
+/* 押せないものは**色を残したまま沈める**。色を消すと状態が読めなくなる */
+.cell:disabled { cursor: default; }
+.cell:disabled::after {
+  content: ""; position: absolute; inset: 0;
+  background: var(--st-disabled-veil); border-radius: inherit;
+}
+
+/* 非常設品。VBA は青字・斜体 */
+.cell--non-permanent { color: var(--non-permanent); font-style: italic; font-weight: 700; }
+.cell--non-permanent[data-state="neutral"] { color: var(--non-permanent-on-neutral); }
+
+/* 倉庫が対応中で現場が触れない行。錠前を出して理由を持たせる */
+.row--locked .cell--size { cursor: not-allowed; }
+.row--locked .cell--size::before {
+  content: "🔒"; margin-right: .35rem; font-size: .85em; font-style: normal;
+}
+
+/* 読むだけの画面ではラベルとして出す(押せる見た目にしない) */
+.cell--label { cursor: default; }
+.cell--label::after { content: none; }
+
+.note {
+  color: var(--non-permanent-text); font-weight: 700; font-size: var(--fs-sm);
+}
+
+/* --- カード(設定画面) ---------------------------------------------- */
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow-1);
+  padding: 1rem 1.1rem; margin-bottom: var(--gap);
+}
+.card > h2 { margin-bottom: .6rem; }
+.card__note { color: var(--muted); font-size: var(--fs-sm); margin-bottom: .8rem; }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: .35rem .9rem; }
+.kv dt { color: var(--muted); white-space: nowrap; }
+.kv dd {
+  margin: 0; word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
+
+.field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .7rem; }
+.field label { font-weight: 700; font-size: var(--fs-sm); }
+.field input, .field select {
+  padding: .4rem .55rem; border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm); background: var(--surface);
+}
+.field small { color: var(--muted); font-size: var(--fs-sm); }
+
+.rowline { display: flex; gap: .5rem; align-items: flex-end; flex-wrap: wrap; }
+.rowline .field { flex: 1 1 16rem; margin-bottom: 0; }
+
+/* --- 空の状態 ------------------------------------------------------- */
+.empty {
+  padding: 2.5rem 1rem; text-align: center; color: var(--muted);
+  background: var(--surface); border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+/* --- 警告の帯 ------------------------------------------------------- */
+.banner {
+  padding: .55rem .8rem; border-radius: var(--radius-sm);
+  margin-bottom: var(--gap); font-size: var(--fs-sm);
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.banner--warn {
+  background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink);
+}
+.banner--bad {
+  background: var(--bad-bg); border-color: var(--bad-line); color: var(--bad);
+}
+/* 権限が無くて別のモードで開いた理由。改行をそのまま出す(何を足せばよいかが 1 行ずつ読める) */
+.startup-notice { white-space: pre-line; }
+
+/* --- トースト ------------------------------------------------------- */
+.toasts {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 200;
+  display: flex; flex-direction: column; gap: .45rem; align-items: flex-end;
+}
+.toast {
+  padding: .5rem .85rem; border-radius: var(--radius-sm);
+  background: var(--toast-bg); color: #fff; box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm); max-width: 26rem;
+  animation: toast-in .16s ease-out;
+}
+.toast--ok { background: var(--ok); color: var(--on-fill); }
+.toast--bad { background: var(--bad); color: var(--on-fill); }
+.toast--warn { background: var(--warn); color: var(--on-fill); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(.4rem); } }
+
+/* --- 覆い(パスワード確認) ------------------------------------------ */
+.modal {
+  position: fixed; inset: 0; z-index: 150;
+  display: grid; place-items: center;
+  background: var(--scrim);
+}
+.modal__box {
+  width: min(24rem, calc(100vw - 2rem));
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-2); padding: 1.1rem 1.2rem;
+}
+.modal__box h2 { margin-bottom: .5rem; }
+.modal__actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
+
+/* --- フォルダ参照(設定画面) ---------------------------------------- */
+/* サーバ側のフォルダを一覧する。ブラウザのファイル選択ダイアログは
+   クライアント側のパスしか返さないので使えない */
+.fs-list {
+  max-height: 16rem; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.fs-item {
+  display: flex; align-items: center; gap: .5rem;
+  width: 100%; padding: .35rem .6rem; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--line);
+  cursor: pointer; font-size: var(--fs-sm);
+}
+.fs-item:last-child { border-bottom: 0; }
+.fs-item:hover { background: var(--surface); }
+.fs-item .gl { flex: none; width: 1.1rem; text-align: center; }
+/* 変換前の Access ファイル。**あることは見せるが選ばせない** ──
+   「フォルダを間違えた」のか「変換がまだ」なのかを区別できるように */
+.fs-item--legacy { color: var(--muted); cursor: not-allowed; }
+.fs-item--legacy:hover { background: none; }
+.fs-item--picked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* --- マスタ管理 ------------------------------------------------------ */
+/* **画面の高さに合わせて出せるだけ出す。**
+   22rem 固定だと 1 度に 11 行しか見えず、100 行めくるのにひたすら
+   スクロールすることになる。画面が広い端末ではそのぶん見せる。
+   見出し行は sticky なので、伸ばしても列名は見えたまま。 */
+.master-table-wrap {
+  max-height: 72vh; overflow: auto; margin-top: .7rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+table.master {
+  border-collapse: collapse; width: 100%; font-size: var(--fs-sm);
+  background: var(--surface);
+}
+table.master th, table.master td {
+  border: 1px solid var(--line); padding: .25rem .45rem;
+  white-space: nowrap;
+}
+table.master th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--surface-2); text-align: left;
+}
+/* 列名を押して並べ替える(マスタ管理)。見た目は見出しのまま、押せることだけ示す */
+.master-sort {
+  all: unset; display: block; width: 100%; cursor: pointer; font-weight: 700;
+}
+.master-sort:hover { color: var(--accent); text-decoration: underline; }
+.master-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+table.master th[aria-sort] { color: var(--accent); }
+/* キー列は直せない。書き換えるとどの行だったのか辿れなくなる */
+table.master td.key { background: var(--surface-2); font-weight: 700; }
+/* 直せない表のマス。**押せる見た目にしない** ── 押しても何も起きないと
+   壊れているようにしか見えない(理由は表の上に出す) */
+table.master td.readonly { color: var(--muted); }
+/* 看板の状態(欲・不・発送…)。値は読めるように、薄くしすぎない */
+table.master td.readonly.state { color: inherit; background: var(--surface-2); cursor: not-allowed; }
+.master-note { margin: .6rem 0 0; font-size: var(--fs-sm); color: var(--muted); }
+
+table.master td.editable { cursor: text; }
+table.master td.editable:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+table.master td input {
+  width: 100%; border: 1px solid var(--accent); border-radius: 2px;
+  padding: .1rem .2rem; font: inherit;
+}
+.master-pager { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; }
+
+/* 削除の列。行の端に置いて、値のマスと間違えて押されないようにする */
+table.master td.master-act { padding: .15rem .3rem; text-align: center; }
+
+/* 行を足す入力欄。列が多いので折り返して並べる */
+.master-form {
+  margin-top: .7rem; padding: .8rem;
+  border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.master-form h3 { margin: 0 0 .6rem; font-size: var(--fs-lg); }
+.master-form__grid {
+  display: grid; gap: .6rem;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+}
+.master-form .field small { color: var(--muted); }
+.master-form .master-note { margin: 0 0 .6rem; }
+
+/* --- この画面は使えません(2枚開いたとき) ---------------------------- */
+/* **プロセスが1つでも、タブは何枚でも繋がる。** 2枚とも押せる状態にして
+   おくと、同じ看板を2画面で取り合うことになる。持ち主でない画面は、
+   ここで全部を覆って押せなくする。
+
+   `.modal`(パスワード確認)より上に出す。両方出る場面はまず無いが、
+   出たときに「押せないはずの画面のパスワード欄」が手前に来てはいけない。
+   `position: fixed` なので、帯も左のレールもまとめて覆う。 */
+#screen-blocked {
+  position: fixed; inset: 0; z-index: 300;
+  display: grid; place-items: center;
+  padding: 1rem;
+  background: var(--scrim-strong);
+}
+.blocked__card {
+  width: min(28rem, 100%);
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  padding: 1.4rem 1.5rem; text-align: center;
+}
+.blocked__title {
+  font-size: 1.1rem; font-weight: 700; color: var(--fg); margin-bottom: .6rem;
+}
+.blocked__body { color: var(--muted); line-height: 1.7; margin-bottom: 1.1rem; }
+.blocked__body strong { color: var(--fg); }
+.blocked__note { margin-top: .7rem; font-size: .85rem; line-height: 1.6; color: var(--muted); }
+.blocked__note strong { color: var(--fg); }
+
+/* --- 未反映の中身(取り込みの状態タブ) ------------------------------ */
+/* 「未反映 8 件」とだけ出ても何が届いていないのか確かめようがないので、
+   中身を並べる。送れないと分かっている行は色で見分けられるようにする */
+.pending-list { margin-top: .9rem; }
+.pending-list b { font-size: var(--fs-sm); }
+td.pending--stuck { color: var(--bad); font-weight: 700; }
+
+/* --- 配布設定・マスタの確認リスト(設定画面) ----------------------- */
+.deploy__h { margin: 1.1rem 0 .3rem; font-size: 1rem; }
+.deploy--bad { color: var(--bad); font-weight: 700; }
+label.check {
+  display: flex; align-items: center; gap: .45rem;
+  font-size: var(--fs-sm); cursor: pointer;
+}
+/* 共有フォルダのパスは長い(\\サーバ\各課共有\…\看板マスタ.sqlite3)。
+   折り返さないと「どこから」「配布設定の値」が右へ押し出され、
+   この表でいちばん見たい列が見えなくなる */
+.deploy--ok { color: var(--ok); }
+
+/* 配布設定フォルダの中身の確認。保存直後は枠で目立たせる */
+.deploy-checks {
+  margin-top: .7rem; padding: .55rem .8rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: var(--fs-sm);
+}
+.deploy-checks.is-ng { border-color: var(--bad); }
+.deploy-checks ul { list-style: none; margin: .35rem 0 0; padding: 0; }
+.deploy-checks li { margin: .15rem 0; }
+.deploy-checks .mark { display: inline-block; width: 1.3em; font-weight: 700; }
+.deploy-checks .is-ok .mark { color: var(--ok); }
+.deploy-checks .is-ng { color: var(--bad); font-weight: 700; }
+.deploy-checks small { color: var(--muted); font-weight: 400; word-break: break-all; }
+
+
+/* 鍵の状態(設定画面のタブの下)。開いているときだけ色を付ける ──
+   開いたままだと誰でも守られた操作ができるので、気付けるようにする */
+.lockbar {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin: .2rem 0 .8rem; padding: .4rem .8rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: var(--fs-sm); color: var(--muted);
+}
+.lockbar.is-open { border-color: var(--ok); color: var(--fg); background: var(--ok-bg); }
+
+/* 配布設定 */
+.dist-state {
+  display: inline-block; margin-left: .4rem; padding: .05rem .5rem;
+  border-radius: 999px; font-size: var(--fs-sm); font-weight: 700;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--line);
+}
+.dist-state.is-ok { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+.distchecks { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: .5rem .8rem; }
+.distchecks legend { font-size: var(--fs-sm); font-weight: 700; padding: 0 .3rem; }
+.distchecks label { display: block; margin: .25rem 0; font-size: var(--fs-sm); cursor: pointer; }
+.distchecks small { color: var(--muted); word-break: break-all; }
+.dist-build-result {
+  margin: .6rem 0 0; padding: .6rem .8rem; white-space: pre-wrap; word-break: break-all;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+/* 看板集計(views/stats.js)
+   線は細く(2px)、目盛りと罫線は控えめに。文字は系列の色で塗らない
+   (色は横の印が持つ。白地で薄い色でも文字は読める) */
+.stats-filter .field { flex: 0 1 11rem; }
+.stats-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.stats-head h2 { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.seg__btn {
+  padding: .3rem .7rem; border: 0; background: var(--surface); color: var(--muted);
+  font-size: var(--fs-sm); cursor: pointer;
+}
+.seg__btn + .seg__btn { border-left: 1px solid var(--line-strong); }
+.seg__btn[aria-pressed="true"] { background: var(--accent); color: var(--on-fill); font-weight: 700; }
+.stats-legend { display: flex; flex-wrap: wrap; gap: .3rem .5rem; margin: .2rem 0 .4rem; }
+.stats-legend button {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .15rem .5rem; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--fg); font-size: var(--fs-sm); cursor: pointer;
+}
+.stats-legend button[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+.stats-legend button[aria-pressed="false"] .swatch { opacity: .25; }
+.swatch { display: inline-block; width: .9rem; height: 3px; border-radius: 2px; }
+.stats-chart { position: relative; width: 100%; min-height: 18rem; }
+.stats-chart svg { display: block; width: 100%; overflow: visible; }
+.stats-chart .axis text, .stats-chart .end-label { font-size: 11px; fill: var(--muted); }
+.stats-chart .end-label { fill: var(--fg); }
+.stats-chart .grid line { stroke: var(--line); stroke-width: 1; }
+.stats-chart .grid line.base { stroke: var(--line-strong); }
+.stats-chart .series path { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.stats-chart .series circle { stroke: var(--surface); stroke-width: 2; }
+.stats-chart .crosshair { stroke: var(--line-strong); stroke-width: 1; }
+.stats-chart .empty-msg { fill: var(--muted); font-size: 13px; }
+.stats-tip {
+  position: absolute; pointer-events: none; z-index: 5; min-width: 9rem;
+  padding: .4rem .6rem; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm); font-variant-numeric: tabular-nums;
+}
+.stats-tip b { display: block; margin-bottom: .2rem; }
+.stats-tip div { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+.stats-tip span.v { margin-left: auto; padding-left: .8rem; font-weight: 700; }
+.stats-tip small { color: var(--muted); font-weight: 400; }
+.stats-table { margin-top: .6rem; }
+.stats-table summary { cursor: pointer; font-size: var(--fs-sm); color: var(--accent); }
+.stats-summary td.num, #stats-rate-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.stats-csv { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.stats-csv li { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
+.stats-csv .btn { min-width: 6.5rem; text-align: center; text-decoration: none; color: var(--fg); }
+.stats-csv .btn--primary { color: var(--on-fill); }
+.stats-csv .btn[aria-disabled="true"], .stats-csv .btn:disabled { opacity: .5; pointer-events: none; }
+.stats-csv__name { min-width: 13rem; font-weight: 700; }
+#csv-result, #history-path-result, #csv-dir-result { white-space: pre-line; }
+
+/* 共有するファイルか、この端末だけのものか(設定の見出しに付ける札)。**色だけに頼らない**(文字で言う) */
+.scope {
+  display: inline-block; margin-left: .5rem; padding: .05rem .5rem; vertical-align: middle;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  font-size: var(--fs-sm); font-weight: 700; color: var(--muted); background: var(--surface-2);
+}
+.scope--shared { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.scope--local { color: var(--warn); border-color: var(--warn-line); background: var(--warn-bg); }
+/* ファイルの場所: 長いパスは折り返す(表からはみ出して「中身」「いま」が見えなくならないように) */
+table.places { table-layout: fixed; width: 100%; }
+table.places th:nth-child(1) { width: 10rem; }
+table.places th:nth-child(3) { width: 30%; }
+table.places th:nth-child(4) { width: 7.5rem; }
+table.places td { white-space: normal; vertical-align: top; }
+table.places code { word-break: break-all; }
+/* 狭い画面では 1 件ずつ縦に積む(列を固定したままだと 1 文字ずつの縦長になる) */
+@media (max-width: 720px) {
+  table.places, table.places tbody, table.places tr, table.places td { display: block; width: auto; }
+  table.places thead { display: none; }
+  table.places tr { border-bottom: 1px solid var(--line-strong); padding: .3rem 0; }
+  table.places td { border: 0; padding: .1rem .45rem; }
+}
+.stats-csv small { color: var(--muted); font-size: var(--fs-sm); }
+.stats-overall { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .7rem; }
+.stats-overall > div {
+  display: flex; flex-direction: column; gap: .1rem; min-width: 7.5rem;
+  padding: .45rem .8rem; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.stats-overall span { font-size: var(--fs-sm); color: var(--muted); }
+.stats-overall b { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.stats-overall > div:first-child b { color: var(--accent); }
+.stats-summary td.num { white-space: nowrap; }
+
+/* 接続先: いまどこに繋がっているか(views/settings.js) */
+.source-now {
+  display: grid; gap: .3rem; margin-bottom: .8rem; padding: .55rem .8rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.source-now__row { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap; }
+.source-now__label { min-width: 6.5rem; color: var(--muted); font-size: var(--fs-sm); }
+.source-now code { word-break: break-all; font-weight: 700; }
+.source-state { font-weight: 700; }
+.source-state.is-ok { color: var(--ok); }
+.source-state.is-bad { color: var(--bad); }
+.source-state.is-unset { color: var(--warn); }
+#source-result { white-space: pre-line; margin-bottom: .8rem; }
+.banner--ok { background: var(--ok-bg); border-color: var(--ok); color: var(--fg); }
+.source-edit { font-weight: 700; }
+.source-edit.is-pending { color: var(--warn); }
+
+/* この端末の権限(アクセス権限)。使える / 権限なし を 1 行ずつ。**色だけに頼らない**(✔ / ✖ と文字) */
+.access-id {
+  display: grid; grid-template-columns: max-content 1fr; gap: .25rem .8rem;
+  margin-bottom: .6rem; padding: .55rem .8rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.access-id__k { color: var(--muted); font-size: var(--fs-sm); }
+.access-id code { font-weight: 700; word-break: break-all; }
+.access-modes { list-style: none; margin: 0 0 .6rem; padding: 0; display: grid; gap: .35rem; }
+.access-modes li { display: grid; grid-template-columns: 1.2rem 9rem 1fr; gap: .5rem; align-items: baseline; }
+.access-modes .mark { font-weight: 700; }
+.access-modes .is-ok .mark { color: var(--ok); }
+.access-modes .is-no .mark { color: var(--bad); }
+.access-modes .how { color: var(--muted); font-size: var(--fs-sm); }
+#access-reason, #access-problems, #access-path-result { white-space: pre-line; }
+.access-other { color: var(--muted); }
+
+/* 発送処理中に注文が取り消されました(赤なし・緑あり)。確かめるまで出し続ける */
+.board-alerts b { display: block; font-size: var(--fs-base); }
+.board-alerts p { margin: .2rem 0 .4rem; color: var(--fg); }
+.board-alerts ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
+.board-alerts li { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; color: var(--fg); }
+.row--alert { outline: 2px dashed var(--bad); outline-offset: 1px; border-radius: var(--radius-sm); }
+.row--alert .cell--size::before { content: "⚠ "; color: var(--bad); }
+.tab--alert::after { content: " ⚠"; color: var(--bad); }
+
+/* コメント(倉庫 ⇔ 現場のやり取り)。無いときは目立たせない */
+.cell--comment {
+  justify-content: center; min-width: 2.4rem; padding: .3rem .35rem;
+  background: var(--surface); color: var(--muted); font-size: var(--fs-sm);
+  opacity: .55;
+}
+.cell--comment.has-comments { opacity: 1; color: var(--fg); font-weight: 700; }
+.cell--comment.is-unread::before {
+  content: ""; position: absolute; top: -4px; right: -4px;
+  width: .65rem; height: .65rem; border-radius: 50%;
+  background: var(--bad); border: 2px solid var(--surface);
+}
+.board-comments { border-color: var(--accent); background: var(--accent-bg); }
+.board-comments b { display: block; font-size: var(--fs-base); color: var(--accent); }
+.board-comments ul { list-style: none; margin: .3rem 0 0; padding: 0; display: grid; gap: .3rem; }
+.board-comments li { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.tab--comment::before { content: "💬 "; }
+.modal__box--comment { width: min(34rem, calc(100vw - 2rem)); }
+.cm-thread {
+  max-height: 18rem; overflow: auto; display: flex; flex-direction: column; gap: .4rem;
+  padding: .5rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.cm-item {
+  max-width: 85%; padding: .35rem .6rem; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); align-self: flex-start;
+}
+.cm-item.is-mine { align-self: flex-end; background: var(--accent-bg); border-color: var(--accent-line); }
+.cm-meta { font-size: var(--fs-sm); color: var(--muted); }
+.cm-text { white-space: pre-wrap; word-break: break-word; }
+.cm-read { font-size: var(--fs-sm); color: var(--muted); text-align: right; }
+.cm-read.is-read { color: var(--ok); font-weight: 700; }
+.cm-empty { color: var(--muted); font-size: var(--fs-sm); margin: .3rem; }
+/* 前の回の区切り: 何をして確認済みになったか */
+.cm-closemark {
+  align-self: stretch; text-align: center; font-size: var(--fs-sm); color: var(--muted);
+  border-top: 1px dashed var(--line-strong); padding-top: .25rem; margin: .2rem 0 .4rem;
+}
+/* 確認済みの分を畳んだとき(区切りは残し、吹き出しだけ隠す) */
+.cm-thread.is-folded .cm-item.cm-confirmed { display: none; }
+.cm-fold { align-self: flex-start; margin-top: .3rem; color: var(--accent); }
+/* 押す前の確認: どの看板のコメントか */
+.cm-confirm__head { font-size: var(--fs-sm); margin-top: .2rem; }
+.cm-history { margin-top: .5rem; font-size: var(--fs-sm); }
+.cm-history summary { cursor: pointer; color: var(--accent); }
+.cm-history > div { display: flex; flex-direction: column; gap: .3rem; margin-top: .4rem; opacity: .8; }
+#cm-form { margin-top: .6rem; }
+#cm-body {
+  width: 100%; padding: .45rem .55rem; resize: vertical;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font: inherit;
+}
+#cm-count, .cm-hint { color: var(--muted); font-size: var(--fs-sm); }
+
+/* Access の最新で表の中身を入れ替える(設定 → マスタ管理) */
+.refresh-rules { margin: 0 0 .8rem; padding-left: 1.2rem; }
+.refresh-rules li { margin: .15rem 0; }
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: .2rem;
+  padding: 1rem; border: 2px dashed var(--line-strong); border-radius: var(--radius);
+  background: var(--surface-2); color: var(--muted); cursor: pointer; text-align: center;
+}
+.dropzone b { color: var(--fg); }
+.dropzone.is-over { border-color: var(--accent); background: var(--accent-bg); }
+.dropzone.is-busy { opacity: .6; pointer-events: none; }
+#rf-note, #rf-result { white-space: pre-line; margin-top: .7rem; }
+#rf-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#rf-table td.why { font-size: var(--fs-sm); color: var(--muted); white-space: normal; min-width: 18rem; }
+#rf-table td.why b { color: var(--bad); font-weight: 700; }
+#rf-table tr.is-off td { color: var(--muted); }
+
+/* マスタ管理: 読み書きする共有DB と、最後に書いた結果(書き込み先つき) */
+.master-dest code { word-break: break-all; font-weight: 700; color: var(--fg); }
+#master-written { white-space: pre-line; word-break: break-all; margin-bottom: .8rem; }
+
+/* 記録(後追い・なぜなぜ)。views/trace.js */
+.trace-kinds { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin-top: .4rem; }
+.trace-list .trace-row { cursor: pointer; }
+.trace-list .trace-row:hover, .trace-list .trace-row:focus { background: var(--accent-bg); outline: none; }
+.trace-list td.trace-what { white-space: normal; min-width: 18rem; }
+.trace-row--error td:nth-child(2), .trace-row--client td:nth-child(2) { color: var(--bad); font-weight: 700; }
+.trace-row--warning td:nth-child(2), .trace-row--refused td:nth-child(2) { color: var(--warn); font-weight: 700; }
+.trace-h { margin: .9rem 0 .3rem; font-size: var(--fs-base); }
+.trace-h small { color: var(--muted); font-weight: 400; }
+.trace-chain, .trace-trail { margin: 0; padding-left: 1.4rem; font-size: var(--fs-sm); display: grid; gap: .15rem; }
+.trace-chain li { word-break: break-word; }
+.trace-tech { margin-top: .6rem; font-size: var(--fs-sm); }
+.trace-tech pre { max-height: 20rem; overflow: auto; background: var(--surface-2); padding: .5rem; white-space: pre-wrap; }
+#trace-sheet { width: 100%; font-family: ui-monospace, Consolas, "MS Gothic", monospace; font-size: var(--fs-sm); }
+#trace-detail .kv dd { word-break: break-word; }
+.muted { color: var(--muted); }
+#log-dir-result { white-space: pre-line; }
+
+/* アクセス権限から決まった担当ライン */
+.access-line { display: flex; gap: .8rem; align-items: baseline; margin: .2rem 0 .5rem; }
+.access-names { margin-top: .5rem; font-size: var(--fs-sm); }
+.access-names summary { cursor: pointer; color: var(--accent); }
+#access-ignored, #access-line-note { white-space: pre-line; }

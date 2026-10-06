@@ -1,0 +1,1311 @@
+{% extends "base.html" %}
+{% block title %}日報入力 — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>日報入力</h1>
+  <span class="lead" id="page-lead">第{{ view.page }}ページ / 全{{ view.page_count or 1 }}ページ</span>
+  {# **同じ直のページを戻っているのか、他の直を開いているのかを言い分ける。**
+     どちらも「過去データを開いています」だと、自分がさっき打った紙を
+     直しているだけなのに、触ってはいけないものに見える #}
+  {% if view.backfill %}
+  <span class="badge badge--alert" id="recall-badge">後日作成: 終わった直を後から作っています</span>
+  {% elif view.recall_other %}
+  <span class="badge badge--alert" id="recall-badge">他の直のデータを開いています</span>
+  {% elif view.recall %}
+  <span class="badge badge--todo" id="recall-badge">この直の第{{ view.page }}ページを直しています</span>
+  {% endif %}
+</div>
+
+{# ---- 後日作成(v4.0.0)── **後から作っていることを、打っているあいだ言い続ける** ---- #}
+{% if view.backfill %}
+<div class="msg msg--warn backfill-note" id="backfill-note" role="status">
+  <b>{{ view.backfill.key }} を後から作っています</b>({{ view.backfill.stamp }})。
+  作業者を選んで打ち、「保存(確定)」を押すと<b>この直のぶん</b>として入り、記録の一覧と紙に
+  「後日作成」の印が残ります。打ち終わったら「最新のページに戻る」を押してから
+  <b>「共有へ保存」</b>を押してください(戻るまでは共有へ保存できません)。
+  12行を超えるときは、戻ってから「記録を見る」でもう一度「この直を後から作る」を押すと
+  次のページを作ります。
+</div>
+{% endif %}
+
+{# ================================================================
+   見るだけの帯 ── **他の直の過去データを、管理者モードでないまま開いている**
+
+   「管理者モード終わった後でも1直データが開いてたらいじれるのはNG
+   （過去データにはなっている）」と言われたところです。保存は前から
+   403 で断っていましたが、**打つことはできました** ── 断られるのは
+   押したときなので、それまでは直せているつもりで手を動かします。
+
+   こうなるのは押し間違いだけではありません。管理者が過去の直を開いた
+   まま直の変わり目をまたぐと、管理者モードは自動で外れ、呼出モードは
+   わざと残ります(消すと保存先が黙って動くため)── **誰も何も操作して
+   いないのに**この状態になります。
+
+   出口を2つとも、この帯に置きます(「過去データの終了方法 / 管理者モードの
+   終了方法 これらがわからない」)。
+   ================================================================ #}
+<div class="msg msg--warn read-only" id="read-only"
+     {% if not view.read_only %}hidden{% endif %} role="alert">
+  <div class="read-only__text">
+    <b>この直の時間は過ぎています。見るだけです。</b>
+    <span id="read-only-what">{{ view.report_date }} {{ view.shift }} 第{{ view.page }}ページ</span>
+    を開いています ── <b>打つことも保存することもできません。</b>
+    <br>
+    {# **半端に打てる状態を残さない。** 打てるのに保存で断られると、
+       直したつもりで手を動かしたぶんが丸ごと消えます
+       (「中途半端に入力できてしまっていることが問題」)。 #}
+    終わった直を直すには<b>管理者モード</b>が要ります ──
+    右の「管理者モードにする」を押してから、もう一度開いてください。
+  </div>
+  <div class="btn-row">
+    {# **出口は理由で変わります**(`_read_only_reason`)。
+
+       過去データを開いている … 最新のページへ戻る
+       直の時間が過ぎた       … **次の直を始める**
+
+       閉じるだけで次へ進む道が無いと、次に座った人は何を押せばよいのか
+       分かりません ── 止めるからには出口を置きます。 #}
+    <button class="btn btn--primary" type="button" id="start-next-shift"
+            {% if view.read_only_reason != "anchor" %}hidden{% endif %}
+            >次の直を始める</button>
+    <button class="btn" type="button" id="read-only-back"
+            {% if view.read_only_reason == "anchor" %}hidden{% endif %}
+            >最新のページに戻る</button>
+    <a class="btn" href="/settings?tab=terminal">管理者モードにする</a>
+  </div>
+</div>
+
+{# ================================================================
+   直の始まり ── **まず作業者を選ぶ**
+
+   「結局初めに何をするのかルール化が決まっていない」と言われました。
+   開けば12行が打てるので、直が変わったことにも、まだ何もしていない
+   ことにも、画面からは気づけません。
+
+   **始まりは作業者を選ぶこと**にします。作業者はどのみち必ず要るので
+   手間は増えません。選ぶまで表は伏せ、選んだ時点で打てるようにします。
+   ================================================================ #}
+{# 直の時間の出どころ ── **控えで動いているなら、そう言う。**
+
+   境界は時間マスタ(`shift_config`)から来ます。読めないときは控えに
+   落ちますが、落ちたことが画面のどこにも出ていませんでした ── 催促も
+   自動確定も最終時間チェックも控えの時刻で動くのに、誰も気づけません。
+   止めはしません(マスタが無いことを理由に打てなくしない)。 #}
+<div class="msg msg--warn" id="shift-times-note" role="status"
+     {% if not view.shift_times_note %}hidden{% endif %}
+  >{{ view.shift_times_note }}</div>
+{# この端末のラインを決めていない(配った先で、まだ据え付けが済んでいない)。
+   **黙って L1 で動かない** ── 別のラインの端末が L1 のキーで保存してしまう。
+
+   v4.3.0 から**関門**です(「決めるまで入力させないほうがいいね」)。
+   決まるまで表と作業者を伏せ、保存も断ります(`routes/entry.py` の
+   `needs_line` / `line_refusal`)。作業者の帯より先に出します ── どの
+   ラインの日報かが決まらないと、作業者を選んでも先へ進めないので。 #}
+<div class="msg msg--warn start-shift line-gate" id="terminal-line-note" role="alert"
+     {% if not view.line_note %}hidden{% endif %}>
+  <div class="start-shift__text" id="terminal-line-text">{{ view.line_note }}</div>
+  <div class="btn-row">
+    <a class="btn btn--primary btn--lg" href="/settings?tab=terminal"
+       id="start-pick-line">ラインを決める</a>
+  </div>
+</div>
+
+{# ================================================================
+   前の直の始末 ── **押し忘れのまま次の直が進むのを止める関門**
+
+   止めたかった流れはこれです:
+
+       共有へ保存を押し忘れる(または打ち間違いで通らない)
+         → そのまま直の時間を過ぎる
+         → 次の直の人が来て、そのまま入力を始める
+         → 誰も気づかないまま、共有に出ない直が溜まる
+
+   途中に「気づく人」が居ません。**必ず1人いる場所**は直の始まりだけ
+   なので、そこへ置きます。出口は2つ、どちらも1押しです:
+
+       中身が綺麗 … 「共有へ保存」。**誰でも押せます**
+                    ── 押すことは直すことではないので
+       直すところが残っている … **引き継ぐ**。誰が・いつ・何を残した
+                    まま引き継いだかを記録して、次へ進む
+
+   **次の直の人に直させません**(運用上できません)。そして引き継いでも
+   消えません ── 共有へ出るまで、この知らせは出続けます。
+
+   作業者を選ぶより**前**に置きます。順番が決まっていないと、どちらから
+   触るのかがまた分からなくなるためです。
+   ================================================================ #}
+{# `data-blocked` ── **止まっているかどうかをサーバが描く。** JS が
+   `paint()` を待つと、止まっているはずの画面が最初の1回だけ打ててしまい、
+   関門の意味がなくなります(「見るだけ」の帯と同じ理由) #}
+<div class="msg msg--error handover band band--prev" id="handover"
+     {% if view.handover.blocked %}data-blocked="1"{% endif %}
+     {% if not view.handover.any_left %}hidden{% endif %} role="alert">
+  {# ---- 主語 ── **この帯はどの直のことか** ----
+
+         上には赤文字でダメなところが書いてあって
+         すぐ下には直すところはありませんって出てる
+
+     上下で言い合っているように読めたのは、**どちらにも主語が無かった**
+     からです。赤いこの帯は**前の直**のこと、下の帯は**いまの直**のこと。
+     札(`.band__who`)と日付(`.band__about`)を頭に置いて、`components.css`
+     で見た目も分けます ── 色だけで分けると、隣どうしに並んだときに
+     「同じ話の続き」に見えます。 #}
+  <div class="band__head">
+    <span class="band__who">{{ view.handover.who }}</span>
+    <span class="band__about" id="handover-about">{{ view.handover.about }}</span>
+    <span class="band__of">のこと</span>
+  </div>
+  <div class="handover__text" id="handover-text">{{ view.handover.message }}</div>
+  <ul class="handover__list" id="handover-list">
+    {% for text in view.handover.problems %}<li>{{ text }}</li>{% endfor %}
+  </ul>
+  <div class="btn-row">
+    <button class="btn btn--primary" type="button" id="handover-push"
+            >共有へ保存する</button>
+    <button class="btn" type="button" id="handover-take"
+            {% if "take" not in view.handover.actions %}hidden{% endif %}
+            >直せないまま引き継ぐ</button>
+  </div>
+  {# ---- ボタンの意味 ── **押す場所に1行で置く** ----
+
+         直せないまま引き継ぐ を押したわけでもないのに
+         どんどん次いけるんだね ボタンの意味は？
+
+     そう読めます。**止めるのと知らせるのは別**で、止まるのは
+     「いまの直にまだ1ページも保存が無いあいだ」だけです。文は
+     `logic/handover` が持っています(止め方を変えたら文も変わる)。
+     1行だけ出して、残りはマウスを載せたときに ── 長い字は
+     読まれないので。 #}
+  <p class="lead tip" id="handover-why" tabindex="0">
+    <span class="tip__line" id="handover-why-line"
+      >{{ view.handover.why_line }}</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more" id="handover-why-more"
+      >{{ view.handover.why_more }}</span>
+  </p>
+  {# 引き継いだあとも残る一行。**片付いたことにはしません** #}
+  <ul class="handover__notes" id="handover-notes">
+    {% for text in view.handover.notes %}<li>{{ text }}</li>{% endfor %}
+  </ul>
+</div>
+
+{# ================================================================
+   この直の直すところ ── **押す前から出しておく**
+
+       設定タブ内で不備は当然確認できるとしても（管理者用）
+       入力しか一般作業者は開かないので
+       そこで何故ダメかが見えないと意味がないかと
+
+   そのとおりでした。7項目の結果が出るのは何かを押して断られたときだけ
+   で、しかも画面を塗り直すと消えます。前の直のぶんは上の帯が理由まで
+   出したままにしているのに、**自分がいま打っている直**は、直の終わりに
+   「共有へ保存」を押して断られるまで分かりませんでした。
+
+   **色を分けます**(`logic/entry_findings`):
+
+       いま直すもの     … 赤。いま入っている値が、それだけで間違っている
+       直の終わりまでに … 灰。まだ足りないだけ(最終時間・休憩)
+
+   分けないと、8時に1行目を打った時点で赤い画面になります ── 1行目から
+   赤ければ、そのうち誰も読みません。
+   ================================================================ #}
+<div class="msg findings-now band band--now" id="shift-findings"
+     data-level="{{ view.shift_findings.level }}"
+     {% if not view.shift_findings.counted %}hidden{% endif %} role="status">
+  {# 主語。**上の帯と対にして読ませます** ── 「前の直のこと」/
+     「いまの直のこと」。どちらの帯にも同じ形で置くので、赤い帯の下に
+     灰の帯が来ても、続きではなく**別の直の話**だと読めます #}
+  <div class="band__head">
+    <span class="band__who">{{ view.shift_findings.who }}</span>
+    <span class="band__about" id="shift-findings-about"
+      >{{ view.shift_findings.about }}</span>
+    <span class="band__of">のこと</span>
+  </div>
+  <div class="findings-now__head" id="shift-findings-head"
+    >{{ view.shift_findings.headline }}</div>
+  {# 中身は JS が組みます(「◯ページ目を開く」を1件ずつ添えるため)。
+     **開いた最初の一瞬から出ているように**、下の JSON を読んで
+     `start()` で1度描きます ── 応答を1つ待つあいだ空の帯が見えると、
+     何も無いのだと読まれます #}
+  <ul class="findings-now__list" id="shift-findings-list"></ul>
+</div>
+<script type="application/json" id="shift-findings-data"
+  >{{ view.shift_findings | tojson }}</script>
+
+<div class="msg msg--todo start-shift" id="start-shift"
+     {% if not view.needs_worker %}hidden{% endif %} role="status">
+  <div class="start-shift__text">
+    {# 直の名前は大きく1行で出ます(`.start-shift__now`)。**次の文を
+       「です。」で始めない** ── 行が分かれるので、「です。」だけが
+       行頭に残って読めなくなります #}
+    <b class="start-shift__now">{{ view.report_date }} {{ view.shift }}</b>
+    <b>まず作業者を選んでください。</b>
+    選ぶと12行の表が打てるようになります。
+  </div>
+  <div class="btn-row">
+    <button class="btn btn--primary btn--lg" type="button" id="start-pick-staff"
+            >作業者を選ぶ</button>
+  </div>
+</div>
+
+{# ================================================================
+   直ひと回りの動線
+
+   ライン・作業者・明細・保存が同じ重さで並んでいたので、どれから
+   触るのかが画面から読めませんでした。**順番に番号を振って、いま
+   どこかを示すだけ**です ── 飛ばして触れないようにはしません
+   (直しに戻ることがあるので、閉じると邪魔になる)。
+
+   帯は保存で終わりません。**確かめる・共有へ保存まで1本**にして、
+   同じものを記録・設定の画面にも出します(`presenters/flow.py`)。
+   ================================================================ #}
+{% with flow = view.flow, flow_here = "entry" %}
+  {% include "_flow.html" %}
+{% endwith %}
+
+{# ================================================================
+   前の直に1ページも無い ── **保存忘れの最後の網**
+
+   催促(15分前)も自動確定(5分前)も、**画面が開いていなければ動きません**。
+   打った人が居なければ催促する相手も居ません。抜けた直は次の直が気づく
+   しかないので、ここで一度だけ知らせます。
+
+   **一度だけ**です(`logic/prev_shift.py` の `WarnGate`)。毎回出すと
+   読まずに閉じる癖がついて、本当に抜けた日にも気づけません。
+   ================================================================ #}
+<div class="msg msg--warn prev-shift" id="prev-shift"
+     {% if not view.prev_shift.warn %}hidden{% endif %}>
+  <div class="prev-shift__text">
+    <b id="prev-shift-message">{{ view.prev_shift.message }}</b>
+    <span class="lead" id="prev-shift-reason">{{ view.prev_shift.reason }}</span>
+  </div>
+  <div class="btn-row">
+    <a class="btn btn--sm" href="/records">記録を見る</a>
+    <button class="btn btn--sm" type="button" id="prev-shift-ack">分かりました</button>
+  </div>
+</div>
+
+{# ================================================================
+   ラインは**ここでは選びません。**
+
+   この端末がどのラインの端末かは据え付けのときに決まるもので、毎直
+   選び直すものではありません。入力画面の1番目に並んでいると「まず
+   選ぶもの」に見えて、押し間違えたまま打ち始められます ── ラインが
+   違えば保存先のキーごと変わるので、気づくのは翌日の集計です。
+
+   変えるのは設定・管理者(管理者モード)。ここでは**いま何なのかだけ**
+   を出します。
+   ================================================================ #}
+
+{# ================================================================
+   紙の1〜3行目 ── **打つ前に決まるもの**だけ
+
+   紙の並び:  作業日・直 / 梱包ライン / 作業者名 / 昼稼働 有・無 /
+              ヨ：その他（理由を記載）
+
+   **合計(枚数・重量・ﾛｯﾄ数・係数Lot数)はここに置きません。**
+   紙では表の下(21〜26行目「直実績合計」「負荷計算後」)にあり、
+   打ち終わって出るものです。上に置くと「まだ何も打っていないのに
+   枚数欄がある」ように見えます。
+   ================================================================ #}
+<div class="card" data-step-for="worker">
+  {# 見出しは**手順の帯と同じ言葉**にする。帯が「作業者」と言っているのに
+     カードが「梱包実績日報表」だと、どれが2番目なのか結び付かない #}
+  <div class="card__head">
+    <h2><span class="card__n">1</span>作業者・昼稼働</h2>
+    {#
+      **この画面が自分を何の直だと思っているか。** 出どころはここ1つで、
+      保存のときにそのままサーバへ送り返します(`views/entry.js:collect`)
+      ── 送らないと、開いたまま 17:00 をまたいだことをサーバが見分け
+      られず、同じ12行が1直と2直の両方に残ります。
+      1分ごとの見張り(`shift_end.js`)も、ここを読んで比べます。
+    #}
+    {# **大きく出します**(「この入力中の表示は大きくしたほうがいいね」)。
+       打っているあいだ、いちばん確かめたいのは**どこへ書いているか**
+       です ── 小さい薄字だと、17:00 をまたいで直が変わったことも、
+       過去データを開いていることも、目に入りません。
+       題(梱包実績日報表)は添え物なので小さいまま。 #}
+    {# **ライン も名乗らせます。** ここが空だと、断りの隣の「◯ページ目を
+       開く」が「いま開いているのと同じページか」を見分けられず、いま
+       目の前にあるページへ行くボタンが出ます(`findingItem`)。JS は
+       応答が来てから足しますが、それでは**開いた最初の一瞬**に間に
+       合いません #}
+    {# `data-tab-loaded` は**この表を描いた時刻**。タブが名乗るときに添えて、
+       ほかのタブが書いたあとに描かれた表かをサーバが見分けます
+       (`logic/tab_lock.py`「引き継いだタブの画面は古い」) #}
+    <span class="sheet-key" id="sheet-key"
+          data-opened-date="{{ view.report_date }}"
+          data-opened-line="{{ view.line }}"
+          data-opened-shift="{{ view.shift }}" data-opened-page="{{ view.page }}"
+          data-tab-loaded="{{ tab_loaded_at }}">
+      <span class="sheet-key__title">梱　包　実　績　日　報　表</span>
+      <b class="sheet-key__now">{{ view.report_date }} {{ view.shift }} ／ {{ view.line_label or view.line }}</b></span>
+  </div>
+  <div class="row">
+    {% for name, label, kind in top_fields %}
+    <div class="field">
+      <label for="hd-{{ name }}">{{ label }}</label>
+      <input id="hd-{{ name }}" data-header="{{ name }}" type="text"
+             size="28" value="{{ view.header[name] }}">
+    </div>
+    {% endfor %}
+    <label class="check">
+      <input type="checkbox" id="hd-day-shift" {% if view.day_shift %}checked{% endif %}>
+      昼稼働(有)
+    </label>
+    {# どちらも「選んで、いまの入力へ返す」操作なので、画面を移らずに
+       モーダルで開く(tkinter版では別ウィンドウだった) #}
+    <button class="btn btn--sm" type="button" id="open-staff"
+            data-hint="名簿から選びます。班の名前を押すと班の全員、いま欄に居る人は最初からチェック済み">作業者を選ぶ</button>
+    {# `data-need-worker` ── **作業者を決めるまで押せない。**
+
+       全停入力も次ページ発行も、押した時点で**1ページを書いて保存**
+       します。直の始まりは作業者を選ぶことだと決めたのに、その前に
+       押せてしまうと「誰の直か分からない紙」が1枚できます
+       (「作業者を選ぶ前に全停入力できてしまう」)。
+
+       伏せるのは画面の親切で、断るのはサーバです(`/api/formstop/execute`
+       の `no_worker`)── 画面だけで止めると古い画面から抜けられます。 #}
+    <button class="btn btn--sm" type="button" id="open-formstop"
+            data-need-worker>全停入力</button>
+    {# 12行を使い切ったら次の紙へ。VBA の「新規発行」に当たる ──
+       いまのページを保存してから、次のページを空で作って移る。
+
+       **保存の列から、ここへ移しました。** 下に置いていたときは
+       「保存(確定)」と並んでいて、保存が2つあるように見えます
+       (「保存2つあって作業者2つ押すかなぁ？」)。これは保存ではなく
+       **紙を1枚増やす**操作なので、紙のことを決める上の段が居場所です。 #}
+    <button class="btn btn--sm{% if view.sheet_full %} btn--primary{% endif %}"
+            type="button" id="new-page" data-need-worker
+            data-hint="12行目を終了まで打つと出せます。押すと、いまのページを保存して次のページ(空の12行)を出します"
+            {% if view.recall %}disabled title="前のページを開いています。先に「最新のページに戻る」を押してください"{% endif %}
+            >次ページ発行</button>
+  </div>
+
+  {# ------------------------------------------------------------
+     理由 ── 紙の「ヨ：その他（理由を記載）」
+
+     **いつでも書く欄ではありません。** 停止理由で「その他」を選んだ
+     ときに、何があったのかを書き足すための欄です。選んでいないあいだ
+     は読み取り専用にして、開く条件を欄の横に書きます ── 空の欄が
+     並んでいると「打つべきなのか」が分からない。
+     ------------------------------------------------------------ #}
+  {% set rname, rlabel, rkind = reason_field %}
+  <div class="reason" id="reason-box">
+    <div class="reason__head">
+      <b>{{ rlabel }}</b>
+      <span class="lead" id="reason-note">
+        作業停止の記号で<b>「その他」</b>を選ぶと、<b>その行ごと</b>に書けます。
+      </span>
+    </div>
+
+    {# 行ごとの理由。**サーバが「どの行に要るか」を決める**
+       (`presenters/entry.reason_entries`)。JS は写すだけ #}
+    <div class="reason__rows" id="reason-rows">
+      {% for e in view.reason_entries %}
+      <div class="reason__row" data-reason-row="{{ e.row }}"
+           {% if e.empty %}data-empty="1"{% endif %}>
+        <label for="reason-{{ e.row }}">{{ e.label }}</label>
+        <input id="reason-{{ e.row }}" data-reason="{{ e.row }}" type="text"
+               value="{{ e.text }}" size="44"
+               placeholder="例: 棚卸し準備、点検表の差し替え">
+        {% if e.lot %}<span class="lead">{{ e.lot }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <p class="lead" id="reason-empty" hidden>
+      作業停止の記号で「その他」を選んだ行はまだありません。
+    </p>
+
+    {# 行番号の分からない古い理由。**捨てずに出す** ── 行ごとに持つ前の
+       データは、どの行のものか分からないので頭に残してある。
+       隠し欄で持ち回るのは、次に保存したときに消さないため #}
+    <input type="hidden" data-header="{{ rname }}"
+           value="{{ view.reason_legacy }}">
+    {% if view.reason_legacy %}
+    <div class="msg msg--info" id="reason-legacy">
+      このページに書かれていた理由(行が分かりません): {{ view.reason_legacy }}
+    </div>
+    {% endif %}
+  </div>
+  <p class="lead">
+    印刷と共有へは <b>「3行目: ○○ / 7行目: ××」</b> の形で1つの欄にまとめます
+    ── 印刷の理由欄が1つしかないためで、<b>持ち方は行ごと</b>です。
+  </p>
+  <p class="lead">※作業停止時間は5分以上で時間を記入</p>
+</div>
+
+{# ================================================================
+   紙の束 ── **VBA の シートタブ に当たるもの**
+
+       直終わりに保存が済み　次直が登録すると前直分はどうなりますか？
+       消えるのですか？
+       VBAのときはシートは残っているし発行すればシートが切り替わって
+       まっさらになるので視覚的に変わった、新規だ　とわかるのですが
+
+   消えません。紙は 報告日・ライン・直・ページ を鍵にした別々の記録で、
+   次の直が作業者を登録しても前の直の紙には触りません。
+
+   **違ったのは見え方でした。** 出していたのは「2直 1ページ目 / 全1ページ」
+   だけで、しかもこの「全1ページ」は**いまの直のぶんしか数えていません**。
+   1直の紙は同じ日の同じラインに在るのに、画面のどこにも姿がない ──
+   だから「消えたのか」「切り替わったのか」が読めませんでした。
+
+   そこで束を並べます。押せば開きます:
+
+       同じ直の別ページ … その場で切り替わる(管理者モードは要りません)
+       別の直の紙       … 読むだけで開く(直すのは「記録を見る」から)
+
+   並びは `logic/sheet_strip.py`、札の状態もあちらが決めます。
+   ================================================================ #}
+{# **鍵は束が自分で持ちます。** 隣の `#sheet-key` から拾っていたら、
+   ライン名がサーバの描いた時点では入っておらず(あれは応答が来てから
+   JS が足します)、開いた直後に押すと「該当するデータが見つかりません」
+   になりました。押し先が要る値は、押す部品の側に置きます #}
+<div class="sheets" id="sheets" data-step-for="rows"
+     data-sheets-date="{{ view.sheets.report_date }}"
+     data-sheets-line="{{ view.sheets.line }}"
+     {% if not view.sheets.sheets %}hidden{% endif %}>
+  <div class="sheets__row" id="sheets-row" role="list">
+    {% for s in view.sheets.sheets %}
+    <button class="sheets__tab{% if s.now %} is-now{% endif %}" type="button"
+            role="listitem"
+            data-sheet-shift="{{ s.shift }}" data-sheet-page="{{ s.page }}"
+            data-sheet-open="{{ s.open_as }}" title="{{ s.note }}"
+            aria-label="{{ s.note }}"
+            {% if s.now %}aria-current="true"{% endif %}>
+      <b class="sheets__label">{{ s.label }}</b>
+      <span class="sheets__mark sheets__mark--{{ s.state }}">{{ s.mark }}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <p class="lead sheets__note" id="sheets-note">{{ view.sheets.summary }}</p>
+</div>
+
+<div class="card__head sheet-now" data-step-for="rows" style="margin-top:var(--sp-3)">
+  <h2><span class="card__n">2</span>日報を入力</h2>
+  {# ---- **いまどこへ打っているか。** 表のすぐ上に、常に。 ----
+
+     「今何直の入力 / 何ページ目の入力 がすぐわかるようにして下さい」。
+     上のカードにも同じ値は出ていますが、**表まで下がると見えません** ──
+     表は横に長くて縦にも12行あるので、打っているあいだ画面に映って
+     いるのは表だけです。
+
+     実際に、**打った覚えのない行のことを言われる**ことが起きました。
+     画面は空のページを映していて、断りは別のページのことを言って
+     いたのですが、何ページ目かが見えないので結び付きません。
+
+     表と一緒にスクロールしないよう、ここは貼り付けます(CSS)。 #}
+  <span class="sheet-now__key" id="sheet-now">
+    <b class="sheet-now__shift">{{ view.report_date }} {{ view.shift }}</b>
+    <span class="sheet-now__line">{{ view.line_label or view.line }}</span>
+    <b class="sheet-now__page">{{ view.page }}ページ目</b>
+    <span class="sheet-now__of">/ 全{{ view.page_count or 1 }}ページ</span>
+  </span>
+  {# **残りが読めないと13行目を打とうとして手が止まる。** 紙は12行しか
+     ないので、あと何行かを常に出す #}
+  {# 一言はサーバが決める(`presenters/entry.page_guide`)。**12行目が終了まで
+     入ってから**「埋まりました」と言う ── 前は行の数で見ていたので、11行目の
+     終了から写っただけの開始時刻で「使い切りました」と出ていました(v4.8.0) #}
+  <span class="lead" id="rows-left" data-mode="{{ view.page_guide.mode }}"
+        {% if view.sheet_full %}data-full="1"{% endif %}>{{ view.page_guide.rows_text }}</span>
+</div>
+
+{# ---- ページの案内(v4.8.0 → v4.9.0)── **その場面で要る一言だけ** ----
+
+     説明を一気に出しすぎです / はじめから4行長文で出すと読まないやつが大半です
+
+   12行目まで済んだ … 「次ページ発行」で第N+1ページへ・引き継ぐもの   [ここへ]
+   赤い行がある     … 先に赤い行を直す
+   出した直後       … 前のページの直し方                             [ページへ]
+   前のページを直す … 直したら「保存(確定)」、続きは「最新のページに戻る」[最新のページに戻る]
+   くわしくはマウスを乗せると出ます(`data-hint`)。中身はサーバ(`page_guide`) #}
+{% set g = view.page_guide %}
+<div class="msg page-guide" id="page-guide" data-mode="{{ g.mode }}" role="status"
+     {% if g.mode not in ('ready', 'fix', 'issued', 'editing') %}hidden{% endif %}>
+  <span class="page-guide__text" id="page-guide-text" data-hint="{{ g.detail }}">{{ g.text }}</span>
+  <button class="btn btn--primary btn--sm" type="button" data-goto="new-page"
+          id="page-guide-goto" {% if g.action != 'goto-new-page' %}hidden{% endif %}
+          data-hint="「次ページ発行」のボタンまで画面を動かします">ここへ</button>
+  <button class="btn btn--sm" type="button" data-goto="page-switch"
+          id="page-guide-pages" {% if g.action != 'goto-pages' %}hidden{% endif %}
+          data-hint="表の下の「ページ」(番号を選ぶ欄)まで画面を動かします">ページへ</button>
+  <button class="btn btn--primary btn--sm" type="button" id="page-guide-back"
+          {% if g.action != 'back' %}hidden{% endif %}
+          data-hint="このページを保存してから、いちばん新しいページへ戻ります">最新のページに戻る</button>
+</div>
+
+{# ================================================================
+   表の上の2枚(v4.22.0)── 左に etc のボタン、右に入力のこつ
+
+       入力ページレイアウトを写真のようにできますか
+       現状操作コントロールの間に説明文があったり導線が好みでないです
+
+   **打つ前に見るもの**を表の上に、**打ち終わって押すもの**を表の下に
+   (③のボタン | 直実績合計)。説明の文はボタンの間に置かず、ここ(右の1枚)と、
+   ボタンに乗せたとき(`data-hint`)と、いちばん下の「くわしく」にまとめます。
+   狭い画面では縦に落ちます(`components.css` の `.entry-panels`)。
+   ================================================================ #}
+{# ================================================================
+   etc欄の押しボタン (VBA SPCommand / STCommand / GACommand /
+                     HACommand / EXCommand / MICommand)
+
+   **1組だけ置いて、いま選んでいる行に効かせます。** VBA も
+   `UFdaily.RowCount`(= いまの行)に対して1組のボタンで書き込んで
+   いました。12行×6個=72個を並べても、押す場所を探すだけ増えます。
+
+   **押した状態はどこにも持ちません。** 値は etc 欄の文字そのもので、
+   行を移るたびにそこから読み直して塗り直します(`CommandLook_For`)。
+   ================================================================ #}
+<div class="entry-panels" data-step-for="rows">
+<div class="card marks" id="marks">
+  <div class="card__head">
+    <h2>etc(反転・EX etc)</h2>
+    <span class="lead">
+      いま <b id="marks-row">—</b> 行目。押すと etc 欄に書き足します
+    </span>
+  </div>
+  <div class="btn-row">
+    {% for m in marks %}
+    <button class="btn btn--sm mark" type="button" data-mark="{{ m.key }}"
+            title="etc欄に「{{ m.text }}」{% if m.auto %} ／ 自動: {{ m.note }}{% endif %}">
+      {{ m.label }}{% if m.auto %}<span class="mark__auto" aria-hidden="true">自</span>{% endif %}
+    </button>
+    {% endfor %}
+    <span class="lead" id="marks-note"></span>
+  </div>
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line"><b>自</b>が付いた2つは自動で押されます。
+      残りは任意 ── もう一度押せば消えます</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">ロット番号を入れたときに自動で押されます ──
+      <b>EX</b> は受注番号の3桁目が1、または EX_輸出区分が1のとき。
+      <b>外注</b> は設計_設備ｺｰｽに GFS / GCT / GSS が含まれるとき。</span>
+  </p>
+</div>
+
+<div class="card entry-hints" id="entry-hints">
+<p class="lead">
+  <span class="legend legend--outside"></span>
+  灰色の2列(作業時間・単重)は<strong>紙には載りません</strong>。
+  印刷範囲の外に置かれている計算結果です。
+</p>
+{# 開始・終了の時刻は**ダブルクリックでいまの時刻**(v4.2.0)。打つこともできる
+   ので、見つけた人が使えば足りる ── 1行で言い、残りはマウスで見せる #}
+<p class="lead tip" tabindex="0" id="stamp-tip">
+  <span class="tip__line">開始・終了の<b>時か分をダブルクリック</b>すると、いまの時刻が
+    時と分の2つにまとめて入ります</span>
+  <span class="tip__mark" aria-hidden="true">くわしく</span>
+  <span class="tip__more">分の1の位は 0 か 5 に寄せます(1〜4 は切り捨て・5 はそのまま・
+    6〜9 は切り上げ。例: 13:03 → 13:00 / 13:05 → 13:05 / 13:57 → 14:00)。
+    ふつうに打つこともできます。過去の直を開いているときは入りません
+    (いまの時刻はその直の時刻ではないので)。</span>
+</p>
+{# 入力の近道(v4.7.0 `logic/input_shortcuts`)。**欄にマウスを乗せると、その欄で
+   使える近道が出ます** ── ここは一覧として1行で言い、残りは「くわしく」に #}
+<p class="lead tip" tabindex="0" id="shortcut-tip">
+  <span class="tip__line"><b>Enter</b> で次の欄・<b>枚数をダブルクリック</b>で上の行と同じ・
+    <b>包数</b>は空なら 1。欄にマウスを乗せると説明が出ます</span>
+  <span class="tip__mark" aria-hidden="true">くわしく</span>
+  <span class="tip__more">
+    <b>Enter / Shift+Enter</b> … 次の欄へ / 前の欄へ(2桁で自動で進む欄と同じ順。
+    行の最後の次は、次の行のロット№)。2桁で自動で進んだ直後に押した Enter は、
+    1回だけ見送ります(押し癖で1つ飛ばさないように。もう1回押せば進みます)。<br>
+    <b>個装単位 枚数・梱包単位 包数をダブルクリック</b> … 上の行(いちばん近い、枚数の
+    入った行)と同じ枚数と包数が入ります。同じロットを分けて打つ続きの行に。<br>
+    <b>梱包単位 包数</b> … 枚数が入っていて包数が空のまま欄を離れると 1 が入ります
+    (包数が空だと、実績合計の枚数と重量が出ません)。<br>
+    <b>終了の時・分</b> … 欄のすぐ下に出る「直の終わり」を押すと、この直の終わりの時刻が
+    入ります。<br>
+    <b>停止の記号</b> … 一覧のいちばん上に、このラインでよく使う記号が並びます。</span>
+</p>
+</div>
+</div>
+
+<div class="grid-wrap">
+  <table class="grid">
+    <thead>
+      {# 上段 ── 紙の5行目(梱包作業時間・梱包数量・作業停止①②③ …)。
+         同じ見出しが続くぶんを結合する #}
+      <tr>
+        <th class="rowno" rowspan="2">行</th>
+        {% set ns = namespace(i=0) %}
+        {% for group, span in column_groups %}
+          {% set col = columns[ns.i] %}
+          {% set cls = [] %}
+          {% for a, b, tone in stop_pairs %}{% if col.family in (a, b) %}{% set _ = cls.append("stop--" ~ tone) %}{% endif %}{% endfor %}
+          {% if col.outside_print %}{% set _ = cls.append("outside") %}{% endif %}
+          {% if group %}
+          <th class="{{ cls|join(' ') }}" colspan="{{ span }}">{{ group }}</th>
+          {% else %}
+          {# 上段の見出しが無い列は、ここが唯一の見出し。
+             打つ画面なので `screen_name`(`layout.Column.screen_label`) #}
+          <th class="{{ cls|join(' ') }}" rowspan="2" data-hint="{{ input_hint(col.family) }}"
+              style="min-width:{{ col.width }}px">{{ col.screen_name }}</th>
+          {% endif %}
+          {% set ns.i = ns.i + span %}
+        {% endfor %}
+      </tr>
+      {# 下段 ── 上段が結合されている列だけ、内訳の見出しを出す #}
+      <tr>
+        {% for col in columns %}
+        {% if col.group %}
+        {% set cls = [] %}
+        {% for a, b, tone in stop_pairs %}{% if col.family in (a, b) %}{% set _ = cls.append("stop--" ~ tone) %}{% endif %}{% endfor %}
+        {% if col.outside_print %}{% set _ = cls.append("outside") %}{% endif %}
+        {# **打つ画面だけの見出し**(`layout.Column.screen_label`)。
+           紙とCSVは `label` のまま ── 紙は現物で、CSVの列名は取り込みが
+           探す名前なので、こちらから変えられません #}
+        <th class="{{ cls|join(' ') }}" data-hint="{{ input_hint(col.family) }}"
+            style="min-width:{{ col.width }}px">{{ col.screen_name }}</th>
+        {% endif %}
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody id="grid-body">
+      {% for row in range(1, row_count + 1) %}
+      <tr data-row="{{ row }}">
+        {# 行番号の隣に「消す」。**1行ずつ手で空にするのが手間**でした ──
+           12欄を1つずつ選んで消して回ることになります。
+           消すのはこの行だけで、下の行は繰り上がりません(紙は12行の
+           罫線が引かれた用紙で、行番号は紙の行番号です)。 #}
+        <td class="rowno">
+          <span class="rowno__n">{{ row }}</span>
+          <button class="rowno__del" type="button" data-clear-row="{{ row }}"
+                  title="{{ row }}行目を空にする" aria-label="{{ row }}行目を空にする"
+          >✕</button>
+        </td>
+        {% for col in columns %}
+        {% set value = view.rows[row|string][col.family] %}
+        {% set td_class = [('outside' if col.outside_print else ''),
+                           ('g-cell' if col.family == 'SIZ' else '')]|select|join(' ') %}
+        <td{% if td_class %} class="{{ td_class }}"{% endif %}>
+          {% if col.kind == 'select' and col.family in stop_code_families and stop_choices %}
+          {# 停止理由の記号は選ばせる。打つと文字の種類で分類が変わり、
+             間違いが集計まで通ってしまう(CheckCharType) #}
+          <select id="{{ col.family }}{{ row }}"
+                  data-family="{{ col.family }}" data-row="{{ row }}"
+                  data-nowheel="1" data-hint="{{ input_hint(col.family) }}"
+                  {% for name, attr in enter_attrs(col.family).items() %}{{ name }}="{{ attr }}" {% endfor %}>
+            {# **「選ばない」は名前を出す。**
+
+               ここは空の `<option value="">` でした。一覧の先頭に高さの
+               無い行が1つあるだけなので、**開いた人には「未入力に戻る」
+               という選択肢が見えません** ── 触ってしまって開いた以上、
+               何かを選ぶしかないように見え、選べば止まっていない分が
+               停止として集計まで通ります。
+
+               文字を入れて、戻り道を見えるようにします。選ばれている
+               ときも「(停止なし)」と読めるので、空欄と「まだ見ていない」
+               の区別が付きます。 #}
+            <option value="">(停止なし)</option>
+            {# **よく使う記号を上に**(v4.7.0)。このラインで最近保存したぶんを
+               数えて多い順(`logic/input_shortcuts.frequent_codes`)。下の分類の
+               中にも同じ記号があります ── 選ばれている印は分類の側に付けます #}
+            {% if frequent_stops %}
+            <optgroup label="よく使う(このライン)" data-frequent="1">
+              {% for r in frequent_stops %}
+              <option value="{{ r.code }}">{{ r.text }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endif %}
+            {% for grp in stop_choices %}
+            <optgroup label="{{ grp.category }}">
+              {% for r in grp.reasons %}
+              <option value="{{ r.code }}"
+                      {% if r.code == value %}selected{% endif %}>{{ r.text }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+            {# マスタに無い記号が入っていても消さない。**過去のデータを
+               勝手に書き換えない** ── マスタが差し替わると、去年の日報の
+               記号が一覧から消えることがある #}
+            {% if value and value not in stop_codes %}
+            <option value="{{ value }}" selected>{{ value }}(マスタに無い)</option>
+            {% endif %}
+          </select>
+          {% elif col.kind == 'select' and col.family == 'AI' %}
+          <select id="AI{{ row }}" data-family="AI" data-row="{{ row }}"
+                  data-hint="{{ input_hint('AI') }}"
+                  {% for name, attr in enter_attrs('AI').items() %}{{ name }}="{{ attr }}" {% endfor %}>
+            {% for choice in interleaf_choices %}
+            <option value="{{ choice }}"
+                    {% if choice == value %}selected{% endif %}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          {# マスタが読めないときは自由入力に落ちる。**画面が出ないより
+             打てるほうがまし** #}
+          <input type="text" id="{{ col.family }}{{ row }}"
+                 data-family="{{ col.family }}" data-row="{{ row }}"
+                 {% if col.kind == 'calc' %}readonly{% endif %}
+                 {% for name, attr in input_attrs(col.family).items() %}{{ name }}="{{ attr }}" {% endfor %}
+                 {% if col.kind != 'calc' %}{% for name, attr in enter_attrs(col.family).items() %}{{ name }}="{{ attr }}" {% endfor %}{% endif %}
+                 {# 枚数・包数はダブルクリックで上の行と同じに(v4.7.0) #}
+                 {% if col.family in ('MAI', 'TUT') %}data-copy-above="1"{% endif %}
+                 data-hint="{{ input_hint(col.family) }}"
+                 value="{{ value }}">
+          {% endif %}
+          {# Gコースのロット(寸法は BOX最終実績)の印(v4.17.0)。**行の控えから
+             サーバが決める**(`presenters/entry.g_marks`)── 開き直しても出る #}
+          {% if col.family == 'SIZ' %}
+          {% set gm = view.g_marks.get(row|string) %}
+          <span class="gmark" data-gmark-row="{{ row }}" role="img"
+                {% if gm %}title="{{ gm.title }}" aria-label="{{ gm.title }}"{% else %}hidden{% endif %}
+          >{{ gm.text if gm else 'G' }}</span>
+          {% endif %}
+        </td>
+        {% endfor %}
+        {# ---- 紙にも表にも出ない欄を、行に持たせておく ----
+
+           用途コード / 用途名 / 納入先 / 包装仕様書No / コイル縦割 /
+           コイル横縦割(紙の AN〜AS)と、引当番号。ロット番号を打つと
+           サーバが埋めますが、**画面に置き場所が無いと、次に送るときに
+           消えます** ── 集めるのは `[data-family]` の欄だけなので、
+           欄そのものが無ければ空で上書きしてしまう。
+
+           打つものではないので隠したまま持ち、そのまま送り返します。
+           集計の明細CSVでは、この6つが唯一の出口です(VBA も
+           `Agg_OutPut` が集計シートにだけ書いていました)。 #}
+        <td class="carry" hidden>
+          {% for family in extra_families %}
+          <input type="hidden" data-family="{{ family }}" data-row="{{ row }}"
+                 id="{{ family }}{{ row }}"
+                 value="{{ view.rows[row|string][family] }}">
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{# 行を空にする確かめ。**押した ✕ のすぐ下に出す。** 以前はブラウザの確かめ
+   (画面のいちばん上に出る)で、✕ から遠く、毎回マウスを上まで運んでいました。
+   「空にする」は ✕ のすぐ下なので、続けて押すだけで済みます(行の中身は隠さない)。
+   Esc・ほかの所を押す・表を動かすと、何もせずに閉じます(views/entry.js) #}
+<div class="rowask" id="row-ask" role="alertdialog" aria-labelledby="row-ask-text" hidden>
+  <span class="rowask__text" id="row-ask-text"></span>
+  <button class="btn btn--danger btn--sm" type="button" id="row-ask-yes">空にする</button>
+  <button class="btn btn--sm" type="button" id="row-ask-no">やめる</button>
+</div>
+{# 「直の終わり」(v4.7.0)。**終了の時/分に入っているあいだだけ、その欄のすぐ下に
+   出ます。** 押すと、開いている直の終わりの時刻が終了の時と分に入ります。
+   いまの時刻を直の終わりへ丸めることはしません(残業で 23:20 などに終わる
+   行があるので)── 押したときだけ入ります(views/entry.js) #}
+<div class="endchip" id="shift-end-chip" hidden>
+  <button class="btn btn--sm endchip__btn" type="button" id="shift-end-btn"
+          data-hint="この直の終わりの時刻を、終了の時と分に入れます(次の行の開始には写りません)"
+          >直の終わり <b id="shift-end-text">{{ shift_end }}</b></button>
+</div>
+{# 時間計算の断り。**止めずに出す** ── 打っている途中でダイアログが出ると
+   続きが打てない。作業時間の欄はサーバが空のまま返すので、直さないと
+   時間が出ないことは画面でも分かる #}
+<div class="msg" id="time-note" hidden style="margin-top:var(--sp-2)"></div>
+{# 直っていない行の数。**保存を押す前に見えるところへ。**
+   トーストも上の帯も数秒で消えるので、それだけだと「警告は出ていたのに
+   そのまま保存された」が起きる ── 印は行にも残し、保存も断る #}
+<div class="msg msg--error" id="bad-note" hidden role="alert"
+     style="margin-top:var(--sp-2)"></div>
+
+{# ================================================================
+   表の下の2枚(v4.22.0)── 左に③のボタン、右に直実績合計
+   ================================================================ #}
+<div class="entry-foot">
+<div class="card entry-actions">
+{# ------------------------------------------------------------
+   ③ の並び ── **押す場面ごとに囲む**
+
+   「保存2つあって作業者2つ押すかなぁ？」と言われたところです。
+   平らに6つ並べると、「保存(確定)」と「共有へ保存」が隣どうしに
+   見えて、**どちらを押すのか / 両方押すのか**が読めません。
+
+   押す回数がまるで違うので、そこで分けます:
+
+       打つあいだ、何度でも … 保存(確定)。1直に何度も押す
+       直が終わったら1回   … この直をチェック → 共有へ保存
+       要るときだけ        … 印刷。押さなくても日報は残る
+
+   囲みの見出しが「いつ押すのか」を言うので、ボタンの名前だけで
+   区別させずに済みます。**並びの順は変えていません** ── 左から
+   右へ、打つ→終わる→紙、で作業の順のままです。
+   ------------------------------------------------------------ #}
+<div class="btn-row btn-row--staged" data-step-for="save">
+  <span class="card__n">3</span>
+
+  <span class="btn-group" data-when="always">
+    <span class="btn-group__cap">打つあいだ、何度でも</span>
+    <span class="btn-group__row">
+      <button class="btn btn--primary" type="button" id="save"
+              data-hint="この端末に保存します ── 7項目のうち5つを通します(通らなければ保存できません)"
+              >保存(確定)</button>
+    </span>
+  </span>
+
+  {# ------------------------------------------------------------
+     直の終わりの2つ。**順に押すものなので、矢印でつなぐ。**
+
+     この直をチェック ── 共有へ保存が断る条件を、先に当ててみる。
+     「確かめる」では何をするのか分からない、と言われたところです。
+     やっていることは1つ:
+
+         いま保存されている この直の全ページを読み直して、
+         「共有へ保存」が断る7項目に当ててみる。**結果を並べるだけ**
+
+     押しても保存しませんし、止まりもしません。直の途中でも押せます
+     ── 直の終わりに断られてから12行を見直すより、途中で気づける
+     ほうが直しやすいので。見るのは**保存済みの中身**です。
+
+     共有へ保存 ── **押す場所を、押す人のいる画面に置く。**
+     これは設定画面の奥にしかありませんでした。直の終わりに毎回押す
+     ものが、設定を変えるための画面の中にあると、探しに行く手順を
+     覚えている人しか押せません(実際「ボタンが無い」と言われました)。
+     設定画面のほうは残します ── 書き先のパスや未送信の数を見ながら
+     押す場面があるので。
+     ------------------------------------------------------------ #}
+  <span class="btn-group" data-when="end">
+    <span class="btn-group__cap">直が終わったら1回</span>
+    <span class="btn-group__row">
+      <button class="btn" type="button" id="check-shift"
+              data-hint="この直を7項目に当ててみます(保存も、止めもしません)"
+              >この直をチェック</button>
+      <span class="btn-group__arrow" aria-hidden="true">→</span>
+      <button class="btn" type="button" id="push-shared"
+              data-hint="みんなが見るところへ渡します ── 直の終わりに1回、7項目ぜんぶを通してから"
+              {% if view.recall %}disabled title="過去データを開いています。先に「最新のページに戻る」を押してください"{% endif %}
+              >共有へ保存</button>
+    </span>
+  </span>
+
+  {# **保存とは別のボタン。** 紙は要るときだけ出すもので、保存や確定の
+     一部ではありません(VBA は1つのボタンで保存も印刷もしていた)。
+     押さなければ1枚も出ませんし、押しても保存にはなりません #}
+  <span class="btn-group" data-when="maybe">
+    <span class="btn-group__cap">要るときだけ</span>
+    <span class="btn-group__row">
+      <button class="btn" type="button" id="print-page"
+              data-report-date="{{ view.report_date }}" data-line="{{ view.line }}"
+              data-shift="{{ view.shift }}"
+              data-hint="紙が欲しいときだけ。押さなくても日報は残ります ── この直の全ページ(保存されているぶん)を別窓で開きます"
+              >印刷</button>
+    </span>
+  </span>
+
+</div>
+{# 保存の知らせ(「前回の自動保存から…」など)は**ボタンの列の外**に(v4.22.0)。
+   列の中にあると、文の長さでボタンが折り返します #}
+<p class="lead entry-actions__note" id="save-note"></p>
+</div>
+
+{# ================================================================
+   紙の21〜26行目 ── 表の下の合計
+
+       S21:T21  負荷計算後      → 係数Lot数
+       U21:W21  直実績合計      → ﾛｯﾄ数 / 枚数 / 重量
+
+   枚数と重量は `Weight計算` が出すので**読み取り専用**です。打てると、
+   合計だけを直して明細と食い違ったまま保存できてしまいます。
+   ================================================================ #}
+<div class="card totals" data-step-for="rows">
+  <div class="card__head">
+    <h2>直実績合計</h2>
+    <span class="lead">明細から出ます(表の下の欄)</span>
+  </div>
+  <div class="row">
+    {% for name, label, kind, calculated in total_fields %}
+    <div class="field totals__cell" {% if calculated %}data-calc="1"{% endif %}>
+      <label for="hd-{{ name }}">{{ label }}</label>
+      <input id="hd-{{ name }}" data-header="{{ name }}" type="text"
+             size="10" value="{{ view.header[name] }}"
+             {% if calculated %}readonly tabindex="-1"{% endif %}>
+      {% if name == 'weight_kg' %}
+      {# 紙は「4379.4 Kg」の下に「4.38 T」と刷ってある。読むための添え物 #}
+      <span class="lead totals__t" id="weight-t">{{ view.weight_t }}{% if view.weight_t %} T{% endif %}</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="lead tip" tabindex="0">
+    {# ラインごとに(v4.20.0): 機側・NS1(コイル形状)は ﾛｯﾄ数・係数Lot数とも計算、
+       AIM(板形状)は ﾛｯﾄ数だけ計算、ほか(板形状)はどちらも手入力 #}
+    <span class="tip__line"><b>枚数・重量</b>は明細から出ます(直せません)。
+      {% if coefficient_auto %}<b>ﾛｯﾄ数・係数Lot数</b>も出ます
+      {% elif lot_count_auto %}<b>ﾛｯﾄ数</b>も出ます。<b>係数Lot数</b>は手入力です
+      {% else %}<b>ﾛｯﾄ数・係数Lot数</b>は手入力です{% endif %}</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">
+      {% if coefficient_auto %}このラインはコイル形状なので、用途コードごとの
+      <b>負荷係数</b>で重みを付けて数えます(伝送用ファイルの
+      「用途名負荷係数算出」)。<b>前の直から続いているロットは
+      数えません。</b>{% elif lot_count_auto %}ﾛｯﾄ数は同じロットを1回だけ数えます。
+      <b>前の直から続いているロットは数えません。</b>負荷係数で重みを付けるのは
+      コイル形状のライン(機側 / NS1)だけなので、係数Lot数は打った数がそのまま出ます。
+      {% else %}負荷係数で重みを付けて数えるのはコイル形状のライン(機側 / NS1)だけ
+      なので、このラインでは打った数がそのまま出ます。{% endif %}</span>
+  </p>
+</div>
+</div>
+
+
+{# ------------------------------------------------------------
+   ページを切り替える (VBA `NippouDB_EditPage`)
+
+   **打ち間違いに気づく場所に置く。** 2ページ目を出したあと1ページ目の
+   間違いに気づくのは普通に起きるので、設定画面の奥まで探しに
+   行かせない。動くのはページだけで、日付も直もラインも動かない。
+
+   **管理者モードは要りません** ── 自分がさっき打った紙を自分で
+   直しているだけで、誰の記録かは変わらないので。
+
+   **保存の囲みの外へ出しました。** これは保存でも送信でもなく
+   「どの紙を見ているか」を変えるだけなので、押す場面で囲った3つと
+   同じ列に混ぜると、④つ目の保存に見えます。
+   ------------------------------------------------------------ #}
+{% if view.pages | length > 1 or view.recall %}
+<div class="btn-row btn-row--nav">
+  {% if view.pages | length > 1 %}
+  <span class="page-switch">
+    <label for="page-switch">ページ</label>
+    <select id="page-switch" data-now="{{ view.page }}">
+      {% for n in view.pages %}
+      <option value="{{ n }}" {% if n == view.page %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+    <span class="lead">/ 全{{ view.pages | length }}ページ</span>
+  </span>
+  {% endif %}
+  {% if view.recall %}
+  {# 呼出中は、値のあるこの画面から戻れるようにする。**戻る前に保存する**
+     ので、直した内容が消えない(VBA NippouDB_BackToCurrent と同じ) #}
+  <button class="btn" type="button" id="back-to-current">
+    最新のページに戻る</button>
+  {% endif %}
+  {# 前のページを直すときの入口。**どう直して、どう戻るかまで**ここで言う(v4.8.0) #}
+  <span class="lead tip" tabindex="0" id="page-switch-tip">
+    <span class="tip__line">前のページを直すときは、ここで番号を選びます</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">移る前に、いまの12行を<b>打ちかけのまま手元へ置きます</b>
+      (確定ではないので、直っていないページも開けます)。</span>
+  </span>
+</div>
+{% endif %}
+{# ---- チェックした結果 (VBA `ExecutePrintProcess` の5つの手続き) ----
+
+   梱包数が検入枚数を超えていないか / 停止の記号がマスタにあるか /
+   定時まで入っているか / 休憩は足りているか / 作業時間の合計が直より
+   長くないか。**見るのは保存済みの中身**で、打ちかけは映りません。 #}
+<div class="check" id="check-panel" hidden>
+  <div class="msg" id="check-head" role="status"></div>
+  <ul class="check__list" id="check-list"></ul>
+  {# ---- 逃げ道 ── **断られる場所に置く** ----
+
+     ここは長らく設定画面にしかありませんでした。それなのに断り文は
+     「下に『設備移動のため保存』と打つと通せます」と書いていたので、
+     **打つ欄の無い画面で「下に打て」と言われる**ことになります。
+     打てないので次の直へも行けません。
+
+     打たせるのはボタン1つだと押し流されるからです(VBA も `UF印刷` に
+     打たせていました)。通るのは最終時間と休憩の2つだけで、梱包数や
+     停止記号の間違いは通せません。 #}
+  <div class="check__skip" id="entry-skip" hidden>
+    <label for="entry-skip-phrase">
+      設備移動などで<b>途中までしか打てない</b>ときは、下に
+      <b id="entry-skip-text">設備移動のため保存</b> と打つと、
+      <b>最終時間と休憩のぶんだけ</b>通せます
+    </label>
+    {# ---- 通せないものが混ざっているとき ----
+
+       逃げ道は長らく「通せるものだけのとき」しか出しませんでした。
+       ところが断り文のほうは**いつでも**「下に打つと通せます」と書くので、
+       欄が出ない画面で「下に打て」と読まされます。
+
+       出しかたを変えます ── **欄はいつでも出し、通せないものが
+       混ざっているときは打てなくしたうえで、何が残っているかを並べる。**
+       「打っても通らない」を、打つ前に読めるようにするためです。 #}
+    <div class="msg msg--warn" id="entry-skip-blocked" hidden>
+      <b>いまは打っても通りません。</b>
+      「<span class="entry-skip-phrase-echo">設備移動のため保存</span>」で
+      通せるのは<b>最終時間と休憩</b>だけです。先に次を直してください:
+      <ul id="entry-skip-blockers"></ul>
+    </div>
+    <div class="btn-row">
+      <input id="entry-skip-phrase" type="text" size="24" autocomplete="off"
+             placeholder="設備移動のため保存">
+      <button class="btn" type="button" id="entry-skip-push">
+        このまま共有へ保存</button>
+    </div>
+  </div>
+</div>
+
+
+{# 出した結果は**残す**。トーストは消えるので、あとから「出たのか」を
+   確かめる先が無くなる ── 出せなかったときは警告の色で出ます #}
+<div class="msg msg--info" id="export-note" hidden></div>
+
+{# ================================================================
+   保存・共有・印刷・ページの決まり(v4.22.0)── **ボタンの間から外して、ここに畳む**
+   ================================================================ #}
+<details class="entry-notes" id="entry-notes">
+  <summary>保存・共有へ保存・印刷・ページの決まり(くわしく)</summary>
+  {# ---- 長い説明は1行に畳む(`.tip`。`components.css` に理由) ----
+
+         この手の情報は関係ある部分にマウスムーブで見れるようにした
+         ほうが良い 個人的には書いてあれば読むけどそうでない人のほうが
+         多いよ(文字多いな...無視しようってなるらしい)
+
+     要るから書いた説明が、置いたままだと「文字の壁」になって飛ばされて
+     いました。**1行だけ残して、残りは載せたときに。** #}
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line">「印刷」は<strong>紙が欲しいときだけ</strong>。
+      押さなくても日報は残ります</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">保存や集計とは別のボタンです。この直ぜんぶ
+      (全ページ)を別窓で開くので、見るだけでも、Ctrl+P で刷っても
+      かまいません。出るのは<strong>保存されているぶん</strong>なので、
+      打ちかけがあるときは先に「保存(確定)」を押してください。過去の直は
+      <a href="/records">記録を見る</a>からいつでも開けます。</span>
+  </p>
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line">「保存(確定)」は<b>この端末に</b>保存します
+      ── 7項目のうち<b>5つ</b>を通します</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">通すのは、上の「この直をチェック」と同じ項目の
+      うち5つです ── <b>梱包数が検入枚数を超えている</b>、
+      <b>マスタに無い停止記号</b>、開始と終了が同じ、1行が直より長い、
+      停止が作業時間を超える。通らなければ保存できません。</span>
+  </p>
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line">「共有へ保存」は<b>みんなが見るところへ</b>渡します
+      ── <b>直の終わりに1回</b>、7項目ぜんぶを通してから</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">残る2つ(<b>最終時間まで入っているか</b>・
+      <b>休憩が60分あるか</b>)は、<b>直が終わってからでないと決まりません</b>。
+      打っている途中は必ず足りないので、保存(確定)では止めず、共有へ渡す
+      ときに見ます(「この直をチェック」は並べるだけで止めません)。
+      書き先のパスや、共有へ未保存の直の数は
+      <a href="/settings">設定・管理者</a>の「保存と出力」で見られます。</span>
+  </p>
+  {#
+    保存を押すと、集計を作り直したあと**集計CSVを3本書き直します**
+    (`routes/entry._export_daily_csv`)。押し忘れると共有のフォルダが
+    前の直のまま残り、**古いCSVは無いCSVより危ない**ので、出すのを
+    人の記憶に任せないことにしました。
+
+    どこへ出るかは押す前に見えるところへ ── グラフ画面と同じ部品です。
+    自動保存(焦点が外れるたび)では書きません。
+  #}
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line">保存のたびに、その日の<b>集計CSVを3本</b>
+      書き直します(押す手間はありません)</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">3本は 直ごとの合計 / 明細 / 停止内訳
+      です。出し先は下のパスの下に <b>ライン名 / 集計 / 年月 / 日</b> の
+      フォルダを作った先(列の説明 CSVの読み方.txt と式の説明 計算内容.csv は
+      <b>年月のフォルダに1つだけ</b>。無いときだけ置きます) ── <a href="/graph">集計・グラフ</a>の
+      「集計CSVを出力」と同じものが出ます。</span>
+  </p>
+  {% include "_out_dir.html" %}
+  <p class="lead tip tip--up" tabindex="0">
+    <span class="tip__line">ページは<b>この直の中でだけ</b>増えます
+      ── 前のページは上の「ページ」の欄で選び直せます</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">同じ直のページを行き来するのに
+      <b>管理者モードは要りません</b>。終わった直は
+      <a href="/records">記録を見る</a> からページを選んで開けます。</span>
+  </p>
+  <p class="lead tip tip--up" tabindex="0">
+    <span class="tip__line">直すところがある行は<b>赤く残ります</b>
+      ── その行があるうちは「保存(確定)」が通りません</span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">打ち間違いのまま直が終わってしまうのを止める
+      ためです。<b>打つこと自体は止めません</b> ── 打ちかけは自動保存で
+      手元に残るので、直してから保存すれば通ります。</span>
+  </p>
+</details>
+
+{# ---- 作業者選択 (tkinter版 UF登録人員) ---- #}
+<div class="modal" id="staff-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="staff-title">
+  {# 広い窓(v4.16.0)── 全部の班を横1列に並べ、スクロールなしで見えるように #}
+  <div class="modal__box modal__box--wide">
+    <div class="modal__head">
+      <h2 id="staff-title">作業者を選ぶ</h2>
+      <button class="btn btn--sm" type="button" data-close="staff-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <div class="msg msg--warn" id="staff-note" hidden></div>
+      {# v4.7.0 ── 班でまとめて選べる・いま担当者欄に居る人は最初からチェック済み #}
+      <p class="lead" id="staff-lead"><b>班の名前を押すと班の全員</b>にチェックが付きます
+        (もう一度押すと外れます)。担当者欄にもう居る人は、最初からチェックしてあります。
+        名簿に無い名前は、反映しても消えません。</p>
+      <div id="staff-teams" class="staff-teams"></div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="staff-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="staff-apply">担当者欄へ反映</button>
+    </div>
+  </div>
+</div>
+
+{# ---- 理由 (紙の「ヨ：その他（理由を記載）」) ----
+
+   「その他」を選んだ瞬間に開きます。**選んだその場で書かせる**ので、
+   画面の上へ戻って空欄を探す必要がありません。閉じても入力は消えず、
+   あとから「理由を書く…」で開き直せます。 #}
+<div class="modal" id="reason-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="reason-title">
+  <div class="modal__box modal__box--narrow">
+    <div class="modal__head">
+      <h2 id="reason-title">理由を書く</h2>
+      <button class="btn btn--sm" type="button" data-close="reason-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="reason-why">作業停止で「その他」を選んでいます。</p>
+      <div class="field">
+        <label for="reason-text">何があったか</label>
+        <input id="reason-text" type="text" size="40"
+               placeholder="例: 棚卸し準備、点検表差し替え">
+      </div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="reason-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="reason-apply">理由欄へ入れる</button>
+    </div>
+  </div>
+</div>
+
+{# ---- 引当を選ぶ (VBAには無い) ----
+
+   VBA `SQLiteLot検索` は SIKAHIKI で**最初に見つかった1件**を黙って
+   使っていました。1つのロットが複数の受注に引き当てられていると、
+   そこで拾った受注の VC・単重・合紙が、実際に梱包する相手と食い違います
+   ── 押した人には見分けが付きません。選ばせます。 #}
+<div class="modal" id="hiki-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="hiki-title">
+  <div class="modal__box">
+    <div class="modal__head">
+      <h2 id="hiki-title">引当を選ぶ</h2>
+      <button class="btn btn--sm" type="button" data-close="hiki-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="hiki-why">
+        このロットには引当が複数あります。どれで埋めるかを選んでください。
+      </p>
+      <table class="list">
+        <thead>
+          <tr><th></th><th>引当番号</th><th>受注番号</th><th>数量</th><th>調整NO</th></tr>
+        </thead>
+        <tbody id="hiki-rows"></tbody>
+      </table>
+      <p class="lead">
+        <b>選んだ引当で ＶＣ・単重・合紙・EX が決まります。</b>
+        選び直すときは、ロット番号の欄をもう一度離れてください。
+      </p>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="hiki-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="hiki-apply">この引当で埋める</button>
+    </div>
+  </div>
+</div>
+
+{# ---- 直が変わった (VBAには無い) ----
+
+   VBA は保存処理の最後で `Unload UFdaily` していたので、フォームが
+   直の変わり目をまたいで生き残ることがまずありませんでした。開きっぱなし
+   にできる Web版は、17:00 を過ぎても「1直」と表示したまま 2直 へ書きます
+   ── 同じ12行が1直と2直の両方に残る形で出ます。
+
+   **どちらに入れるかは、押した人にしか決められません。** 直の終わりに
+   打ち終えたぶんは打っていた直の紙で、変わってから始めたぶんは新しい直の
+   紙です。文言も選択肢もサーバが持ちます(`logic/shift_boundary.py`)。 #}
+<div class="modal" id="shift-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="shift-modal-title">
+  <div class="modal__box modal__box--narrow">
+    <div class="modal__head">
+      <h2 id="shift-modal-title">直が変わりました</h2>
+      <button class="btn btn--sm" type="button" data-close="shift-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="shift-modal-why"></p>
+      {# **選択肢は行で出す。** どちらを押すと何が起きるかを添えないと、
+         「はい / いいえ」と変わらない #}
+      <div class="pick" id="shift-modal-choices"></div>
+      <p class="lead">
+        <b>まだ1行も書いていません。</b>
+        選ぶまで保存しないので、やめて確かめてからでもかまいません。
+      </p>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="shift-modal">やめる</button>
+    </div>
+  </div>
+</div>
+
+{# ================================================================
+   包装仕様の注意 (VBA `PackagingSpecificationNo` → `MsgBox`)
+
+   包装仕様NO に「ふだんと違うこと」が付いていたとき、ロット番号を
+   打った時点で出します ── **打ち終わってから気づくと、荷を解く
+   ことになります。**
+
+   VBA は `If arr(0) <> "板" Then MsgBox` ── **コイルのときだけ**
+   目の前に出し、板は黙って etc 欄へ入れていました(「板***警告なし
+   (検査側で出力)」とソースに書いてあります)。ここも同じで、板は
+   下の帯(トースト)に出るだけです。
+   ================================================================ #}
+<div class="modal" id="note-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="note-title">
+  <div class="modal__box">
+    <div class="modal__head">
+      <h2 id="note-title">包装仕様の注意</h2>
+      <button class="btn btn--sm" type="button" data-close="note-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="note-where"></p>
+      <ul class="check__list" id="note-list"></ul>
+      <p class="lead">
+        <b>この文言は etc 欄にも入っています。</b>
+        紙にも出るので、消さないでください。
+      </p>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--primary" type="button"
+              data-close="note-modal">読みました</button>
+    </div>
+  </div>
+</div>
+
+{# ---- 全停入力 (tkinter版 Formstop) ---- #}
+<div class="modal" id="formstop-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="formstop-title">
+  <div class="modal__box">
+    <div class="modal__head">
+      <h2 id="formstop-title">全停入力</h2>
+      <button class="btn btn--sm" type="button" data-close="formstop-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <div class="msg msg--warn" id="formstop-note" hidden></div>
+      <p class="lead">直の開始〜終了と選んだ理由を1行目にまとめ、<b>新しいページ</b>として保存します。</p>
+      <div id="formstop-categories" class="row"></div>
+      <p style="margin-top:var(--sp-2)">
+        選択中: <b id="formstop-selected">(未選択)</b>
+      </p>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="formstop-modal">やめる</button>
+      <button class="btn btn--danger" type="button" id="formstop-run">全停実行</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{# 行ごとの etc の印。**最初の描画をJSに任せない** ── ここが無いと、
+   画面を開いた直後は「どの印が付いているか」を画面が知らず、行を選んでも
+   ボタンが点きません(サーバへ1度投げるまで分からない)。
+   判断そのものはサーバ(`etc_marks.active`)が持ったままです。 #}
+<script type="application/json" id="entry-marks">{{ view.marks | tojson }}</script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/entry.js') }}"></script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/modals.js') }}"></script>
+{% endblock %}

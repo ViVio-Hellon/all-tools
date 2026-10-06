@@ -1,0 +1,145 @@
+{#
+  画面の外枠。
+
+  ・帯 (.ribbon)  … アプリ名・版・ライン設定・同期の状態・終了
+  ・レール (.rail) … カレンダー / 設定
+  ・接続断の帯     … 基盤仕様書 2.9。黙って古い表示を出し続けない
+
+  **業務データは載せない。** 帯に出す同期の状態も、初期値だけ埋めて
+  あとは `sync.js` が入れ替える ── 同じ事実を HTML と JSON の2か所に
+  持つと、片方が古くなる。
+#}
+<!doctype html>
+{# 画面の見た目。「自動」なら属性を付けず、OS の設定(prefers-color-scheme)に任せる #}
+<html lang="ja"{% if theme in ("light", "dark") %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ display_name }}{% endblock %}</title>
+{# タブのアイコン。外部ファイルにしないのは要求を1本減らすため #}
+<link rel="icon" href="data:image/svg+xml,{{ favicon | urlencode }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<div class="offline" id="offline" hidden role="alert">
+  <span>バックエンドに接続できません</span>
+  <button class="btn" type="button" id="reconnect">再接続</button>
+  <button class="btn" type="button" onclick="location.reload()">再読込</button>
+</div>
+
+{#
+  この端末で使う画面は1つだけ(`screen.js`)。2枚目のタブは、この面が
+  被さって操作できない。**押せないボタンを押させない**ために、
+  薄く隠すのではなく全面を覆う。
+  取って代わる道は残す ── 前の画面が異常終了して合図を送れなかったとき、
+  何十秒も待たせるほうが現場では困る。
+#}
+<div class="screen-block" id="screen-block" hidden role="alertdialog"
+     aria-labelledby="screen-block-title">
+  <div class="screen-block__box">
+    <h2 id="screen-block-title">すでに別の画面で開いています</h2>
+    <p id="screen-block-text"></p>
+    <button class="btn btn--primary" type="button" id="screen-block-take">
+      この画面で使う
+    </button>
+  </div>
+</div>
+
+<div class="app">
+  <header class="ribbon">
+    {#
+      アプリの名前と版。**どの画面でも消えない。**
+      端末はフォルダごとコピーして配るので、「その端末に入っているのは
+      どれか」を電話で聞かれることがある。画面の左上を読んでもらえば答えられる。
+      版の出どころは `config/app.json` ただ1つ。
+    #}
+    <div class="brand">
+      <b class="brand__name">{{ display_name }}</b>
+      <span class="ver" title="このアプリの版">{{ version_label }}</span>
+    </div>
+
+    <div class="ribbon__slots">
+      {# この端末のライン。**休みとコメントの絞り込みに効く**ので、
+         いつでも見えるところに出す(tkinter 版は下端の1行だった) #}
+      <div class="slot" id="rb-line-slot">
+        <span class="k">ライン</span>
+        <span class="v" id="rb-line">{{ my_line }}</span>
+      </div>
+      {# 同期の状態。中身は `sync.js` が入れ替える #}
+      <div class="slot" id="rb-sync-slot">
+        <span class="k">同期</span>
+        <span class="v" id="rb-sync">確認中</span>
+      </div>
+    </div>
+
+    <div class="ribbon__end">
+      {# 明るい / 暗い の切り替え。文字は `theme.js` が入れる(押すと何になるか) #}
+      <button class="bar-btn" type="button" id="theme-toggle">
+        <span class="gl" aria-hidden="true" id="theme-toggle-glyph"></span><span id="theme-toggle-label">見た目</span>
+      </button>
+      <button class="bar-btn" type="button" id="sync-now" title="いますぐ取り込み元と同期します">
+        <span class="gl" aria-hidden="true">&#8635;</span>今すぐ同期
+      </button>
+      <button class="bar-btn bar-btn--danger" type="button" id="quit">
+        <span class="gl" aria-hidden="true">&#9632;</span>終了
+      </button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" aria-label="画面">
+      <ol>
+        {% for item in nav %}
+        <li>
+          {# 2行。名前だけでは何をする画面か押すまで分からない。
+             説明はサーバが持つ(`shell.NavItem.note`) #}
+          <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>
+            <span class="n" aria-hidden="true">{{ loop.index }}</span>
+            <span class="rail__text">
+              <b class="label">{{ item.label }}</b>
+              {% if item.note %}<small>{{ item.note }}</small>{% endif %}
+            </span>
+            {% if item.badge %}
+            <span class="badge badge--{{ item.badge_kind }}" data-rail-badge="{{ item.key }}">{{ item.badge }}</span>
+            {% else %}
+            <span class="badge" data-rail-badge="{{ item.key }}" hidden></span>
+            {% endif %}
+          </a>
+        </li>
+        {% endfor %}
+      </ol>
+    </nav>
+
+    <main class="work" id="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  // サーバから渡す起動時の値。JSはここ以外から設定を読まない
+  window.APP = {
+    token: {{ token | tojson }},
+    active: {{ active | tojson }},
+    version: {{ version | tojson }},
+    pid: {{ pid | tojson }},
+    healthPollMs: {{ health_poll_ms }},
+    heartbeatMs: {{ heartbeat_ms }},
+    syncPollMs: {{ sync_poll_ms }},
+    theme: {{ theme | tojson }}
+  };
+</script>
+{# 画面のエラーをサーバへ送る見張り。**app.js より先に**普通のスクリプトで読む
+   (app.js の読み込みが失敗したときこそ残したい) #}
+<script src="{{ url_for('static', filename='js/errlog.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

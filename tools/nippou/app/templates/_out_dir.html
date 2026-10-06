@@ -1,0 +1,24 @@
+{# ================================================================
+   書き出しの行き先 (CSVを出すボタンの隣に置く)
+
+   「CSVってどこに出力してます？」に答える1行です。出したあとの
+   知らせにもパスは入っていますが、**知らせは消える**ので、押す前に
+   分かる場所がありませんでした。押す人が知りたいのは「いま押したら
+   どこに出るのか」なので、ボタンの隣に常に置きます。
+
+   中身は `presenters/settings.output_dir_view()`。変えるのは
+   設定・参照設定の「集計CSV・印刷用HTMLの出力パス」と「集計CSVの出力パス(2つ目)」です。
+   ================================================================ #}
+<p class="lead out-dir">
+  出力先:
+  <code class="out-dir__path">{{ out_dir.path }}</code>
+  {% if out_dir.is_default %}
+  <span class="out-dir__note">(既定 ── <b>この端末の中</b>です。
+    他の人にも見せるなら共有のフォルダを指してください)</span>
+  {% endif %}
+  {% if out_dir.second %}
+  <br>集計CSVの2つ目: <code class="out-dir__path">{{ out_dir.second }}</code>
+  <span class="out-dir__note">(「共有へ保存」で送れたときに出します。このボタンでは出ません)</span>
+  {% endif %}
+  ・<a href="{{ out_dir.settings_url }}">設定・参照設定で変える</a>
+</p>

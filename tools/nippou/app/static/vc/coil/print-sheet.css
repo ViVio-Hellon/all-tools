@@ -1,0 +1,230 @@
+/*
+  コイル重量・平板重量の計算書(印刷)
+
+  【紙の端から 5mm 以内には何も置かない】
+  プリンタは紙の縁から約 4mm には印刷できない。ブラウザのプレビューは紙の端まで
+  描くので、画面では収まって見えても紙では欠ける。そこで
+    - @page の余白は 0(ブラウザが余白に日付や URL を刷らないようにする)
+    - 計算書そのものに 12mm の内側の余白を持たせる(5mm の決まりに 7mm のゆとり)
+    - 罫線・枠・色の帯も、すべてこの内側に置く(計算書の外枠を紙の端に引かない)
+  A4 縦 1枚に収める(内側 186 × 273mm)。
+*/
+@page {
+    size: A4 portrait;
+    margin: 0;
+}
+
+/* 画面の上: 印刷ボタン(タブの並びの右端) */
+.tabs {
+    align-items: center;
+}
+
+.print-btn {
+    margin-left: auto;
+    margin-right: 4px;
+    padding: 6px 16px;
+    border: 1px solid var(--medium-gray);
+    border-radius: var(--border-radius);
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.print-btn:hover:not(:disabled) {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.print-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.print-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+/* 計算書(画面では出さない) */
+.print-sheet {
+    display: none;
+}
+
+@media print {
+    html,
+    body {
+        width: 210mm;
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        background: #fff !important;
+        display: block !important;
+    }
+
+    body > *:not(#print-sheet) {
+        display: none !important;
+    }
+
+    .print-sheet {
+        display: block;
+        box-sizing: border-box;
+        width: 210mm;
+        height: 296mm;              /* 297mm ちょうどだと端数で2枚目が出ることがある */
+        padding: 12mm;              /* ← 紙の端からの距離。5mm 以上を守る */
+        overflow: hidden;
+        color: #000;
+        font-family: 'Segoe UI', 'Meiryo', 'Yu Gothic', sans-serif;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+
+/* ここから下は計算書の中身(内側の余白の中だけに置く) */
+.print-sheet * {
+    font-size: 10pt;
+    line-height: 1.5;
+}
+
+.print-sheet .ps-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8mm;
+    padding-bottom: 2mm;
+    border-bottom: 0.6mm solid #333;
+}
+
+.print-sheet .ps-title {
+    margin: 0;
+    font-size: 16pt;
+    font-weight: 700;
+}
+
+.print-sheet .ps-date {
+    font-size: 9pt;
+    color: #444;
+}
+
+.print-sheet .ps-results {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4mm;
+    margin: 5mm 0;
+}
+
+.print-sheet .ps-result {
+    display: grid;
+    gap: 1mm;
+    padding: 3mm 4mm;
+    border: 0.3mm solid #555;
+    border-left: 1.5mm solid #4285F4;
+    border-radius: 1.5mm;
+}
+
+.print-sheet .ps-result__k {
+    font-size: 9pt;
+    color: #444;
+}
+
+.print-sheet .ps-result__v {
+    font-size: 15pt;
+    font-weight: 700;
+    text-align: right;
+}
+
+.print-sheet .ps-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 72mm;
+    gap: 6mm;
+    align-items: start;
+}
+
+.print-sheet .ps-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.print-sheet .ps-table caption {
+    text-align: left;
+    font-weight: 700;
+    padding-bottom: 1.5mm;
+}
+
+.print-sheet .ps-table th,
+.print-sheet .ps-table td {
+    padding: 1.5mm 3mm;
+    border: 0.3mm solid #777;
+    text-align: left;
+}
+
+.print-sheet .ps-table th {
+    width: 28mm;
+    background: #f0f2f4;
+    font-weight: 600;
+}
+
+.print-sheet .ps-table td {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.print-sheet .ps-figure {
+    margin: 0;
+    display: grid;
+    gap: 1mm;
+}
+
+.print-sheet .ps-figure img {
+    display: block;
+    width: 72mm;
+    height: auto;
+    max-height: 60mm;
+    object-fit: contain;
+    border: 0.3mm solid #999;
+    border-radius: 1mm;
+}
+
+.print-sheet .ps-figure figcaption {
+    font-size: 8pt;
+    color: #555;
+}
+
+.print-sheet .ps-steps {
+    margin-top: 5mm;
+}
+
+.print-sheet .ps-h2 {
+    margin: 0 0 2mm;
+    padding-bottom: 1mm;
+    font-size: 11pt;
+    font-weight: 700;
+    border-bottom: 0.3mm solid #555;
+}
+
+.print-sheet .ps-step {
+    margin-bottom: 2.5mm;
+    break-inside: avoid;
+}
+
+.print-sheet .ps-h3 {
+    margin: 0 0 0.5mm;
+    font-size: 10pt;
+    font-weight: 700;
+}
+
+.print-sheet .ps-line {
+    margin: 0;
+    padding-left: 4mm;
+    font-size: 9pt;
+    overflow-wrap: anywhere;
+}
+
+.print-sheet .ps-foot {
+    margin-top: 4mm;
+    padding-top: 1.5mm;
+    border-top: 0.3mm solid #999;
+    font-size: 8pt;
+    color: #555;
+}

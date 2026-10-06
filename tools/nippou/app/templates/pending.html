@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ title }}</h1>
+  <span class="badge badge--todo">準備中</span>
+</div>
+
+<div class="card">
+  {# 「いつ」と「それまでどうするか」まで書く。
+     「準備中です」だけだと、待てばよいのか別の道があるのか分からない #}
+  <p>この画面はまだ作っていません。</p>
+  {% if plan %}<p><b>予定:</b> {{ plan }}</p>{% endif %}
+  {% if gains %}<p><b>できるようになること:</b> {{ gains }}</p>{% endif %}
+  {% if instead %}<p><b>いまは:</b> {{ instead }}</p>{% endif %}
+</div>
+{% endblock %}

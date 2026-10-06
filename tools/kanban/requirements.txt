@@ -1,0 +1,20 @@
+# 資材発注看板システム — 実行に必要な追加パッケージ
+#
+# 画面は Flask + HTML/CSS/JS。詳細は docs/移行仕様.md を参照。
+#
+#   pip install -r requirements.txt
+#
+# 【方針】依存はこの2つだけに抑える。
+# 社内端末での再インストール・更新の手間を増やさないため、
+# フロントエンド側にもビルド工程(npm / webpack など)を持ち込まない。
+#
+# 正データは共有フォルダ上の SQLite なので、DB ドライバは要らない
+# (標準ライブラリの sqlite3 だけ)。初回に .accdb を読む変換だけは
+# 純Python実装の解析器(kanban/accdb/reader.py)で行う。
+
+# Webフレームワーク本体
+Flask~=3.0
+
+# WSGIサーバ。Flask同梱の開発用サーバは本番利用を想定していないため、
+# Windowsで安定して動く純Python実装のこれを使う。
+waitress~=3.0

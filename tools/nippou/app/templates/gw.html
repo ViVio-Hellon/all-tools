@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% block title %}梱包資材重量計算 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  梱包資材重量計算
+
+  【なぜ列に並べたのか】
+  以前は「引く」「寸法」「使う資材」「結果」を**上から下へ全幅で**積んで
+  いたので、結果を見ながら入力を直すたびに画面を上下に往復していました。
+  横に長い1行の入力欄も、見出しと欄が離れて目が戻る場所を見失います。
+
+  作業は「製品を決める → 梱包の形を入れる → 資材を選ぶ → 結果を読む」の
+  一方向なので、**その順に左から右へ列を並べます。** 列の中は縦に積み、
+  見出しは左、欄は同じ幅で右に揃えるので、上から順に埋めるだけで済みます。
+  結果は右端に置いたまま動かないので、入力を直すと**その場で数字が
+  変わるのが見えます**(往復しない)。
+
+  VBA のフォームの囲み(製品情報 / 梱包情報 / 梱包資材情報)は崩して
+  いません ── 現場が覚えている塊です。
+#}
+<div class="page-head">
+  <h1>梱包資材重量計算</h1>
+  <span class="lead">寸法から資材の重量を出す(UFGW 相当)</span>
+</div>
+
+{# ================================================================
+   ① 製品情報 ── ロット番号を打てば、あとは全部ここに入る
+
+   **「引く」ボタンは置きません。** 打ってから押す、を覚えていないと
+   進めないのは仕組みの都合で、押す人の都合ではありません。欄を離れた
+   時点で引きます(VBA も `LOT*_Change` で自動的に引いていた)。
+   ================================================================ #}
+{# data-role は**その列で何をするか**。地色と印の色がそれで決まる ──
+   同じ白い箱が4つ並ぶと、どこに打つのかが画面から読めない。
+   色だけに頼らないよう、題の隣に一言でも書く #}
+<div class="card" id="product" data-role="read">
+  <div class="card__head">
+    <h2><span class="card__n">1</span>製品情報<span class="role-tag">引いてきた値</span></h2>
+    <span class="lead">LotNo を入れると、オーダーNo から下は自動で入ります</span>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label for="lot-no">LotNo</label>
+      <input id="lot-no" type="text" size="10" maxlength="7"
+             inputmode="latin" autocomplete="off" spellcheck="false"
+             placeholder="7桁">
+    </div>
+    <div class="field">
+      <label for="order-no">オーダーNo
+        <span class="lead" id="order-count"></span>
+      </label>
+      {# **複数の引当があるときはここが選択肢になる。** 1件なら選ぶ
+         ものが無いので、そのまま入って選べない見た目にする #}
+      <select id="order-no" disabled>
+        <option value="">LotNo を先に入れてください</option>
+      </select>
+    </div>
+    <span class="lead" id="search-state"></span>
+  </div>
+  <div class="msg msg--info" id="search-note" hidden></div>
+
+  {# 引いて入った値。**打つ欄と混ぜない** ── 混ざっていると、どれを
+     埋めればよいのかが読めない #}
+  <dl class="facts" id="product-facts">
+    {% for name, label in product_fields %}
+    <div class="fact">
+      <dt>{{ label }}</dt>
+      <dd id="pf-{{ name }}">—</dd>
+    </div>
+    {% endfor %}
+  </dl>
+</div>
+
+{# ================================================================
+   ②③④ ── 左から右へ、作業の順に
+   ================================================================ #}
+<div class="gw-cols">
+
+  {# ---- ② 梱包の形 ---------------------------------------------- #}
+  <section class="card gw-col" data-role="input">
+    <div class="card__head">
+      <h2><span class="card__n">2</span>梱包の形<span class="role-tag">打つ</span></h2>
+    </div>
+    <p class="lead">現物を見ないと決まらない値。上から順に入れてください。</p>
+
+    <div class="stack-fields">
+      <b class="stack-fields__head">製品寸法</b>
+      {# Gコースのロット(v4.17.0)。寸法は BOX最終実績 ── **SIKALOT の製造の寸法と
+         違う**ので、ここに書いておく(文言はサーバ `logic/g_course`) #}
+      <div class="msg msg--info msg--prose gw-gnote" id="g-course-note" role="status" hidden>
+        <span class="gmark gmark--inline" aria-hidden="true">G</span><span id="g-course-text"></span>
+      </div>
+      {% for name, label, unit in size_fields %}
+      <label class="stack-field">
+        <span class="stack-field__label">{{ label }}</span>
+        <input id="dim-{{ name }}" data-dim="{{ name }}" type="text"
+               inputmode="decimal" autocomplete="off">
+        <span class="stack-field__unit">{{ unit }}</span>
+      </label>
+      {% endfor %}
+
+      <b class="stack-fields__head">梱包情報</b>
+      {% for name, label, unit in pack_fields %}
+      <label class="stack-field">
+        <span class="stack-field__label">{{ label }}</span>
+        {% if name in spin_fields %}
+        {# スピンボタン(v4.16.0)。▲▼ で1ずつ・上下の矢印キーでも。**打つのはそのまま** #}
+        {% set low, high = spin_fields[name] %}
+        <span class="spin">
+          <input id="dim-{{ name }}" data-dim="{{ name }}" type="text"
+                 inputmode="numeric" autocomplete="off"
+                 data-spin-min="{{ low }}"{% if high is not none %} data-spin-max="{{ high }}"{% endif %}>
+          <span class="spin__btns">
+            <button class="spin__btn" type="button" data-spin="1" tabindex="-1"
+                    aria-label="{{ label }}を1増やす" title="1増やす">▲</button>
+            <button class="spin__btn" type="button" data-spin="-1" tabindex="-1"
+                    aria-label="{{ label }}を1減らす" title="1減らす">▼</button>
+          </span>
+        </span>
+        {% else %}
+        <input id="dim-{{ name }}" data-dim="{{ name }}" type="text"
+               inputmode="decimal" autocomplete="off">
+        {% endif %}
+        <span class="stack-field__unit">{{ unit }}</span>
+      </label>
+      {% endfor %}
+
+      <label class="stack-field">
+        <span class="stack-field__label">積合せ</span>
+        <input id="combined-load" type="text" inputmode="decimal"
+               autocomplete="off" disabled>
+        <span class="stack-field__unit">kg</span>
+      </label>
+      <label class="check"><input type="checkbox" id="use-combined">積合せ有り</label>
+
+      <label class="stack-field">
+        <span class="stack-field__label">Aインプット重量</span>
+        <input id="input-weight" type="text" inputmode="decimal"
+               autocomplete="off">
+        <span class="stack-field__unit">kg</span>
+      </label>
+    </div>
+    <p class="lead">
+      Aインプット重量を入れると <b>GW</b> が出ます(入れなければ出しません)。
+    </p>
+  </section>
+
+  {# ---- ③ 使う資材 ---------------------------------------------- #}
+  <section class="card gw-col" data-role="choose">
+    <div class="card__head">
+      <h2><span class="card__n">3</span>使う資材<span class="role-tag">選ぶ</span></h2>
+    </div>
+    <p class="lead">
+      <span class="badge badge--todo">自動</span> が付いた欄は、オーダーから
+      決まったものです。変えられます。
+    </p>
+
+    <div class="checks">
+      {% for name, label in material_flags %}
+      <label class="check" data-flag-for="{{ name }}">
+        <input type="checkbox" data-flag="{{ name }}" checked>{{ label }}
+      </label>
+      {% endfor %}
+    </div>
+
+    <div class="stack-fields" style="margin-top:var(--sp-3)">
+      <label class="stack-field">
+        <span class="stack-field__label">バンド種別</span>
+        <select id="band-kind">
+          {% for kind in band_kinds %}<option>{{ kind }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="stack-field">
+        <span class="stack-field__label">積み形態</span>
+        <select id="stack-pattern">
+          {% for n in stack_patterns %}<option value="{{ n }}">{{ n }}山積み</option>{% endfor %}
+        </select>
+      </label>
+      <label class="stack-field">
+        <span class="stack-field__label">包装仕様NO</span>
+        <input id="pack-spec" type="text" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="vc" style="margin-top:var(--sp-3)">
+      <label class="check"><input type="checkbox" id="use-vc">VCフィルムを使う</label>
+      {# 表と裏。**「使う」と面と品名を1行に並べる** ── 縦にばらすと、
+         どの品名がどちらの面のものか読めなくなる #}
+      <div class="stack-fields">
+        {# ＶＣの品名は**選ぶもの**(VBA `VCCombo設定` が ComboBox1/2 へ
+           VC重量マスタの品名を積んでいたのと同じ)。打たせると、マスタに
+           無い綴りがそのまま通り、計算の最後で「登録されていないVCです」と
+           断られます ── 打ち直す場所も分かりません。
+
+           **マスタを読めなかった日は、打つ欄に落とします。** 一覧が空の
+           まま選ぶ欄だけ出すと、その日はGW計算そのものができません。 #}
+        <div class="stack-field stack-field--vc">
+          <label class="check" for="vc-a">
+            <input type="checkbox" id="vc-a">表面(A)
+          </label>
+          {% if vc_names %}
+          <select id="vc-name-a" data-vc="1">
+            <option value="">(選ぶ)</option>
+            {% for name in vc_names %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <input id="vc-name-a" type="text" autocomplete="off" placeholder="品名">
+          {% endif %}
+          <span class="stack-field__unit"></span>
+        </div>
+        <div class="stack-field stack-field--vc">
+          <label class="check" for="vc-b">
+            <input type="checkbox" id="vc-b">裏面(B)
+          </label>
+          {% if vc_names %}
+          <select id="vc-name-b" data-vc="1">
+            <option value="">(選ぶ)</option>
+            {% for name in vc_names %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <input id="vc-name-b" type="text" autocomplete="off" placeholder="品名">
+          {% endif %}
+          <span class="stack-field__unit"></span>
+        </div>
+        {% if not vc_names %}
+        <p class="lead">
+          ＶＣ重量マスタを読めなかったので、品名は<b>手入力</b>です
+          ── <a href="/settings">設定・管理者</a>の「参照設定」で
+          置き場所を確かめてください。
+        </p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {# ---- ④ 結果 ---------------------------------------------------
+     **入力の隣に置いたまま動かない。** 直したら、その場で数字が
+     変わるのが見える(上下に往復しない)。 #}
+  <section class="card gw-col" data-role="result">
+    <div class="card__head">
+      <h2><span class="card__n">4</span>結果<span class="role-tag">出てきた値</span></h2>
+      <span class="lead" id="stack-count"></span>
+    </div>
+
+    <table class="list result">
+      <tbody>
+        {% for name, label, strong in result_rows %}
+        <tr data-result="{{ name }}" {% if strong %}class="result--sum"{% endif %}>
+          <td>{{ label }}</td>
+          <td class="num"><span data-result-value>—</span> <small>kg</small></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="btn-row" style="margin-top:var(--sp-3)">
+      <button class="btn btn--primary" type="button" id="calc">計算</button>
+      {# 梱包図を出す (VBA `図形展開` のボタン)
+
+         図そのものは計算すると下に出ますが、**画面の下のほうにあるので
+         気づかれませんでした**(「図形描写出すボタンがない」)。VBA には
+         押すボタンがあったので、同じものを計算の隣に置きます ──
+         まだ計算していなければ計算してから、図まで送ります。 #}
+      <button class="btn" type="button" id="show-figure"
+              title="梱包の外形を描いて、そこまで画面を送ります">梱包図を出す</button>
+      {# 打った値はこのタブに控えてあり、画面を移っても戻ります。
+         **最初からやり直すとき**はここで全部消す #}
+      <button class="btn" type="button" id="clear-inputs"
+              title="LotNo・寸法・資材の選択・VC・重量をすべて消して、最初の状態に戻します">入力値クリア</button>
+      <span class="lead" id="calc-state"></span>
+    </div>
+
+    {# 断られた理由。**全部まとめて出す** ── VBA は1つずつ MsgBox で
+       知らせていたので、3か所間違っていると3回押し直すことになった #}
+    <div class="msg msg--error" id="calc-problems" hidden
+         style="margin-top:var(--sp-2)"></div>
+
+    {# ---- 印刷 (VBA `UFGW` の印刷ボタン → `印刷()` / `印刷2()`) ----
+
+       **紙で要るのは1行だけ。** VBA は1〜100梱包の表を刷っていましたが
+       (`印刷2`)、読むのは「いま作る梱包数」の行1つで、残りの99行は
+       探す手間になります。ここでは梱包数を聞いて、**その行だけ**を
+       計算結果の紙に載せます。
+
+       1〜100の表は下の「梱包数ごとの重量」に残っているので、見比べたい
+       ときは画面で見られます。
+
+       **計算してからでないと押せません** ── 計算していない紙は
+       空欄だらけで、刷ってから気づくことになります。
+
+       **「印刷」はボタンそのものです。** 以前は「印刷」が見出しの字で、
+       押すボタンは灰色の「下見を開く」でした ──
+
+           印刷と書いてあるだけでボタンにもなっていません
+           つまり印刷できません
+
+       押せない理由も、マウスを載せたときだけ出る吹き出しでは読まれ
+       ません。**横に字で出します**(`#print-why`)。押すと紙の窓が開き、
+       そのまま印刷の画面が出ます(Ctrl+P は要りません)。 #}
+    <div class="gw-print" id="gw-print">
+      <label class="gw-print__packs" for="print-packs">梱包数</label>
+      <input id="print-packs" type="text" inputmode="numeric" size="4"
+             value="1" maxlength="3" autocomplete="off">
+      <span class="lead">梱包</span>
+      <button class="btn btn--primary" type="button" id="print-gw" disabled
+              title="先に「計算」を押してください">印刷</button>
+      <span class="gw-print__why" id="print-why">先に「計算」を押すと印刷できます</span>
+      <span class="lead" id="print-note">
+        A4横1枚の紙が別の窓で開き、印刷の画面が出ます
+        ── 梱包数に<b>2以上</b>を入れると、その梱包数ぶんの資材重量が
+        計算結果の下に付きます(<b>1〜100梱包</b>。画面の表と同じ範囲)。
+      </span>
+    </div>
+  </section>
+</div>
+
+{# ================================================================
+   計算の内訳 ── **何を、どう使って、その数になったのか**
+
+   VBA の `NewGW` は押すと欄に数字が出るだけで、疑われたときに確かめる
+   手がソースを読むしかありませんでした。1つずつ4段で見せます:
+
+       ① 式  ② 数字を入れた式  ③ 基準量  ④ ×単位質量×係数 = 重量
+
+   **②と③が要点です。** 間違いはたいてい入れた数字のほう(板丈が0の
+   まま、枚数が前のロットのまま)なので、入れた数字が見えれば現場が
+   自分で気づけます。組み立ては `presenters/gw_breakdown.py`。
+   ================================================================ #}
+<div class="card" id="breakdown" hidden style="margin-top:var(--sp-3)">
+  <div class="card__head">
+    <h2>計算の内訳</h2>
+    <span class="lead">何を、どう使って、その数になったのか</span>
+    <button class="btn btn--sm" type="button" id="breakdown-copy"
+            title="この内訳を文字にしてコピーします。メール・チャット・メモ帳にそのまま貼り付けられます(数字を確かめてもらうときに)"
+            >内訳をコピー</button>
+  </div>
+
+  <div class="bd-cols">
+    <div>
+      <h3 class="bd-head">入力した値</h3>
+      <table class="list list--nowrap"><tbody id="bd-inputs"></tbody></table>
+    </div>
+    <div>
+      <h3 class="bd-head">先に決まる値</h3>
+      <table class="list list--nowrap"><tbody id="bd-common"></tbody></table>
+    </div>
+  </div>
+
+  <h3 class="bd-head">資材ごと</h3>
+  <div id="bd-lines"></div>
+
+  <h3 class="bd-head">合計の積み上げ</h3>
+  <div class="scroll-x">
+    <table class="list list--nowrap">
+      <thead><tr><th></th><th>足し算</th><th>数字</th><th class="num">kg</th></tr></thead>
+      <tbody id="bd-totals"></tbody>
+    </table>
+  </div>
+
+  <h3 class="bd-head">読むときの注意</h3>
+  <ul class="lead uses" id="bd-notes"></ul>
+</div>
+
+{# ================================================================
+   梱包図 (VBA `図形展開`)
+
+   **輸出梱包の完成確認用。** 出来上がった梱包を見て「これで合っているか」
+   を確かめるものなので、外形だけを描きます ── バンドは何本どこを通るか、
+   縦バンドアングルは付くか、パレットの脚は何本か。
+
+   **中身は描きません。** 合紙やポリシートは梱包すると見えないので、
+   完成確認の役に立ちません(VBA `中身` は移植していません)。寸法の矢印
+   (`分析矢印`)も、数字は左の欄に出ているので外しました。
+
+   何を描くかは `logic/packing_figure.py` が cm の箱で返し、絵にするのは
+   `views/gw.js` ── グラフ(`chart.js`)と同じ分け方です。
+   ================================================================ #}
+<div class="card" id="figure" hidden style="margin-top:var(--sp-3)">
+  <div class="card__head">
+    <h2>梱包図<span class="role-tag">出てきた形</span></h2>
+    <span class="lead">輸出梱包の完成確認用。外形だけを描いています</span>
+  </div>
+
+  {# 描けない理由。**計算は通っても図は描けない**ことがある
+     (横バンドが1本、パレット高さが0 など) #}
+  <div class="msg msg--warn" id="figure-problems" hidden></div>
+
+  <div class="figure">
+    <div class="figure__canvas" id="figure-canvas"></div>
+    {# **形だけに頼らない。** 図で読み取るものを字でも並べる #}
+    <dl class="facts figure__facts" id="figure-facts"></dl>
+  </div>
+</div>
+
+{# 梱包数ごとの重量。「この梱包を N 個作るなら資材はいくつ要るか」
+   (VBA の メイン C25:L124 = RangePaste)。**横に長い表なので全幅** #}
+<div class="card" id="per-pack" hidden style="margin-top:var(--sp-3)">
+  <div class="card__head">
+    <h2>梱包数ごとの重量</h2>
+    <span class="lead">1梱包ぶんの計算結果を掛けたもの</span>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="per-pack-rows">出す行数</label>
+      <select id="per-pack-rows">
+        <option value="10">10梱包まで</option>
+        <option value="20" selected>20梱包まで</option>
+        <option value="50">50梱包まで</option>
+        <option value="100">100梱包まで</option>
+      </select>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="list" id="per-pack-table">
+      <thead><tr id="per-pack-head"></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" data-view="{{ url_for('static', filename='js/views/gw.js') }}"></script>
+{% endblock %}

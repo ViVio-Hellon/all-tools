@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}カレンダー — {{ display_name }}{% endblock %}
+
+{#
+  カレンダーの器。**中身はサーバが持つ**(`GET /api/calendar`)ので、
+  ここには枠しか書かない。42セルも曜日見出しも JS が入れる ──
+  HTML にも書くと、同じものが2か所にあって片方が古くなる。
+#}
+{% block content %}
+<section class="cal" aria-label="カレンダー">
+
+  <div class="cal__bar">
+    <button class="btn" type="button" id="cal-prev" title="前の月へ">
+      <span class="gl" aria-hidden="true">&#8592;</span>前月
+    </button>
+    <button class="btn" type="button" id="cal-today">当月</button>
+    <button class="btn" type="button" id="cal-next" title="次の月へ">
+      翌月<span class="gl" aria-hidden="true">&#8594;</span>
+    </button>
+
+    <h1 class="cal__title" id="cal-title">&nbsp;</h1>
+
+    <span class="cal__spacer"></span>
+    <button class="btn" type="button" id="cal-print" title="A4横1ページの印刷用ページを開きます">
+      <span class="gl" aria-hidden="true">&#9113;</span>印刷
+    </button>
+  </div>
+
+  {# 班員名簿が無いなど、使う前に直すべきことがあれば出る #}
+  <div class="note note--warn" id="cal-notice" hidden></div>
+
+  <div class="cal__grid" id="cal-grid" aria-busy="true">
+    <div class="cal__week" id="cal-headers"></div>
+  </div>
+
+  <p class="hint" style="font-size:11.5px;color:var(--muted)">
+    日付を押すと [休み] [コメント・連絡] [内容閲覧] [削除] を選べます。
+    セルにマウスを乗せると残業繋ぎ・早出繋ぎが出ます。
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/calendar.js') }}";
+  start();
+</script>
+{% endblock %}

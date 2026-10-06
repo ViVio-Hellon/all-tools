@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+{#
+  点検表 選択・印刷(VBA版 UFPrintManager / UFPreview)
+
+  結果(点検表の一覧)を左、操作(選んだもの・部数・プレビュー・印刷)を右。
+  python-web-tools の `.split` と同じ並び(設計指針 §4.4)。
+#}
+
+{% block slots %}
+<div class="slot"><span class="k">選択</span><span class="v" id="rb-selected">0件</span></div>
+<div class="slot"><span class="k">検出</span><span class="v" id="rb-found">--</span></div>
+<div class="slot"><span class="k">更新</span><span class="v" id="rb-scanned">--:--</span></div>
+<div class="slot slot--path"><span class="k">点検表フォルダ</span><span class="v tail" id="rb-folder" title=""><bdi>--</bdi></span></div>
+{% endblock %}
+
+{% block ribbon_tools %}
+<button class="btn" type="button" id="btn-refresh" title="フォルダを読み直します"><span class="gl">↻</span>再読込</button>
+<button class="btn" type="button" id="btn-settings"><span class="gl">▤</span>設定</button>
+<button class="btn" type="button" id="btn-theme" title="表示の明るさを切り替えます">ライト</button>
+{% endblock %}
+
+{% block content %}
+<div class="split split--inspection">
+  <!-- ===== 結果: カテゴリー → サブカテゴリー → 点検表 ===== -->
+  <section class="split__results" aria-labelledby="items-title">
+    <div class="tabs__bar cat-tabs" id="cat-tabs" role="tablist" aria-label="カテゴリー"></div>
+
+    <div class="browse">
+      <nav class="subnav" id="subnav" aria-label="サブカテゴリー"></nav>
+
+      <div class="card items-card">
+        <header>
+          <h3 id="items-title">点検表</h3>
+          <span class="items-count" id="items-count"></span>
+          <div class="listtools">
+            <input class="input search" type="search" id="search" placeholder="点検表を検索(全カテゴリー)"
+                   autocomplete="off" aria-label="点検表を検索">
+          </div>
+        </header>
+        <div class="items-tools btn-row">
+          <button class="btn btn--sm" type="button" id="btn-sub-all">表示中を全選択</button>
+          <button class="btn btn--sm" type="button" id="btn-sub-none">表示中を全解除</button>
+          <span class="items-tools__sep" aria-hidden="true"></span>
+          <button class="btn btn--sm" type="button" id="btn-cat-all">カテゴリ全選択</button>
+          <button class="btn btn--sm" type="button" id="btn-cat-none">カテゴリ全解除</button>
+        </div>
+        <div class="items-scroll" id="items-scroll">
+          <div class="items-grid" id="items"></div>
+          <div class="empty" id="items-empty" hidden></div>
+          <details class="unmatched" id="unmatched" hidden>
+            <summary id="unmatched-summary"></summary>
+            <p class="why">ファイル名の先頭が「カテゴリ名_サブカテゴリ名_」になっていないため表示していません(VBA版と同じ規則)。</p>
+            <ul id="unmatched-list"></ul>
+          </details>
+        </div>
+        <div class="scan-overlay" id="scan-overlay" hidden>
+          <div class="scan-box">
+            <span class="spinner" aria-hidden="true"></span>
+            <b>点検表フォルダを確認しています</b>
+            <small id="scan-detail"></small>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 操作: 選んだもの・部数・プレビュー・印刷 ===== -->
+  <aside class="split__controls" aria-labelledby="sel-title">
+    <div class="card sel-card">
+      <header>
+        <h3 id="sel-title">選択中 <span class="sel-count" id="sel-count">0</span> 件</h3>
+        <button class="btn btn--sm" type="button" id="btn-clear-sel">すべて解除</button>
+      </header>
+      <div class="sel-scroll">
+        <ol class="sel-list" id="sel-list"></ol>
+        <p class="sel-empty" id="sel-empty">左の一覧から点検表を押して選んでください。<br>選んだ順番に印刷します。</p>
+      </div>
+    </div>
+
+    <div class="card print-card">
+      <div class="pad">
+        <div class="copies">
+          <label for="copies">印刷部数</label>
+          <div class="stepper">
+            <button class="btn" type="button" id="copies-dec" aria-label="部数を減らす">−</button>
+            <input class="input input--num" type="text" id="copies" value="1" inputmode="numeric"
+                   aria-describedby="copies-why" autocomplete="off">
+            <button class="btn" type="button" id="copies-inc" aria-label="部数を増やす">＋</button>
+          </div>
+          <span class="why" id="copies-why">1～{{ max_copies }} 部</span>
+        </div>
+        <div class="btn-grid print-actions">
+          <button class="btn btn--run" type="button" id="btn-preview"><span class="gl">◧</span>プレビュー</button>
+          <button class="btn btn--print" type="button" id="btn-print"><span class="gl">⎙</span>印刷</button>
+        </div>
+        <p class="why printer" id="printer-name" title="Windows の既定のプリンターへ印刷します">プリンター: --</p>
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block dialogs %}
+<!-- ===== プレビュー(VBA版 UFPreview) ===== -->
+<dialog class="modal modal--preview" id="preview-dialog" aria-labelledby="pv-title">
+  <header class="modal__head">
+    <h2 id="pv-title">プレビュー</h2>
+    <div class="btn-row">
+      <button class="btn btn--sm" type="button" id="pv-fit" aria-pressed="true">全体表示</button>
+      <button class="btn btn--sm" type="button" id="pv-regenerate" title="Excelから画像を作り直します">作り直す</button>
+      <button class="btn btn--sm" type="button" id="pv-close">閉じる</button>
+    </div>
+  </header>
+  <div class="preview">
+    <ul class="preview__list" id="pv-list" role="listbox" aria-label="選択中の点検表"></ul>
+    <div class="preview__view fit" id="pv-view">
+      <img id="pv-image" alt="" hidden>
+      <div class="preview__msg" id="pv-message"></div>
+    </div>
+  </div>
+  <footer class="modal__foot">
+    <span class="preview__status" id="pv-status">点検表を選んでください</span>
+    <span class="why">↑↓ キーで切り替え</span>
+    <span class="ver-note" title="このアプリの版">{{ version_label }}</span>
+  </footer>
+</dialog>
+
+<!-- ===== 印刷の進み具合 ===== -->
+<dialog class="modal modal--print" id="print-dialog" aria-labelledby="print-title">
+  <header class="modal__head"><h2 id="print-title">印刷中...</h2></header>
+  <div class="modal__body print">
+    <div class="print__counter" id="print-counter">0 / 0</div>
+    <div class="print__current" id="print-current"></div>
+    <div class="progress"><i id="print-bar"></i></div>
+    <div class="print__summary" id="print-summary"></div>
+    <ol class="print__items" id="print-items"></ol>
+  </div>
+  <footer class="modal__foot">
+    <span class="why" id="print-printer"></span>
+    <span class="modal__spacer"></span>
+    <span class="ver-note" title="このアプリの版">{{ version_label }}</span>
+    <button class="btn btn--danger" type="button" id="print-cancel">中止</button>
+    <button class="btn btn--nav" type="button" id="print-close" hidden>閉じる</button>
+  </footer>
+</dialog>
+
+<!-- ===== 設定(タブで分ける。python-web-tools の設定画面と同じ作法) ===== -->
+<dialog class="modal modal--settings" id="settings-dialog" aria-labelledby="settings-title">
+  <header class="modal__head"><h2 id="settings-title">設定</h2></header>
+  <div class="modal__body settings">
+    {% if version_problem %}<div class="status status--ng">{{ version_problem }}</div>{% endif %}
+    {# 面で分ける。**縦に積むとスクロールが要る**。見出しは常に見えていて、
+       中身に知らせがある面は、開いていなくても見出しがそう言う(tabs.js) #}
+    <div class="tabs" data-tabs="settings" id="settings-tabs">
+      <div class="tabs__bar" role="tablist" aria-label="設定の面">
+        {% for key, label in [("folder", "点検表フォルダ"), ("password", "管理者パスワード"), ("distribution", "配布設定"), ("logs", "ログ")] %}
+        <button class="tab" type="button" role="tab" data-key="{{ key }}"
+                {% if loop.first %}data-default="1"{% endif %}
+                id="tab-{{ key }}" aria-controls="panel-{{ key }}" aria-selected="false">
+          <span class="tab__label">{{ label }}</span>
+          <span class="tab__badge" hidden></span>
+        </button>
+        {% endfor %}
+      </div>
+
+      <div class="tabs__panels">
+        <!-- 点検表フォルダ(VBA版 ShowFolderSettings / SelectFolderDialog) -->
+        <section class="tabpanel tabpanel--scroll" id="panel-folder" role="tabpanel" aria-labelledby="tab-folder" hidden>
+          <p>点検表ファイルが入っている「親フォルダ」を指定してください。</p>
+          <p class="why">この中に「カテゴリ フォルダ」→「サブカテゴリ フォルダ」→「Excel ファイル」の階層が必要です。</p>
+          <label class="settings__label" for="settings-folder">点検表ルートフォルダ</label>
+          <div class="pathrow">
+            <input class="input settings__path" type="text" id="settings-folder" spellcheck="false" autocomplete="off">
+            <button class="btn" type="button" id="settings-pick" data-desktop-only hidden>参照…</button>
+          </div>
+          <div class="why" id="settings-source"></div>
+          <div class="status status--ng" id="settings-error" hidden></div>
+          <div class="fs">
+            <div class="fs__bar">
+              <button class="btn btn--sm" type="button" id="fs-up" title="1つ上のフォルダへ">↑ 上へ</button>
+              <span class="fs__path tail" id="fs-path"><bdi></bdi></span>
+              <select class="input fs__roots" id="fs-roots" aria-label="ドライブ"></select>
+            </div>
+            <ul class="fs__list" id="fs-list" aria-label="フォルダ"></ul>
+            <div class="why fs__note" id="fs-note"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn--commit" type="button" id="settings-save">保存して読み直す</button>
+            <button class="btn" type="button" id="settings-reset">既定に戻す</button>
+          </div>
+        </section>
+
+        <!-- 管理者パスワード(python-web-tools の admin_password を移植) -->
+        <section class="tabpanel tabpanel--scroll" id="panel-password" role="tabpanel" aria-labelledby="tab-password" hidden>
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">鍵</i>
+              <h3>管理者パスワード</h3>
+              <span class="st st--warn" id="adm-state">既定のまま</span>
+            </header>
+            <div class="pad">
+              <div class="pwgrid">
+                <label for="adm-now">いまのパスワード</label>
+                <input class="input" id="adm-now" type="password" autocomplete="current-password">
+                <label for="adm-new">新しいパスワード</label>
+                <input class="input" id="adm-new" type="password" autocomplete="new-password">
+                <label for="adm-confirm">確認のためもう一度</label>
+                <input class="input" id="adm-confirm" type="password" autocomplete="new-password">
+              </div>
+              <p class="status status--ng" id="adm-why" hidden></p>
+              <div class="btn-row">
+                <button class="btn btn--commit" type="button" id="adm-save">パスワードを変える</button>
+                <button class="btn btn--danger" type="button" id="adm-reset">既定に戻す</button>
+              </div>
+              <p class="why">
+                <b>配布設定</b>を書き出す・読み込み直す・消すときの確認に使います(<span id="adm-min">4</span>文字以上)。
+                1台の操作で全ラインの設定が変わるので、誤って押されないためのガードです。
+                変えていない端末では、梱包資材総合ツールと同じ既定のパスワードが通ります。
+              </p>
+              <p class="why">
+                値は撹拌して持つので、設定ファイルを開いても読めません。<b>忘れたときは</b>
+                <code>%LOCALAPPDATA%\InspectionSheetPrint\data\user_settings.json</code> の
+                <code>admin_password</code> の行を消すと既定に戻ります。
+              </p>
+            </div>
+          </section>
+        </section>
+
+        <!-- 配布設定(python-web-tools の distribution を移植) -->
+        <section class="tabpanel tabpanel--scroll" id="panel-distribution" role="tabpanel" aria-labelledby="tab-distribution" hidden>
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">配</i>
+              <h3>いま置いてある配布設定</h3>
+              <span class="st st--warn" id="dist-state">なし</span>
+            </header>
+            <div class="pad">
+              <p class="why" id="dist-meta"></p>
+              <div class="tablewrap" id="dist-table" hidden>
+                <table class="table">
+                  <thead><tr><th class="t">項目</th><th class="t">値</th></tr></thead>
+                  <tbody id="dist-rows"></tbody>
+                </table>
+              </div>
+              <p class="why">置き場所: <code id="dist-path"></code>
+                ── 各ラインは<b>起動したときにここを読みます</b>。アプリを共有フォルダに置いていれば、書き出すだけで全ラインに届きます。</p>
+              <p class="why" id="dist-applied"></p>
+            </div>
+          </section>
+
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">出</i>
+              <h3>この端末の設定を配布設定にする</h3>
+            </header>
+            <div class="pad">
+              <p class="why">
+                いまこの端末に入っている値をそのまま書き出します(前の中身は置き換えます)。
+                各ラインは<b>起動したときに読み込みます</b>。ただし<b>その端末ですでに設定してある項目は
+                読み込みません</b>(上書きしない)。揃えたいときは、その端末で「読み込み直す」を押します。
+              </p>
+              <fieldset class="distchecks" id="dist-items"></fieldset>
+              <div class="field">
+                <label for="dist-password">管理者パスワード</label>
+                <input class="input" id="dist-password" type="password" autocomplete="current-password">
+              </div>
+              <p class="status status--ng" id="dist-why" hidden></p>
+              <div class="btn-row">
+                <button class="btn btn--commit" type="button" id="dist-export">配布設定を書き出す</button>
+                <button class="btn" type="button" id="dist-reapply">配布設定を読み込み直す</button>
+                <button class="btn btn--danger" type="button" id="dist-remove">配布設定を消す</button>
+              </div>
+              <p class="why">
+                <b>ログの保存先</b>に共有フォルダを入れて配ると、全ラインのログが1か所に集まります(「ログ」タブ)。
+                <b>表示(ダーク/ライト)は既定で入れません</b>(人ごとの好み)。
+                この端末で変えていない項目は選べません ── 配った先も既定で動くので、入れる必要がありません。
+                Excel の扱いや部数の上限(<code>config\inspection.json</code>)はアプリのフォルダに入っているので、
+                フォルダごと配れば届きます。
+              </p>
+            </div>
+          </section>
+        </section>
+
+        <!-- ログ(後追い・なぜなぜ分析)。仕組みは core/logging_utils.py・core/event_log.py -->
+        <section class="tabpanel tabpanel--scroll" id="panel-logs" role="tabpanel" aria-labelledby="tab-logs" hidden>
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">探</i>
+              <h3>問い合わせ番号で探す</h3>
+            </header>
+            <div class="pad">
+              <p class="why">エラーの文の最後に出る番号(例: <code>1001-1502-7KQ2</code>)で、そのときの記録と、直前の操作を出します。
+                保存先が共有フォルダなら、<b>ほかの端末の番号</b>も探せます。</p>
+              <div class="btn-row">
+                <input class="input logref" id="log-ref" type="text" spellcheck="false" autocomplete="off"
+                       placeholder="0000-0000-XXXX" aria-label="問い合わせ番号">
+                <button class="btn" type="button" id="log-find">探す</button>
+              </div>
+              <p class="status status--ng" id="log-find-why" hidden></p>
+            </div>
+          </section>
+          <section class="card" id="log-detail-card" hidden>
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">析</i>
+              <h3>なぜなぜ <span class="why" id="log-detail-ref"></span></h3>
+              <button class="btn btn--sm" type="button" id="log-copy" style="margin-left:auto">文にして写す</button>
+            </header>
+            <div class="pad" id="log-detail"></div>
+          </section>
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">近</i>
+              <h3>最近のエラー・断り(この端末・<span id="log-days">7</span>日)</h3>
+              <button class="btn btn--sm" type="button" id="log-reload" style="margin-left:auto">読み直す</button>
+            </header>
+            <div class="pad">
+              <ul class="loglist" id="log-recent"></ul>
+            </div>
+          </section>
+          <section class="card">
+            <header>
+              <i class="ib ib--sm" aria-hidden="true">記</i>
+              <h3>ログの保存先</h3>
+              <span class="st st--ok" id="log-state">この PC</span>
+            </header>
+            <div class="pad">
+              <p class="status status--ng" id="log-fallback" hidden></p>
+              <dl class="kv">
+                <dt>いま書いているフォルダ</dt><dd><code id="log-dir"></code></dd>
+                <dt>今日のファイル</dt><dd><code id="log-file"></code><br><code id="log-events"></code></dd>
+                <dt>保存日数</dt><dd><span id="log-keep-now"></span> 日(過ぎた<b>この端末の</b>ログは起動時に消す)</dd>
+              </dl>
+              <label class="settings__label" for="log-dir-input">保存先のフォルダ(空なら この PC のローカル)</label>
+              <div class="pathrow">
+                <input class="input settings__path" type="text" id="log-dir-input" spellcheck="false" autocomplete="off"
+                       placeholder="例: \\サーバ名\共有\点検表システム\ログ">
+                <button class="btn" type="button" id="log-pick" data-desktop-only hidden>参照…</button>
+              </div>
+              <div class="field field--inline">
+                <label for="log-keep">保存日数</label>
+                <input class="input input--num" id="log-keep" type="number" min="7" max="3650" step="1">
+                <span class="why">日</span>
+              </div>
+              <p class="status status--ng" id="log-why" hidden></p>
+              <div class="btn-row">
+                <button class="btn btn--commit" type="button" id="log-save">保存する</button>
+                <button class="btn" type="button" id="log-reset">この PC(既定)に戻す</button>
+                <button class="btn" type="button" id="log-open">フォルダを開く</button>
+              </div>
+              <p class="why">
+                <b>共有フォルダを指定すると、全ラインのログが1か所に集まり、管理者の席から後追いできます。</b>
+                ファイル名に端末名と利用者名が入るので、ほかの端末のログと混ざりません。
+                共有に書けなくなったときは この PC に退避して書き続け、戻れば自動で戻ります。
+                配布設定に入れて全ラインへ配れます。
+              </p>
+              <p class="why" id="log-local-note"></p>
+            </div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </div>
+  <footer class="modal__foot">
+    <span class="modal__spacer"></span>
+    <span class="ver-note" title="このアプリの版">{{ version_label }}</span>
+    <button class="btn" type="button" id="settings-close">閉じる</button>
+  </footer>
+</dialog>
+
+<!-- ===== 確認(取り消せない操作だけ) ===== -->
+<dialog class="modal modal--confirm" id="confirm-dialog" aria-labelledby="confirm-title">
+  <header class="modal__head"><h2 id="confirm-title">確認</h2></header>
+  <div class="modal__body confirm" id="confirm-body"></div>
+  <footer class="modal__foot">
+    <span class="modal__spacer"></span>
+    <button class="btn" type="button" id="confirm-no">キャンセル</button>
+    <button class="btn btn--print" type="button" id="confirm-yes">OK</button>
+  </footer>
+</dialog>
+
+<div class="ended" id="ended" hidden>
+  <div class="ended__card">
+    <h2>点検表システムを終了しました</h2>
+    <span class="ver-note" title="このアプリの版">{{ version_label }}</span>
+    <p>このタブは閉じてかまいません。<br>もう一度使うときは Start.vbs から起動してください。</p>
+  </div>
+</div>
+{% endblock %}

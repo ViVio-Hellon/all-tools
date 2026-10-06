@@ -1,0 +1,310 @@
+<!doctype html>
+{#
+  `data-theme` ── 背景のライト / ダーク(v4.19.0)。選んでいなければ付けない
+  (OS の設定に従う ── `tokens.css` の @media)。
+  `data-skin` ── グラフと集計の見た目(ネオン / 元のまま)。
+  **描く前に決めます。** あとから JS で付けると、一瞬だけ前の見た目が
+  出てから切り替わります(ちらつき)。下の小さな script は
+  `<head>` の中で、CSSより先に走らせるためにここに置いてあります。
+#}
+<html lang="ja" data-skin="neon">
+<head>
+<script>
+  /* 覚えている選択を、描く前に当てる。読めない場面(プライベート窓・
+     記憶を消した直後)があるので、失敗したら既定(neon)のまま */
+  try {
+    if (localStorage.getItem("nippou.skin") === "plain") {
+      document.documentElement.dataset.skin = "plain";
+    }
+  } catch (e) { /* 既定のまま */ }
+  /* 背景(ライト / ダーク)。選んでいれば描く前に当てる(`static/js/theme.js`) */
+  try {
+    var theme = localStorage.getItem("nippou.theme");
+    if (theme === "light" || theme === "dark") {
+      document.documentElement.dataset.theme = theme;
+    }
+  } catch (e) { /* OS の設定のまま */ }
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ display_name }}{% endblock %}</title>
+{#
+  タブのアイコン。同じ現場で梱包資材ツールと並べて開くことがあり、
+  タブの文字は途中で切れるので、**色と文字でどちらのタブか分かる**
+  ようにしておく。外部ファイルにしないのは要求を1本減らすため。
+#}
+<link rel="icon" href="data:image/svg+xml,{{ favicon | urlencode }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+{% block head %}{% endblock %}
+</head>
+{# `data-page` ── いまどの画面か。ネオンの見た目を**集計・グラフと
+   集計管理だけ**に当てるために使います(「あくまで集計結果とグラフに
+   関してだけです」)。日報入力・GW計算・記録・設定は変わりません #}
+<body data-page="{{ active }}" data-line-labels="{{ line_labels_json }}"{% if bare %} data-bare="1"{% endif %}>
+
+<!--
+  アプリの外枠。
+
+  ・ステータスリボン … いま何が決まっているかを常時見せる(作業記憶を使わせない)
+  ・左のレール       … 5画面。並びは作業の順序
+  ・接続断の帯       … 基盤仕様書 2.9。黙って古い表示を出し続けない
+
+  情報の並び・色相の意味・作業の順序は tkinter 版から変えない。
+-->
+
+<div class="offline" id="offline" hidden role="alert">
+  <span>バックエンドに接続できません</span>
+  <button class="btn btn--sm" type="button" id="reconnect">再接続</button>
+  <button class="btn btn--sm" type="button" onclick="location.reload()">再読込</button>
+</div>
+
+{#
+  直が変わった、という帯。
+
+  **トーストにはしません。** 数秒で消えるものにすると、打つ手を止めて
+  離れているあいだに出て、戻ったときには消えています ── いちばん
+  気づかせたい場面が、いちばん見落とされます。
+
+  接続断の帯と同じで**外枠の側**に置きます(`nav.js` の差し替えでは
+  消えません)。文言はサーバが持ち、`shift_end.js` が1分ごとに確かめて
+  出します。閉じる釦は**付けません** ── まだ古い直として開いたままで
+  あることに変わりはないので、消せるようにすると消して忘れます。
+#}
+<div class="shiftmoved" id="shift-moved" hidden role="alert">
+  <span class="shiftmoved__mark" aria-hidden="true">▲</span>
+  <span class="shiftmoved__text" id="shift-moved-text"></span>
+  <button class="btn btn--sm" type="button" id="shift-moved-reload">画面を引き直す</button>
+</div>
+
+{# 別窓(早見表だけ ── v4.16.0)では帯もレールも出さない。**ほかの画面へ移る道を作らない** #}
+{% if not bare %}
+<header class="ribbon">
+  {#
+    アプリの名前と版。**どの画面でも消えない。**
+    端末はフォルダごとコピーして配るので、「その端末に入っているのは
+    どれか」を電話で聞かれることがある。画面の左上を読んでもらえば
+    答えられる。版の出どころは `config/app.json` ただ1つ。
+  #}
+  <div class="brand">
+    <b class="brand__name">{{ display_name }}</b>
+    {# 版は常に見えるところに。**印(build)は title に添える** ──
+       帯に8文字の英数字を並べても読めないが、聞かれたときには要る #}
+    <span class="ver" id="app-version"
+          title="このアプリの版 / build {{ static_stamp }}">{{ version_label }}</span>
+  </div>
+
+  {# いま何が決まっているか。値はサーバが持つ。画面を移っても消えないのが
+     要点で、JSが動く前から読める #}
+  <div class="ribbon__slots">
+    <div class="slot"><span class="k">報告日</span><span class="v" id="rb-date"
+      {% if ribbon.report_date == "—" %}data-empty="1"{% endif %}>{{ ribbon.report_date }}</span></div>
+    <div class="slot"><span class="k">ライン</span><span class="v" id="rb-line"
+      {% if ribbon.line == "—" %}data-empty="1"{% endif %}
+      {% if "line" in (ribbon.warn or []) %}data-warn="1" title="{{ ribbon.titles.line }}"{% endif %}
+      >{{ ribbon.line }}</span></div>
+    <div class="slot"><span class="k">直</span><span class="v" id="rb-shift"
+      {% if ribbon.shift == "—" %}data-empty="1"{% endif %}>{{ ribbon.shift }}</span></div>
+    <div class="slot"><span class="k">ページ</span><span class="v" id="rb-page"
+      {% if ribbon.page == "—" %}data-empty="1"{% endif %}>{{ ribbon.page }}</span></div>
+  </div>
+
+  {# 入った印は、**そのまま押して出られる**。「過去データの終了方法 /
+     管理者モードの終了方法 これらがわからない」と言われたところで、
+     やめる場所が別の画面の奥にありました。状態の隣に出口を置きます。
+     押せないもの(「いま 2直」など)は `<span>` のまま #}
+  <div class="ribbon__chips" id="rb-chips">
+    {% for chip in ribbon.chips %}
+      {%- if chip.action -%}
+      <button class="chip chip--{{ chip.kind }} chip--act" type="button"
+              data-chip-action="{{ chip.action }}"
+              {% if chip.confirm %}data-chip-confirm="{{ chip.confirm }}"{% endif %}
+              title="{{ chip.title }}">{{ chip.text }}<span class="chip__x" aria-hidden="true">✕</span></button>
+      {%- else -%}
+      <span class="chip chip--{{ chip.kind }}"
+            {% if chip.title %}title="{{ chip.title }}"{% endif %}>{{ chip.text }}</span>
+      {%- endif -%}
+    {% endfor %}
+  </div>
+
+  {#
+    いま動いているもの。**どの画面にいても見える。**
+    共有への保存は時間がかかることがあり、始めた画面を離れると終わった
+    かどうかが分からなくなる。帯に出しておけば離れたまま待てる。
+    何も走っていないときは消える(`hidden`)。
+  #}
+  <div class="running" id="rb-running" hidden>
+    <span class="running__dot" aria-hidden="true"></span>
+    <span class="running__text">
+      <b id="rb-run-what"></b>
+      <small id="rb-run-how"></small>
+    </span>
+    <span class="running__track" aria-hidden="true"><i id="rb-run-fill"></i></span>
+  </div>
+
+  <div class="ribbon__end">
+    {# 背景の切り替え(v4.19.0)。**この端末のブラウザが覚える**。まだ選んでいなければ
+       Windows の設定に従い、いま効いているほうが押された見た目になる(`theme.js`) #}
+    <div class="theme-switch" id="theme-switch" role="group" aria-label="背景">
+      <button class="theme-switch__btn" type="button" data-theme-choice="light"
+              aria-pressed="false" aria-label="ライト" title="明るい背景にする"
+      ><span aria-hidden="true">☀</span><span class="theme-switch__text">ライト</span></button>
+      <button class="theme-switch__btn" type="button" data-theme-choice="dark"
+              aria-pressed="false" aria-label="ダーク" title="暗い背景にする"
+      ><span aria-hidden="true">☾</span><span class="theme-switch__text">ダーク</span></button>
+    </div>
+    <button class="btn btn--danger" type="button" id="quit">■ 終了</button>
+  </div>
+</header>
+{% endif %}
+
+<div class="shell{% if bare %} shell--bare{% endif %}">
+  {% if not bare %}
+  <nav class="rail" aria-label="作業の順序">
+    <ol>
+      {% for item in nav %}
+      <li>
+        {# 2行。名前だけでは「全停」が何をする画面か押すまで分からない。
+           説明はサーバが持つ(`shell.NavItem.note`) #}
+        <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>
+          <span class="n" aria-hidden="true">{{ loop.index }}</span>
+          <span class="rail__text">
+            <b class="label">{{ item.label }}</b>
+            {% if item.note %}<small>{{ item.note }}</small>{% endif %}
+            {# **説明の下に置く。** 横に並べるとレールが狭いぶん説明が
+               押しつぶされ、行き先の手がかりのほうが読めなくなる #}
+            {% if item.badge %}
+            <span class="badge badge--{{ item.badge_kind }}">{{ item.badge }}</span>
+            {% endif %}
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+  </nav>
+  {% endif %}
+
+  <main class="work" id="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  // サーバから渡す起動時の値。JSはここ以外から設定を読まない
+  window.APP = {
+    token: {{ token | tojson }},
+    appId: {{ app_id | tojson }},
+    healthPollMs: {{ health_poll_ms }},
+    alivePollMs: {{ alive_poll_ms }},
+    // サーバがいま配っている版と印。**画面(JS)が古くないか**を
+    // `app.js` がこれと突き合わせる
+    version: {{ version_label | tojson }},
+    stamp: {{ static_stamp | tojson }}
+  };
+
+  /*
+    起動の見張り ── **黙って死なせない。**
+
+    `type="module"` のスクリプトは、読めなかったとき(404・構文の誤り・
+    import の失敗)に**何も言わずに止まります。** 画面はふつうに出ている
+    のに、どのボタンも効かない ── 押す人からは「効いていない」としか
+    見えず、原因に辿り着く手がかりが画面のどこにもありません。
+
+    実際にそうなりました。入れ替えのあと全画面のボタンが死んだのに、
+    画面には何の断りも出ませんでした。
+
+    ここは**素のスクリプト**(module ではない)なので、module が転んでも
+    必ず動きます。`app.js` が起動しきると `booted` を立てるので、
+    数秒たっても立っていなければ、理由と次にやることを画面の頭へ出します。
+  */
+  window.APP.booted = false;
+
+  /*
+    **人に Ctrl+Shift+R を押させない。**
+
+    転んだ理由のほとんどは「古い控えを掴んでいる」です。それを直す
+    のは決まりきった操作なので、こちらで1回やります ── `?_r=<時刻>`
+    を付けて自分を取り直すと、サーバが静的ファイルの印にもその値を
+    足すので(`app/__init__._register_static_version`)、**URLが変わって
+    必ず取りに来ます。**
+
+    やり直すのは**1回だけ**です。印ごとに覚えておき、取り直しても
+    駄目だったときは帯を出します ── 直らないまま延々と読み直すと、
+    何が起きているのか分からない画面になります。
+  */
+  window.APP.bootRetry = function (why) {
+    var key = "bootRetry:" + window.APP.stamp;
+    try {
+      if (sessionStorage.getItem(key)) return false;   // もう試した
+      sessionStorage.setItem(key, "1");
+    } catch (e) {
+      return false;                                    // 覚えられないなら諦める
+    }
+    var url = location.pathname + location.search
+      + (location.search ? "&" : "?") + "_r=" + Date.now() + location.hash;
+    location.replace(url);
+    return true;
+  };
+
+  window.APP.bootProblem = function (why) {
+    // まず黙って取り直す。駄目だったときだけ人に言う
+    if (window.APP.bootRetry(why)) return;
+    var main = document.querySelector("main#main") || document.body;
+    if (!main || document.querySelector(".msg--boot")) return;
+    var box = document.createElement("div");
+    box.className = "msg msg--error msg--boot";
+    box.setAttribute("role", "alert");
+    box.textContent =
+      "この画面の操作を読み込めませんでした ── ボタンは効きません。"
+      + " 控えを取り直しても直りませんでした。"
+      + " 管理者へ: サーバの印 " + window.APP.stamp + " / " + why;
+    main.insertBefore(box, main.firstChild);
+    // **記録にも残す**(ログの面で番号つきで見られる)。部品が読めないので
+    // ここは素の fetch。送れなくても何もしない
+    try {
+      fetch("/api/log/client", {
+        method: "POST",
+        headers: { "Content-Type": "application/json",
+                   "X-Tool-Token": window.APP.token, "X-Screen": location.pathname },
+        body: JSON.stringify({ kind: "boot", message: "画面の操作を読み込めませんでした: " + why,
+                               screen: location.pathname, version: window.APP.version })
+      }).then(function (res) { return res.json(); }).then(function (body) {
+        if (body && body.id) box.textContent += " (番号 " + body.id + ")";
+      }).catch(function () {});
+    } catch (err) { /* 記録できないだけ */ }
+
+    /*
+      面(タブ)を全部開く。
+
+      面を切り替えるのは JS です。その JS が死んでいると、開いていない
+      面は `hidden` のまま**二度と開けません** ── 設定画面なら、
+      版の印を確かめる「この端末」の面にも辿り着けなくなります。
+      縦に積まれて読みにくくはなりますが、**読めないより読めるほうが
+      よい**ので、全部出します。
+    */
+    var panels = document.querySelectorAll(".tabpanel[hidden]");
+    for (var i = 0; i < panels.length; i++) panels[i].hidden = false;
+  };
+  window.addEventListener("error", function (event) {
+    // module の読み込みそのものが失敗したとき(404 など)はここに来る
+    var target = event && event.target;
+    if (target && target.tagName === "SCRIPT" && target.src) {
+      window.APP.bootProblem("読めないファイル " + target.src);
+    }
+  }, true);
+  setTimeout(function () {
+    if (!window.APP.booted) window.APP.bootProblem("起動が終わりません");
+  }, 5000);
+</script>
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{#
+  画面ごとのスクリプトは**この箱の中だけ**に置く。画面を移るとき、
+  `nav.js` はこの箱の中身を入れ替えて動かし直す(外枠のぶんは残す)。
+#}
+<div id="pagescripts" hidden>{% block scripts %}{% endblock %}</div>
+</body>
+</html>

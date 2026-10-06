@@ -1,0 +1,44 @@
+{#
+  直ひと回りの動線 ── **関わる画面すべてに同じ帯を出す。**
+
+  画面ごとに違う帯だと、行った先で順番が途切れます。ここは1つの部品に
+  して、日報入力 / 記録を見る / 設定・管理者 が同じものを読み込みます。
+  済み・いまどこか・次の行き先を決めるのは `presenters/flow.py` です
+  ── 画面は写すだけ。
+
+  `flow`      … `flow.Flow.as_dict()`
+  `flow_here` … いまの画面のキー("entry" / "records" / "settings")。
+                その画面でやる段には行き先のボタンを出さない
+#}
+{% if flow %}
+<div class="flow">
+  <p class="flow__head">{{ flow.headline }}</p>
+  <ol class="steps" id="steps">
+    {% for s in flow.steps %}
+    <li class="step" data-step="{{ s.key }}"
+        {% if s.done %}data-done="1"{% endif %}
+        {% if s.current %}data-current="1" aria-current="step"{% endif %}>
+      <span class="step__n">{{ loop.index }}</span>
+      <span class="step__text">
+        <b>{{ s.label }}</b>
+        <small>{{ s.note }}</small>
+      </span>
+      {# **いまやること**だけ、そこへ行くボタンを出す。いまの画面で
+         できることには出さない ── 自分自身へのリンクは道しるべに
+         ならないので #}
+      {% set here = (flow_here == "entry" and s.url == "/")
+                 or (flow_here == "settings" and s.url == "/settings") %}
+      {% if s.current and s.url and not here %}
+      <a class="btn btn--sm btn--primary step__go" href="{{ s.url }}">{{ s.action }}</a>
+      {% elif s.current and s.focus and here %}
+      {# **この画面にあるが、下のほうにある。** 長い画面では「どこ?」で
+         止まるので、押せばそのボタンまで連れて行く #}
+      <button class="btn btn--sm btn--primary step__go" type="button"
+              data-goto="{{ s.focus }}">ここへ</button>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  <p class="lead flow__aside">{{ flow.paper_note }}</p>
+</div>
+{% endif %}

@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
+venv/
+
+# Web版のローカル実行領域(基盤仕様書 2.7 でローカルへ置くもの)
+/config/app.local.json
+
+# 配布設定(`nippou/distribution.py`)。**現場の共有パスと音声ファイルが
+# 入る**ので、リポジトリには入れない。設定画面の「配布設定を書き出す」で、
+# 起動用の Start.vbs と同じフォルダに作る(python-web-tools と同じ)
+/配布設定/
+/配布設定.作成中/
+# 前の版の置き場所(v3.71〜3.73)。読むだけ
+/config/site.json
+/config/site.json.tmp
+/配布先/

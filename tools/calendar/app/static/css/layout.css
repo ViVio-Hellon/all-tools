@@ -1,0 +1,172 @@
+/*
+  layout.css — 画面の骨格
+
+    ┌──────────────────────────────────────────┐
+    │ 帯 (.ribbon)  名前・版 / ライン / 同期 / 終了 │
+    ├──────┬───────────────────────────────────┤
+    │ レール │  作業面 (main.work)                │
+    │ (.rail)│                                    │
+    └──────┴───────────────────────────────────┘
+
+  帯とレールは**どの画面でも消えない**。カレンダーと設定を行き来しても、
+  ライン設定と同期の状態は同じ場所に出ている。
+*/
+.app{
+  display:grid;
+  grid-template-rows:auto 1fr;
+  height:100%;
+}
+
+/* ================================================================
+   帯
+   ================================================================ */
+.ribbon{
+  display:flex; align-items:center; gap:14px;
+  padding:0 14px; height:52px;
+  background:linear-gradient(118deg, var(--bar-a), var(--bar-b));
+  color:var(--bar-ink);
+  box-shadow:0 1px 0 rgba(0,0,0,.18);
+  position:relative; z-index:20;
+}
+.brand{display:flex; align-items:baseline; gap:8px; min-width:0}
+.brand__name{font-size:15px; font-weight:700; white-space:nowrap}
+/* 版。**読んでもらうために出しているので、読める大きさにする。**
+   端末はフォルダごとコピーして配るので、「その端末に入っているのはどれか」を
+   電話で聞かれる。10px の薄い色だと、読み上げてもらう前に探させてしまう。 */
+.ver{
+  font-family:var(--mono); font-variant-numeric:tabular-nums;
+  font-size:12px; font-weight:700; letter-spacing:.05em;
+  padding:3px 8px; border-radius:999px;
+  background:var(--bar-face-on); border:1px solid var(--bar-edge);
+  color:var(--bar-ink);
+}
+
+.ribbon__slots{display:flex; align-items:center; gap:8px; min-width:0}
+.slot{
+  display:flex; align-items:baseline; gap:6px;
+  padding:4px 10px; border-radius:var(--ctl-r);
+  background:var(--bar-face); border:1px solid var(--bar-edge);
+  white-space:nowrap; max-width:280px;
+}
+.slot .k{font-size:10px; color:var(--bar-muted); letter-spacing:.04em}
+.slot .v{font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis}
+.slot--alert .v{color:var(--bar-alert)}
+.slot--ok .v{color:var(--bar-ok)}
+
+.ribbon__end{margin-left:auto; display:flex; align-items:center; gap:8px}
+
+/* 帯の上の操作。**うっすら白を重ねるだけ**で作る ──
+   帯の中で更に色を増やすと騒がしくなる */
+.bar-btn{
+  height:var(--ctl-h); padding:0 12px; border-radius:var(--ctl-r);
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--bar-face); border:1px solid var(--bar-edge);
+  color:var(--bar-ink); font-size:12px; font-weight:600;
+  transition:background-color .15s ease;
+}
+.bar-btn:hover{background:var(--bar-face-on)}
+.bar-btn:focus-visible{outline:2px solid var(--bar-focus); outline-offset:2px}
+.bar-btn--danger:hover{background:rgba(255,120,110,.28)}
+
+/* ================================================================
+   レール
+   ================================================================ */
+.shell{display:grid; grid-template-columns:190px 1fr; min-height:0}
+
+.rail{
+  background:var(--surface); border-right:1px solid var(--rule);
+  padding:10px 8px; overflow-y:auto;
+}
+.rail a{
+  display:flex; align-items:center; gap:9px;
+  padding:9px 10px; margin-bottom:3px; border-radius:var(--radius);
+  color:var(--ink); text-decoration:none;
+  border:1px solid transparent;
+  transition:background-color .15s ease;
+}
+.rail a:hover{background:var(--sunken); text-decoration:none}
+.rail a[aria-current="page"]{
+  background:var(--accent-soft); border-color:var(--accent-line);
+}
+.rail .n{
+  flex:0 0 auto; width:20px; height:20px; border-radius:6px;
+  display:grid; place-items:center;
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  background:var(--raised); color:var(--muted);
+}
+.rail a[aria-current="page"] .n{background:var(--accent); color:var(--on-accent)}
+.rail__text{min-width:0; display:flex; flex-direction:column}
+.rail__text .label{font-size:13px; font-weight:600}
+.rail__text small{font-size:10.5px; color:var(--muted); line-height:1.35}
+
+.badge{
+  margin-left:auto; flex:0 0 auto;
+  min-width:19px; height:19px; padding:0 5px; border-radius:999px;
+  display:grid; place-items:center;
+  font-family:var(--mono); font-size:10.5px; font-weight:700;
+}
+.badge--wait{background:var(--state-warn-bg); color:var(--state-warn)}
+.badge--alert{background:var(--state-error-bg); color:var(--state-error)}
+
+/* ================================================================
+   作業面
+   ================================================================ */
+.work{
+  min-width:0; min-height:0;
+  padding:14px 16px;
+  overflow:auto;
+  display:flex; flex-direction:column; gap:var(--gap);
+}
+
+/* ================================================================
+   接続断の帯 (基盤仕様書 2.9)
+   **黙って古い表示を出し続けない。**
+   ================================================================ */
+.offline{
+  position:fixed; inset:0 0 auto 0; z-index:100;
+  display:flex; align-items:center; justify-content:center; gap:12px;
+  padding:9px 14px;
+  background:var(--state-error-bg); color:var(--state-error);
+  border-bottom:1px solid var(--state-error);
+  font-size:13px; font-weight:600;
+}
+
+/* ================================================================
+   2枚目の画面を塞ぐ面
+
+   **全面を覆う。** 薄く隠すだけだと、押せないボタンを押し続ける
+   ことになる。モーダルより上に置く(開いたまま取って代わられる
+   ことがあるため)。
+   ================================================================ */
+.screen-block{
+  position:fixed; inset:0; z-index:400;
+  display:grid; place-items:center;
+  padding:24px;
+  background:color-mix(in srgb, var(--ink) 55%, transparent);
+  backdrop-filter:blur(2px);
+}
+.screen-block__box{
+  width:min(460px, 100%);
+  background:var(--surface); color:var(--ink);
+  border:1px solid var(--rule); border-radius:var(--radius);
+  box-shadow:var(--shadow-lift);
+  padding:24px; text-align:center;
+}
+.screen-block__box h2{margin:0 0 10px; font-size:17px}
+.screen-block__box p{margin:0 0 18px; line-height:1.8; text-align:left}
+
+/* ================================================================
+   トースト
+   ================================================================ */
+.toasts{
+  position:fixed; right:16px; bottom:16px; z-index:200;
+  display:flex; flex-direction:column; gap:8px;
+  max-width:min(420px, calc(100vw - 32px));
+}
+
+@media (max-width:820px){
+  .shell{grid-template-columns:56px 1fr}
+  .rail__text, .rail .badge{display:none}
+  .rail a{justify-content:center}
+  .ribbon__slots{display:none}
+}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}直の実績確認 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  直の終わりに出す、画面いっぱいの確認 (VBA `graphF` を最大化していたもの)。
+
+  **閉じる道は「確認しました」だけ。** レールも帯も覆うので、押すまで
+  他の画面へ行けない ── 入力しっ放しで直が終わると、間違いに気づくのは
+  翌日の集計になる。
+
+  ブラウザは操作なしに本当の全画面(Fullscreen API)にできないので、
+  既定はこの覆い。本当の全画面にしたい人のためのボタンも置く。
+#}
+{# 「本日の梱包結果」の音(VBA `音楽を流す` の「本日の梱包結果なのだ」)。
+   **鳴らすかはサーバが決めて、ここに置きます**(締めくくる直ごとに1回)。
+   空なら鳴らしません(`routes/graph.review_page`) #}
+<div class="review" id="review" data-sound-cue="{{ sound_cue or '' }}">
+  <div class="review__head">
+    <div>
+      <h1>{{ ribbon.shift }} の実績</h1>
+      <span class="lead">{{ report_date }} / {{ line | line_label }}</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn" type="button" id="review-fullscreen">画面いっぱいにする</button>
+      {# **締めくくりのボタン。** 文言も何をするかもサーバが決める
+         (`logic/shift_closing.py`)── 直しに戻る / 共有へ保存して終わる /
+         確認しました。ここで終われないと、共有へ渡すのは「覚えている人
+         だけの作業」に戻ります #}
+      <button class="btn btn--primary" type="button" id="review-act"
+              data-action="{{ closing.action }}">{{ closing.label }}</button>
+      {# 共有へ出せるときは「あとで」を別に置く。**閉じる道は残す** ──
+         直の途中に出ることもあるので、押さずに戻れないのは重すぎます #}
+      <button class="btn" type="button" id="review-later"
+              {% if not closing.can_push %}hidden{% endif %}>あとで</button>
+    </div>
+  </div>
+
+  {# **画面最大化で1画面に収める**(v3.86.0)。左に締めくくりと表、右に推移。
+     はみ出すぶんは箱の中だけで流し、画面ごとは動かしません ──
+     「大きすぎて見えません 画面最大化で収まるサイズに表示してください」。
+     狭い画面(幅1100px未満・高さ540px未満)では縦に流します #}
+  <div class="review__body">
+   <div class="review__side">
+    <div class="review__note msg msg--warn" id="review-reason" hidden></div>
+
+    {# ================================================================
+       締めくくり ── **この直をどう終わらせるか**
+
+       VBA は保存すると `graphF` が最大化で出て、それが「この直は
+       済んだ」の合図になっていました。こちらは画面こそ出ていたものの、
+       出口が「確認しました」だけで**共有へ渡すところへ繋がっていません**
+       でした。成り行きをここに出して、次に押すもの1つを決めます。
+       ================================================================ #}
+    <div class="closing" id="closing" data-level="{{ closing.level }}">
+      <div class="closing__head">
+        <b id="closing-headline">{{ closing.headline }}</b>
+        <span class="lead" id="closing-note">{{ closing.note }}</span>
+      </div>
+      <ul class="closing__list" id="closing-list"
+          {% if not closing.findings %}hidden{% endif %}>
+        {% for f in closing.findings %}
+        <li><b>{{ f.where }}</b> {{ f.message }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card review__card">
+      <div class="card__head"><h2>この日の直別</h2></div>
+      <div class="scroll-x">
+        <table class="list">
+          <thead>
+            <tr><th>直</th><th class="num">枚数</th><th class="num">重量(t)</th>
+                <th class="num">実働(分)</th><th class="num">管理ロス</th>
+                <th class="num">突発</th><th class="num">ハンドリング</th>
+                <th class="num">稼働率(%)</th><th class="num">生産性(t/h)</th></tr>
+          </thead>
+          <tbody>
+            {% for r in today.table %}
+            <tr>
+              <td>{{ r.shift }}</td>
+              <td class="num">{{ r.count }}</td>
+              <td class="num">{{ r.weight_ton }}</td>
+              <td class="num">{{ r.work_minutes }}</td>
+              <td class="num">{{ r.loss }}</td>
+              <td class="num">{{ r.sudden }}</td>
+              <td class="num">{{ r.handling }}</td>
+              <td class="num">{{ r.rate }}</td>
+              <td class="num">{{ r.productivity }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="empty">この日の保存データがありません。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# 直の終わりに見るなら、停止は**項目まで**出す。3分類の合計だけでは
+       「今日は何に時間を取られたのか」が分からない(VBA `Stop_Agg`) #}
+    <div class="card review__card review__card--grow">
+      <div class="card__head">
+        <h2>この日の停止(項目ごと)</h2>
+        <span class="lead">長い順</span>
+      </div>
+      <div class="scroll-x">
+        <table class="list">
+          <thead>
+            <tr><th>記号・内訳</th><th>分類</th>
+                <th class="num">回数</th><th class="num">時間(分)</th></tr>
+          </thead>
+          <tbody>
+            {% for s in today.stops %}
+            <tr>
+              <td>{{ s.text }}</td><td>{{ s.kind }}</td>
+              <td class="num">{{ s.count }}</td><td class="num">{{ s.minutes }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty">この日の停止入力はありません。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+   </div>
+
+    <div class="card review__charts">
+      <div class="card__head">
+        <h2>今月の推移</h2>
+        <span class="lead">月初から今日まで</span>
+      </div>
+      {# 絵は枠の大きさで描く(`chart.js` の `paintCharts(…, {fit})`) #}
+      <div class="fit-charts" id="review-charts"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script id="review-data" type="application/json">{{ history | tojson }}</script>
+{# 締めくくりの成り行き。**サーバが描いたぶんをそのまま持つ** ── 応答を
+   1つ待つあいだ空の帯が見える、をなくします(v3.59.0 と同じ作り) #}
+<script id="closing-data" type="application/json">{{ closing.as_dict() | tojson }}</script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/review.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}看板 — {{ display_name }}{% endblock %}
+
+{#
+  看板そのもの。**盤面は JS が描く**(`views/board.js`)。
+
+  サーバが渡すのは「押せるか」「何色か」「何と出すか」まで決まった
+  ビューモデル(`kanban/presenters/board.py`)で、JS はそれを DOM にする
+  だけ。業務判断を JS に持たせない(設計 §1 の規則1)。
+
+  最初の1枚だけはサーバ側で `state` を埋めて渡してあるので、JS が動く前から
+  盤面が見える(白紙を挟まない)。
+#}
+
+{% block content %}
+
+{% if not lines %}
+  <div class="empty">
+    <p><b>表示できるラインがありません。</b></p>
+    <p>Access からの取り込みがまだ終わっていないか、担当ラインが設定されていません。</p>
+    <p><a href="/settings">設定を開く</a></p>
+  </div>
+{% else %}
+
+  {# ラインのタブ。現場は1本だけなので出さない #}
+  {% if lines | length > 1 %}
+  <div class="tabs" role="tablist" id="line-tabs">
+    {% for l in lines %}
+    <button class="tab" type="button" role="tab" data-line="{{ l.code }}"
+            aria-selected="{{ 'true' if l.current else 'false' }}">{{ l.label }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="toolbar">
+    <button class="btn" type="button" id="refresh"
+            title="Access から最新を読み直します">↻ 更新</button>
+
+    {% if mode == 'site' %}
+    <button class="btn btn--primary" type="button" id="batch-reset"
+            title="赤と緑が両方点いている資材を、届いたものとしてまとめて戻します">
+      届いた資材を一括確認 <span class="count" id="c-reset">0</span>
+    </button>
+    {% elif mode == 'warehouse' %}
+    <button class="btn btn--primary" type="button" id="batch-ship"
+            title="このラインの未発送品をまとめて発送済みにします">
+      表示中のラインを全て発送済みに <span class="count" id="c-ship">0</span>
+    </button>
+    {% endif %}
+
+    <span class="toolbar__spacer"></span>
+    <span id="reports"></span>
+  </div>
+
+  {% if read_only %}
+  <div class="banner banner--warn">
+    参照専用モードです。押しても状態は変わりません。
+  </div>
+  {% endif %}
+
+  {# 共有DBにこのラインの表が無い(消された・名前が変わった)。JS が出し入れする #}
+  <div class="banner banner--bad" id="table-missing" role="alert" hidden></div>
+
+  {# 発送処理中に注文が取り消されました(赤なし・緑あり)。JS が出し入れする #}
+  <div class="banner banner--bad board-alerts" id="alerts" role="alert" hidden></div>
+
+  {# 相手側の新しいコメント。JS が出し入れする #}
+  <div class="banner board-comments" id="comment-alerts" role="status" hidden></div>
+
+  <div id="note" class="note"></div>
+  <div class="board" id="board"></div>
+
+{% endif %}
+
+{# 看板ごとのやり取り(倉庫 ⇔ 現場)。JS が出し入れする #}
+<div class="modal" id="comment-modal" hidden>
+  <div class="modal__box modal__box--comment" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+    <h2 id="cm-title">💬 コメント</h2>
+    <p class="card__note" id="cm-sub"></p>
+    <div class="cm-thread" id="cm-thread"></div>
+    {# 確認済みの分を自分で畳む(はじめは開いたまま。この端末に覚える) #}
+    <button class="btn btn--ghost btn--sm cm-fold" type="button" id="cm-fold" hidden>確認済みを畳む</button>
+    <details class="cm-history" id="cm-history" hidden>
+      <summary id="cm-history-sum">前の回のやり取り</summary>
+      <div id="cm-closed"></div>
+    </details>
+    <form id="cm-form" autocomplete="off">
+      <textarea id="cm-body" rows="2" maxlength="200"
+                placeholder=""></textarea>
+      <small id="cm-count"></small> <small class="cm-hint">Ctrl+Enter でも送れます</small>
+    </form>
+    <p class="card__note" id="cm-readonly" hidden>倉庫参照モードでは読むだけです。</p>
+    <div class="modal__actions">
+      <button class="btn" type="button" id="cm-close">閉じる</button>
+      <button class="btn btn--primary" type="submit" form="cm-form" id="cm-send">送る</button>
+    </div>
+  </div>
+</div>
+
+{#
+  押す前にコメントを見せる(views/board.js の confirmComments)。押すと、それまでの
+  コメントは確認済みになり「前の回」へ移る ── 読まずに確認済みにしない
+#}
+<div class="modal" id="cm-confirm" hidden>
+  <div class="modal__box modal__box--comment" role="dialog" aria-modal="true" aria-labelledby="cm-confirm-title">
+    <h2 id="cm-confirm-title">💬 相手からのコメントがあります</h2>
+    <p class="card__note">
+      読んでから進めてください。「<b id="cm-confirm-action"></b>」を押すと、下のコメントは
+      <b>確認済み</b>になり、やり取りの「前の回」へ移ります(消えません)。
+      読んで押すボタンが変わるときは「やめる」を押して、押し直してください。
+    </p>
+    <div class="cm-thread" id="cm-confirm-list"></div>
+    <div class="modal__actions">
+      <button class="btn" type="button" id="cm-confirm-stop">やめる</button>
+      <button class="btn btn--primary" type="button" id="cm-confirm-go">確認して進める</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/board.js') }}";
+  start({{ state | tojson if state else 'null' }}, {{ shown_line | tojson }});
+</script>
+{% endblock %}

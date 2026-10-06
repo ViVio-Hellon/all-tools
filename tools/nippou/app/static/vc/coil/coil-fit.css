@@ -1,0 +1,145 @@
+/*
+  画面に収める(コイル・平板)
+
+  元のツールは画面の高さに固定して、はみ出た分を隠していた(overflow: hidden)。
+  1920×1080 では結果のカードと 3D の下が少しだけ切れていた。
+  「少しだけはみ出す」ときは、それぞれの表示を縮めてスクロール無しで収める。
+  「全然収まらない」ときは、縮めすぎず、ページごと縦に動かす。
+
+  どれにするかは coil-fit.js が、いまの中身の高さをはかって決める:
+    1. そのままで収まる              → そのまま
+    2. 詰めた見た目(fit-compact)で収まる → 詰めた見た目
+    3. 詰めて 0.75 倍までに縮めれば収まる → 詰めた見た目 + 縮める(fit-zoom)
+    4. それでも収まらない             → 詰めた見た目 + ページごと動かす(fit-scroll)
+  3列に並ぶ幅(1401px 以上)のときだけ。狭い幅は元どおり(plate-calculator.css)。
+*/
+
+/* 3D の絵(canvas)は枠の高さに数えない ── 枠の高さは残りの高さから決める */
+.model-container > canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+}
+
+/* グラフの高さは幅で決まっていた(Chart.js の縦横比 2:1)。縮めると幅が広がって
+   グラフが伸び、はかった高さとずれる ── 高さを決めておく(元の見た目と同じ 150px) */
+.chart-container {
+    position: relative;
+    height: 150px;
+}
+
+@media (min-width: 1401px) {
+    /* 3D の枠: 固定の 500px をやめて、残りの高さいっぱい */
+    .visual-panel .model-container {
+        flex: 1 1 auto;
+        height: auto;
+        min-height: 260px;
+    }
+
+    /* 詳細計算過程: 横に2列(縦の長さがおよそ半分になる) */
+    .calculation-details {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-content: start;
+    }
+}
+
+/* --- 2. 詰めた見た目 --- */
+html.fit-compact body { line-height: 1.45; }
+html.fit-compact .container { padding: 6px 12px; }
+html.fit-compact .shape-switch { margin-bottom: 2px; padding: 2px; }
+html.fit-compact .shape-btn { padding: 3px 18px; }
+html.fit-compact .theme-switch { top: 6px; }
+html.fit-compact header { padding-bottom: 4px; }
+html.fit-compact header h1 { font-size: 17px; margin-bottom: 0; }
+html.fit-compact header h1 i { font-size: 17px; }
+html.fit-compact header p { font-size: 12px; }
+html.fit-compact .tab-container { margin-top: 4px; }
+html.fit-compact .tab,
+html.fit-compact .ptab { padding: 5px 16px; }
+html.fit-compact .print-btn { padding: 4px 14px; }
+html.fit-compact .tab-content,
+html.fit-compact .ptab-content { padding: 8px 0; }
+html.fit-compact .content,
+html.fit-compact .right-content,
+html.fit-compact .card-area,
+html.fit-compact .results { gap: 10px; }
+html.fit-compact .input-panel,
+html.fit-compact .visual-panel { padding: 10px 14px; }
+html.fit-compact .panel-title { font-size: 15px; margin-bottom: 8px; padding-bottom: 4px; }
+html.fit-compact .material-presets { margin-bottom: 8px; }
+html.fit-compact .preset-title { margin-bottom: 4px; }
+html.fit-compact .form-group { margin-bottom: 6px; }
+html.fit-compact .form-group label { margin-bottom: 2px; }
+html.fit-compact .form-control,
+html.fit-compact select#material-preset,
+html.fit-compact select#plate-material-preset { padding: 4px 8px; }
+html.fit-compact .plate-figure { margin: 0 0 6px; }
+html.fit-compact .plate-figure__svg { max-width: 200px; }
+html.fit-compact .controls-container { margin-bottom: 6px; }
+html.fit-compact .control-buttons { margin-bottom: 4px; }
+html.fit-compact .control-btn { padding: 4px 10px; }
+html.fit-compact .color-option input[type="color"] { width: 26px; height: 26px; }
+html.fit-compact .tip-container { margin-top: 4px; }
+html.fit-compact .result-card { padding: 8px 14px; }
+html.fit-compact .result-title { font-size: 15px; margin-bottom: 4px; padding-bottom: 4px; }
+html.fit-compact .result-value { margin: 2px 0; }
+html.fit-compact .chart-container { height: 140px; }
+html.fit-compact .calculation-details { gap: 10px; }
+html.fit-compact .detail-card { padding: 10px 14px; }
+html.fit-compact .details-title { margin-bottom: 6px; padding-bottom: 4px; }
+html.fit-compact .calculation-formula { padding: 6px 10px; margin-bottom: 4px; }
+
+/* --- 3. 縮める(body の高さは縮めたぶん伸ばして、画面の高さちょうどにする) --- */
+html.fit-zoom { zoom: var(--fit-zoom, 1); }
+html.fit-zoom body { height: calc(100vh / var(--fit-zoom, 1)); }
+
+/* --- 4. 収まらない: ページごと縦に動かす --- */
+html.fit-scroll body {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+}
+
+html.fit-scroll .container,
+html.fit-scroll .shape-section,
+html.fit-scroll .tab-container,
+html.fit-scroll .tab-content.active,
+html.fit-scroll .ptab-content.active,
+html.fit-scroll .content,
+html.fit-scroll .calculation-details {
+    overflow: visible;
+}
+
+html.fit-scroll .visual-panel .model-container {
+    flex: none;
+    height: 420px;
+}
+
+/* --- はかるあいだ(付けて、はかって、外すまでが1回の処理の中。画面には出ない) ---
+   高さを縛るものを外して、中身がほんとうに要る高さを出す。3D の枠は最小の高さで数える */
+html.fit-measure body {
+    height: auto !important;
+    overflow: visible !important;
+}
+
+html.fit-measure .container,
+html.fit-measure .shape-section,
+html.fit-measure .tab-container,
+html.fit-measure .tab-content.active,
+html.fit-measure .ptab-content.active,
+html.fit-measure .content,
+html.fit-measure .calculation-details,
+html.fit-measure .input-panel,
+html.fit-measure .visual-panel {
+    overflow: visible !important;
+}
+
+html.fit-measure .visual-panel .model-container {
+    flex: none !important;
+    height: 260px !important;
+}
+
+@media print {
+    html.fit-zoom { zoom: 1 !important; }
+}

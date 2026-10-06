@@ -1,0 +1,18 @@
+# 起動ファイルは CRLF・CP932(Shift-JIS)の**バイト列のまま**保存する。
+#
+# `.bat` は cmd.exe がコンソールのコードページで、`.vbs` は WSH が
+# システムANSIで読むため、UTF-8で保存し直すと現場で文字化けする。
+# このアプリはフォルダごとコピーして配ることがあり、その経路では
+# git の変換が効かないので、リポジトリの中身がそのまま動く形にしておく
+# (`-text` = git に改行を変換させない)。
+# `tests/test_launch_files.py` が文字コードと改行の両方を見ている。
+*.vbs -text
+*.bat -text
+*.cmd -text
+# それ以外のテキストは LF で管理
+*.py   text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf

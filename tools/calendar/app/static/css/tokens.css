@@ -1,0 +1,216 @@
+/*
+  デザイントークン — 色・書体・寸法の唯一の出どころ
+  ここ以外(components.css・layout.css・HTML・JS)に色の直値を書かない。
+
+  【色相の意味は VBA から引き継ぐ】
+  カレンダーの色分けは現場が10年以上見てきたもので、**意味を変えない**:
+
+    日曜・祝日 … 赤系      土曜 … 青系
+    前後月     … グレー    当日 … 橙の枠
+
+  変えたのは濃さだけ。tkinter 版は塗りが強く、42セルが並ぶと文字より
+  地のほうが目立っていたので、塗りを淡くして**文字が主役**になるように
+  している。当日の枠は逆に強くした ── 42個の中から1つを見つける印なので、
+  淡くすると役に立たない。
+
+  【骨格の色は操作の色から独立させる】
+  上の帯・現在地・焦点は**濃紺**で、赤/青(曜日の意味)とは別系統。
+  同じ色にすると「押せるもの」と「日曜」が主張し合う。
+
+  【3つの状態に対応する】
+    :root                        … ライト(既定)
+    prefers-color-scheme: dark   … OSがダーク、かつ明示指定なし
+    [data-theme="dark"|"light"]  … 利用者が明示的に選んだ場合
+                                   (帯の「暗くする/明るくする」・設定「10. 画面の見た目」。
+                                    この端末の settings.json に覚える)
+
+  ダークの2つの節(OS がダーク / 明示的にダーク)は**同じ値**にする
+  (``tests/test_theme.py`` が食い違いを見る)。
+*/
+:root{
+  /* 入力欄・選択肢・スクロールバーなど、ブラウザが描く部品の明暗 */
+  color-scheme:light;
+
+  /* 地・面・線。**罫線は目立たせない** ── 42セルを線で囲むほど、
+     画面は「枠の集まり」に見えて中身が沈む */
+  --ground:#f2f5f8; --surface:#ffffff; --sunken:#f0f4f7; --raised:#e8eef4;
+  --ink:#17232d; --muted:#5b6d79; --faint:#7d8f9a;
+  --rule:#dbe3ea; --hairline:#e8edf2;
+
+  /* 骨格のアクセント(現在地・焦点・押せるもの) */
+  --accent:#2f5d8a; --accent-soft:#e8f0f8; --accent-line:#bcd3e8;
+  --focus:#2f5d8a;
+  /* アクセント・危険の色で**塗った上に乗せる文字**。明暗で入れ替わる
+     (ダークでは塗りが明るくなるので、白い字だと読めない) */
+  --on-accent:#ffffff; --on-error:#ffffff;
+  /* 入力欄・押せる部品の輪郭。--rule(装飾)より濃い。
+     WCAG 1.4.11 は部品の輪郭に 3:1 を求める */
+  --field-line:#8695a1;
+
+  /* ================================================================
+     上の帯 —— 画面のいちばん上に1本だけ置く暗い面
+
+     ライン設定・同期の状態・終了を載せる。**暗い帯を1本通すと、
+     下のカレンダーが明るく広く見える。** 起動待機画面も同じ地なので、
+     起動直後に出るものが本体と地続きに見える。
+     ================================================================ */
+  --bar-a:#20344f; --bar-b:#3a5f8a;      /* 118deg のグラデーション */
+  --bar-ink:#ffffff; --bar-muted:#c6d6e8;
+  /* 帯の上の「未設定」「送れていません」。本文用の --state-error は
+     暗い地では読めない */
+  --bar-alert:#ffc4bf;
+  /* 帯の上の「済み」。起動待機画面の段の印にも使う */
+  --bar-ok:#9fe6b8;
+  --bar-face:#ffffff14; --bar-face-on:#ffffff26; --bar-edge:#ffffff33;
+  --bar-focus:#8fc6f0;
+  --ctl-h:34px; --ctl-r:9px;             /* 帯の上の操作の寸法(1つに統一) */
+
+  /* ================================================================
+     カレンダーの意味(入れ替え禁止 —— VBA からの引き継ぎ)
+     ================================================================ */
+  --day-bg:#ffffff;        --day-ink:#17232d;      /* 平日 */
+  --day-sat-bg:#eaf2fd;    --day-sat-ink:#1c3f7a;  /* 土曜 */
+  --day-sun-bg:#fdeeee;    --day-sun-ink:#8f2723;  /* 日曜・祝日 */
+  --day-out-bg:#eef1f4;    --day-out-ink:#a7b2bb;  /* 前後月 */
+  --day-today:#e8811f;                             /* 当日の枠 */
+  --day-line:#cfd9e2;                              /* セルの罫線 */
+
+  /* 曜日見出し。塗りは濃く、文字は白(VBA と同じ) */
+  --head-bg:#465a78; --head-sun:#a03c3c; --head-sat:#3c5aaa; --head-ink:#ffffff;
+
+  /* 登録内容の種別。**色だけで運ばない** ── 必ず文字([休み]/[連絡])と併用 */
+  --kind-rest:#8f2723; --kind-rest-bg:#fdeeee;
+  --kind-comment:#1f5c46; --kind-comment-bg:#eaf6f0;
+
+  /* ================================================================
+     履歴表示(過去の月を見るだけ)
+
+     **現行のカレンダーと取り違えない。** マス目は同じ部品なので、
+     古い紙のようなセピア寄りの色に差し替える(`.cal--history` の中だけ)。
+     土曜・日曜祝日・平日の**見分けは保つ**(色相は同じ向き、彩度を落とす)
+     ================================================================ */
+  --hist-accent:#7a5a2c; --hist-accent-ink:#ffffff;
+  --hist-soft:#f7f1e6;   --hist-line:#d8c8a8;
+  --hist-day-bg:#fbf8f2;
+  --hist-day-sat-bg:#e9eef3;
+  --hist-day-sun-bg:#f6e9e4;
+  --hist-day-out-bg:#efebe3;
+  --hist-day-line:#dccfb8;
+  --hist-head-bg:#6b5a44; --hist-head-sun:#94524a; --hist-head-sat:#556a86;
+
+  /* 状態 */
+  --state-ok:#1c6b45;   --state-ok-bg:#e9f6ef;
+  --state-warn:#8a5a10; --state-warn-bg:#fdf3e2;
+  --state-error:#a32b26; --state-error-bg:#fdecec;
+  --state-info:#2f5d8a; --state-info-bg:#e8f0f8;
+
+  /* 繋ぎの2画面 (残業 / 早出)。
+     **同じ形の一覧が続けて2回出る**ので、色でも分ける。
+     `ink` は濃いほうの上に乗せる文字色(明暗で入れ替わる) */
+  --tone-overtime:#9a5a00; --tone-overtime-bg:#fdf1de; --tone-overtime-ink:#ffffff;
+  --tone-early:#1f6b7a;    --tone-early-bg:#e2f2f5;    --tone-early-ink:#ffffff;
+
+  /* 書体。Windows の社内端末に必ずある名前から並べる */
+  --sans:"Yu Gothic UI","Meiryo UI","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
+  --mono:ui-monospace,Consolas,"Courier New",monospace;
+
+  /* 寸法 */
+  --radius:8px; --radius-sm:5px;
+  --gap:12px; --gap-sm:8px;
+  --shadow:0 1px 2px rgba(16,35,45,.06), 0 4px 16px rgba(16,35,45,.06);
+  --shadow-lift:0 8px 32px rgba(16,35,45,.16);
+}
+
+/* OSがダーク、かつ利用者が明示指定していないとき */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#131a21; --surface:#1a232c; --sunken:#151d25; --raised:#222d38;
+    --ink:#e6edf3; --muted:#9fb0bd; --faint:#7d8f9a;
+    --rule:#2c3945; --hairline:#232e39;
+
+    --accent:#7fb3e3; --accent-soft:#1c2b3a; --accent-line:#33506e;
+    --focus:#7fb3e3;
+    --on-accent:#0d1824; --on-error:#2a0f0d;
+    --field-line:#6a7b88;
+
+    --day-bg:#1a232c;      --day-ink:#e6edf3;
+    --day-sat-bg:#1a2838;  --day-sat-ink:#9ec4f0;
+    --day-sun-bg:#2e1e20;  --day-sun-ink:#f0a9a4;
+    --day-out-bg:#161d24;  --day-out-ink:#5a6773;
+    --day-today:#f0932c;
+    --day-line:#2c3945;
+
+    --head-bg:#2b3a4f; --head-sun:#7a3234; --head-sat:#33507e;
+
+    --hist-accent:#d9b77c; --hist-accent-ink:#1f1a12;
+    --hist-soft:#211c14;   --hist-line:#4d4230;
+    --hist-day-bg:#1f1b15;
+    --hist-day-sat-bg:#1d2229;
+    --hist-day-sun-bg:#2a1f1c;
+    --hist-day-out-bg:#181511;
+    --hist-day-line:#3a3226;
+    --hist-head-bg:#4a3f30; --hist-head-sun:#6e3a33; --hist-head-sat:#3a4a60;
+
+    --kind-rest:#f0a9a4;    --kind-rest-bg:#2e1e20;
+    --kind-comment:#8fd8b4; --kind-comment-bg:#172b22;
+
+    --state-ok:#8fd8b4;    --state-ok-bg:#172b22;
+    --state-warn:#e8c07a;  --state-warn-bg:#2d2415;
+    --state-error:#f0a9a4; --state-error-bg:#2e1e20;
+    --state-info:#9ec4f0;  --state-info-bg:#1c2b3a;
+
+    /* 繋ぎの2画面。濃いほうが明るい色になるので `ink` は暗い色 */
+    --tone-overtime:#f0b860; --tone-overtime-bg:#2e2413; --tone-overtime-ink:#1a1206;
+    --tone-early:#79cede;    --tone-early-bg:#122a30;    --tone-early-ink:#0b1c21;
+
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+    --shadow-lift:0 8px 32px rgba(0,0,0,.5);
+  }
+}
+
+/* 利用者が明示的にダークを選んだとき(OSの設定より優先) */
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#131a21; --surface:#1a232c; --sunken:#151d25; --raised:#222d38;
+  --ink:#e6edf3; --muted:#9fb0bd; --faint:#7d8f9a;
+  --rule:#2c3945; --hairline:#232e39;
+
+  --accent:#7fb3e3; --accent-soft:#1c2b3a; --accent-line:#33506e;
+  --focus:#7fb3e3;
+  --on-accent:#0d1824; --on-error:#2a0f0d;
+  --field-line:#6a7b88;
+
+  --day-bg:#1a232c;      --day-ink:#e6edf3;
+  --day-sat-bg:#1a2838;  --day-sat-ink:#9ec4f0;
+  --day-sun-bg:#2e1e20;  --day-sun-ink:#f0a9a4;
+  --day-out-bg:#161d24;  --day-out-ink:#5a6773;
+  --day-today:#f0932c;
+  --day-line:#2c3945;
+
+  --head-bg:#2b3a4f; --head-sun:#7a3234; --head-sat:#33507e;
+
+  --hist-accent:#d9b77c; --hist-accent-ink:#1f1a12;
+  --hist-soft:#211c14;   --hist-line:#4d4230;
+  --hist-day-bg:#1f1b15;
+  --hist-day-sat-bg:#1d2229;
+  --hist-day-sun-bg:#2a1f1c;
+  --hist-day-out-bg:#181511;
+  --hist-day-line:#3a3226;
+  --hist-head-bg:#4a3f30; --hist-head-sun:#6e3a33; --hist-head-sat:#3a4a60;
+
+  --kind-rest:#f0a9a4;    --kind-rest-bg:#2e1e20;
+  --kind-comment:#8fd8b4; --kind-comment-bg:#172b22;
+
+  --state-ok:#8fd8b4;    --state-ok-bg:#172b22;
+  --state-warn:#e8c07a;  --state-warn-bg:#2d2415;
+  --state-error:#f0a9a4; --state-error-bg:#2e1e20;
+  --state-info:#9ec4f0;  --state-info-bg:#1c2b3a;
+
+  /* 繋ぎの2画面。濃いほうが明るい色になるので `ink` は暗い色 */
+  --tone-overtime:#f0b860; --tone-overtime-bg:#2e2413; --tone-overtime-ink:#1a1206;
+  --tone-early:#79cede;    --tone-early-bg:#122a30;    --tone-early-ink:#0b1c21;
+
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+  --shadow-lift:0 8px 32px rgba(0,0,0,.5);
+}

@@ -1,0 +1,29 @@
+{
+  "app_id": "nlm.kanban-system",
+  "display_name": "資材発注看板システム",
+  "version": "3.1.0",
+  "monitor_level": 2,
+
+  "local_dir_name": "KanbanSystem",
+
+  "server": {
+    "host": "127.0.0.1",
+    "port_retry": 3,
+    "roles": {
+      "site": {
+        "port": 8741
+      },
+      "warehouse": {
+        "port": 8751
+      },
+      "view": {
+        "port": 8761
+      }
+    }
+  },
+
+  "monitoring": {
+    "health_poll_seconds": 15,
+    "job_poll_ms": 300
+  }
+}

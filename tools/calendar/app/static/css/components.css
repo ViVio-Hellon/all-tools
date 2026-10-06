@@ -1,0 +1,511 @@
+/*
+  components.css — 部品
+
+  色は tokens.css からしか取らない。ここに直値は書かない。
+*/
+
+/* ================================================================
+   ボタン
+   ================================================================ */
+.btn{
+  height:32px; padding:0 13px; border-radius:var(--radius-sm);
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  background:var(--surface); color:var(--ink);
+  border:1px solid var(--field-line);
+  font-size:13px; font-weight:600; white-space:nowrap;
+  transition:background-color .15s ease, border-color .15s ease;
+}
+.btn:hover:not(:disabled){background:var(--sunken)}
+.btn:disabled{opacity:.45}
+.btn--primary{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
+.btn--primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn--danger{background:var(--state-error); border-color:var(--state-error); color:var(--on-error)}
+.btn--danger:hover:not(:disabled){filter:brightness(1.08)}
+.btn--quiet{background:transparent; border-color:transparent; color:var(--muted)}
+.btn--quiet:hover:not(:disabled){background:var(--sunken); color:var(--ink)}
+.btn--lg{height:38px; padding:0 18px; font-size:14px}
+.btn--block{width:100%}
+
+/* 押したあと返ってくるまで。**押した本人にだけ**出す */
+.btn[data-busy]{position:relative; color:transparent !important}
+.btn[data-busy]::after{
+  content:""; position:absolute; width:13px; height:13px; border-radius:50%;
+  border:2px solid currentColor; border-top-color:transparent;
+  color:var(--ink); animation:spin .7s linear infinite;
+}
+.btn--primary[data-busy]::after{color:var(--on-accent)}
+.btn--danger[data-busy]::after{color:var(--on-error)}
+@keyframes spin{to{transform:rotate(1turn)}}
+
+/* ================================================================
+   カード
+   ================================================================ */
+.card{
+  background:var(--surface); border:1px solid var(--rule);
+  border-radius:var(--radius); box-shadow:var(--shadow);
+}
+.card__head{
+  display:flex; align-items:center; gap:10px;
+  padding:11px 14px; border-bottom:1px solid var(--hairline);
+}
+.card__head h2{font-size:14px}
+.card__head .sub{font-size:11.5px; color:var(--muted); margin-left:auto}
+.card__body{padding:14px}
+.card__body > * + *{margin-top:12px}
+
+/* ================================================================
+   フォーム
+   ================================================================ */
+.field{display:flex; flex-direction:column; gap:5px}
+.field > label{font-size:12px; font-weight:600; color:var(--muted)}
+.field .hint{font-size:11.5px; color:var(--faint); line-height:1.5}
+
+.input, .select, .textarea{
+  width:100%; padding:7px 10px; border-radius:var(--radius-sm);
+  background:var(--surface); color:var(--ink);
+  border:1px solid var(--field-line);
+  font-size:13px;
+}
+.textarea{min-height:96px; resize:vertical; line-height:1.6}
+.input:disabled,.select:disabled{background:var(--sunken); color:var(--muted)}
+
+.row{display:flex; gap:var(--gap-sm); align-items:flex-end; flex-wrap:wrap}
+.row > .field{flex:1 1 200px; min-width:0}
+
+/* 配布設定に入れる項目。押しやすいよう1行ずつ・2列に並べる */
+.distchecks{border:1px solid var(--rule); border-radius:var(--radius-sm);
+            padding:8px 12px; margin:0; display:grid;
+            grid-template-columns:repeat(auto-fill, minmax(16em, 1fr)); gap:6px 16px}
+.distchecks legend{font-size:11.5px; color:var(--muted); padding:0 4px}
+.distchecks label{display:flex; align-items:center; gap:6px; min-height:32px; font-size:12.5px}
+.distchecks input{margin:0; accent-color:var(--accent)}
+
+/* ================================================================
+   状態の一言
+   ================================================================ */
+.note{
+  padding:9px 12px; border-radius:var(--radius-sm);
+  font-size:12.5px; line-height:1.6;
+  border-left:3px solid transparent;
+}
+.note--ok{background:var(--state-ok-bg); color:var(--state-ok); border-left-color:var(--state-ok)}
+.note--warn{background:var(--state-warn-bg); color:var(--state-warn); border-left-color:var(--state-warn)}
+.note--error{background:var(--state-error-bg); color:var(--state-error); border-left-color:var(--state-error)}
+.note--info{background:var(--state-info-bg); color:var(--state-info); border-left-color:var(--state-info)}
+
+.pill{
+  display:inline-flex; align-items:center; gap:5px;
+  padding:2px 9px; border-radius:999px;
+  font-size:11.5px; font-weight:700;
+}
+.pill--ok{background:var(--state-ok-bg); color:var(--state-ok)}
+.pill--warn{background:var(--state-warn-bg); color:var(--state-warn)}
+.pill--error{background:var(--state-error-bg); color:var(--state-error)}
+.pill--info{background:var(--state-info-bg); color:var(--state-info)}
+
+.kv{display:grid; grid-template-columns:max-content 1fr; gap:5px 14px; font-size:12.5px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0; word-break:break-all; font-family:var(--mono); font-size:11.5px}
+
+/* ================================================================
+   カレンダー
+   ================================================================ */
+.cal{display:flex; flex-direction:column; gap:8px; flex:1; min-height:0}
+
+.cal__bar{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.cal__title{
+  font-size:20px; font-weight:700; letter-spacing:.01em;
+  min-width:9ch; text-align:center;
+}
+.cal__spacer{margin-left:auto}
+
+.cal__grid{
+  flex:1; min-height:0;
+  display:grid; grid-template-rows:auto repeat(6, minmax(0,1fr));
+  gap:2px;
+  background:var(--day-line);
+  border:1px solid var(--day-line); border-radius:var(--radius);
+  overflow:hidden;
+}
+.cal__week{display:grid; grid-template-columns:repeat(7, minmax(0,1fr)); gap:2px}
+
+.cal__head{
+  padding:4px 0; text-align:center;
+  font-size:12.5px; font-weight:700;
+  background:var(--head-bg); color:var(--head-ink);
+}
+.cal__head[data-tone="sun"]{background:var(--head-sun)}
+.cal__head[data-tone="sat"]{background:var(--head-sat)}
+
+/* 日付セル。**文字が主役**なので塗りは淡く */
+.day{
+  position:relative; overflow:hidden;
+  display:flex; flex-direction:column; gap:2px;
+  padding:3px 5px;
+  background:var(--day-bg); color:var(--day-ink);
+  border:0; text-align:left; font:inherit;
+  min-height:0;
+}
+.day[data-tone="sat"]{background:var(--day-sat-bg); color:var(--day-sat-ink)}
+.day[data-tone="holiday"]{background:var(--day-sun-bg); color:var(--day-sun-ink)}
+.day[data-tone="out"]{background:var(--day-out-bg); color:var(--day-out-ink); cursor:default}
+.day:not([data-tone="out"]):hover{filter:brightness(.97)}
+.day:not([data-tone="out"]){cursor:pointer}
+.day:focus-visible{outline:2px solid var(--focus); outline-offset:-2px}
+
+/* 当日。**42個の中から1つを見つける印**なので強くする */
+.day[data-today]{box-shadow:inset 0 0 0 3px var(--day-today)}
+
+.day__top{display:flex; align-items:baseline; gap:4px; flex:0 0 auto}
+.day__num{font-size:13px; font-weight:700; font-variant-numeric:tabular-nums}
+.day__holiday{
+  font-size:10px; font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.day__body{
+  flex:1; min-height:0; overflow:hidden;
+  font-size:10.5px; line-height:1.4; white-space:pre-wrap; word-break:break-all;
+  color:var(--ink);
+}
+.day[data-tone="holiday"] .day__body,
+.day[data-tone="sat"] .day__body{color:var(--ink)}
+
+/* ================================================================
+   モーダル
+   止める確認は「取り消せない操作」だけに使う。
+   確認が多すぎると、慣れて素通りするようになる。
+   ================================================================ */
+.modal{
+  position:fixed; inset:0; z-index:150;
+  display:grid; place-items:center; padding:20px;
+  background:rgba(10,20,30,.45);
+}
+.modal__box{
+  width:min(560px, 100%); max-height:calc(100vh - 40px);
+  display:flex; flex-direction:column;
+  background:var(--surface); border-radius:var(--radius);
+  box-shadow:var(--shadow-lift);
+}
+.modal__box--wide{width:min(860px, 100%)}
+.modal__head{
+  display:flex; align-items:center; gap:10px;
+  padding:13px 16px; border-bottom:1px solid var(--hairline);
+}
+.modal__head h2{font-size:15px}
+.modal__step{
+  margin-left:auto; font-size:11px; color:var(--muted);
+  font-family:var(--mono);
+}
+
+/* ================================================================
+   繋ぎの2画面 (残業 / 早出)
+
+   **同じ形の一覧が続けて2回出る。** 見出しの文字だけが変わる形では、
+   選んだのに効いていないように見え、取り違えても気づけない。
+   VBA のころはメッセージボックスで1つずつ止めていたので、
+   進んだことが嫌でも分かった ── あの**メリハリ**を、止めずに作る。
+
+   ここでは色を惜しまない:
+     * 帯を丸ごと塗る(見出しの行が、色ごと入れ替わる)
+     * 上端に太い線を1本(箱の輪郭からして違う)
+     * 札は塗りつぶし(小さくても遠目に効く)
+   ================================================================ */
+.modal__tag{
+  flex:0 0 auto;
+  padding:4px 11px; border-radius:999px;
+  font-size:12px; font-weight:700; letter-spacing:.04em;
+  background:var(--raised); color:var(--muted);
+}
+.modal__box--toned .modal__head{
+  background:var(--tone-bg);
+  border-bottom:2px solid var(--tone);
+  border-radius:var(--radius) var(--radius) 0 0;
+  padding-top:14px; padding-bottom:14px;
+}
+.modal__box--toned .modal__head h2{font-size:18px; color:var(--tone)}
+.modal__box--toned .modal__tag{background:var(--tone); color:var(--tone-ink)}
+.modal__box--toned .modal__step{color:var(--tone); font-weight:700; font-size:12px}
+/* 上端の1本。**箱の形からして違う**ようにする */
+.modal__box--toned{border-top:5px solid var(--tone)}
+
+.modal__box--tone-overtime{
+  --tone:var(--tone-overtime);
+  --tone-bg:var(--tone-overtime-bg);
+  --tone-ink:var(--tone-overtime-ink);
+}
+.modal__box--tone-early{
+  --tone:var(--tone-early);
+  --tone-bg:var(--tone-early-bg);
+  --tone-ink:var(--tone-early-ink);
+}
+
+.modal__body{padding:16px; overflow:auto; flex:1; min-height:0}
+.modal__body > * + *{margin-top:12px}
+
+/* ここまでに選んだもの。
+   **押したことが効いている**と分かるようにするためだけの帯。
+   選び直す口は置かない(戻るなら取り消してやり直す)。
+   最後の1つ(=直前に選んだもの)だけ色を付ける ── そこが増えたことが
+   分かれば、「効いていない」とは見えない。 */
+.chosen{
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px;
+  padding:9px 12px; border-radius:var(--radius-sm);
+  background:var(--sunken); border:1px solid var(--hairline);
+}
+.chosen__item{
+  display:flex; align-items:baseline; gap:7px; min-width:0;
+  padding:3px 9px; border-radius:999px;
+  background:var(--surface); border:1px solid var(--rule);
+}
+/* **いま増えた1つ。** この画面の色(--tone)ではなく骨格の色を使う ──
+   ここは「前の画面で選んだもの」なので、いま聞かれていることと
+   同じ色にすると、どちらの話か分からなくなる */
+.chosen__item--last{background:var(--accent-soft); border-color:var(--accent-line)}
+.chosen__key{font-size:11px; color:var(--faint)}
+.chosen__item--last .chosen__key{color:var(--accent)}
+.chosen__value{font-size:13px; color:var(--ink)}
+.modal__foot{
+  display:flex; gap:8px; justify-content:flex-end;
+  padding:12px 16px; border-top:1px solid var(--hairline);
+}
+.modal__foot .left{margin-right:auto}
+
+/* 選択肢を縦に並べる(操作の選択・直の選択) */
+.choices{display:flex; flex-direction:column; gap:7px}
+.choice{
+  display:flex; align-items:center; gap:10px;
+  padding:11px 14px; border-radius:var(--radius-sm);
+  background:var(--surface); border:1px solid var(--field-line);
+  text-align:left; font-size:14px; font-weight:600;
+}
+.choice:hover{background:var(--accent-soft); border-color:var(--accent-line)}
+.choice small{margin-left:auto; font-weight:400; font-size:11.5px; color:var(--muted)}
+
+/* 作業者の選択。ライン見出し → 班ごとの列 (tkinter 版と同じ形) */
+.workers{display:flex; flex-direction:column; gap:14px}
+.workers__line > h3{
+  font-size:12px; color:var(--muted); margin-bottom:6px;
+  padding-bottom:3px; border-bottom:1px solid var(--hairline);
+}
+.workers__groups{display:flex; gap:10px; flex-wrap:wrap}
+.workers__group{flex:1 1 130px; min-width:0}
+.workers__group > h4{
+  font-size:11px; color:var(--faint); margin-bottom:4px; font-weight:700;
+}
+.workers__group ul{display:flex; flex-direction:column; gap:3px}
+.worker{
+  width:100%; padding:6px 9px; border-radius:var(--radius-sm);
+  background:var(--surface); border:1px solid var(--rule);
+  text-align:left; font-size:12.5px;
+}
+.worker:hover{background:var(--accent-soft); border-color:var(--accent-line)}
+
+/* 削除の選択(チェック) */
+.picklist{display:flex; flex-direction:column; gap:5px}
+.pick{
+  display:flex; align-items:flex-start; gap:9px;
+  padding:9px 11px; border-radius:var(--radius-sm);
+  background:var(--sunken); border:1px solid var(--rule);
+  font-size:13px; cursor:pointer;
+}
+.pick:hover{border-color:var(--field-line)}
+.pick input{margin-top:3px; flex:0 0 auto; width:15px; height:15px; accent-color:var(--accent)}
+.pick__text{min-width:0}
+.pick__meta{display:block; font-size:11px; color:var(--muted); margin-top:1px}
+.pick[data-kind="rest"]{border-left:3px solid var(--kind-rest)}
+.pick[data-kind="comment"]{border-left:3px solid var(--kind-comment)}
+
+/* 閲覧 */
+.viewer{
+  padding:12px 14px; border-radius:var(--radius-sm);
+  background:var(--sunken); border:1px solid var(--rule);
+  font-size:13px; line-height:1.75; white-space:pre-wrap; word-break:break-all;
+  max-height:52vh; overflow:auto;
+}
+.viewer--empty{color:var(--muted); text-align:center; padding:28px}
+
+/* フォルダ参照 */
+.browse{border:1px solid var(--rule); border-radius:var(--radius-sm); overflow:hidden}
+.browse__path{
+  padding:7px 11px; background:var(--sunken); border-bottom:1px solid var(--rule);
+  font-family:var(--mono); font-size:11px; word-break:break-all;
+}
+.browse__list{max-height:300px; overflow:auto}
+.browse__item{
+  display:flex; align-items:center; gap:8px; width:100%;
+  padding:7px 11px; background:transparent; border:0;
+  border-bottom:1px solid var(--hairline);
+  text-align:left; font-size:12.5px;
+}
+.browse__item:hover{background:var(--accent-soft)}
+.browse__item .gl{color:var(--muted); flex:0 0 auto}
+.browse__item[data-kind="file"]{font-weight:600}
+
+/* ================================================================
+   マスタ管理の表
+
+   直す先は取り込み元なので、**いま見ているのがどのファイルか**を
+   すぐ上に出す(`.hint`)。行は打ち込める欄そのものにして、
+   「開いて直して閉じる」の一手間を無くす。
+   ================================================================ */
+.mtable{
+  overflow:auto; max-height:420px;
+  border:1px solid var(--rule); border-radius:var(--radius-sm);
+}
+.mtable table{border-collapse:separate; border-spacing:0; width:100%; font-size:12.5px}
+.mtable th, .mtable td{
+  padding:5px 7px; border-bottom:1px solid var(--hairline); text-align:left;
+  white-space:nowrap;
+}
+.mtable thead th{
+  position:sticky; top:0; z-index:1;
+  background:var(--raised); color:var(--muted);
+  font-size:11px; font-weight:700;
+  border-bottom:1px solid var(--rule);
+}
+.mtable tbody tr:hover{background:var(--sunken)}
+/* 列名は**押すと並べ替え**。見出しの見た目のまま、押せることだけ足す */
+.mtable__sort{
+  all:unset; cursor:pointer; display:block; width:100%;
+  font:inherit; color:inherit; white-space:nowrap;
+}
+.mtable__sort:hover{color:var(--ink); text-decoration:underline}
+.mtable__sort:focus-visible{outline:2px solid var(--focus); outline-offset:2px; border-radius:3px}
+.mtable thead th[data-sorted]{color:var(--accent)}
+.mtable input{
+  width:100%; min-width:88px; padding:4px 6px; border-radius:4px;
+  background:var(--surface); color:var(--ink);
+  border:1px solid transparent; font-size:12.5px;
+}
+.mtable input:hover:not(:disabled){border-color:var(--rule)}
+.mtable input:focus{border-color:var(--focus); background:var(--surface)}
+.mtable input:disabled{background:transparent; border-color:transparent; color:var(--muted)}
+/* 鍵の列は**あとから変えられない**(変えると同じ人が2行に増える) */
+.mtable input[data-key]{font-family:var(--mono); font-weight:700}
+
+/* 打てる欄と読むだけの欄が**同じ表に混ざる**とき(端末一覧)。
+   班員名簿は全部の欄が打てるので、枠を透明にして表らしく見せているが、
+   混ざった表で同じことをすると、**唯一直せる欄が他と見分けられない**。
+   そこだけ枠と地を出す。 */
+.mtable--mixed input:not(:disabled){
+  border-color:var(--field-line);
+  background:var(--surface);
+  /* 添え書きが切れると、何を入れる欄か分からないまま残る */
+  min-width:210px;
+}
+.mtable--mixed input:not(:disabled)::placeholder{color:var(--faint)}
+.mtable td.act{text-align:right; white-space:nowrap}
+.mtable .btn{height:26px; padding:0 9px; font-size:11.5px}
+.mtable tr[data-dirty] td{background:var(--state-warn-bg)}
+
+/* ================================================================
+   トースト
+   ================================================================ */
+.toast{
+  display:flex; align-items:center; gap:10px;
+  padding:11px 14px; border-radius:var(--radius);
+  background:var(--surface); border:1px solid var(--rule);
+  box-shadow:var(--shadow-lift);
+  font-size:13px; line-height:1.5;
+  border-left:3px solid var(--muted);
+  animation:toast-in .18s ease-out;
+}
+@keyframes toast-in{from{opacity:0; transform:translateY(6px)}}
+.toast--ok{border-left-color:var(--state-ok)}
+.toast--info{border-left-color:var(--state-info)}
+.toast--warn{border-left-color:var(--state-warn)}
+.toast--error{border-left-color:var(--state-error)}
+
+/* ================================================================
+   記号。**文字だけで意味が通る**ようにしてあるので、装飾扱い
+   ================================================================ */
+.gl{font-family:var(--mono); font-weight:400; opacity:.8}
+
+.empty{
+  padding:30px; text-align:center; color:var(--muted); font-size:13px;
+}
+
+/* ================================================================
+   履歴表示(過去の月を見るだけ)
+
+   **カレンダー画面と取り違えない。** マス目は同じ部品なので、
+   枠の色と「閲覧のみ」の札で、書けない画面だと分かるようにする
+   ================================================================ */
+/* 画面の区画ごと、紙の色の地にする。左の帯で「履歴」の面だと分かる */
+.cal--history{
+  background:var(--hist-soft); border:1px solid var(--hist-line);
+  border-left:6px solid var(--hist-accent); border-radius:var(--radius);
+  padding:10px 12px;
+  /* マス目の色を差し替える。部品(.day / .cal__head)は現行と同じまま */
+  --day-bg:var(--hist-day-bg);
+  --day-sat-bg:var(--hist-day-sat-bg);
+  --day-sun-bg:var(--hist-day-sun-bg);
+  --day-out-bg:var(--hist-day-out-bg);
+  --day-line:var(--hist-day-line);
+  --head-bg:var(--hist-head-bg); --head-sun:var(--hist-head-sun); --head-sat:var(--hist-head-sat);
+}
+.cal--history .cal__title{color:var(--hist-accent)}
+.cal--history .btn--primary{background:var(--hist-accent); border-color:var(--hist-accent); color:var(--hist-accent-ink)}
+/* 「履歴」の札。**色だけで運ばない** ── 文字で「履歴・閲覧のみ」と書く */
+.hist-tag{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 10px; border-radius:999px;
+  background:var(--hist-accent); color:var(--hist-accent-ink);
+  font-size:12px; font-weight:700; letter-spacing:.04em;
+}
+.note--hist{background:var(--surface); color:var(--ink); border-left-color:var(--hist-accent)}
+
+/* 年月を選ぶ: 年ごとに12か月のマス(履歴の色で) */
+.mpick{display:flex; flex-direction:column; gap:10px; min-width:min(420px, 80vw);
+       --accent:var(--hist-accent); --accent-soft:var(--hist-soft);
+       --on-accent:var(--hist-accent-ink)}
+.mpick__month[aria-current="true"]{color:var(--hist-accent-ink)}
+.mpick__head{display:flex; align-items:center; justify-content:space-between; gap:8px}
+.mpick__year{font-size:14px}
+.mpick__grid{display:grid; grid-template-columns:repeat(4, 1fr); gap:6px}
+.mpick__month{
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:9px 4px; border-radius:var(--radius-sm);
+  border:1px solid var(--field-line); background:var(--surface); color:var(--ink);
+  cursor:pointer; font:inherit;
+}
+.mpick__month:hover:not(:disabled){background:var(--accent-soft); border-color:var(--accent)}
+.mpick__month[aria-current="true"]{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
+.mpick__month:disabled{background:var(--sunken); color:var(--faint); border-style:dashed; cursor:not-allowed}
+.mpick__name{font-weight:700; font-size:13px}
+.mpick__count{font-size:11px; opacity:.85}
+
+/* ================================================================
+   ファイルの置き場所(設定 7)
+
+   **この端末だけ / 全端末で共有 / アプリのフォルダ** で分けて並べる。
+   「消さない」は色だけでなく文字で出す
+   ================================================================ */
+.store{margin-top:10px}
+.store__head{font-size:13px; margin:0 0 6px; padding-bottom:4px; border-bottom:1px solid var(--rule)}
+.store__item{
+  display:grid; gap:2px; padding:7px 10px; margin-bottom:6px;
+  border:1px solid var(--hairline); border-radius:var(--radius-sm);
+  background:var(--surface); font-size:12.5px; line-height:1.55;
+}
+.store__name{display:flex; align-items:center; gap:8px}
+.store__path{font-family:var(--mono); font-size:11.5px; color:var(--muted); word-break:break-all}
+.store__note{color:var(--muted); font-size:12px}
+
+/* なぜなぜ分析の材料(設定「9. ログ」)。**写して貼る**ための文なので、
+   等幅で、折り返さずに桁をそろえる */
+.report-text{
+  width:100%; min-height:420px; resize:vertical;
+  font-family:var(--mono); font-size:12px; line-height:1.55;
+  white-space:pre; overflow:auto;
+}
+
+/* 画面の見た目(設定「10. 画面の見た目」)。選択肢を横に並べ、押せる幅を広く取る */
+.theme-choices{border:0; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:8px}
+.theme-choice{
+  display:flex; align-items:center; gap:8px; cursor:pointer;
+  padding:8px 14px; border:1px solid var(--field-line); border-radius:var(--radius-sm);
+  background:var(--surface); color:var(--ink);
+}
+.theme-choice:has(input:checked){border-color:var(--accent); background:var(--accent-soft); font-weight:600}
+.theme-choice input{accent-color:var(--accent); margin:0}

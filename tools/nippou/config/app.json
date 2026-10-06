@@ -1,0 +1,19 @@
+{
+  "app_id": "nlm.nippou-tool",
+  "display_name": "日報管理ツール",
+  "version": "4.22.0",
+  "monitor_level": 1,
+
+  "local_dir_name": "NippouTool",
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8733,
+    "port_retry": 3
+  },
+
+  "monitoring": {
+    "health_poll_seconds": 15,
+    "job_poll_ms": 300
+  }
+}

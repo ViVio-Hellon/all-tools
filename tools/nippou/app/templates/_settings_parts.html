@@ -1,0 +1,137 @@
+{# ================================================================
+   設定画面の部品 ── 参照パスの1行と、鍵の帯
+
+   どちらも**面をまたいで同じ形で出る**ものです。置き場所の欄は、
+   それを使う機能と同じ面に置くので(「音の置き場所」は「音」の面へ、
+   「日報データの置き場所」は「共有へ保存」の面へ)、1行ぶんの書き方を
+   1か所に持たないと面ごとに揺れます。
+   ================================================================ #}
+
+{#
+  参照パス1行。**「設定した値」と「実際に見る道」を両方出す。**
+  片方だけだと、相対で書いたときにどこを見ているのか分からず、
+  「設定したのに見つからない」の原因が追えません。
+
+  印の文言は**サーバが決めます**(`presenters/settings.PathView`)。
+  「見つかりません」とだけ出していたときは、フォルダのことなのか
+  ファイルのことなのかが読めませんでした。
+#}
+{% macro path_row(p, files, admin) %}
+<div class="path" data-path-key="{{ p.key }}">
+  <div class="field field--wide">
+    <label for="path-{{ p.key }}">
+      {{ p.label }}
+      {% if p.protected %}<span class="badge badge--todo"
+        title="変えるには管理者パスワードが要ります">要パスワード</span>{% endif %}
+      {# **打ちかけか、保存済みか。** 打っただけでは効いていないのに、
+         見た目が変わらないと「もう保存された」と読めてしまう #}
+      <span class="path__state" data-path-state></span>
+    </label>
+    {# **守る欄は、鍵が閉まっているあいだ打てない。** 打てるのに保存で
+       断られると、押した人には「ボタンが効いていない」としか見えない #}
+    <div class="path__edit">
+      <input id="path-{{ p.key }}" type="text" value="{{ p.value }}"
+             placeholder="{{ p.empty_text }}" spellcheck="false"
+             {% if p.protected and not admin %}readonly
+             title="この面の上にある鍵を開けると直せます"{% endif %}>
+      {# **欄ごとに保存。** まとめて1つだと、どこまでが保存の対象なのかが
+         読めず、押すたびに他の欄まで巻き込みます #}
+      <button class="btn btn--primary" type="button" data-save-path>保存</button>
+    </div>
+    <span class="lead">{{ p.note }}</span>
+  </div>
+  <div class="path__now">
+    <span class="lead">実際に見る道:</span>
+    <code>{{ p.resolved }}</code>
+    {% if p.off %}<span class="badge">使っていません</span>
+    {% else %}
+    {% if p.from_site %}<span class="badge">配布設定の値</span>
+    {% elif p.is_default %}<span class="badge">既定</span>{% endif %}
+    {% if p.is_relative %}<span class="badge badge--todo">相対(アプリのフォルダから)</span>{% endif %}
+    {% if p.exists %}<span class="badge badge--done">{{ p.found_text }}</span>
+    {% else %}<span class="badge badge--alert">{{ p.missing_text }}</span>{% endif %}
+    {% endif %}
+    {% if not p.is_file %}
+    {# 「辿る…」では何が起きるのか読めなかった。**押すと何が出るか**を書く #}
+    <button class="btn btn--sm" type="button" data-browse="{{ p.key }}">
+      フォルダを選ぶ…</button>
+    {% endif %}
+  </div>
+
+  {# このフォルダ設定から来るファイル。**1件ずつフルパスで出す** #}
+  {% set kids = files | selectattr("source_key", "equalto", p.key) | list %}
+  {% if kids %}
+  <ul class="path__files">
+    {% for f in kids %}
+    <li class="path__file">
+      <span class="path__file-name">{{ f.label }}</span>
+      <code class="path__file-path">{{ f.path }}</code>
+      <span class="badge">{{ "sqlite3" if f.kind == "sqlite3" else "Access" }}</span>
+      {% if f.is_write_target and not f.exists and f.writable %}
+        <span class="badge">初回の保存で作られます</span>
+      {% elif not f.exists %}<span class="badge badge--alert">このファイルがありません</span>
+      {% elif f.readable %}<span class="badge badge--done">読めます</span>
+      {% else %}<span class="badge badge--alert">{{ f.error }}</span>{% endif %}
+      {% if f.uses %}
+      <span class="path__file-uses">
+        {% for u in f.uses %}<code>{{ u.table }}</code> → {{ u.purpose }}{% if not loop.last %} / {% endif %}{% endfor %}
+      </span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endmacro %}
+
+
+{#
+  置き場所の欄をまとめる箱と、その保存ボタン。
+
+  **保存はこの箱の欄だけを送ります。** 箱をまたいで送ると、別のところで
+  打ちかけていた値まで一緒に保存されます(送っていない項目は触らない
+  ── `presenters/settings.save` の約束)。
+#}
+{% macro path_group(rows, files, admin, caption="") %}
+<div class="path-group" data-path-group>
+  {% for p in rows %}{{ path_row(p, files, admin) }}{% endfor %}
+  <div class="msg" data-path-note hidden style="margin-top:var(--sp-2)"></div>
+</div>
+{% endmacro %}
+
+
+{#
+  鍵の帯 ── **この面の何に管理者パスワードが要るのか。**
+
+  「設定でパスがいる場合とそうでない場合が分かりにくい。そうしないと
+  ボタンが効いているのかも分からない」という指摘から置きました。
+  面を開いた時点で、(1)鍵が要ること (2)いま開いているかどうか
+  (3)何に要るのか が読めます ── 押してから断られるのは手戻りです。
+
+  **鍵は管理者モードそのもの。** このツールに合言葉は1つしかなく、
+  2つ目を作ると現場は両方を紙に貼ります。直が変われば自動で閉じます。
+#}
+{% macro lockbar(tab, admin) %}
+{% if tab.needs_lock %}
+<div class="lockbar{{ ' lockbar--open' if admin else '' }}" data-lock="{{ tab.key }}">
+  {% if admin %}
+  <span class="badge badge--done">鍵が開いています</span>
+  <span class="lead lockbar__what">
+    この面の<strong>{{ tab.lock }}</strong>が使えます。直が変わると自動で閉じます。
+  </span>
+  <button class="btn btn--sm" type="button" data-lock-off>鍵を閉じる</button>
+  {% else %}
+  <span class="badge badge--todo">鍵がかかっています</span>
+  <span class="lead lockbar__what">
+    この面の<strong>{{ tab.lock }}</strong>には管理者パスワードが要ります。
+    ほかは鍵なしで使えます。
+  </span>
+  <div class="field">
+    <label for="lock-pw-{{ tab.key }}">管理者パスワード</label>
+    <input id="lock-pw-{{ tab.key }}" type="password" size="14" data-lock-pw>
+  </div>
+  <button class="btn" type="button" data-lock-on>鍵を開ける</button>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

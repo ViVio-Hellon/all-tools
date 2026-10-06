@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.accdb
+*.laccdb
+.venv/
+build/
+dist/
+*.egg-info/
+DebugPrint/
+
+# Web 版で増えたもの
+venv/
+.pytest_cache/
+# 印刷用の一時 HTML(ローカル領域へ出すが、念のため)
+*_印刷_*.html
+
+# 一時期の版がアプリのフォルダに置いていた、その端末の設定(いまは %APPDATA%)。
+# 残っていれば 1 度だけ引き継ぐ。端末ごとの中身でソースではない
+/data/
+
+# 配布設定(設定画面の「配布設定」で書き出す)。管理者パスワードのハッシュと
+# 社内の共有フォルダのパスが入るので、リポジトリへは上げない
+/配布設定/
+
+# デスクトップ版(Rust/Tauri)の作りかけ。`cargo build` で作り直せる
+src-tauri/target/
+src-tauri/gen/

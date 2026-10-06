@@ -1,0 +1,1804 @@
+
+Option Explicit
+' ============================================
+' ユーザーフォームモジュール (UFPrintManager)
+' 遅延読み込み対応版 + 一括チェック機能
+' ============================================
+
+' フォーム変数
+Private MainTab As MSForms.MultiPage
+Private CheckBoxCollection As Collection
+Private PrintButtonHandler As clsButton
+Private CloseButtonHandler As clsButton
+Private DarkModeButtonHandler As clsButton
+Private txtCopies As MSForms.TextBox
+Private IsDarkMode As Boolean
+Private btnDarkMode As MSForms.CommandButton
+Private CheckBoxHandlerCollection As Collection
+Private lblSelectedList As MSForms.TextBox 'MSForms.Label_TextBoxに修正
+Private txtFolderPath As MSForms.TextBox
+Private SettingsButtonHandler As clsButton
+Private btnSettings As MSForms.CommandButton
+Private lblStatus As MSForms.Label
+Private btnMainCategoryCheckAll As MSForms.CommandButton
+Private MainCategoryCheckAllHandler As clsButton
+
+' 遅延読み込み用の変数
+Private IsTabContentLoaded As Object
+Private MainTabChangeHandler As clsMainTabChange
+Private SubTabChangeHandlers As Collection
+Private AllWorkbooksCache As Collection
+Private BulkCheckButtonHandlers As Collection
+
+Private PreviewButtonHandler As clsButton
+Private btnPreview As MSForms.CommandButton
+
+Private Const DEFAULT_FOLDER As String = "一括管理_点検表"
+
+Private Sub UserForm_Activate()
+'    ApplyColorTheme
+End Sub
+
+Public Sub FinalizeLayout()
+    Dim i As Integer, j As Integer
+    Dim subTab As MSForms.MultiPage
+    Dim frm As MSForms.Frame
+    Dim originalMainTabValue As Integer
+    Dim originalSubTabValue As Integer
+    
+    On Error GoTo ErrorHandler
+    
+    If MainTab.Pages.count = 0 Then Exit Sub
+    
+    originalMainTabValue = MainTab.value
+    Application.ScreenUpdating = False
+    
+    For i = 0 To MainTab.Pages.count - 1
+        MainTab.value = i
+        Set subTab = MainTab.Pages(i).Controls("SubTab" & i)
+        
+        subTab.left = 0: subTab.top = 0
+        subTab.Width = MainTab.Pages(i).InsideWidth
+        subTab.Height = MainTab.Pages(i).InsideHeight
+        
+        originalSubTabValue = subTab.value
+        
+        For j = 0 To subTab.Pages.count - 1
+            subTab.value = j
+            DoEvents
+            
+            Set frm = subTab.Pages(j).Controls("PageFrame_" & i & "_" & j)
+            frm.left = 0: frm.top = 0
+            frm.Width = subTab.Pages(j).InsideWidth
+            frm.Height = subTab.Pages(j).InsideHeight
+        Next j
+        
+        subTab.value = originalSubTabValue
+    Next i
+    
+    MainTab.value = originalMainTabValue
+    Application.ScreenUpdating = True
+    Exit Sub
+    
+ErrorHandler:
+    Application.ScreenUpdating = True
+    MsgBox "レイアウト調整中にエラーが発生しました: " & Err.Description, vbCritical
+End Sub
+
+'Private Sub UserForm_Click()
+'MsgBox Awidth & "_" & Bwidth & "_" & Cwidth & "_" & Me.width
+'End Sub
+
+Private Sub UserForm_Initialize()
+    On Error GoTo ErrorHandler
+
+    On Error Resume Next
+    Dim dmValue As Variant: dmValue = Null
+    Dim nm As name
+    For Each nm In ThisWorkbook.Names
+        If nm.name = "DarkMode" Then
+            dmValue = nm.RefersToRange.value: Exit For
+        End If
+    Next nm
+    IsDarkMode = IIf(IsNull(dmValue), True, (dmValue = 1))
+    On Error GoTo 0
+    
+    Set CheckBoxCollection = New Collection
+    Set CheckBoxHandlerCollection = New Collection
+    Set IsTabContentLoaded = CreateObject("Scripting.Dictionary")
+    Set AllWorkbooksCache = New Collection
+    Set SubTabChangeHandlers = New Collection
+    Set BulkCheckButtonHandlers = New Collection
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "フォーム初期化エラー: " & Err.Description, vbCritical
+End Sub
+'配置するコントロールの詳細設定
+Private Sub CreateUIControls()
+On Error GoTo ErrorHandler
+Application.ScreenUpdating = False
+
+' === 宣言部 ===
+Dim lblCopies As MSForms.Label
+Dim btnPrint As MSForms.CommandButton
+Dim btnClose As MSForms.CommandButton
+Dim lblFolderInfo As MSForms.Label
+
+' プロシージャレベルで宣言が必要だが、ここでは簡略化のためDimで宣言 (本来はモジュールレベルまたはPublic/WithEvents)
+' ※ Me.Controls.Addで追加するコントロールは、このプロシージャの外部で使用する場合、モジュールレベル以上の宣言が必要です。
+' 外部で使用しないと仮定し、ここではローカル宣言は省略し、Setでの代入のみ行います。
+
+' 追加した配置用定数
+Const LEFT_COL_LEFT As Long = 10
+Const BTN_HEIGHT As Long = 30
+Const LABEL_HEIGHT As Long = 20
+Const TEXTBOX_HEIGHT As Long = 22
+Const CONTROL_WIDTH As Long = 65
+Const BTN_SPACING As Long = 5            ' ボタン間の縦間隔
+Const BTN_TOTAL_STEP As Long = BTN_HEIGHT + BTN_SPACING ' ボタンの開始位置の増分 (35)
+
+Dim currentTop As Long ' 現在のTop位置を追跡する変数
+
+' === マルチページ (MainTab) の配置（位置変更なし） ===
+Set MainTab = Me.Controls.Add("Forms.MultiPage.1", "MainTab", True)
+With MainTab
+    .left = 85: .top = 10: .Width = 320: .Height = 350
+    .Font.name = "Meiryo UI": .Font.Size = 9
+End With
+
+' === 左側のコントロール（縦に配置する部分） ===
+currentTop = 10
+
+' --- 部数入力部 ---
+
+' 印刷部数ラベル
+Set lblCopies = Me.Controls.Add("Forms.Label.1", "lblCopies", True)
+With lblCopies:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = LABEL_HEIGHT
+    .caption = "印刷部数:"
+End With
+
+currentTop = currentTop + LABEL_HEIGHT - 5 ' 次のコントロールへ移動（調整）
+
+' 印刷部数テキストボックス
+Set txtCopies = Me.Controls.Add("Forms.TextBox.1", "txtCopies", True)
+With txtCopies:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = TEXTBOX_HEIGHT
+    .text = "1"
+End With
+
+currentTop = currentTop + TEXTBOX_HEIGHT + BTN_SPACING ' ボタン群の開始位置
+
+' --- ボタン群の配置（等間隔に調整） ---
+
+' 印刷ボタン
+Set btnPrint = Me.Controls.Add("Forms.CommandButton.1", "btnPrint", True)
+With btnPrint:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "印刷"
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' 閉じるボタン
+Set btnClose = Me.Controls.Add("Forms.CommandButton.1", "btnClose", True)
+With btnClose:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "閉じる"
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' ダークモードボタン
+Set btnDarkMode = Me.Controls.Add("Forms.CommandButton.1", "btnDarkMode", True)
+With btnDarkMode:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "ダークモード": .Font.Size = 8
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' フォルダ設定ボタン
+Set btnSettings = Me.Controls.Add("Forms.CommandButton.1", "btnSettings", True)
+With btnSettings:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "フォルダ設定": .Font.Size = 8
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' プレビューボタン
+Set btnPreview = Me.Controls.Add("Forms.CommandButton.1", "btnPreview", True)
+With btnPreview
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "プレビュー": .Font.Size = 8: .Font.name = "Meiryo UI"
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' カテゴリ全選択ボタン
+Set btnMainCategoryCheckAll = Me.Controls.Add("Forms.CommandButton.1", "btnMainCategoryCheckAll", True)
+With btnMainCategoryCheckAll:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = BTN_HEIGHT
+    .caption = "カテゴリ全選択": .Font.Size = 8: .Font.name = "Meiryo UI"
+End With
+currentTop = currentTop + BTN_TOTAL_STEP
+
+' --- ステータス・情報表示部 ---
+
+' ステータスラベル
+Set lblStatus = Me.Controls.Add("Forms.Label.1", "lblStatus", True)
+With lblStatus
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = 15 ' 高さを調整
+    .caption = "読込中...": .Font.Size = 9: .WordWrap = True
+    .BorderStyle = fmBorderStyleSingle: .TextAlign = fmTextAlignCenter: .Font.name = "Meiryo UI"
+End With
+currentTop = currentTop + 30 + BTN_SPACING
+
+' フォルダ情報ラベル
+Set lblFolderInfo = Me.Controls.Add("Forms.Label.1", "lblFolderInfo", True)
+With lblFolderInfo:
+    .left = LEFT_COL_LEFT: .top = currentTop: .Width = CONTROL_WIDTH: .Height = 35 ' 高さを調整
+    .caption = "検出: --" & vbCrLf & "更新: --:--": .Font.Size = 8
+    .WordWrap = True: .TextAlign = fmTextAlignLeft: .Font.name = "Meiryo UI"
+End With
+
+' --- その他のコントロール（位置変更なし） ---
+
+' パス表示テキストボックス (txtFolderPath)
+Set txtFolderPath = Me.Controls.Add("Forms.TextBox.1", "txtFolderPath", True)
+With txtFolderPath:
+    .left = 10: .top = 365: .Width = 550: .Height = 20
+    .text = GetBaseFolderPath()
+    .MultiLine = True: .ScrollBars = fmScrollBarsVertical: .Font.Size = 9
+    .Locked = True: .BackColor = RGB(240, 240, 240): .Font.name = "Meiryo UI"
+End With
+
+'TextBoxに修正_2025.12.27
+' 選択リストラベル (lblSelectedList)
+'Set lblSelectedList = Me.Controls.Add("Forms.Label.1", "lblSelectedList", True)
+'With lblSelectedList
+'    .Left = 415: .Top = 10: .width = 210: .Height = 350
+'    .BorderStyle = fmBorderStyleSingle: .Font.Name = "Meiryo UI": .Font.Size = 9
+'    .WordWrap = True: .Caption = "■選択中のシート:" & vbCrLf & "(読み込み中...)"
+'End With
+
+Set lblSelectedList = Me.Controls.Add("Forms.TextBox.1", "txtSelectedList", True)
+With lblSelectedList
+    .left = 415: .top = 10: .Width = 225: .Height = 350
+    .MultiLine = True
+    .ScrollBars = fmScrollBarsVertical  ' 縦スクロールバー
+    .Locked = True  ' 編集不可（表示のみ）
+    .BackColor = RGB(240, 240, 240)  ' 背景色（任意）
+    .BorderStyle = fmBorderStyleSingle
+    .Font.name = "Meiryo UI": .Font.Size = 9
+    .WordWrap = True
+    .text = "■選択中のシート:" & vbCrLf & "(読み込み中...)"
+End With
+
+' --- イベントハンドラーの設定（変更なし） ---
+Set PrintButtonHandler = New clsButton: PrintButtonHandler.SetButton btnPrint, "Print", Me
+Set CloseButtonHandler = New clsButton: CloseButtonHandler.SetButton btnClose, "Close", Me
+Set DarkModeButtonHandler = New clsButton: DarkModeButtonHandler.SetButton btnDarkMode, "DarkMode", Me
+Set SettingsButtonHandler = New clsButton: SettingsButtonHandler.SetButton btnSettings, "Settings", Me
+Set MainCategoryCheckAllHandler = New clsButton: MainCategoryCheckAllHandler.SetButton btnMainCategoryCheckAll, "MainCategoryCheckAll", Me
+Set PreviewButtonHandler = New clsButton: PreviewButtonHandler.SetButton btnPreview, "Preview", Me
+
+' --- ユーザーフォーム自体の設定（変更なし） ---
+Awidth = btnClose.Width
+Bwidth = lblSelectedList.Width
+Cwidth = MainTab.Width
+
+Dim toalwidth As Single: toalwidth = btnClose.Width + lblSelectedList.Width + MainTab.Width + 60
+
+Me.Width = toalwidth '595
+Me.Height = 420: Me.caption = "シート印刷管理"
+Application.ScreenUpdating = True
+Exit Sub
+
+ErrorHandler:
+Application.ScreenUpdating = True
+MsgBox "UIコントロール作成エラー: " & Err.Description, vbCritical
+End Sub
+
+Public Sub LoadContents(ByVal progressForm As UFProgressBar)
+Dim i As Integer, j As Integer, k As Integer
+Dim uniqueCategories As Collection
+Dim uniqueSubCategories As Collection
+Dim cat As Variant, subCat As Variant
+Dim currentStep As Single
+Dim stepIncrement As Single
+
+On Error GoTo ErrorHandler
+Application.ScreenUpdating = False
+
+progressForm.SetMax 100
+
+progressForm.UpdateProgress 5, "フォルダ情報スキャン..."
+DoEvents
+
+progressForm.UpdateProgress 10, "UIを初期化中..."
+DoEvents
+CreateUIControls
+
+progressForm.UpdateProgress 15, "フォルダをスキャン中..."
+DoEvents
+Set AllWorkbooksCache = GetWorkbooksFromFolder(progressForm)
+
+Dim fileCount As Long
+fileCount = AllWorkbooksCache.count
+
+Dim lblFolderInfo As MSForms.Label
+Set lblFolderInfo = Me.Controls("lblFolderInfo")
+lblFolderInfo.caption = "検出: " & fileCount & vbCrLf & "更新: " & Format(Now, "mm/dd h:nn")
+
+If AllWorkbooksCache.count = 0 Then
+    progressForm.UpdateProgress 100, "ファイルが見つかりません。"
+    DoEvents
+    Application.ScreenUpdating = True
+    UpdateStatus "ファイルなし"
+    UpdateSelectedList
+    ApplyColorTheme
+    Exit Sub
+End If
+
+progressForm.UpdateProgress 40, "カテゴリ情報を整理中..."
+DoEvents
+
+Set uniqueCategories = New Collection
+On Error Resume Next
+For Each cat In AllWorkbooksCache
+    uniqueCategories.Add cat(1), cat(1)
+Next cat
+On Error GoTo 0
+Set uniqueCategories = SortCollectionAscending(uniqueCategories)
+
+MainTab.Pages.Clear
+i = -1
+currentStep = 40
+If uniqueCategories.count > 0 Then stepIncrement = (90 - 40) / uniqueCategories.count
+
+For Each cat In uniqueCategories
+    currentStep = currentStep + stepIncrement
+    progressForm.UpdateProgress currentStep, "タブ作成中: " & CStr(cat)
+    
+    i = i + 1
+    MainTab.Pages.Add: MainTab.Pages(i).caption = CStr(cat)
+    
+    Dim subTab As MSForms.MultiPage
+    Set subTab = MainTab.Pages(i).Controls.Add("Forms.MultiPage.1", "SubTab" & i, True)
+    With subTab
+        .left = 0: .top = 0: .Font.name = "Meiryo UI": .Font.Size = 8
+        .Style = fmTabStyleButtons: .TabOrientation = fmTabOrientationRight
+    End With
+    
+    Set uniqueSubCategories = New Collection
+    On Error Resume Next
+    For Each subCat In AllWorkbooksCache
+        If subCat(1) = CStr(cat) Then
+            uniqueSubCategories.Add subCat(2), subCat(2)
+        End If
+    Next subCat
+    On Error GoTo 0
+    Set uniqueSubCategories = SortCollectionAscending(uniqueSubCategories)
+    
+    subTab.Pages.Clear
+    j = -1
+    
+    For Each subCat In uniqueSubCategories
+        j = j + 1
+        subTab.Pages.Add: subTab.Pages(j).caption = CStr(subCat)
+        
+        Dim frm As MSForms.Frame
+        Set frm = subTab.Pages(j).Controls.Add("Forms.Frame.1", "PageFrame_" & i & "_" & j, True)
+        frm.BorderStyle = fmBorderStyleNone: frm.caption = ""
+        frm.tag = CStr(cat) & "|" & CStr(subCat)
+        
+        IsTabContentLoaded(CStr(cat) & "|" & CStr(subCat)) = False
+    Next subCat
+    
+    Dim hasVisibleSubPage As Boolean: hasVisibleSubPage = False
+    For k = 0 To subTab.Pages.count - 1
+        If subTab.Pages(k).visible Then hasVisibleSubPage = True: Exit For
+    Next k
+    MainTab.Pages(i).visible = hasVisibleSubPage
+Next cat
+
+progressForm.UpdateProgress 90, "初期タブを読み込み中..."
+DoEvents
+
+If MainTab.Pages.count > 0 Then
+    MainTab.value = 0
+    LoadCurrentTabContent
+End If
+
+Set MainTabChangeHandler = New clsMainTabChange
+MainTabChangeHandler.SetMultiPage MainTab, Me
+AttachSubTabEventHandlers
+
+progressForm.UpdateProgress 93, "テーマを適用中..."
+DoEvents
+ApplyColorTheme
+
+progressForm.UpdateProgress 97, "最終処理中..."
+DoEvents
+UpdateStatus "初期化完了"
+UpdateSelectedList
+
+progressForm.UpdateProgress 100, "完了"
+Application.ScreenUpdating = True
+Exit Sub
+
+ErrorHandler:
+Application.ScreenUpdating = True
+MsgBox "フォーム読み込みエラー: " & Err.Description, vbCritical
+Unload progressForm
+Unload Me
+End Sub
+
+Public Sub LoadCurrentTabContent()
+On Error Resume Next
+
+Dim mainTabIndex As Integer
+mainTabIndex = MainTab.value
+
+Dim subTab As MSForms.MultiPage
+Set subTab = MainTab.Pages(mainTabIndex).Controls("SubTab" & mainTabIndex)
+If subTab Is Nothing Then Exit Sub
+
+Dim currentSubTabIndex As Integer
+currentSubTabIndex = subTab.value
+
+Dim frm As MSForms.Frame
+Set frm = subTab.Pages(currentSubTabIndex).Controls("PageFrame_" & mainTabIndex & "_" & currentSubTabIndex)
+If frm Is Nothing Then Exit Sub
+
+Dim tagParts() As String
+tagParts = Split(frm.tag, "|")
+If UBound(tagParts) < 1 Then Exit Sub
+
+Dim category As String, subCategory As String, key As String
+category = tagParts(0)
+subCategory = tagParts(1)
+key = category & "|" & subCategory
+
+If IsTabContentLoaded.exists(key) Then
+    If IsTabContentLoaded(key) = True Then Exit Sub
+End If
+
+UpdateStatus "読込中: " & subCategory
+CreateCheckBoxes category, subCategory, frm
+
+IsTabContentLoaded(key) = True
+UpdateStatus CheckBoxCollection.count & "件選択可能"
+
+On Error GoTo 0
+End Sub
+
+Private Sub CreateCheckBoxes(category As String, subCategory As String, targetPage As Object)
+Dim workbooks As Collection
+Dim item As Variant
+Dim chk As MSForms.checkbox
+Dim topPos As Integer, leftPos As Integer, colCount As Integer
+Dim maxItemsPerColumn As Integer, currentColumn As Integer
+Dim chkHandler As clsCheckBoxEvents
+Dim btnBulkCheck As MSForms.CommandButton
+Dim btnHandler As clsButton
+
+On Error GoTo ErrorHandler
+
+Set btnBulkCheck = targetPage.Controls.Add("Forms.CommandButton.1", "btnBulkCheck_" & Replace(targetPage.name, "PageFrame_", ""), True)
+With btnBulkCheck
+    .left = 15
+    .top = 10
+    .Width = 100
+    .Height = 22
+    .caption = "全選択/解除"
+    .Font.name = "Meiryo UI"
+    .Font.Size = 9
+    .tag = targetPage.name
+End With
+
+ApplyColorToCommandButton btnBulkCheck
+
+Set btnHandler = New clsButton
+btnHandler.SetButton btnBulkCheck, "BulkCheck", Me
+BulkCheckButtonHandlers.Add btnHandler
+
+topPos = 35
+leftPos = 20
+colCount = 0
+currentColumn = 0
+maxItemsPerColumn = 10
+
+Set workbooks = GetWorkbooksByFilterFromCache(category, subCategory)
+
+Dim fileName As String, displayName As String, prefix As String
+prefix = category & "_" & subCategory & "_"
+
+For Each item In workbooks
+    fileName = Trim(item(3))
+    
+'        If category = "NS1" Then '不具合時にチェックするときここで名前を絞る
+'          Debug.Print "■比較する接頭辞 (Prefix):" & vbCrLf & """" & prefix & """" & vbCrLf & vbCrLf & "■比較されるファイル名 (FileName):" & vbCrLf & """" & fileName & """", vbInformation, "デバッグ情報"
+'        End If
+    
+    If LCase(left(fileName, Len(prefix))) = LCase(prefix) Then
+        displayName = Mid(fileName, Len(prefix) + 1)
+        
+        Set chk = targetPage.Controls.Add("Forms.CheckBox.1", , True)
+        With chk
+            .left = leftPos + (currentColumn * 180): .top = topPos
+            .Width = 170: .Height = 35
+            .caption = displayName: .tag = item(4)
+            .Font.name = "Meiryo UI": .Font.Size = 10
+            .AutoSize = False: .WordWrap = True
+        End With
+        
+        ApplyColorToCommandButton btnBulkCheck
+        
+        CheckBoxCollection.Add chk
+        
+        Set chkHandler = New clsCheckBoxEvents
+        chkHandler.SetCheckBox chk, Me
+        CheckBoxHandlerCollection.Add chkHandler
+        
+        colCount = colCount + 1
+        topPos = topPos + 30
+        
+        If colCount >= maxItemsPerColumn Then
+            currentColumn = currentColumn + 1
+            topPos = 30
+            colCount = 0
+        End If
+    End If
+Next item
+
+If targetPage.Controls.count = 0 Then
+    targetPage.Parent.visible = False
+Else
+    targetPage.Parent.visible = True
+End If
+
+Exit Sub
+ErrorHandler:
+Debug.Print "CreateCheckBoxesエラー: " & Err.Description
+End Sub
+
+Private Sub ApplyColorToCommandButton(btn As MSForms.CommandButton)
+On Error Resume Next
+If IsDarkMode Then
+    btn.BackColor = RGB(70, 70, 70)
+    btn.ForeColor = RGB(255, 255, 255)
+Else
+    btn.BackColor = RGB(240, 240, 240)
+    btn.ForeColor = RGB(0, 0, 0)
+End If
+On Error GoTo 0
+End Sub
+
+Private Sub ApplyColorToCheckBox(chk As MSForms.checkbox)
+On Error Resume Next
+Dim bgColor As Long
+If IsDarkMode Then
+    bgColor = RGB(45, 45, 48)
+    chk.BackColor = bgColor
+    chk.ForeColor = RGB(255, 255, 255)
+Else
+    bgColor = RGB(240, 240, 240)
+    chk.BackColor = bgColor
+    chk.ForeColor = RGB(0, 0, 0)
+End If
+On Error GoTo 0
+End Sub
+
+Private Function GetWorkbooksByFilterFromCache(category As String, subCategory As String) As Collection
+Dim filtered As Collection
+Set filtered = New Collection
+
+Dim item As Variant
+For Each item In AllWorkbooksCache
+    If item(1) = category And item(2) = subCategory Then
+        filtered.Add item
+    End If
+Next item
+
+Set GetWorkbooksByFilterFromCache = filtered
+End Function
+
+Public Sub DoBulkCheck(ByVal btn As MSForms.CommandButton)
+Dim targetPageName As String
+Dim targetPage As MSForms.Frame
+Dim ctrl As MSForms.Control
+Dim chk As MSForms.checkbox
+Dim checkedCount As Integer
+Dim uncheckedCount As Integer
+Dim totalCount As Integer
+
+On Error GoTo ErrorHandler
+
+targetPageName = btn.tag
+
+Dim mainTabIndex As Integer
+mainTabIndex = MainTab.value
+
+Dim subTab As MSForms.MultiPage
+Set subTab = MainTab.Pages(mainTabIndex).Controls("SubTab" & mainTabIndex)
+
+Dim subTabIndex As Integer
+subTabIndex = subTab.value
+
+Set targetPage = subTab.Pages(subTabIndex).Controls(targetPageName)
+
+If targetPage Is Nothing Then Exit Sub
+
+For Each ctrl In targetPage.Controls
+    If TypeName(ctrl) = "CheckBox" Then
+        totalCount = totalCount + 1
+        If ctrl.value = True Then
+            checkedCount = checkedCount + 1
+        Else
+            uncheckedCount = uncheckedCount + 1
+        End If
+    End If
+Next ctrl
+
+If checkedCount > 0 And uncheckedCount > 0 Then
+    Exit Sub
+End If
+
+Dim newState As Boolean
+If checkedCount = 0 Then
+    newState = True
+Else
+    newState = False
+End If
+
+For Each ctrl In targetPage.Controls
+    If TypeName(ctrl) = "CheckBox" Then
+        Set chk = ctrl
+        chk.value = newState
+    End If
+Next ctrl
+
+UpdateSelectedList
+
+Exit Sub
+
+ErrorHandler:
+MsgBox "一括チェックエラー: " & Err.Description, vbCritical
+End Sub
+
+Public Sub DoMainCategoryCheckAll()
+Dim mainTabIndex As Integer
+Dim subTab As MSForms.MultiPage
+Dim i As Integer
+Dim frm As MSForms.Frame
+Dim ctrl As MSForms.Control
+Dim chk As MSForms.checkbox
+Dim hasUnchecked As Boolean
+Dim totalChecked As Integer
+Dim totalUnchecked As Integer
+
+On Error GoTo ErrorHandler
+
+mainTabIndex = MainTab.value
+Set subTab = MainTab.Pages(mainTabIndex).Controls("SubTab" & mainTabIndex)
+
+If subTab Is Nothing Then Exit Sub
+
+UpdateStatus "カテゴリ全体をスキャン中..."
+DoEvents
+
+For i = 0 To subTab.Pages.count - 1
+    Set frm = subTab.Pages(i).Controls("PageFrame_" & mainTabIndex & "_" & i)
+    If Not frm Is Nothing Then
+        Dim tagParts() As String
+        tagParts = Split(frm.tag, "|")
+        If UBound(tagParts) >= 1 Then
+            Dim key As String
+            key = tagParts(0) & "|" & tagParts(1)
+            
+            If Not IsTabContentLoaded.exists(key) Or IsTabContentLoaded(key) = False Then
+                CreateCheckBoxes tagParts(0), tagParts(1), frm
+                IsTabContentLoaded(key) = True
+            End If
+        End If
+        
+        For Each ctrl In frm.Controls
+            If TypeName(ctrl) = "CheckBox" Then
+                If ctrl.value = True Then
+                    totalChecked = totalChecked + 1
+                Else
+                    totalUnchecked = totalUnchecked + 1
+                    hasUnchecked = True
+                End If
+            End If
+        Next ctrl
+    End If
+Next i
+
+If hasUnchecked Then
+    UpdateStatus "チェック適用中..."
+    DoEvents
+    
+    For i = 0 To subTab.Pages.count - 1
+        Set frm = subTab.Pages(i).Controls("PageFrame_" & mainTabIndex & "_" & i)
+        If Not frm Is Nothing Then
+            For Each ctrl In frm.Controls
+                If TypeName(ctrl) = "CheckBox" Then
+                    Set chk = ctrl
+                    If chk.value = False Then
+                        chk.value = True
+                    End If
+                End If
+            Next ctrl
+        End If
+    Next i
+    
+    UpdateStatus "全選択完了"
+Else
+    UpdateStatus "全て選択済み"
+End If
+
+UpdateSelectedList
+
+Exit Sub
+
+ErrorHandler:
+MsgBox "メインカテゴリ一括チェックエラー: " & Err.Description, vbCritical
+UpdateStatus "エラー"
+End Sub
+
+Private Sub ApplyColorTheme()
+Dim bgColor As Long
+Dim fgColor As Long
+Dim ctrl As Control
+
+If IsDarkMode Then
+    bgColor = RGB(45, 45, 48)
+    fgColor = RGB(220, 220, 220)
+    Me.BackColor = bgColor
+Else
+    bgColor = RGB(240, 240, 240)
+    fgColor = RGB(0, 0, 0)
+    Me.BackColor = &H8000000F
+End If
+
+If Not btnDarkMode Is Nothing Then
+    btnDarkMode.caption = IIf(IsDarkMode, "ライトモード", "ダークモード")
+End If
+
+If Not lblSelectedList Is Nothing Then
+    lblSelectedList.BackColor = bgColor
+    lblSelectedList.ForeColor = fgColor
+    lblSelectedList.BorderColor = IIf(IsDarkMode, RGB(80, 80, 80), &H8000000B)
+End If
+
+If Not lblStatus Is Nothing Then
+    lblStatus.BackColor = bgColor
+    If IsDarkMode Then
+        lblStatus.ForeColor = RGB(255, 255, 102)
+    Else
+        lblStatus.ForeColor = RGB(0, 100, 200)
+    End If
+    lblStatus.BorderColor = IIf(IsDarkMode, RGB(80, 80, 80), &H8000000B)
+End If
+
+' プレビューボタンのカラー適用
+If Not btnPreview Is Nothing Then
+    ApplyColorToCommandButton btnPreview
+End If
+
+For Each ctrl In Me.Controls
+    ApplyColorToControl ctrl, bgColor, fgColor
+Next ctrl
+
+If Not MainTab Is Nothing Then
+    ApplyColorToControl MainTab, bgColor, fgColor
+End If
+End Sub
+
+Private Sub ApplyColorToControl(ByVal targetControl As MSForms.Control, ByVal bgColor As Long, ByVal fgColor As Long)
+On Error Resume Next
+Dim childControl As MSForms.Control
+Dim i As Integer
+Dim pg As Object
+
+Select Case TypeName(targetControl)
+    Case "MultiPage"
+        If IsDarkMode Then
+            targetControl.BackColor = bgColor
+            targetControl.ForeColor = RGB(0, 0, 255)
+        Else
+            targetControl.BackColor = bgColor
+            targetControl.ForeColor = RGB(0, 0, 0)
+        End If
+        
+        For i = 0 To targetControl.Pages.count - 1
+            Set pg = targetControl.Pages(i)
+            pg.BackColor = bgColor
+            
+            If IsDarkMode Then
+                pg.ForeColor = RGB(255, 255, 255)
+            Else
+                pg.ForeColor = RGB(0, 0, 0)
+            End If
+            
+            If pg.Controls.count > 0 Then
+                For Each childControl In pg.Controls
+                    ApplyColorToControl childControl, bgColor, fgColor
+                Next childControl
+            End If
+        Next i
+        
+    Case "Frame"
+        targetControl.BackColor = bgColor
+        targetControl.ForeColor = fgColor
+        
+    Case "Label"
+        ' ★変更点: lblStatusは個別に色設定するので、ここでは除外する
+        If targetControl.name <> "lblStatus" Then
+            targetControl.BackColor = bgColor
+            If IsDarkMode Then
+                targetControl.ForeColor = RGB(255, 255, 255)
+            Else
+                targetControl.ForeColor = RGB(0, 0, 0)
+            End If
+        End If
+    Case "CheckBox"
+        targetControl.BackColor = bgColor
+        If IsDarkMode Then
+            targetControl.ForeColor = RGB(255, 255, 255)
+        Else
+            targetControl.ForeColor = RGB(0, 0, 0)
+        End If
+        
+    Case "TextBox"
+        If IsDarkMode Then
+            targetControl.BackColor = RGB(60, 60, 60)
+            targetControl.ForeColor = RGB(255, 255, 255)
+        Else
+            targetControl.BackColor = RGB(255, 255, 255)
+            targetControl.ForeColor = RGB(0, 0, 0)
+        End If
+        
+    Case "CommandButton"
+        If IsDarkMode Then
+            targetControl.BackColor = RGB(70, 70, 70)
+            targetControl.ForeColor = RGB(255, 255, 255)
+        Else
+            targetControl.BackColor = RGB(240, 240, 240)
+            targetControl.ForeColor = RGB(0, 0, 0)
+        End If
+End Select
+
+If targetControl.Controls.count > 0 Then
+    For Each childControl In targetControl.Controls
+        ApplyColorToControl childControl, bgColor, fgColor
+    Next childControl
+End If
+
+On Error GoTo 0
+End Sub
+
+Public Sub DoPrint()
+Dim selectedPaths As New Collection
+Dim ctrl As Variant
+Dim copies As Integer
+Dim chk As MSForms.checkbox
+
+If txtFolderPath.text <> GetBaseFolderPath() Then
+    SaveBaseFolderPath txtFolderPath.text
+End If
+
+On Error GoTo ErrorHandler
+
+UpdateStatus "印刷準備中..."
+
+If IsNumeric(txtCopies.text) Then
+    copies = CInt(txtCopies.text)
+    If copies < 1 Then copies = 1
+    If copies > 100 Then copies = 100
+Else
+    MsgBox "印刷部数は1～100の数値で入力してください。", vbExclamation
+    UpdateStatus "エラー"
+    Exit Sub
+End If
+
+For Each ctrl In CheckBoxCollection
+    If TypeOf ctrl Is MSForms.checkbox Then
+        Set chk = ctrl
+        If chk.value = True Then
+            selectedPaths.Add chk.tag
+        End If
+    End If
+Next ctrl
+
+If selectedPaths.count > 0 Then
+    UpdateStatus "印刷中..." & selectedPaths.count & "件"
+    PrintWorkbooksFromFolder selectedPaths, copies
+    UpdateStatus "印刷完了"
+Else
+    MsgBox "印刷するシートを選択してください。", vbExclamation
+    UpdateStatus "選択なし"
+End If
+
+Exit Sub
+
+ErrorHandler:
+MsgBox "印刷エラー: " & Err.Description, vbCritical
+UpdateStatus "印刷エラー"
+End Sub
+
+Public Sub ToggleDarkMode()
+IsDarkMode = Not IsDarkMode
+On Error Resume Next
+ThisWorkbook.Names.Add name:="DarkMode", RefersTo:=IIf(IsDarkMode, 1, 0)
+On Error GoTo 0
+Me.Repaint
+ApplyColorTheme
+ApplyColorToDynamicControls
+End Sub
+'すべての動的に作成されたボタンにも適用
+Private Sub ApplyColorToDynamicControls()
+Dim ctrl As Variant
+Dim btn As MSForms.CommandButton
+Dim chk As MSForms.checkbox
+
+On Error Resume Next
+
+' BulkCheckButtonHandlersに登録されたボタンに適用
+If Not BulkCheckButtonHandlers Is Nothing Then
+    Dim handler As clsButton
+    For Each handler In BulkCheckButtonHandlers
+        ' ※ clsButtonクラスにGetButtonメソッドがあると仮定
+        ' なければ、別の方法でボタンを取得する必要があります
+    Next handler
+End If
+
+' CheckBoxCollectionのチェックボックスに適用
+If Not CheckBoxCollection Is Nothing Then
+    For Each ctrl In CheckBoxCollection
+        If TypeName(ctrl) = "CheckBox" Then
+            Set chk = ctrl
+            ApplyColorToCheckBox chk
+        End If
+    Next ctrl
+End If
+
+' フレーム内のすべてのコントロールを再帰的に処理
+Dim i As Integer, j As Integer
+Dim subTab As MSForms.MultiPage
+Dim frm As MSForms.Frame
+Dim frameCtrl As MSForms.Control
+
+For i = 0 To MainTab.Pages.count - 1
+    Set subTab = MainTab.Pages(i).Controls("SubTab" & i)
+    If Not subTab Is Nothing Then
+        For j = 0 To subTab.Pages.count - 1
+            Set frm = subTab.Pages(j).Controls("PageFrame_" & i & "_" & j)
+            If Not frm Is Nothing Then
+                For Each frameCtrl In frm.Controls
+                    If TypeName(frameCtrl) = "CommandButton" Then
+                        ApplyColorToCommandButton frameCtrl
+                    ElseIf TypeName(frameCtrl) = "CheckBox" Then
+                        ApplyColorToCheckBox frameCtrl
+                    End If
+                Next frameCtrl
+            End If
+        Next j
+    End If
+Next i
+
+On Error GoTo 0
+End Sub
+Public Sub ShowSelectedSheetsForEditing()
+MsgBox "フォルダベース版では、各ファイルを直接開いて編集してください。", vbInformation
+End Sub
+'選択されたシートのリストを右側のラベル（lblSelectedList）に表示・更新
+Public Sub UpdateSelectedList()
+Dim listText As String
+Dim ctrl As MSForms.Control
+Dim chk As MSForms.checkbox
+Dim checkCount As Integer
+
+On Error GoTo 0
+
+If CheckBoxCollection Is Nothing Then Exit Sub
+
+listText = "■選択中のシート:"
+checkCount = 0
+
+For Each ctrl In CheckBoxCollection
+    If TypeName(ctrl) = "CheckBox" Then
+        Set chk = ctrl
+        If chk.value = True Then
+            Dim mainTabCaption As String
+            Dim subTabCaption As String ' ★ 追加: サブカテゴリ名用の変数を宣言
+            
+            ' メインカテゴリ名を取得
+            mainTabCaption = chk.Parent.Parent.Parent.Parent.caption
+            
+            ' ★ 追加: サブカテゴリ名を取得 (chk -> Frame -> SubTabのPage)
+            subTabCaption = chk.Parent.Parent.caption
+            
+            ' ★ 変更: 表示形式を「[メイン - サブ] シート名」に変更
+            listText = listText & vbCrLf & "・[" & mainTabCaption & " - " & subTabCaption & "] " & chk.caption
+            
+            checkCount = checkCount + 1
+        End If
+    End If
+Next ctrl
+
+If checkCount = 0 Then
+    listText = listText & vbCrLf & "(なし)"
+End If
+
+If Not lblSelectedList Is Nothing Then
+'    lblSelectedList.Caption = listText
+    lblSelectedList.text = listText
+End If
+
+UpdateStatus checkCount & "件選択中"
+End Sub
+
+Public Sub ShowFolderSettings()
+Dim newPath As String
+Dim currentPath As String
+
+currentPath = GetBaseFolderPath()
+
+MsgBox "点検表ファイルが保存されている「親フォルダ」を選択してください。" & vbCrLf & vbCrLf & _
+       "例: C:\作業フォルダ\一括管理_点検表" & vbCrLf & vbCrLf & _
+       "この中に「カテゴリフォルダ」→「サブカテゴリフォルダ」→「ファイル」という" & vbCrLf & _
+       "階層構造が必要です。", vbInformation, "フォルダ選択"
+
+UpdateStatus "フォルダ選択中..."
+
+newPath = SelectFolderDialog(currentPath)
+
+If newPath <> "" And newPath <> currentPath Then
+    UpdateStatus "パス保存中..."
+    SaveBaseFolderPath newPath
+    txtFolderPath.text = newPath
+    UpdateStatus "保存完了"
+    
+    If MsgBox("参照フォルダを以下に変更しました:" & vbCrLf & vbCrLf & _
+              newPath & vbCrLf & vbCrLf & _
+              "リストを更新するために画面を開き直します。", _
+              vbInformation + vbOKCancel, "設定変更") = vbOK Then
+        UpdateStatus "再読み込み中..."
+        Unload Me
+        DoEvents
+        ShowPrintManager
+    Else
+        SaveBaseFolderPath currentPath
+        txtFolderPath.text = currentPath
+        UpdateStatus "キャンセル"
+    End If
+Else
+    UpdateStatus "変更なし"
+End If
+End Sub
+
+Public Sub UpdateStatus(msg As String)
+If Not lblStatus Is Nothing Then
+    lblStatus.caption = msg
+    DoEvents
+End If
+End Sub
+
+Private Sub UserForm_Terminate()
+Set CheckBoxCollection = Nothing
+Set MainTab = Nothing
+Set PrintButtonHandler = Nothing
+Set CloseButtonHandler = Nothing
+Set DarkModeButtonHandler = Nothing
+Set CheckBoxHandlerCollection = Nothing
+Set txtCopies = Nothing
+Set btnDarkMode = Nothing
+Set lblSelectedList = Nothing
+Set btnSettings = Nothing
+Set SettingsButtonHandler = Nothing
+Set txtFolderPath = Nothing
+Set lblStatus = Nothing
+Set IsTabContentLoaded = Nothing
+Set MainTabChangeHandler = Nothing
+Set SubTabChangeHandlers = Nothing
+Set AllWorkbooksCache = Nothing
+Set BulkCheckButtonHandlers = Nothing
+Set btnMainCategoryCheckAll = Nothing
+Set MainCategoryCheckAllHandler = Nothing
+Set PreviewButtonHandler = Nothing
+Set btnPreview = Nothing
+End Sub
+
+Private Function SortCollectionAscending(ByVal sourceCol As Collection) As Collection
+Dim sortedCol As New Collection
+Dim tempArray() As Variant
+Dim i As Long, j As Long
+Dim temp As Variant
+Dim item As Variant
+
+If sourceCol.count = 0 Then
+    Set SortCollectionAscending = sortedCol
+    Exit Function
+End If
+
+ReDim tempArray(1 To sourceCol.count)
+i = 1
+For Each item In sourceCol
+    tempArray(i) = item
+    i = i + 1
+Next item
+
+For i = LBound(tempArray) To UBound(tempArray) - 1
+    For j = i + 1 To UBound(tempArray)
+        If StrComp(CStr(tempArray(i)), CStr(tempArray(j)), vbTextCompare) > 0 Then
+            temp = tempArray(i)
+            tempArray(i) = tempArray(j)
+            tempArray(j) = temp
+        End If
+    Next j
+Next i
+
+For i = LBound(tempArray) To UBound(tempArray)
+    sortedCol.Add tempArray(i)
+Next i
+
+Set SortCollectionAscending = sortedCol
+End Function
+
+Private Sub AttachSubTabEventHandlers()
+Dim i As Integer
+Dim subTab As MSForms.MultiPage
+Dim handler As clsSubTabChange
+
+On Error Resume Next
+
+For i = 0 To MainTab.Pages.count - 1
+    Set subTab = MainTab.Pages(i).Controls("SubTab" & i)
+    
+    If Not subTab Is Nothing Then
+        Set handler = New clsSubTabChange
+        handler.SetMultiPage subTab, Me, i
+        SubTabChangeHandlers.Add handler
+    End If
+Next i
+
+On Error GoTo 0
+End Sub
+
+Public Sub LoadTabContentAt(ByVal mainTabIndex As Integer, ByVal subTabIndex As Integer)
+On Error Resume Next
+
+Dim subTab As MSForms.MultiPage
+Set subTab = MainTab.Pages(mainTabIndex).Controls("SubTab" & mainTabIndex)
+If subTab Is Nothing Then Exit Sub
+
+Dim frm As MSForms.Frame
+Set frm = subTab.Pages(subTabIndex).Controls("PageFrame_" & mainTabIndex & "_" & subTabIndex)
+If frm Is Nothing Then Exit Sub
+
+Dim tagParts() As String
+tagParts = Split(frm.tag, "|")
+If UBound(tagParts) < 1 Then Exit Sub
+
+Dim category As String, subCategory As String, key As String
+category = Trim(tagParts(0))       ' ← Trim を追加
+subCategory = Trim(tagParts(1))    ' ← Trim を追加
+key = category & "|" & subCategory
+
+If IsTabContentLoaded.exists(key) Then
+    If IsTabContentLoaded(key) = True Then Exit Sub
+End If
+
+UpdateStatus "読込中: " & subCategory
+CreateCheckBoxes category, subCategory, frm
+
+IsTabContentLoaded(key) = True
+
+Dim selectedCount As Integer
+selectedCount = 0
+Dim ctrl As Variant
+For Each ctrl In CheckBoxCollection
+    If TypeName(ctrl) = "CheckBox" Then
+        If ctrl.value = True Then selectedCount = selectedCount + 1
+    End If
+Next ctrl
+UpdateStatus selectedCount & "件選択中"
+
+On Error GoTo 0
+End Sub
+
+' プレビュー処理用のPublicメソッドを追加
+Public Sub ShowPreview()
+Dim SelectedItems As Collection
+Dim ctrl As Variant
+Dim chk As MSForms.checkbox
+Dim itemInfo As Variant
+
+On Error GoTo ErrorHandler
+
+UpdateStatus "プレビュー準備中..."
+
+' チェックされているアイテムを収集
+Set SelectedItems = New Collection
+
+For Each ctrl In CheckBoxCollection
+    If TypeOf ctrl Is MSForms.checkbox Then
+        Set chk = ctrl
+        If chk.value = True Then
+            ' ★ 変更点1: 配列のサイズを4に変更
+            Dim info(1 To 4) As String
+            Dim mainTabCaption As String
+            Dim subTabCaption As String ' ★ 変更点2: サブカテゴリ名用の変数を追加
+
+            ' メインタブ名を取得
+            mainTabCaption = chk.Parent.Parent.Parent.Parent.caption
+            
+            ' ★ 変更点3: サブカテゴリ名を取得
+            ' chk -> Frame -> SubTabのPage のキャプション
+            subTabCaption = chk.Parent.Parent.caption
+
+            ' ★ 変更点4: 配列に各情報を格納
+            info(1) = chk.caption      ' 表示名 (シート名)
+            info(2) = chk.tag          ' フルパス
+            info(3) = mainTabCaption   ' メインカテゴリ名
+            info(4) = subTabCaption    ' サブカテゴリ名
+            
+            SelectedItems.Add info
+        End If
+    End If
+Next ctrl
+
+If SelectedItems.count = 0 Then
+    MsgBox "プレビューするシートを選択してください。", vbExclamation, "選択なし"
+    UpdateStatus "選択なし"
+    Exit Sub
+End If
+
+' プレビューフォームを表示
+UpdateStatus "プレビュー起動中..."
+UFPreview.ShowPreview SelectedItems
+UpdateStatus SelectedItems.count & "件選択中"
+
+Exit Sub
+
+ErrorHandler:
+MsgBox "プレビュー表示エラー: " & Err.Description, vbCritical
+UpdateStatus "プレビューエラー"
+End Sub
+
+
+Option Explicit
+
+' ============================================
+' ユーザーフォーム: UFPreview
+' 選択されたファイルのプレビュー表示（クリップボード経由）
+' ============================================
+
+' ★★★ Windows API宣言 ★★★
+#If VBA7 Then
+    Private Declare PtrSafe Function OpenClipboard Lib "user32" (ByVal hwnd As LongPtr) As Long
+    Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
+    Private Declare PtrSafe Function CloseClipboard Lib "user32" () As Long
+    Private Declare PtrSafe Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+    Private Declare PtrSafe Function OleCreatePictureIndirect Lib "oleaut32" (lpPictDesc As PictDesc, riid As GUID, ByVal fOwn As Long, ipic As IPicture) As Long
+    Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#Else
+    Private Declare Function OpenClipboard Lib "user32" (ByVal hwnd As Long) As Long
+    Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
+    Private Declare Function CloseClipboard Lib "user32" () As Long
+    Private Declare Function IsClipboardFormatAvailable Lib "user32" (ByVal wFormat As Long) As Long
+    Private Declare Function OleCreatePictureIndirect Lib "oleaut32" (lpPictDesc As PictDesc, riid As GUID, ByVal fOwn As Long, ipic As IPicture) As Long
+    Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
+Private Const CF_BITMAP = 2
+Private Const CF_PALETTE = 9
+Private Const CF_ENHMETAFILE = 14
+
+Private Type PictDesc
+    cbSizeofStruct As Long
+    picType As Long
+#If VBA7 Then
+    hImage As LongPtr
+    Option1 As LongPtr
+#Else
+    hImage As Long
+    Option1 As Long
+#End If
+End Type
+
+Private Type GUID
+    Data1 As Long
+    Data2 As Integer
+    Data3 As Integer
+    Data4(7) As Byte
+End Type
+
+Private lstFiles As MSForms.listBox
+Private imgPreview As MSForms.Image
+Private btnClose As MSForms.CommandButton
+Private lblStatus As MSForms.Label
+Private CloseButtonHandler As clsButton
+Private ListBoxHandler As clsListBoxEvents
+Private SelectedItems As Collection
+Private TempPreviewPath As String
+
+Private Sub UserForm_Initialize()
+    On Error GoTo ErrorHandler
+    
+    Me.caption = "シートプレビュー"
+    Me.Width = 900
+    Me.Height = 650
+    
+    ' ファイルリストボックス
+    Set lstFiles = Me.Controls.Add("Forms.ListBox.1", "lstFiles", True)
+    With lstFiles
+        .left = 10
+        .top = 10
+        .Width = 200
+        .Height = 570
+        .Font.name = "Meiryo UI"
+        .Font.Size = 10
+    End With
+    
+    ' プレビュー画像
+    Set imgPreview = Me.Controls.Add("Forms.Image.1", "imgPreview", True)
+    With imgPreview
+        .left = 220
+        .top = 10
+        .Width = 650
+        .Height = 570
+        .PictureSizeMode = fmPictureSizeModeZoom
+        .BackColor = RGB(240, 240, 240)
+        .BorderStyle = fmBorderStyleSingle
+        .BorderColor = RGB(180, 180, 180)
+        Set .Picture = Nothing
+    End With
+    
+    ' ステータスラベル
+    Set lblStatus = Me.Controls.Add("Forms.Label.1", "lblStatus", True)
+    With lblStatus
+        .left = 220
+        .top = 590
+        .Width = 550
+        .Height = 20
+        .caption = "ファイルを選択してください"
+        .Font.name = "Meiryo UI"
+        .Font.Size = 9
+        .TextAlign = fmTextAlignLeft
+    End With
+    
+    ' 閉じるボタン
+    Set btnClose = Me.Controls.Add("Forms.CommandButton.1", "btnClose", True)
+    With btnClose
+        .left = 780
+        .top = 590
+        .Width = 90
+        .Height = 30
+        .caption = "閉じる"
+        .Font.name = "Meiryo UI"
+        .Font.Size = 10
+    End With
+    
+    Set CloseButtonHandler = New clsButton
+    CloseButtonHandler.SetButton btnClose, "ClosePreview", Me
+    
+    Set ListBoxHandler = New clsListBoxEvents
+    ListBoxHandler.SetListBox lstFiles, Me
+    
+    Debug.Print "UFPreview初期化完了"
+    
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "フォーム初期化エラー: " & Err.Description, vbCritical
+End Sub
+
+Public Sub ShowPreview(items As Collection)
+    Debug.Print "ShowPreview開始 - アイテム数: " & items.count
+    
+    Set SelectedItems = items
+    
+    Dim item As Variant
+    Dim i As Integer
+    i = 1
+    For Each item In SelectedItems
+        ' item(1) -> シート名, item(2) -> フルパス, item(3) -> メインカテゴリ名, item(4) -> サブカテゴリ名
+        Debug.Print i & ": [" & item(3) & " - " & item(4) & "] " & item(1) & " -> " & item(2)
+        
+        ' ★ 変更点: 表示形式を「[メインカテゴリ - サブカテゴリ] シート名」に変更
+        lstFiles.AddItem "[" & item(3) & " - " & item(4) & "] " & item(1)
+        
+        i = i + 1
+    Next item
+    
+    Debug.Print "リストボックスにアイテム追加完了: " & lstFiles.ListCount & "件"
+    
+    Me.show vbModeless
+    
+    Debug.Print "フォーム表示完了"
+End Sub
+
+Public Sub OnListBoxClick()
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== OnListBoxClick 開始 ==="
+    Debug.Print "ListIndex: " & lstFiles.ListIndex
+    
+    If lstFiles.ListIndex < 0 Then
+        Debug.Print "リストが選択されていません"
+        Exit Sub
+    End If
+    
+    ' 既存の画像をクリア
+    On Error Resume Next
+    Set imgPreview.Picture = Nothing
+    imgPreview.BackColor = RGB(240, 240, 240)
+    On Error GoTo ErrorHandler
+    
+    lblStatus.caption = "プレビュー生成中..."
+    DoEvents
+    
+    Dim selectedIndex As Integer
+    selectedIndex = lstFiles.ListIndex + 1
+    
+    If selectedIndex > SelectedItems.count Then
+        Debug.Print "インデックスが範囲外"
+        Exit Sub
+    End If
+    
+    Dim itemInfo As Variant
+    itemInfo = SelectedItems(selectedIndex)
+    
+    Dim filePath As String
+    filePath = itemInfo(2)
+    
+    Debug.Print "プレビュー対象: " & filePath
+    
+    GeneratePreview filePath
+    
+    lblStatus.caption = "表示中: " & itemInfo(1)
+    
+    Debug.Print "=== OnListBoxClick 完了 ==="
+    
+    Exit Sub
+    
+ErrorHandler:
+    lblStatus.caption = "エラー: " & Err.Description
+    Debug.Print "OnListBoxClickエラー: " & Err.Description
+    MsgBox "プレビュー表示エラー: " & Err.Description & vbCrLf & "ファイル: " & filePath, vbCritical
+End Sub
+
+Private Sub lstFiles_Click()
+    Debug.Print "警告: lstFiles_Click が直接呼ばれました（通常は発生しません）"
+End Sub
+
+Private Sub GeneratePreview(filePath As String)
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim rng As Range
+    Dim originalReferenceStyle As XlReferenceStyle
+    Dim printAreaAddress As String
+    Dim pic As StdPicture
+    
+    On Error GoTo ErrorHandler
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' ファイルが存在するか確認
+    If Dir(filePath) = "" Then
+        MsgBox "ファイルが見つかりません: " & vbCrLf & filePath, vbExclamation
+        GoTo CleanUp
+    End If
+    
+    Debug.Print "ファイルを開きます: " & filePath
+    
+    ' ワークブックを開く
+    Set wb = workbooks.Open(fileName:=filePath, ReadOnly:=True, UpdateLinks:=0)
+    
+    Debug.Print "ワークブックを開きました。シート数: " & wb.Worksheets.count
+    
+    ' 最初の表示可能なシートを取得
+    For Each ws In wb.Worksheets
+        If ws.visible = xlSheetVisible Then
+            Debug.Print "プレビュー対象シート: " & ws.name
+            
+            ' ★★★ 印刷範囲を取得 ★★★
+            originalReferenceStyle = Application.ReferenceStyle
+            
+            On Error Resume Next
+            printAreaAddress = ws.PageSetup.PrintArea
+            On Error GoTo ErrorHandler
+            
+            If printAreaAddress <> "" Then
+                Debug.Print "印刷範囲（取得値）: " & printAreaAddress
+                
+                ' 複数ページある場合は1ページ目のみ
+                If InStr(printAreaAddress, ",") > 0 Then
+                    printAreaAddress = Split(printAreaAddress, ",")(0)
+                    Debug.Print "複数ページ検出 → 1ページ目のみ使用: " & printAreaAddress
+                End If
+                
+                ' R1C1形式の場合はA1形式に変換
+                If InStr(1, printAreaAddress, "R", vbTextCompare) > 0 And _
+                   InStr(1, printAreaAddress, "C", vbTextCompare) > 0 Then
+                    Debug.Print "R1C1形式を検出 → A1形式に変換します"
+                    
+                    Application.ReferenceStyle = xlR1C1
+                    
+                    On Error Resume Next
+                    Set rng = ws.Range(printAreaAddress)
+                    
+                    If Err.Number <> 0 Then
+                        Debug.Print "Range取得エラー → 手動変換を試みます"
+                        Err.Clear
+                        
+                        ' 手動変換
+                        Dim r1c1Parts() As String
+                        Dim startCell As String, endCell As String
+                        
+                        If InStr(printAreaAddress, ":") > 0 Then
+                            r1c1Parts = Split(printAreaAddress, ":")
+                            startCell = ConvertR1C1ToA1(r1c1Parts(0))
+                            endCell = ConvertR1C1ToA1(r1c1Parts(1))
+                            
+                            Debug.Print "変換結果: " & startCell & ":" & endCell
+                            
+                            Set rng = ws.Range(startCell & ":" & endCell)
+                            
+                            If Not rng Is Nothing Then
+                                Debug.Print "手動変換成功: " & rng.Address
+                            End If
+                        End If
+                    End If
+                    
+                    On Error GoTo ErrorHandler
+                    Application.ReferenceStyle = originalReferenceStyle
+                    
+                    If Not rng Is Nothing Then
+                        Debug.Print "印刷範囲（A1形式）: " & rng.Address
+                    End If
+                Else
+                    Debug.Print "A1形式で設定されています: " & printAreaAddress
+                    Set rng = ws.Range(printAreaAddress)
+                End If
+            Else
+                Debug.Print "印刷範囲が未設定のため、使用範囲を使用"
+                On Error Resume Next
+                Set rng = ws.UsedRange
+                On Error GoTo ErrorHandler
+                
+                If rng Is Nothing Then
+                    Set rng = ws.Range("A1:P40")
+                    Debug.Print "デフォルト範囲を使用: A1:P40"
+                Else
+                    If rng.rows.count > 40 Then Set rng = rng.Resize(40)
+                    If rng.Columns.count > 16 Then Set rng = rng.Resize(, 16)
+                End If
+            End If
+            
+            Debug.Print "プレビュー範囲: " & rng.Address
+            Debug.Print "範囲サイズ: " & rng.rows.count & "行 × " & rng.Columns.count & "列"
+            
+            If rng Is Nothing Then
+                MsgBox "印刷範囲の取得に失敗しました。", vbExclamation
+                GoTo CleanUp
+            End If
+            
+            ' ★★★ クリップボード経由で画像を取得 ★★★
+            
+            ' 画面更新を一時的に有効化（画面に表示されないとコピーできない）
+            Application.ScreenUpdating = True
+            
+            ' シートをアクティブにして範囲を選択
+            ws.Activate
+            rng.Select
+            DoEvents
+            
+            Debug.Print "範囲を選択しました"
+            
+            ' 範囲を画像としてクリップボードにコピー
+            rng.CopyPicture Appearance:=xlScreen, Format:=xlPicture
+            
+            Debug.Print "クリップボードにコピーしました"
+            
+            ' 少し待機
+            Sleep 500
+            DoEvents
+            
+            ' クリップボードから画像を取得
+            Set pic = CreatePictureFromClipboard()
+            
+            If Not pic Is Nothing Then
+                Debug.Print "クリップボードから画像を取得しました"
+                
+                ' Imageコントロールに直接設定
+                Set imgPreview.Picture = pic
+                
+                Debug.Print "画像をImageコントロールに設定しました"
+                Debug.Print "Picture.Width: " & imgPreview.Picture.Width
+                Debug.Print "Picture.Height: " & imgPreview.Picture.Height
+                
+                Me.Repaint
+                DoEvents
+            Else
+                Debug.Print "★エラー: クリップボードから画像を取得できませんでした"
+                MsgBox "プレビュー画像の取得に失敗しました。", vbExclamation
+            End If
+            
+            Application.CutCopyMode = False
+            Application.ScreenUpdating = False
+            
+            Exit For
+        End If
+    Next ws
+    
+    wb.Close SaveChanges:=False
+    Set wb = Nothing
+    
+    Debug.Print "ワークブックを閉じました"
+    
+CleanUp:
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    Application.CutCopyMode = False
+    
+    Exit Sub
+    
+ErrorHandler:
+    Debug.Print "GeneratePreviewエラー: " & Err.Description & " (番号: " & Err.Number & ")"
+    
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    Application.CutCopyMode = False
+    
+    If Not wb Is Nothing Then
+        On Error Resume Next
+        wb.Close SaveChanges:=False
+        Set wb = Nothing
+        On Error GoTo 0
+    End If
+    
+    MsgBox "プレビュー生成エラー: " & Err.Description & vbCrLf & vbCrLf & _
+           "ファイル: " & filePath, vbCritical
+End Sub
+
+' クリップボードから画像を取得する関数
+Public Function CreatePictureFromClipboard() As StdPicture
+#If VBA7 Then
+    Dim hImg As LongPtr
+    Dim hPalette As LongPtr
+#Else
+    Dim hImg As Long
+    Dim hPalette As Long
+#End If
+    Dim uPictDesc As PictDesc
+    Dim uGUID As GUID
+    Dim retryCount As Integer
+    
+    Set CreatePictureFromClipboard = Nothing
+    
+    ' クリップボードに該当データが無い場合は終了
+    If IsClipboardFormatAvailable(CF_BITMAP) = 0 And IsClipboardFormatAvailable(CF_ENHMETAFILE) = 0 Then
+        Debug.Print "クリップボードに画像データがありません"
+        Exit Function
+    End If
+    
+    ' リトライカウンター初期化
+    retryCount = 0
+    Do While retryCount < 15
+        ' クリップボードからイメージハンドルを取得
+        If OpenClipboard(0&) <> 0 Then
+            ' まずはEnhanced Metafile（高解像度）を試す
+            hImg = GetClipboardData(CF_ENHMETAFILE)
+            If hImg <> 0 Then
+                uPictDesc.picType = 4 ' vbPicTypeEMetafile
+                Debug.Print "Enhanced Metafileを取得しました"
+            Else
+                ' Bitmapにフォールバック
+                hImg = GetClipboardData(CF_BITMAP)
+                hPalette = GetClipboardData(CF_PALETTE)
+                uPictDesc.picType = 1 ' vbPicTypeBitmap
+                Debug.Print "Bitmapを取得しました"
+            End If
+            Call CloseClipboard
+        End If
+        
+        ' クリップボードからイメージハンドルが取得できた場合
+        If hImg <> 0 Then Exit Do
+        
+        ' 少し待ってからリトライ
+        retryCount = retryCount + 1
+        Debug.Print "リトライ " & retryCount & "/15"
+        DoEvents
+        Sleep 200
+    Loop
+    
+    If hImg = 0 Then
+        Debug.Print "クリップボードから画像ハンドルを取得できませんでした"
+        Exit Function
+    End If
+    
+    With uPictDesc
+        .cbSizeofStruct = Len(uPictDesc)
+        .hImage = hImg
+        If uPictDesc.picType = 1 Then .Option1 = hPalette
+    End With
+    
+    With uGUID
+        .Data1 = &H20400
+        .Data4(0) = &HC0
+        .Data4(7) = &H46
+    End With
+    
+    Call OleCreatePictureIndirect(uPictDesc, uGUID, 0&, CreatePictureFromClipboard)
+    
+    Debug.Print "StdPictureオブジェクトを作成しました"
+End Function
+
+' R1C1形式をA1形式に変換する関数
+Private Function ConvertR1C1ToA1(r1c1Str As String) As String
+    On Error Resume Next
+    
+    Dim rowNum As Long
+    Dim colNum As Long
+    Dim colLetter As String
+    
+    Dim rPos As Integer, cPos As Integer
+    rPos = InStr(r1c1Str, "R")
+    cPos = InStr(r1c1Str, "C")
+    
+    If rPos > 0 And cPos > 0 Then
+        rowNum = CLng(Mid(r1c1Str, rPos + 1, cPos - rPos - 1))
+        colNum = CLng(Mid(r1c1Str, cPos + 1))
+        
+        colLetter = ConvertColumnNumberToLetter(colNum)
+        
+        ConvertR1C1ToA1 = "$" & colLetter & "$" & rowNum
+    Else
+        ConvertR1C1ToA1 = ""
+    End If
+End Function
+
+' 列番号をアルファベットに変換する関数
+Private Function ConvertColumnNumberToLetter(colNum As Long) As String
+    Dim Result As String
+    Dim remainder As Long
+    
+    Do While colNum > 0
+        remainder = (colNum - 1) Mod 26
+        Result = Chr(65 + remainder) & Result
+        colNum = (colNum - remainder - 1) \ 26
+    Loop
+    
+    ConvertColumnNumberToLetter = Result
+End Function
+
+Public Sub ClosePreview()
+    If TempPreviewPath <> "" Then
+        On Error Resume Next
+        Kill TempPreviewPath
+        On Error GoTo 0
+    End If
+    
+    Unload Me
+End Sub
+
+Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    ClosePreview
+End Sub
+
+Private Sub UserForm_Terminate()
+    Set lstFiles = Nothing
+    Set imgPreview = Nothing
+    Set btnClose = Nothing
+    Set lblStatus = Nothing
+    Set CloseButtonHandler = Nothing
+    Set ListBoxHandler = Nothing
+    Set SelectedItems = Nothing
+End Sub
+
+

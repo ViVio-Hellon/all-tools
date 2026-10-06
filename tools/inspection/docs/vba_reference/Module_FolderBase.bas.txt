@@ -1,0 +1,498 @@
+Option Explicit
+
+' ============================================
+' 標準モジュール: フォルダベース用関数（修正版）
+' ============================================
+Public Awidth As Single
+Public Bwidth As Single
+Public Cwidth As Single
+
+Private Const DEFAULT_FOLDER As String = "一括管理_点検表"
+Private Const DEFAULT_Path As String = "\\nlmsrvngy03\各課共有\0130_日軽稲沢\梱包課\AIM\【■】_参照用ファイル\"
+' ============================================
+' ベースフォルダパスを取得
+' ============================================
+Function GetBaseFolderPath() As String
+    On Error Resume Next
+    Dim nm As name
+    Dim pathValue As String
+    
+    ' 名前定義から取得を試みる
+    For Each nm In ThisWorkbook.Names
+        If nm.name = "FolderPath" Then
+            pathValue = CStr(nm.RefersToRange.value)
+            
+            ' 有効なパスであれば返す
+            If pathValue <> "" And pathValue <> "0" And pathValue <> "FolderPath" Then
+                Debug.Print "保存されたパス取得: " & pathValue
+                GetBaseFolderPath = pathValue
+                Exit Function
+            End If
+        End If
+    Next nm
+    On Error GoTo 0
+    
+    ' デフォルトパス
+    GetBaseFolderPath = DEFAULT_Path & "\" & DEFAULT_FOLDER
+    Debug.Print "デフォルトパス使用: " & GetBaseFolderPath
+End Function
+
+' ============================================
+' ★ フォルダパスを保存する関数（修正版）
+' ============================================
+Sub SaveBaseFolderPath(ByVal pathValue As String)
+    On Error Resume Next
+    
+    ' 既存の名前定義を削除
+    ThisWorkbook.Names("FolderPath").Delete
+    
+    ' 新しい名前定義を作成（セルへの参照ではなく文字列として保存）
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets(1) ' 最初のシートを使用
+    
+    ' A1セルに値を書き込み、それを参照する
+    ws.Range("ZZ1").value = pathValue
+    ThisWorkbook.Names.Add name:="FolderPath", RefersTo:=ws.Range("ZZ1")
+    
+    On Error GoTo 0
+End Sub
+
+' ============================================
+' ★ フォルダ選択ダイアログ（修正版）
+' ============================================
+Function SelectFolderDialog(Optional initialPath As String = "") As String
+    Dim fd As FileDialog
+    Set fd = Application.FileDialog(msoFileDialogFolderPicker)
+    
+    With fd
+        .title = "【親フォルダ】を選択 (例: 一括管理_点検表)"
+        .ButtonName = "選択"
+        
+        ' 初期フォルダの設定
+        If initialPath <> "" And Len(initialPath) > 0 Then
+            On Error Resume Next
+            .InitialFileName = initialPath & "\"
+            On Error GoTo 0
+        Else
+            .InitialFileName = ThisWorkbook.path & "\"
+        End If
+        
+        If .show = -1 Then ' OKが押された場合
+            SelectFolderDialog = .SelectedItems(1)
+            Debug.Print "フォルダ選択: " & SelectFolderDialog
+        Else
+            SelectFolderDialog = ""
+            Debug.Print "フォルダ選択キャンセル"
+        End If
+    End With
+    
+    Set fd = Nothing
+End Function
+
+' フォルダ構造から全ブック情報を取得
+Function GetWorkbooksFromFolder(Optional progressForm As UFProgressBar = Nothing) As Collection
+    Dim basePath As String
+    Dim fso As Object
+    Dim baseFolder As Object
+    Dim categoryFolder As Object
+    Dim subCategoryFolder As Object
+    Dim file As Object
+    Dim workbookInfo As Collection
+    Dim totalFiles As Long
+    Dim scannedFiles As Long
+    Dim progressValue As Long
+    
+    Set workbookInfo = New Collection
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    basePath = GetBaseFolderPath()
+    Debug.Print "検索対象フォルダ: " & basePath
+    
+    If Not fso.FolderExists(basePath) Then
+        MsgBox "点検表フォルダが見つかりません: " & vbCrLf & vbCrLf & basePath & vbCrLf & vbCrLf & _
+               "「フォルダ設定」ボタンから正しいフォルダを指定してください。", vbExclamation, "フォルダエラー"
+        Set GetWorkbooksFromFolder = workbookInfo
+        Exit Function
+    End If
+    
+    Set baseFolder = fso.GetFolder(basePath)
+    
+    ' ★ Step 1: 総ファイル数をカウント（進捗計算用）
+    totalFiles = 0
+    On Error Resume Next
+    For Each categoryFolder In baseFolder.SubFolders
+        For Each subCategoryFolder In categoryFolder.SubFolders
+            For Each file In subCategoryFolder.files
+                Dim ext As String
+                ext = LCase(fso.GetExtensionName(file.name))
+                If ext = "xlsm" Or ext = "xlsx" Or ext = "xls" Then '拡張子が一致しないとリストアップされない
+                    totalFiles = totalFiles + 1
+                End If
+            Next file
+        Next subCategoryFolder
+    Next categoryFolder
+    On Error GoTo 0
+    
+    ' ★ Step 2: ファイルを読み込みながら進捗を更新
+    scannedFiles = 0
+    On Error Resume Next
+    For Each categoryFolder In baseFolder.SubFolders
+        Dim categoryName As String
+        categoryName = categoryFolder.name
+        
+        For Each subCategoryFolder In categoryFolder.SubFolders
+            Dim subCategoryName As String
+            subCategoryName = subCategoryFolder.name
+            
+            For Each file In subCategoryFolder.files
+                ext = LCase(fso.GetExtensionName(file.name))
+                
+                If ext = "xlsm" Or ext = "xlsx" Or ext = "xls" Then '拡張子が一致しないとリストアップされない
+                    scannedFiles = scannedFiles + 1
+                    
+                    Dim itemInfo(1 To 4) As String
+                    itemInfo(1) = categoryName
+                    itemInfo(2) = subCategoryName
+                    itemInfo(3) = fso.GetBaseName(file.name)
+                    itemInfo(4) = file.path
+                    
+                    workbookInfo.Add itemInfo
+                    Debug.Print "検出: " & categoryName & ">" & subCategoryName & ">" & itemInfo(3)
+                    
+                    ' ★ 進捗を更新（5%～35%の範囲で表示）
+                    If Not progressForm Is Nothing And totalFiles > 0 Then
+                        progressValue = 5 + CLng((scannedFiles / totalFiles) * 30)
+                        progressForm.UpdateProgress progressValue, _
+                            "スキャン中... (" & scannedFiles & "/" & totalFiles & ") " & vbCrLf & _
+                            categoryName & " > " & subCategoryName
+                        DoEvents
+                    End If
+                End If
+            Next file
+        Next subCategoryFolder
+    Next categoryFolder
+    On Error GoTo 0
+    
+    Debug.Print "合計 " & workbookInfo.count & " ファイル検出"
+    Set GetWorkbooksFromFolder = workbookInfo
+End Function
+
+' ============================================
+' カテゴリ一覧を取得
+' ============================================
+Function GetUniqueCategoriesFromFolder() As Collection
+    Dim allWorkbooks As Collection
+    Dim categories As Collection
+    Dim item As Variant
+    Dim category As String
+    
+    Set categories = New Collection
+    Set allWorkbooks = GetWorkbooksFromFolder()
+    
+    On Error Resume Next
+    For Each item In allWorkbooks
+        category = item(1)
+        categories.Add category, category
+    Next item
+    On Error GoTo 0
+    
+    Set GetUniqueCategoriesFromFolder = categories
+End Function
+
+' ============================================
+' サブカテゴリ一覧を取得
+' ============================================
+Function GetUniqueSubCategoriesFromFolder(category As String) As Collection
+    Dim allWorkbooks As Collection
+    Dim subCategories As Collection
+    Dim item As Variant
+    Dim subCategory As String
+    
+    Set subCategories = New Collection
+    Set allWorkbooks = GetWorkbooksFromFolder()
+    
+    On Error Resume Next
+    For Each item In allWorkbooks
+        If item(1) = category Then
+            subCategory = item(2)
+            subCategories.Add subCategory, subCategory
+        End If
+    Next item
+    On Error GoTo 0
+    
+    Set GetUniqueSubCategoriesFromFolder = subCategories
+End Function
+
+' ============================================
+' 特定カテゴリ・サブカテゴリのブック一覧を取得
+' ============================================
+Function GetWorkbooksByFilter(category As String, subCategory As String) As Collection
+    Dim allWorkbooks As Collection
+    Dim filtered As Collection
+    Dim item As Variant
+    
+    Set filtered = New Collection
+    Set allWorkbooks = GetWorkbooksFromFolder()
+    
+    For Each item In allWorkbooks
+        If item(1) = category And item(2) = subCategory Then
+            filtered.Add item
+        End If
+    Next item
+    
+    Set GetWorkbooksByFilter = filtered
+End Function
+
+' ============================================
+' 選択されたブックを印刷
+' ============================================
+Sub PrintWorkbooksFromFolder(selectedPaths As Collection, copies As Integer)
+    Dim filePath As Variant
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim printedCount As Long
+    Dim errorCount As Long
+    Dim errorList As String
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    For Each filePath In selectedPaths
+        On Error Resume Next
+        
+        Debug.Print "印刷開始: " & filePath
+        
+        ' ブックを開く
+        Set wb = workbooks.Open(fileName:=CStr(filePath), ReadOnly:=True, UpdateLinks:=0)
+        
+        If Err.Number = 0 And Not wb Is Nothing Then
+            ' 表示されているシートを印刷
+            For Each ws In wb.Worksheets
+                If ws.visible = xlSheetVisible Then
+                    ws.PrintOut copies:=copies
+                    printedCount = printedCount + 1
+                    Debug.Print "  印刷完了: " & ws.name
+                    Exit For ' 最初のシートだけ
+                End If
+            Next ws
+            
+            wb.Close SaveChanges:=False
+        Else
+            errorCount = errorCount + 1
+            errorList = errorList & vbCrLf & "・" & CStr(filePath)
+            Debug.Print "  エラー: " & Err.Description
+        End If
+        
+        Err.Clear
+        Set wb = Nothing
+        On Error GoTo 0
+    Next filePath
+    
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    ' 結果表示
+    Dim msg As String
+    msg = "印刷完了: " & printedCount & " ファイル"
+    
+    If errorCount > 0 Then
+        msg = msg & vbCrLf & vbCrLf & "エラー: " & errorCount & " ファイル" & errorList
+        MsgBox msg, vbExclamation, "印刷結果"
+    Else
+        MsgBox msg, vbInformation, "印刷完了"
+    End If
+End Sub
+
+' ============================================
+' ダークモード設定の保存/読み込み
+' ============================================
+Public Property Get DarkModeEnabled() As Boolean
+    On Error Resume Next
+    Dim nm As name
+    For Each nm In ThisWorkbook.Names
+        If nm.name = "DarkMode" Then
+            DarkModeEnabled = (nm.RefersToRange.value = 1)
+            Exit Property
+        End If
+    Next nm
+    DarkModeEnabled = True
+    On Error GoTo 0
+End Property
+
+Public Property Let DarkModeEnabled(value As Boolean)
+    On Error Resume Next
+    ThisWorkbook.Names.Add name:="DarkMode", RefersTo:=IIf(value, 1, 0)
+    On Error GoTo 0
+End Property
+
+' ============================================
+' フォルダ構造を作成するツール
+' ============================================
+Sub CreateFolderStructure()
+    Dim basePath As String
+    Dim fso As Object
+    Dim ws As Worksheet
+    Dim category As String
+    Dim subCategory As String
+    Dim fileName As String
+    Dim newWb As Workbook
+    
+    If MsgBox("現在のシートを個別ブックとしてフォルダに保存します" & vbCrLf & vbCrLf & _
+              "保存先: " & ThisWorkbook.path & "\" & DEFAULT_FOLDER & vbCrLf & vbCrLf & _
+              "続行しますか？", vbYesNo + vbQuestion) = vbNo Then
+        Exit Sub
+    End If
+    
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    basePath = ThisWorkbook.path & "\" & DEFAULT_FOLDER
+    
+    If Not fso.FolderExists(basePath) Then
+        fso.CreateFolder basePath
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Dim exportedCount As Long
+    Dim skippedCount As Long
+    
+    For Each ws In ThisWorkbook.Worksheets
+        ' 起動シートと一覧シートはスキップ
+        If ws.name <> "起動" And ws.name <> "一覧" Then
+            Dim parts() As String
+            parts = Split(ws.name, "_")
+            
+            If UBound(parts) >= 2 Then
+                category = parts(0)
+                subCategory = parts(1)
+                fileName = ws.name & ".xlsm"
+                
+                ' カテゴリフォルダ作成
+                Dim categoryPath As String
+                categoryPath = basePath & "\" & category
+                If Not fso.FolderExists(categoryPath) Then
+                    fso.CreateFolder categoryPath
+                End If
+                
+                ' サブカテゴリフォルダ作成
+                Dim subCategoryPath As String
+                subCategoryPath = categoryPath & "\" & subCategory
+                If Not fso.FolderExists(subCategoryPath) Then
+                    fso.CreateFolder subCategoryPath
+                End If
+                
+                ' シートを新しいブックとして保存
+                ws.Copy
+                Set newWb = ActiveWorkbook
+                
+                Dim savePath As String
+                savePath = subCategoryPath & "\" & fileName
+                newWb.SaveAs fileName:=savePath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
+                newWb.Close SaveChanges:=False
+                
+                exportedCount = exportedCount + 1
+                
+                Debug.Print "エクスポート: " & savePath
+            Else
+                skippedCount = skippedCount + 1
+                Debug.Print "スキップ（形式不正）: " & ws.name
+            End If
+        Else
+            skippedCount = skippedCount + 1
+            Debug.Print "スキップ（システムシート）: " & ws.name
+        End If
+    Next ws
+    
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    MsgBox "フォルダ構造の作成完了" & vbCrLf & vbCrLf & _
+           "エクスポート: " & exportedCount & " シート" & vbCrLf & _
+           "スキップ: " & skippedCount & " シート" & vbCrLf & vbCrLf & _
+           "保存先: " & basePath, vbInformation
+End Sub
+
+' ============================================
+' テスト: フォルダ構造を確認
+' ============================================
+Sub TestFolderStructure()
+    Dim allWorkbooks As Collection
+    Dim item As Variant
+    Dim report As String
+    Dim categories As New Collection
+    Dim cat As Variant
+    
+    Set allWorkbooks = GetWorkbooksFromFolder()
+    
+    report = "=== フォルダ構造確認 ===" & vbCrLf & vbCrLf
+    report = report & "参照フォルダ: " & GetBaseFolderPath() & vbCrLf
+    report = report & "検出されたブック数: " & allWorkbooks.count & vbCrLf & vbCrLf
+    
+    ' カテゴリ別に表示
+    On Error Resume Next
+    For Each item In allWorkbooks
+        Dim catName As String
+        catName = item(1)
+        categories.Add catName, catName
+    Next item
+    On Error GoTo 0
+    
+    For Each cat In categories
+        report = report & "【" & cat & "】" & vbCrLf
+        For Each item In allWorkbooks
+            If item(1) = cat Then
+                report = report & "  " & item(2) & " > " & item(3) & vbCrLf
+            End If
+        Next item
+        report = report & vbCrLf
+    Next cat
+    
+    Debug.Print report
+    
+    MsgBox "参照フォルダ: " & GetBaseFolderPath() & vbCrLf & vbCrLf & _
+           "検出されたブック数: " & allWorkbooks.count & vbCrLf & _
+           "カテゴリ数: " & categories.count & vbCrLf & vbCrLf & _
+           "詳細はイミディエイトウィンドウで確認してください", vbInformation
+End Sub
+
+' フォーム起動用 (プログレスバー対応版)
+Sub ShowPrintManager()
+
+If UFPrintManager.visible Then Exit Sub '起動していたら終了
+
+
+    ' 1. プログレスバーフォームを先に表示
+    Load UFProgressBar
+    UFProgressBar.show vbModeless
+    DoEvents ' フォームの表示を確定させる
+    
+    On Error GoTo ErrorHandler
+
+    ' 2. メインフォームをメモリにロード（まだ表示はしない）
+    Load UFPrintManager
+    
+    ' 3. メインフォームの重い処理を実行（プログレスバーを引数で渡す）
+    UFPrintManager.LoadContents UFProgressBar
+    
+    ' ★★★ ここに追加 ★★★
+    ' 4. 重いレイアウト調整をプログレスバー表示中に実行する
+    UFProgressBar.UpdateProgress 98, "レイアウトを最終調整中..."
+    DoEvents
+    UFPrintManager.FinalizeLayout
+    
+    ' 5. 処理が終わったらプログレスバーフォームを閉じる
+    Unload UFProgressBar
+    
+    ' 6. メインフォームを表示する (Activateイベントが軽くなったので即時表示される)
+    UFPrintManager.show vbModeless
+    
+    Exit Sub
+    
+ErrorHandler:
+    ' エラーが発生した場合、両方のフォームを閉じる
+    MsgBox "起動処理中に予期せぬエラーが発生しました。", vbCritical, "起動エラー"
+    On Error Resume Next
+    Unload UFProgressBar
+    Unload UFPrintManager
+    On Error GoTo 0
+End Sub

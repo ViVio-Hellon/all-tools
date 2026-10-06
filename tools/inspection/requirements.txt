@@ -1,0 +1,20 @@
+# 点検表 選択・印刷 — 実行に必要な追加パッケージ
+#
+# 環境は python-web-tools(梱包資材総合ツール)と同じ。
+# 同じ端末に入っているものだけを使い、新しく足すものは無い。
+#
+#   pip install -r requirements.txt
+#
+# 【方針】依存はこの2つだけに抑える。
+# フロントエンド側にもビルド工程(npm / webpack など)を持ち込まない。
+#
+# Excel の操作は pywin32 を使わず、Windows に最初から入っている
+# cscript.exe + VBScript(COM)で行う(app/vbscript/excel_worker.vbs)。
+# プレビュー画像は ctypes(Windows API)+ 標準ライブラリで作る(Pillow 不要)。
+
+# Webフレームワーク本体
+Flask~=3.0
+
+# WSGIサーバ。Flask同梱の開発用サーバは本番利用を想定していないため、
+# Windowsで安定して動く純Python実装のこれを使う。
+waitress~=3.0

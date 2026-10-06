@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# アプリが生成するもの
+# (既定の保存先は ~/.coil_line_calendar だが、CALENDAR_HOME でリポジトリ内を
+#  指した場合に取り込んでしまわないよう、リポジトリ直下だけを対象にする。
+#  先頭の / が無いと calendar_app/sync/ のようなパッケージまで無視されてしまう)
+/sync/
+/logs/
+/print/
+/settings.json
+*.db
+*.db-journal
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Claude Code のローカル設定
+.claude/settings.local.json
+
+# 配布設定。**配る人がその場で書き出すもの**で、ソースではない
+# (`calendar_app/distribution.py`。ツールの直下 = start.bat と同じ階層)
+/配布設定/
+/配布設定.作成中/
+
+# デスクトップ版(Tauri)を作ったときにできるもの。`cargo build` で作り直せる
+src-tauri/target/
+src-tauri/gen/
+# GitHub Actions から取ってきて直下に置いた exe(配布のときに make_dist が入れる)
+/LineCalendar.exe

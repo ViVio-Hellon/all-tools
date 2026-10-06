@@ -1,0 +1,3029 @@
+/*
+  components.css — 部品
+
+  色は tokens.css の変数だけを使う。**色だけで意味を運ばない** ──
+  必ず形・位置・文言のいずれかを併せる。
+*/
+
+/* ==================================================================
+   添え書き
+
+   「何のための欄か」「押すと何が起きるか」を、その場に書くための字。
+   本文より一段落として、読み飛ばせるようにする ── 読まなくても操作は
+   でき、迷ったときだけ目に入る。
+
+   **`.page-head` の中だけに規則があり、外では素の本文と同じ大きさで
+   出ていました。** 添え書きが本文と同じ濃さで並ぶと、どれが操作で
+   どれが説明かが読めません。
+   ================================================================== */
+.lead{ color:var(--muted); font-size:var(--fs-sm); }
+.lead b, .lead strong{ color:var(--ink); }
+/* 「この設定が何を決めているか」の箇条書き。1行1つ、字下げは最小限 */
+ul.uses{ margin:var(--sp-1) 0 var(--sp-2); padding-left:1.4em; }
+ul.uses li{ margin:2px 0; }
+
+/* ==================================================================
+   ボタン
+   ================================================================== */
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  min-height:32px; padding:0 var(--sp-3);
+  font-family:inherit; font-size:var(--fs-md); line-height:1;
+  color:var(--btn-ink); background:var(--btn-face);
+  border:1px solid var(--btn-line); border-radius:var(--r-md);
+  cursor:pointer; white-space:nowrap;
+}
+.btn:hover:not(:disabled){ background:var(--btn-hover); }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+
+/* 実行(保存・反映)。1つの画面に1つだけ */
+.btn--primary{
+  color:var(--primary-ink); background:var(--primary); border-color:var(--primary);
+  font-weight:700;
+}
+.btn--primary:hover:not(:disabled){ background:var(--primary-hover); }
+
+.btn--danger{
+  color:var(--danger-ink); background:var(--danger); border-color:var(--danger);
+}
+.btn--danger:hover:not(:disabled){ background:var(--danger-hover); }
+
+/* 帯の上のボタン。うっすら白を重ねるだけで作る(帯の中で色を増やさない) */
+.ribbon .btn{
+  min-height:var(--ctl-h); border-radius:var(--ctl-r);
+  color:var(--bar-ink); background:var(--bar-face); border-color:var(--bar-edge);
+}
+.ribbon .btn:hover:not(:disabled){ background:var(--bar-face-on); }
+.ribbon .btn--danger{ border-color:var(--bar-alert); color:var(--bar-alert); }
+
+.btn--sm{ min-height:26px; padding:0 var(--sp-2); font-size:var(--fs-sm); }
+
+/* 待っていることを、押した本人に伝える(api.js が付ける) */
+.btn[data-busy="1"]{ position:relative; color:transparent !important; }
+.btn[data-busy="1"]::after{
+  content:""; position:absolute; width:14px; height:14px;
+  border:2px solid currentColor; border-top-color:transparent;
+  border-radius:50%; animation:spin .7s linear infinite;
+  color:var(--btn-ink);
+}
+.btn--primary[data-busy="1"]::after{ color:var(--primary-ink); }
+@keyframes spin{ to{ transform:rotate(360deg) } }
+
+.btn-row{ display:flex; gap:var(--sp-2); flex-wrap:wrap; align-items:center; }
+
+/* ==================================================================
+   押す場面ごとに囲むボタンの並び (日報入力の③)
+
+   平らに6つ並べると「保存(確定)」と「共有へ保存」が隣どうしに見えて、
+   **どちらを押すのか / 両方押すのか**が読めません
+   (「保存2つあって作業者2つ押すかなぁ？」)。
+
+   名前で区別させるのをやめて、**押す回数で囲みます** ── 打つあいだ
+   何度でも / 直が終わったら1回 / 要るときだけ。囲みの見出しが
+   「いつ押すのか」を言うので、ボタンの名前は短いままで済みます。
+
+   囲みそのものは目立たせません(下地と細い枠だけ)。目立つべきは
+   ボタンで、囲みは**境目が分かればいい**ためのものです。
+   ================================================================== */
+/* 囲みはどれも「見出し1行 + ボタン1段」で背が同じなので、中央で
+   そろえる。③の丸印と、右の注記も同じ高さに乗る */
+.btn-row--staged{ align-items:center; gap:var(--sp-3); }
+
+.btn-group{
+  display:inline-flex; flex-direction:column; gap:4px;
+  padding:var(--sp-2); border:1px solid var(--hairline);
+  border-radius:var(--r-md); background:var(--sunken);
+}
+.btn-group__cap{
+  font-size:var(--fs-xs); color:var(--muted); line-height:1;
+}
+.btn-group__row{ display:inline-flex; align-items:center; gap:var(--sp-2); }
+
+/* 順に押す2つは矢印でつなぐ ── 「チェックしてから送る」が並び順だけ
+   でなく形でも見えるように */
+.btn-group__arrow{ color:var(--muted); font-size:var(--fs-sm); }
+
+/* 直の終わりの囲みだけ、少し強く縁取る。**1直に1回しか押さないのに
+   押し忘れると共有に届かない**ので、視線が最後に止まる場所にする */
+.btn-group[data-when="end"]{ border-color:var(--rule); }
+
+/* 見るページを変えるだけの並び。**保存の囲みとは別の行**に置いて、
+   4つ目の保存に見えないようにする */
+.btn-row--nav{ margin-top:var(--sp-2); }
+
+/* ページの切り替え。**ボタンの並びに混ぜない** ── 押すと何かが起きる
+   ものと、選ぶだけのものを見た目で分ける(枠で1つにまとめる) */
+.page-switch{
+  display:inline-flex; align-items:center; gap:var(--sp-2);
+  padding:0 var(--sp-2); height:var(--ctl-h);
+  border:1px solid var(--rule); border-radius:var(--r-md);
+  background:var(--sunken);
+}
+.page-switch > label{ font-size:var(--fs-xs); color:var(--muted); }
+.page-switch select{ min-width:4em; }
+
+/* ==================================================================
+   入力
+   ================================================================== */
+.field{ display:flex; flex-direction:column; gap:2px; }
+.field > label{ font-size:var(--fs-xs); color:var(--muted); }
+
+input[type="text"], input[type="date"], input[type="number"],
+input[type="password"], select, textarea{
+  font-family:inherit; font-size:var(--fs-md); color:var(--ink);
+  background:var(--surface);
+  border:1px solid var(--field-line); border-radius:var(--r-sm);
+  padding:5px var(--sp-2); min-height:30px;
+}
+/* 選ぶ項目の名前が長い欄(「オペレーター構成ごと」── v4.15.0)。字が切れないように */
+select.select--wide{ min-width:14em; }
+input:disabled, select:disabled, textarea:disabled{
+  background:var(--sunken); color:var(--faint); cursor:not-allowed;
+}
+/* 入力の誤り。**色だけでなく文言も出す**(.msg--error を隣に置く) */
+input[aria-invalid="true"], select[aria-invalid="true"]{
+  border-color:var(--state-error); background:var(--state-error-bg);
+}
+
+.check{ display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+.check input{ width:16px; height:16px; accent-color:var(--accent); }
+
+/* ==================================================================
+   12行入力グリッド — この道具の主役
+   tkinter版 entry_grid.py に対応する
+   ================================================================== */
+.grid-wrap{
+  overflow:auto; background:var(--surface);
+  border:1px solid var(--rule); border-radius:var(--r-md);
+  box-shadow:var(--shadow-1);
+}
+table.grid{ border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+table.grid th, table.grid td{
+  border:1px solid var(--grid-line);
+  padding:0; text-align:center; white-space:nowrap;
+}
+table.grid thead th{
+  position:sticky; top:0; z-index:2;
+  background:var(--raised); color:var(--muted);
+  font-size:var(--fs-xs); font-weight:700;
+  padding:var(--sp-1) var(--sp-1);
+}
+/* 行番号の列。左に貼り付ける(横に長い表なので、どの行かを見失わない) */
+table.grid td.rowno, table.grid th.rowno{
+  position:sticky; left:0; z-index:1;
+  background:var(--raised); color:var(--muted);
+  font-family:var(--mono); font-size:var(--fs-xs);
+  width:46px; min-width:46px;
+}
+/* 行番号と「消す」を横に並べる。**番号は動かさない** ── 番号が動くと、
+   紙の何行目を見ているのかが分からなくなります */
+table.grid td.rowno{
+  display:flex; align-items:center; justify-content:space-between; gap:2px;
+  padding-left:4px; padding-right:2px;
+}
+table.grid td.rowno .rowno__n{ flex:none; }
+/* **ふだんは薄く。** 常に濃く出ていると、押すためのものに見えて
+   触られます ── 消すのは取り返しの付かない操作です */
+.rowno__del{
+  flex:none; border:0; background:transparent; cursor:pointer;
+  color:var(--muted); opacity:.35; font-size:11px; line-height:1;
+  padding:2px 3px; border-radius:var(--r-sm);
+}
+table.grid tbody tr:hover .rowno__del{ opacity:1; }
+.rowno__del:hover{ background:var(--state-error-bg); color:var(--state-error); }
+.rowno__del:focus-visible{ opacity:1; outline:2px solid var(--accent); }
+.rowno__del[disabled]{ display:none; }
+/* 確かめている行の ✕ は濃いまま(行の塗りは下の「焦点のある行」の後ろ) */
+.rowno__del[aria-expanded="true"]{
+  opacity:1; background:var(--state-error-bg); color:var(--state-error);
+}
+
+/* 行を空にする確かめ。**押した ✕ のすぐ下に出す吹き出し**(位置は views/entry.js)。
+   画面の上に出るブラウザの確かめは ✕ から遠く、毎回マウスを運んでいました */
+.rowask{
+  position:fixed; z-index:70;
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3);
+  color:var(--ink); background:var(--surface);
+  border:1px solid var(--state-error-line); border-left:4px solid var(--state-error);
+  border-radius:8px; box-shadow:var(--shadow-2);
+  font-size:var(--fs-sm); white-space:nowrap;
+}
+.rowask[hidden]{ display:none; }
+.rowask__text{ font-weight:700; }
+
+/* ページの案内(v4.8.0 → v4.9.0)── 表のすぐ上に**1行だけ**。場面ごとに一言と、
+   要るときだけボタン1つ(views/entry.js paintPageGuide)。くわしくはマウスで */
+.page-guide{
+  display:flex; align-items:center; gap:var(--sp-2);
+  margin:var(--sp-2) 0; padding-block:var(--sp-1);
+  border-left:4px solid var(--accent); color:var(--ink); background:var(--accent-soft);
+}
+/* `.msg` は改行をそのまま出す(pre-wrap。下のほうで決めている)。ここは組んだ箱
+   なので普通に流す ── `.msg` より後ろで勝つよう、2つ重ねて指す */
+.msg.page-guide{ white-space:normal; }
+.page-guide[hidden], .page-guide [hidden]{ display:none; }
+.page-guide__text{ flex:1 1 auto; font-weight:700; }
+.page-guide[data-mode="editing"]{
+  border-left-color:var(--state-warn); background:var(--state-warn-bg);
+}
+.page-guide[data-mode="fix"]{
+  border-left-color:var(--state-error); background:var(--state-error-bg);
+}
+
+/* ------------------------------------------------------------------
+   入力の近道 (v4.7.0)
+
+   「直の終わり」── 終了の時/分に入っているあいだだけ、その欄のすぐ下に
+   出る押しボタン(`views/entry.js`)。✕ の確かめ(`.rowask`)と同じく、
+   行の中身は隠さない位置に浮かせます。
+   ------------------------------------------------------------------ */
+.endchip{
+  position:fixed; z-index:65;
+  padding:2px; border-radius:8px;
+  background:var(--surface); border:1px solid var(--accent-line);
+  box-shadow:var(--shadow-2);
+}
+.endchip[hidden]{ display:none; }
+.endchip__btn{ white-space:nowrap; }
+.endchip__btn b{ font-variant-numeric:tabular-nums; }
+/* ツールが入れた欄を一瞬光らせる(上の行と同じ・包数の 1・直の終わり)。
+   **入ったことが目に見えるように** ── 黙って入ると、見直しで気づけない */
+@keyframes filled-glow{
+  from{ background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent); }
+  to{ background:transparent; box-shadow:0 0 0 0 transparent; }
+}
+table.grid input.is-filled{ animation:filled-glow 1.3s ease-out; }
+@media (prefers-reduced-motion: reduce){
+  table.grid input.is-filled{ animation:none; outline:2px solid var(--accent); }
+}
+
+/* 作業者を選ぶ窓の班の見出し ── 押すと班の全員(views/modals.js) */
+.staff-team__head{
+  display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2);
+  width:100%; margin:0 0 var(--sp-1); padding:var(--sp-1) var(--sp-2);
+  font:inherit; font-weight:700; color:var(--ink); cursor:pointer;
+  background:var(--accent-soft); border:1px solid var(--accent-line); border-radius:6px;
+}
+.staff-team__head:hover, .staff-team__head:focus-visible{
+  background:var(--accent); color:var(--on-fill);
+}
+.staff-team__all{ font-size:var(--fs-xs); font-weight:400; }
+/* 作業者を選ぶ窓(v4.16.0)── **スクロールなしで全部の班が見えるように**。
+   班を横1列に並べ(狭い画面では折り返す)、名前の行を詰める。`.check` に付いている
+   上の余白(断りの板のもの)と `.card + .card` の余白はここでは外す。
+   窓の幅は `.modal__box--wide`(モーダルの節) */
+.staff-teams{
+  display:grid; gap:var(--sp-2); align-items:start;
+  grid-template-columns:repeat(auto-fit, minmax(128px, 1fr));
+}
+.staff-teams .card + .card{ margin-top:0; }
+.staff-team{ padding:var(--sp-2); }
+.staff-team .check{
+  display:flex; margin-top:0; padding:3px 2px;
+  font-size:var(--fs-sm); line-height:1.25; white-space:nowrap;
+}
+
+/* マウスを乗せると出る簡易説明(`static/js/hint.js`)。**1〜2行で言い切る** */
+.hint{
+  position:fixed; z-index:90; pointer-events:none;
+  max-width:min(42ch, calc(100vw - 16px));
+  padding:var(--sp-1) var(--sp-2); line-height:1.6;
+  font-size:var(--fs-sm); color:var(--ink); background:var(--surface);
+  border:1px solid var(--rule); border-left:3px solid var(--accent);
+  border-radius:6px; box-shadow:var(--shadow-2);
+  white-space:pre-line;           /* 1行目が答え、改行の下に式(梱包力など) */
+}
+.hint[hidden]{ display:none; }
+[data-hint]:not([data-hint=""]){ cursor:help; }
+table.grid input[data-hint], table.grid select[data-hint]{ cursor:auto; }
+table.grid tbody tr:nth-child(even) td:not(.rowno){ background:var(--row-alt); }
+
+/* 日本語入力を最初から起こさない欄 (LOTNO・時・分・枚数など)
+
+   ここに打つのは英数字だけです。かなで打てる欄ではないのに IME が
+   開くと、候補の窓が下の行を覆い、Enter が候補の確定に取られます
+   ── 打ち終わったつもりで次の行を見ると、何も入っていません。
+
+   【効く範囲は正直に言うと狭い】
+   `ime-mode` を見てくれるのは IE と旧 Edge だけで、Chrome や
+   Chromium 版 Edge は無視します。**それらでは欄の側から IME を
+   止める手立てがありません**(仕様にありません)。
+   そちらは「入っても確定した瞬間に落とす」で受けています
+   (`views/entry.js` の `compositionend`)。履歴の一覧のほうは
+   `autocomplete="off"` でどのブラウザでも出なくなります。 */
+table.grid [data-charset="alnum_upper"],
+table.grid [data-charset="digits"]{ ime-mode:disabled; }
+/* 時間計算が断った行。**どの行を直せばよいのかを行で示す** ──
+   文言に「3行目」と書いてあっても、12行あると目で数えることになる。
+   **色だけに頼らない**ので、行番号の脇にも印を出す */
+table.grid tbody tr[data-problem="1"] td{ background:var(--stop-sudden-bg); }
+table.grid tbody tr[data-problem="1"] td.rowno{
+  color:var(--stop-sudden); font-weight:700;
+  box-shadow:inset 3px 0 0 var(--stop-sudden);
+}
+/* 印は**行番号そのものを札にする**(塗りつぶした角丸)。行番号の右には
+   「空にする」の ✕ があるので、そこに記号を足すと ✕ と見分けにくい
+   (以前は直っていない行に赤い ✕ を出していて、消すボタンと紛れました) */
+table.grid tbody tr[data-problem="1"] td.rowno .rowno__n{
+  color:var(--on-fill); background:var(--stop-sudden);
+  border-radius:999px; padding:0 4px;
+}
+
+/* ==================================================================
+   直っていない行。**消えない印。**
+
+   `data-problem` は「いま出ている断り」で、次に打てば消えます。
+   こちらは**直すまで残る**印で、保存(確定)もこの行があるうちは通りません
+   (`logic/work_time.problems`)。色だけに頼らないよう、行番号を塗りつぶした
+   札にし、左端に太い縦線を引きます。
+   ================================================================== */
+table.grid tbody tr[data-bad="1"] td{
+  background:var(--state-error-bg);
+}
+table.grid tbody tr[data-bad="1"] td.rowno{
+  color:var(--state-error); font-weight:700;
+  box-shadow:inset 4px 0 0 var(--state-error);
+}
+/* 行番号を赤い札に(✕ は「空にする」だけ ── 印に ✕ は使わない) */
+table.grid tbody tr[data-bad="1"] td.rowno .rowno__n{
+  color:var(--on-fill); background:var(--state-error);
+  border-radius:999px; padding:0 4px;
+}
+/* 焦点のある行でも印は消さない ── 触っている最中こそ見えてほしい */
+table.grid tbody tr[data-bad="1"][data-focus="1"] td{
+  background:var(--state-error-bg);
+}
+
+/* 押せるが通らないボタン。**disabled にはしない** ── 押して初めて
+   「なぜ駄目か」が出るほうが、押せない理由を探すより早い */
+.btn--blocked{
+  border-color:var(--state-error-line);
+  box-shadow:inset 0 -3px 0 var(--state-error);
+}
+
+/* 焦点のある行。tkinter版 `Point_Change` と同じ役目。
+   **色だけに頼らない**ので行番号も太字にする */
+table.grid tbody tr[data-focus="1"] td{ background:var(--row-focus); }
+table.grid tbody tr[data-focus="1"] td.rowno{
+  color:var(--accent); font-weight:700;
+  box-shadow:inset 3px 0 0 var(--row-focus-line);
+}
+/* 空にするか確かめている行。**どの行が消えるのかを塗って見せる**(縞・焦点より後ろに置く) */
+table.grid tbody tr:has(.rowno__del[aria-expanded="true"]) td:not(.rowno){
+  background:var(--state-error-bg);
+}
+/* 2段の見出し。上段(結合されるほう)は下段より一段濃くして、
+   「梱包作業時間」と「開始 時」が同じ高さに見えないようにする。
+   **停止の3分類には触らない** ── あちらは色そのものが意味を持つ
+   (下の `th.stop--*`)ので、地色で塗り潰すと分類が読めなくなる */
+table.grid thead tr:first-child th[colspan]:not([class*="stop--"]){
+  background:var(--accent-soft); color:var(--ink);
+  border-bottom:1px solid var(--accent-line);
+}
+table.grid thead tr:first-child th[colspan]{
+  border-bottom:1px solid var(--accent-line);
+}
+/* 上段が貼り付いたぶん、下段はその下へ。高さは見出しの実寸に合わせる */
+table.grid thead tr:nth-child(2) th{ top:22px; }
+
+/* 升目の入力欄。枠は表の罫線が担うので、入力欄自身は枠を持たない */
+table.grid input, table.grid select{
+  border:0; border-radius:0; background:transparent;
+  width:100%; min-height:26px; padding:2px 4px;
+  font-size:var(--fs-sm); text-align:center;
+  color:inherit; font-family:inherit;
+}
+table.grid input:focus, table.grid select:focus{
+  outline:2px solid var(--focus); outline-offset:-2px;
+  background:var(--surface);
+}
+table.grid input[readonly]{ color:var(--muted); background:var(--sunken); }
+/* 選ぶ欄(合紙・停止理由の記号)。**打つ欄と見分けが付くようにする** ──
+   同じ見た目だと、打とうとして打てず「効いていない」に見える */
+table.grid select{
+  appearance:none;
+  background-image:linear-gradient(45deg, transparent 50%, var(--faint) 50%),
+                   linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+  background-position:calc(100% - 9px) calc(50% + 1px),
+                      calc(100% - 5px) calc(50% + 1px);
+  background-size:4px 4px, 4px 4px;
+  background-repeat:no-repeat;
+  padding-right:14px; text-align:left;
+}
+
+/* 停止の3分類。列見出しに付けて、どの欄がどれかを一目で分ける。
+   **上段の見出し(`th[colspan]`)より強く書く** ── そちらの地色に
+   負けると、3分類の色が消えて「停止の欄が3組ある」だけの表になる */
+table.grid thead th.stop--loss{
+  color:var(--stop-loss); background:var(--stop-loss-bg);
+}
+table.grid thead th.stop--sudden{
+  color:var(--stop-sudden); background:var(--stop-sudden-bg);
+}
+table.grid thead th.stop--handling{
+  color:var(--stop-handling); background:var(--stop-handling-bg);
+}
+
+/* ------------------------------------------------------------------
+   紙に載らない列(作業時間・単重)
+
+   印刷範囲の外(X列・Y列)に置かれている計算結果。**入力する列と
+   同じ見た目にしない** ── 同じに見えると「刷ったのに出てこない」と
+   受け取られる。
+   ------------------------------------------------------------------ */
+table.grid th.outside{ background:var(--sunken); color:var(--faint); }
+/* Gコースのロットの印(v4.17.0)。寸法の欄の右端に「G」。乗せると
+   「Gコース(GSS)のロット ── 寸法は BOX最終実績」。**欄の文字には重ねない** ──
+   印のある欄だけ右に印のぶんの余白を取る */
+table.grid td.g-cell{ position:relative; }
+.gmark{
+  position:absolute; top:50%; right:3px; z-index:1; transform:translateY(-50%);
+  min-width:16px; padding:0 3px; border-radius:4px;
+  font:700 11px/16px var(--mono); text-align:center;
+  color:var(--on-fill); background:var(--accent);
+  cursor:help;
+}
+.gmark[hidden]{ display:none; }
+table.grid td.g-cell:has(> .gmark:not([hidden])) input{ padding-right:22px; }
+/* 文の頭に置くとき(GW の寸法の上) */
+.gmark--inline{ position:static; display:inline-block; flex:none; transform:none; }
+.gw-gnote{
+  display:flex; align-items:baseline; gap:var(--sp-2);
+  margin:var(--sp-1) 0 var(--sp-2); padding:var(--sp-1) var(--sp-2); line-height:1.5;
+}
+.gw-gnote[hidden]{ display:none; }
+/* Gコースの寸法の欄。印と同じ色の縁(どの欄が BOX最終実績から入ったか) */
+.stack-field input.is-gsize{ box-shadow:inset 3px 0 0 var(--accent); }
+table.grid td.outside{ background:var(--sunken); }
+table.grid tbody tr:nth-child(even) td.outside{ background:var(--sunken); }
+/* 印刷範囲の切れ目を1本の線で示す */
+table.grid th.outside:first-of-type, table.grid td.outside:first-of-type{
+  border-left:2px solid var(--rule);
+}
+.legend{
+  display:inline-block; width:12px; height:12px;
+  vertical-align:-1px; border:1px solid var(--grid-line);
+}
+.legend--outside{ background:var(--sunken); }
+
+/* ==================================================================
+   一覧表(集計・履歴)
+   ================================================================== */
+table.list{
+  border-collapse:collapse; width:100%; font-size:var(--fs-sm);
+  background:var(--surface);
+}
+table.list th, table.list td{
+  border-bottom:1px solid var(--hairline);
+  padding:var(--sp-2); text-align:left;
+}
+table.list thead th{
+  background:var(--raised); color:var(--muted);
+  font-size:var(--fs-xs); position:sticky; top:0;
+}
+table.list td.num, table.list th.num{ text-align:right; font-family:var(--mono); }
+table.list tbody tr:hover{ background:var(--sunken); }
+
+/* ==================================================================
+   カード / 区画
+   ================================================================== */
+.card{
+  background:var(--surface); border:1px solid var(--rule);
+  border-radius:var(--r-md); padding:var(--sp-3);
+  box-shadow:var(--shadow-1);
+}
+.card + .card{ margin-top:var(--sp-3); }
+.card__head{
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:var(--sp-2); margin-bottom:var(--sp-2);
+}
+.card__head h2{ font-size:var(--fs-md); }
+
+.stack{ display:flex; flex-direction:column; gap:var(--sp-3); }
+.row{ display:flex; gap:var(--sp-3); flex-wrap:wrap; align-items:flex-end; }
+
+/* ==================================================================
+   作業の順序
+
+   ライン・作業者・明細・保存が同じ重さで並んでいたので、どれから触る
+   のかが画面から読めなかった。**番号を振って、いまどこかを示すだけ。**
+   飛ばして触れないようにはしない ── 直しに戻ることがあるので、
+   閉じると邪魔になる。
+
+   済みかどうかを決めるのはサーバ(`presenters/entry.py:steps()`)。
+   ================================================================== */
+/* 直ひと回りの動線。**関わる画面すべてに同じものを出す** ──
+   画面ごとに違う帯だと、行った先で順番が途切れる */
+.flow{ margin-bottom:var(--sp-3); }
+.flow__head{
+  margin:0 0 var(--sp-2); font-size:var(--fs-sm); font-weight:700;
+}
+.flow__aside{ margin:calc(var(--sp-2) * -1) 0 0; }
+.flow .steps{ margin-bottom:var(--sp-2); }
+/* いまやることの行き先。**ここを押せば次へ進める** */
+.step__go{ margin-left:var(--sp-2); flex:0 0 auto; }
+
+/* 帯の「ここへ」で運ばれた先。着いたことが分かるように少しだけ光らせる
+   (2秒で消える。色だけに頼らないよう、枠も太くする) */
+[data-pointed="1"]{
+  outline:3px solid var(--accent);
+  outline-offset:2px;
+  animation:pointed 2s ease-out;
+}
+@keyframes pointed{
+  0%,60%{ outline-color:var(--accent); }
+  100%{ outline-color:transparent; }
+}
+@media (prefers-reduced-motion:reduce){
+  [data-pointed="1"]{ animation:none; }
+}
+
+.steps{
+  display:flex; flex-wrap:wrap; gap:var(--sp-2);
+  list-style:none; margin:0 0 var(--sp-3); padding:0;
+}
+.step{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-1) var(--sp-3);
+  background:var(--surface); border:1px solid var(--rule);
+  border-radius:99px; min-width:0;
+}
+.step__n{
+  flex:0 0 auto; width:22px; height:22px; border-radius:50%;
+  display:grid; place-items:center;
+  font-size:var(--fs-xs); font-family:var(--mono);
+  background:var(--raised); color:var(--muted);
+}
+.step__text{ display:flex; flex-direction:column; line-height:1.3; min-width:0; }
+.step__text b{ font-size:var(--fs-sm); }
+.step__text small{ font-size:var(--fs-xs); color:var(--muted); }
+
+/* 済み。**番号は残す**(カードの肩の番号と突き合わせるため)。
+   色だけに頼らないので、名前のうしろに ✓ を足す */
+.step[data-done="1"] .step__n{ background:var(--state-ok-bg); color:var(--state-ok); }
+.step[data-done="1"] .step__text b::after{ content:" ✓"; color:var(--state-ok); }
+
+/* いまここ。次に触る場所を1つだけ立てる */
+.step[data-current="1"]{
+  border-color:var(--accent); background:var(--accent-soft);
+}
+.step[data-current="1"] .step__n{ background:var(--accent); color:var(--on-fill); }
+.step[data-current="1"] .step__text b{ font-weight:700; }
+
+/* カードの肩に付ける番号。帯の順序と突き合わせるためのもの */
+.card__n{
+  display:inline-grid; place-items:center;
+  width:20px; height:20px; border-radius:50%;
+  margin-right:var(--sp-2);
+  font-size:var(--fs-xs); font-family:var(--mono);
+  background:var(--accent); color:var(--on-fill);
+  vertical-align:middle;
+}
+
+/* ==================================================================
+   表の下の合計 (紙の21〜26行目「直実績合計」「負荷計算後」)
+   ================================================================== */
+.totals{ margin-top:var(--sp-3); }
+.entry-foot > .totals{ margin-top:0; }
+/* 計算で決まる欄。**打つ欄と見分けが付くようにする** ── 打てないことを
+   押してから知るのでは遅い */
+.totals__cell[data-calc="1"] input{
+  background:var(--sunken); color:var(--ink);
+  font-weight:700; cursor:default;
+}
+.totals__cell[data-calc="1"] > label::after{
+  content:"(自動)"; margin-left:4px; color:var(--faint);
+}
+.totals__t{ font-family:var(--mono); }
+
+/* 12行を使い切った。**文言で言う**(色だけだと気づかない) */
+#rows-left[data-full="1"]{ color:var(--state-warn); font-weight:700; }
+
+/* ==================================================================
+   etc欄の押しボタン (VBA SPCommand〜MICommand)
+
+   1組だけ置いて、いま選んでいる行に効かせる。**押した状態は etc 欄の
+   文字が持つ**ので、ここは見た目だけ。
+   ================================================================== */
+.marks{ margin-top:var(--sp-3); }
+.entry-panels > .marks{ margin-top:0; }
+/* 押されている印。色だけに頼らないので `aria-pressed` も付ける */
+.mark[aria-pressed="true"]{ font-weight:700; }
+/* 自動で押されるもの。押した覚えが無い人が「なぜ付いた」と辿れるよう、
+   ボタン自身に印を出す(理由は title と下の説明にある) */
+.mark__auto{
+  margin-left:4px; padding:0 3px; border-radius:var(--r-sm);
+  font-size:var(--fs-xs); background:var(--raised); color:var(--muted);
+}
+.mark[aria-pressed="true"] .mark__auto{ background:rgba(255,255,255,.25); color:inherit; }
+
+/* ロット番号が引けた欄。**引けたことが分かる**ようにする ──
+   引けなかったときは手で埋めることになるので、その区別が要る */
+.grid input[data-family="LOT"][data-filled="1"]{
+  background:var(--state-ok-bg);
+}
+
+/* ==================================================================
+   梱包資材重量計算 ── 作業の順に、左から右へ列で並べる
+
+   以前は「引く / 寸法 / 使う資材 / 結果」を上から下へ全幅で積んで
+   いたので、結果を見ながら入力を直すたびに画面を上下に往復していた。
+   横に長い1行の入力欄も、見出しと欄が離れて目が戻る場所を見失う。
+
+   作業は一方向(製品→梱包の形→資材→結果)なので、その順に列を置く。
+   **結果は右端に固定**され、入力を直すとその場で数字が変わる。
+   ================================================================== */
+.gw-cols{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(260px, 1fr));
+  gap:var(--sp-3);
+  align-items:start;
+  margin-top:var(--sp-3);
+}
+.gw-col{ min-width:0; }
+
+/* ------------------------------------------------------------------
+   列の役割 (`data-role`)
+
+   **同じ白い箱が4つ並ぶと、どこに打つのか画面から読めない。**
+   4つの列はやることが違うので、地色と印の色で分ける:
+
+     read   引いてきた値(製品情報) … 沈んだ面。**触らないものは沈める**
+     input  人が打つ  (梱包の形)   … 明るい面 + 左の印
+     choose 選ぶ      (使う資材)   … 明るい面 + 別の印
+     result 出てきた値(結果)       … 淡い面。入力と地色で分ける
+
+   明るいところに目が行くので、**打つ列がいちばん明るい**。読むだけの
+   列を沈めると、触るところが自然に残ります。
+
+   色だけに頼りません ── 題の隣に「打つ」「選ぶ」と書いてあり、
+   左の印は色が見分けられなくても帯として見えます。
+   ------------------------------------------------------------------ */
+.card[data-role]{
+  border-left:3px solid var(--role);
+  padding-left:calc(var(--sp-3) - 2px);
+}
+.card[data-role] .card__n{ background:var(--role); }
+.card[data-role="read"]{
+  --role:var(--role-read); background:var(--sunken); box-shadow:none;
+}
+.card[data-role="input"]{ --role:var(--role-input); background:var(--surface); }
+.card[data-role="choose"]{ --role:var(--role-choose); background:var(--surface); }
+/* 結果は淡い緑。印(緑)と地色をそろえる ── 印と地が違う色だと、
+   どちらが「この列は何か」を指しているのか読めない */
+.card[data-role="result"]{ --role:var(--role-result); background:var(--state-ok-bg); }
+
+/* ==================================================================
+   梱包図 (VBA `図形展開`)
+
+   **輸出梱包の完成確認用。** 部材ごとに色を分けるのは、図の中で
+   「これはバンド」「これはアングル」を見分けるためです ── 色の意味は
+   この図の中だけで閉じているので、グラフのなかまの色は使わず、
+   部材そのものの色を持ちます。
+
+   **色だけに頼りません。** 図の隣に本数や寸法を字で並べ、箱には
+   `<title>`(マウスを乗せると出る)を付けてあります。
+   ================================================================== */
+.figure{ display:flex; flex-wrap:wrap; gap:var(--sp-4); align-items:flex-start; }
+.figure__canvas{ flex:1 1 380px; min-width:0; }
+.figure__facts{ flex:0 1 260px; }
+.fig{ width:100%; height:auto; display:block; max-width:520px; }
+
+/* 面の描き分け。**同じ部材でも、上・横・手前で明るさを変える** ──
+   平らな塗りだと立体に見えず、どこが手前か読めない */
+.fig-face{ stroke:var(--ink); stroke-width:.4; }
+.fig-face--top{ filter:brightness(1.14); }
+.fig-face--side{ filter:brightness(.82); }
+
+/* 部材の色。木は木の色、バンドは金属の色 ── 現物の色に寄せる */
+.fig-box--product .fig-face{ fill:var(--fig-product); }
+.fig-box--hardboard .fig-face{ fill:var(--fig-board); }
+.fig-box--pallet .fig-face{ fill:var(--fig-timber); }
+.fig-box--lid .fig-face{ fill:var(--fig-lid); }
+/* 蓋の桟(縦桟・横桟)は角材の色。濃い板の上に明るい桟が載って、蓋だと分かる */
+.fig-box--lid-cleat .fig-face{ fill:var(--fig-timber); }
+.fig-box--angle .fig-face{ fill:var(--fig-angle); }
+.fig-box--band .fig-face{ fill:var(--fig-band); }
+/* バンドは材質で塗り分ける ── **PETバンドは緑、帯鉄は青**(現場の指定)。
+   字でも「バンド種別: PETバンド(緑)」と図の脇に出します */
+.fig-box--band-pet .fig-face{ fill:var(--fig-band-pet); }
+.fig-box--band-steel .fig-face{ fill:var(--fig-band-steel); }
+
+@media (max-width:720px){
+  .figure__facts{ flex-basis:100%; }
+}
+
+/* 配布設定 (設定・この端末と配布)。python-web-tools と同じく、
+   入れる項目は**1行ずつ**並べる(押しやすく、値まで読めるように) */
+.distchecks{
+  border:1px solid var(--rule); border-radius:var(--r-sm);
+  margin:var(--sp-2) 0 0; padding:var(--sp-1) var(--sp-3) var(--sp-2);
+  display:grid; gap:2px;
+}
+.distchecks legend{ font-size:var(--fs-xs); color:var(--muted); padding:0 4px; }
+.distchecks label{ display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap; min-height:32px; }
+.distchecks__value{ overflow-wrap:anywhere; }
+.site-warnings{ list-style:none; padding:0; margin:var(--sp-2) 0 0; display:grid; gap:var(--sp-1); }
+
+/* 印刷の選択 (GW画面の結果の列)
+   **何を刷るかを先に見せる。** VBA は印刷範囲だけ違う2つの Sub を
+   持っていて、どちらが走るかはソースを読むまで分からなかった */
+.gw-print{
+  margin-top:var(--sp-3); padding-top:var(--sp-3);
+  border-top:1px solid var(--rule);
+  display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:center;
+}
+/* 押せない理由。**吹き出しに隠さない**(マウスを載せないと読めない) */
+.gw-print__why{ font-size:var(--fs-sm); color:var(--muted); }
+.gw-print__why[hidden]{ display:none; }
+/* 梱包数。**紙だけの値**なので、上の入力欄と同じ見た目にしない
+   (打ち直しても計算は変わらない) */
+.gw-print__packs{ font-size:var(--fs-xs); color:var(--muted); }
+.gw-print input{ width:4em; text-align:right; }
+.gw-print #print-note{ flex-basis:100%; }
+
+/* 題の隣の一言。**色の意味を字で書く** ── 色が見分けられない人にも、
+   色を覚えていない人にも、同じことが伝わる */
+.role-tag{
+  margin-left:var(--sp-2); font-size:var(--fs-xs); font-weight:400;
+  color:var(--role, var(--muted)); white-space:nowrap;
+}
+
+
+/* 縦に積む入力欄。見出しは左、欄は同じ幅で右にそろえる ──
+   幅がそろっていると、上から順に埋めるだけで済む */
+.stack-fields{ display:flex; flex-direction:column; gap:var(--sp-2); }
+.stack-fields__head{
+  font-size:var(--fs-xs); color:var(--muted);
+  border-bottom:1px solid var(--rule); padding-bottom:2px;
+  margin-top:var(--sp-2);
+}
+.stack-fields__head:first-child{ margin-top:0; }
+.stack-field{
+  display:grid;
+  /* 見出し / 欄 / 単位。**単位の幅を固定**して、数字の右端をそろえる */
+  grid-template-columns:1fr 90px 2.5em;
+  align-items:center; gap:var(--sp-2);
+  font-size:var(--fs-sm);
+}
+.stack-field__label{ min-width:0; overflow-wrap:anywhere; }
+/* VCの表裏。「使う」と面の名前と品名を**1行に並べる** ── 縦にばらすと、
+   どの品名がどちらの面のものか読めなくなる。ここだけ列の幅がそろわない
+   ので、格子ではなく素直に横並びにする */
+.stack-field--vc{ display:flex; align-items:center; gap:var(--sp-2); }
+.stack-field--vc > .check{
+  flex:0 0 auto; white-space:nowrap; font-size:var(--fs-sm);
+}
+/* 品名は打つ欄(`input`)のことも選ぶ欄(`select`)のこともある ──
+   マスタを読めた日は `select`。**どちらも同じ幅の振る舞い**にする */
+.stack-field--vc > input, .stack-field--vc > select{
+  flex:1 1 auto; min-width:0;
+}
+.stack-field input, .stack-field select{ width:100%; }
+/* 数字は右寄せ。**桁が縦にそろう**と、桁違いに気づける */
+.stack-field input[inputmode="decimal"]{ text-align:right; font-family:var(--mono); }
+.stack-field__unit{ font-size:var(--fs-xs); color:var(--muted); }
+/* 文字を打つ欄(列を足す窓 ── v4.14.0)。欄を広く、添え書きは欄の下に */
+.stack-field--wide{ grid-template-columns:7em minmax(0,1fr); }
+.stack-field--wide .stack-field__unit{ grid-column:2; }
+.stack-field input:disabled{ background:var(--raised); }
+/* スピンボタン(GW の梱包締枚数・バンド本数 ── v4.16.0)。欄の右に ▲▼ を縦に重ねる */
+.spin{ display:flex; align-items:stretch; min-width:0; }
+.stack-field .spin input{ flex:1 1 auto; width:auto; min-width:0;
+  border-top-right-radius:0; border-bottom-right-radius:0; }
+.spin__btns{ display:flex; flex-direction:column; flex:0 0 22px; }
+.spin__btn{
+  flex:1 1 0; padding:0; font-size:9px; line-height:1; cursor:pointer;
+  border:1px solid var(--field-line); border-left:none; background:var(--raised); color:var(--ink);
+}
+.spin__btn:first-child{ border-top-right-radius:var(--r-sm); }
+.spin__btn:last-child{ border-top:none; border-bottom-right-radius:var(--r-sm); }
+.spin__btn:hover{ background:var(--sunken); }
+.spin__btn:active{ background:var(--accent); color:var(--surface); }
+
+/* 使う資材のチェック。2列に畳んで縦に読ませる */
+.checks{
+  display:grid; grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:var(--sp-1) var(--sp-2);
+}
+
+/* 引いて入った値。**打つ欄と混ぜない**ので、文字だけで出す */
+.facts{
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+  gap:var(--sp-1) var(--sp-3);
+  margin:var(--sp-3) 0 0;
+}
+.fact{ display:flex; flex-direction:column; min-width:0; line-height:1.35; }
+.fact dt{ font-size:var(--fs-xs); color:var(--muted); }
+.fact dd{
+  margin:0; font-size:var(--fs-sm);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+/* まだ入っていない。**色だけで運ばない**ので「—」を出したまま薄くする */
+.fact dd[data-empty="1"]{ color:var(--faint); }
+
+/* 結果の表。合計行は一段強く */
+.result td{ padding:3px var(--sp-2); }
+.result .num{ font-family:var(--mono); }
+.result tr.result--sum{ font-weight:700; }
+.result tr.result--sum td{ border-top:1px solid var(--rule); }
+/* まだ出ていない行。数字が入るまでは薄く */
+.result tr[data-empty="1"]{ color:var(--faint); }
+
+/* 自動で決まった欄(VBA が赤色でしていたこと)。
+   色だけに頼らないので、うしろに「自動」と出す */
+.is-auto{ outline:2px solid var(--accent); outline-offset:1px; }
+.is-auto::after{
+  content:"自動"; margin-left:4px; padding:0 3px;
+  border-radius:var(--r-sm); font-size:var(--fs-xs);
+  background:var(--accent-soft); color:var(--accent);
+}
+/* 入力欄そのものには ::after が置けないので、囲みの側に出す */
+input.is-auto, select.is-auto{ outline:2px solid var(--accent); }
+input.is-auto::after, select.is-auto::after{ content:none; }
+
+/* 断られた欄 */
+.is-bad{ outline:2px solid var(--state-error); outline-offset:1px; }
+
+/* ==================================================================
+   表を見る / 直す
+
+   相手は sqlite3 で、現場のPCに開く道具が無い前提。**確かめる場所と
+   直す場所を、このツールの中に持つ。**
+   ================================================================== */
+/* 編集の関門。開いているかどうかが、いつでも見える */
+.unlock{ align-items:center; }
+
+/* 見出しを押すと並び替え。押している列には向きを出す ──
+   **色だけに頼らない**ので、記号で示す */
+.grid-edit thead th{ cursor:pointer; user-select:none; white-space:nowrap; }
+.grid-edit thead th:hover{ background:var(--raised); }
+.grid-edit thead th[data-sort]{ color:var(--accent); }
+.grid-edit thead th[data-sort="asc"]::after{ content:" ▲"; font-size:var(--fs-xs); }
+.grid-edit thead th[data-sort="desc"]::after{ content:" ▼"; font-size:var(--fs-xs); }
+/* まだ押していない列にも「押せる」印を薄く出す(気づかれないと無いのと同じ) */
+.grid-edit thead th[data-sortable]:not([data-sort])::after{ content:" ⇅"; font-size:var(--fs-xs);
+  opacity:.45; }
+.grid-edit thead th[data-sortable]:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+/* 中身は詰めて出す。**1画面に多く入るほうが探しやすい** */
+.grid-edit td{ white-space:nowrap; max-width:28ch; overflow:hidden;
+               text-overflow:ellipsis; }
+
+/* **高さを切って、枠の中だけを流す。** 200行をそのまま積むと、絞り込みも
+   表の選び直しも画面の遥か上へ行ってしまい、行を1つ見るたびに戻ることに
+   なる。見出しは貼り付けたままにして、どの列かを見失わせない */
+.grid-edit__box{
+  max-height:min(56vh, 620px); overflow:auto;
+  border:1px solid var(--rule); border-radius:var(--r-md);
+}
+.grid-edit thead th{ position:sticky; top:0; z-index:1; background:var(--raised); }
+
+/* 狭い画面(現場は 1366x768 が多い)。3列が窮屈なら2列 → 1列へ */
+@media (max-width: 1500px){
+  .gw-cols{ grid-template-columns:repeat(2, minmax(260px, 1fr)); }
+}
+@media (max-width: 900px){
+  .gw-cols{ grid-template-columns:1fr; }
+}
+
+/* ==================================================================
+   理由 (紙の「ヨ：その他（理由を記載）」)
+
+   いつでも書く欄ではないので、開いていないことが見て分かるようにする。
+   ================================================================== */
+/* ==================================================================
+   理由 ── **行ごとに1つ**
+
+   紙の「ヨ：その他（理由を記載）」は欄が1つしかなく、VBA もそれに
+   合わせていました。紙の都合であって書きたいことの都合ではないので、
+   欄は「その他」を選んだ行の数だけ出します(紙と共有へ出すときだけ
+   `3行目: ○○ / 7行目: ××` の形で1つにまとめます)。
+
+   **空欄を並べない。** 選んでいない行の欄を読み取り専用で並べると、
+   打つべきかどうかが分からなくなるので、要る行だけを出します。
+   ================================================================== */
+.reason{ margin-top:var(--sp-2); }
+.reason__head{
+  display:flex; gap:var(--sp-2); align-items:baseline; flex-wrap:wrap;
+  margin-bottom:var(--sp-1);
+}
+.reason__rows{ display:flex; flex-direction:column; gap:var(--sp-1); }
+.reason__row{
+  display:flex; gap:var(--sp-2); align-items:center; flex-wrap:wrap;
+}
+.reason__row > label{
+  flex:0 0 auto; min-width:4.5em;
+  font-size:var(--fs-xs); color:var(--muted);
+}
+/* まだ書いていない行。**促すだけで、止めない** */
+.reason__row[data-empty="1"] > label{ color:var(--state-warn); font-weight:700; }
+.reason__row[data-empty="1"] input{
+  border-color:var(--state-warn-line); background:var(--state-warn-bg);
+}
+
+/* ==================================================================
+   確かめた結果 (VBA `ExecutePrintProcess` のチェック5本)
+
+   **畳まない。** 断りをトーストにすると、1件直すたびに押し直して
+   読み返すことになる。直している間ずっと出したままにして、上から
+   順に消していけるようにする。
+   ================================================================== */
+.check{ margin-top:var(--sp-3); }
+/* **断りの板は縦に積む。**
+   `.check` はチェックボックス1個の名前でもあり(上の `display:inline-flex`)、
+   同じ名前を付けたこの板にもそれが効いていました ── 断り・一覧・逃げ道が
+   横一列に潰れて並び、逃げ道の欄が細い帯になっていました。 */
+#check-panel.check{ display:block; }
+.check__list{
+  margin:var(--sp-2) 0 0; padding-left:var(--sp-4);
+  font-size:var(--fs-sm); line-height:1.9;
+}
+.check__list ul{ margin:0; padding-left:var(--sp-4); }
+.check__list li{ margin-bottom:2px; }
+.check__skip{
+  margin-top:var(--sp-3); padding:var(--sp-2) var(--sp-3);
+  background:var(--sunken); border-radius:var(--r-md);
+  font-size:var(--fs-sm);
+}
+.check__skip .btn-row{ margin-top:var(--sp-2); }
+/* 打つ欄。**`size` だけでは細い帯に潰れます**(欄の幅は CSS が持っている)
+   ── 「設備移動のため保存」がまるごと見える幅を持たせる */
+.check__skip input[type="text"]{ min-width:18rem; }
+.check__skip input:disabled, .check__skip .btn:disabled{ opacity:.55; }
+/* 通せないものが混ざっているときの断り。一覧は箇条書きの詰めだけ揃える */
+#entry-skip-blockers{ margin:var(--sp-2) 0 0; padding-left:var(--sp-4); }
+
+/* ==================================================================
+   状態の知らせ
+   ================================================================== */
+.msg{
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-md);
+  border-left:4px solid; font-size:var(--fs-sm); line-height:1.7;
+  white-space:pre-wrap;
+}
+.msg--ok{ background:var(--state-ok-bg); border-color:var(--state-ok); color:var(--state-ok); }
+.msg--warn{ background:var(--state-warn-bg); border-color:var(--state-warn); color:var(--state-warn); }
+.msg--error{ background:var(--state-error-bg); border-color:var(--state-error); color:var(--state-error); }
+.msg--info{ background:var(--state-info-bg); border-color:var(--state-info); color:var(--state-info); }
+/* 箇条書きなど**組んだ中身**を持つ知らせ。`pre-wrap` のままだと、テンプレートの
+   改行と字下げがそのまま空白になって、行の間が大きく空く(停止内訳・ライン毎目標) */
+.msg--prose{ white-space:normal; }
+.msg--prose .check__list{ margin:var(--sp-1) 0; }
+
+/* 書き出しの行き先。**押す前に見える1行** (_out_dir.html)
+   パスは折り返させる ── 共有のパスは長く、切れると探しに行けない */
+.out-dir{ margin-top:var(--sp-2); }
+.out-dir__path{
+  font-family:var(--mono); font-size:var(--fs-xs);
+  padding:1px var(--sp-1); border-radius:var(--r-sm);
+  background:var(--sunken); word-break:break-all;
+}
+.out-dir__note{ color:var(--muted); }
+/* 標準作業時間の出力先。**その画面で変えられる**ので、欄を1行に並べる */
+.std-out__edit{ align-items:center; gap:var(--sp-2); }
+.std-out__edit input[type=text]{ flex:1 1 24em; min-width:0; }
+.std-out .msg{ margin-top:var(--sp-2); }
+
+/* 梱包力 (v4.10.0) ── ゲームの DPS メーターのように。
+   大きい数は**全体の1つだけ**。棒は1色(1つの系列なので凡例は無し)、
+   値の文字は棒の色ではなく文字の色。100 の縦線が標準のペース */
+/* この端末のライン: 正規の呼び名が主、ツールのコードは小さく添える(v4.12.4) */
+.line-now{ font-size:var(--fs-lg); }
+
+/* アクセス権限: ライン名の書き方(正規 / このツール)は短い2列なので、幅いっぱいにしない */
+.access__names table.list{ width:auto; min-width:18em; margin:var(--sp-1) 0; }
+.access__names summary{ cursor:pointer; }
+
+.power-lead{ margin-top:0; }
+[data-table="power"] .card__head h2{ white-space:nowrap; }   /* 狭い幅で「梱包/力」に割れない */
+.power-lead__how{
+  margin-left:var(--sp-1); color:var(--accent); font-size:var(--fs-sm);
+  text-decoration:underline dotted;
+}
+.power-hero{
+  display:flex; align-items:center; gap:var(--sp-4);
+  margin:var(--sp-3) 0 var(--sp-2);
+}
+.power-hero__value{
+  font-size:56px; line-height:1; font-weight:700; color:var(--ink);
+  font-variant-numeric:proportional-nums; letter-spacing:-.02em;
+}
+.power-hero__text{ display:flex; flex-direction:column; gap:2px; }
+.power-hero__label{ color:var(--muted); font-size:var(--fs-sm); }
+.power-hero__meaning{ font-weight:700; }
+
+.power-meter{
+  --ref:66.7%;
+  list-style:none; margin:var(--sp-2) 0 var(--sp-3); padding:0;
+  display:grid; grid-template-columns:minmax(4em, max-content) minmax(8em, 1fr) 3.5em;
+  column-gap:var(--sp-2); row-gap:var(--sp-2); max-width:680px;
+}
+.power-meter[hidden]{ display:none; }
+.power-meter > li{
+  display:grid; grid-column:1 / -1; grid-template-columns:subgrid; align-items:center;
+}
+.power-meter__label{
+  font-size:var(--fs-sm); color:var(--ink); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; max-width:14em;
+}
+.power-meter__track{ position:relative; height:14px; }
+/* 100 の線。行と行のすき間まで伸ばして、1本の線に見せる */
+.power-meter__track::after{
+  content:""; position:absolute; left:var(--ref); top:calc(-1 * var(--sp-1));
+  bottom:calc(-1 * var(--sp-1)); border-left:1px solid var(--muted);
+}
+.power-meter__fill{
+  position:absolute; left:0; top:0; bottom:0; max-width:100%;
+  background:var(--accent); border-radius:0 4px 4px 0;
+}
+.power-meter__value{
+  font-size:var(--fs-sm); font-weight:700; color:var(--ink); text-align:right;
+  font-variant-numeric:tabular-nums;
+}
+.power-meter__row{ cursor:default; }
+.power-meter__row:hover .power-meter__fill{ filter:brightness(1.12); }
+.power-meter__row:hover .power-meter__label{ text-decoration:underline; }
+.power-meter__row.is-muted .power-meter__label,
+.power-meter__row.is-muted .power-meter__value{ color:var(--faint); }
+.power-meter__axis .power-meter__track{ height:auto; min-height:1.2em; }
+.power-meter__axis .power-meter__track::after{ top:auto; bottom:calc(-1 * var(--sp-1)); height:4px; }
+.power-meter__tick{
+  position:absolute; left:var(--ref); bottom:2px; transform:translateX(-50%);
+  font-size:var(--fs-xs); color:var(--muted); white-space:nowrap;
+}
+/* 考え方と計算 (v4.11.0) ── 読むだけの面。目次 → 6つの節。式は等幅の箱 */
+.guide__toc{
+  display:flex; flex-wrap:wrap; gap:var(--sp-1) var(--sp-3);
+  padding:var(--sp-2) 0; border-bottom:1px solid var(--rule); font-size:var(--fs-sm);
+}
+.guide__part{ padding:var(--sp-3) 0; border-bottom:1px solid var(--hairline); max-width:72em; }
+.guide__part:last-child{ border-bottom:0; }
+.guide__part > h3{ margin:0 0 var(--sp-2); font-size:var(--fs-lg); }
+.guide__part p{ margin:var(--sp-2) 0; line-height:1.7; }
+.guide__part .scroll-x{ margin:var(--sp-2) 0; }
+.guide__part table.list{ width:auto; }
+.guide__basis{ min-width:40em; }        /* 狭い幅では潰さず、箱の中で横に動かす */
+.rename__table{ min-width:46em; }       /* コンバートの数の表も同じ(v4.13.0) */
+.rename__table th, .rename__table td{ white-space:nowrap; }
+.guide__basis td:first-child{ white-space:nowrap; }
+.guide__steps, .guide__rules{ margin:var(--sp-2) 0; padding-left:1.6em; line-height:1.7; }
+.guide__steps > li, .guide__rules > li{ margin-bottom:var(--sp-2); }
+.guide__formula{
+  margin:var(--sp-2) 0; padding:var(--sp-2) var(--sp-3);
+  font-family:var(--mono); font-size:var(--fs-sm); line-height:1.7; color:var(--ink);
+  background:var(--sunken); border-left:3px solid var(--accent); border-radius:var(--r-sm);
+  white-space:pre-wrap; overflow-x:auto;
+}
+.guide__tag{
+  display:inline-block; margin:2px var(--sp-1) 2px 0; padding:0 var(--sp-2);
+  border:1px solid var(--rule); border-radius:99px; font-size:var(--fs-sm); background:var(--surface);
+}
+.guide__scale td:first-child{ font-weight:700; }
+.guide__part{ scroll-margin-top:var(--sp-3); }   /* 「しくみ」から飛んだとき、見出しが端に貼り付かない */
+
+@media (max-width:640px){
+  .power-hero__value{ font-size:48px; }
+  .power-meter{ grid-template-columns:minmax(3em, max-content) minmax(5em, 1fr) 3em; }
+}
+
+.badge{
+  display:inline-block; padding:1px var(--sp-2); border-radius:99px;
+  font-size:var(--fs-xs); font-weight:700;
+  background:var(--raised); color:var(--muted);
+  /* 「未保存 3」が2行に割れると、数字が本文に紛れて読めない */
+  white-space:nowrap;
+}
+.badge--todo{ background:var(--state-warn-bg); color:var(--state-warn); }
+.badge--done{ background:var(--state-ok-bg); color:var(--state-ok); }
+.badge--alert{ background:var(--state-error-bg); color:var(--state-error); }
+
+/* ==================================================================
+   トースト
+   ================================================================== */
+.toast{
+  display:flex; align-items:flex-start; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3);
+  background:var(--surface); border:1px solid var(--rule);
+  border-left:4px solid var(--accent);
+  border-radius:var(--r-md); box-shadow:var(--shadow-2);
+  font-size:var(--fs-sm); line-height:1.6;
+  animation:slide-in .18s ease-out;
+}
+@keyframes slide-in{ from{ transform:translateY(8px); opacity:0 } }
+.toast--ok{ border-left-color:var(--state-ok); }
+.toast--warn{ border-left-color:var(--state-warn); }
+.toast--error{ border-left-color:var(--state-error); }
+.toast__text{ flex:1 1 auto; white-space:pre-wrap; }
+.toast__close{
+  flex:0 0 auto; border:0; background:transparent; cursor:pointer;
+  color:var(--muted); font-size:var(--fs-lg); line-height:1; padding:0 2px;
+}
+
+/* ==================================================================
+   モーダル
+   作業者選択・全停入力のように「選んで、いまの入力へ返す」もの
+   ================================================================== */
+.modal{
+  position:fixed; inset:0; z-index:80;
+  display:grid; place-items:center;
+  background:rgba(16,23,32,.45);
+  padding:var(--sp-4);
+}
+.modal__box{
+  width:min(720px, 100%); max-height:calc(100vh - 64px);
+  display:flex; flex-direction:column;
+  background:var(--surface); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-2); overflow:hidden;
+}
+/* 1つだけ書かせるもの(理由)。**幅を広げても書きやすくならない** */
+.modal__box--narrow{ width:min(480px, 100%); }
+/* 一覧を全部見せたいもの(作業者を選ぶ: 班を横1列に) */
+.modal__box--wide{ width:min(1180px, 100%); }
+.modal__head{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:var(--sp-2); padding:var(--sp-3);
+  border-bottom:1px solid var(--rule);
+}
+.modal__body{ padding:var(--sp-3); overflow:auto; flex:1 1 auto; }
+.modal__foot{
+  display:flex; justify-content:flex-end; gap:var(--sp-2);
+  padding:var(--sp-3); border-top:1px solid var(--rule);
+  background:var(--sunken);
+}
+
+/* ==================================================================
+   自己描画グラフ (SVG)
+   tkinter版 graph_canvas.py の置き換え。描くのはサーバが作った
+   ビューモデルで、JSは座標に写すだけ
+   ================================================================== */
+/* ==================================================================
+   ダッシュボード (集計の主表示)
+
+   VBA は `graphF` のタブで**1枚ずつ**切り替えていた。並べると
+   「重量は出ているのに稼働率が低い」のような、**隣を見て初めて
+   分かること**が見える。切り替えは下の「1つずつ大きく見る」に残す。
+
+   升目は `auto-fit` で、画面の幅に合わせて列数が変わる。数字のタイルは
+   小さく、絵と表のタイルは広く取る ── 大きな数字は場所を要らない。
+   ================================================================== */
+.tiles{
+  display:grid; gap:var(--sp-3);
+  grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));
+  margin-top:var(--sp-3);
+  /*
+    **背の高さは中身ぶんだけ。** 既定(stretch)だと、同じ段のタイルは
+    いちばん高い1枚に揃えられます ── 計算内容を1枚開いた途端、隣の
+    「合計重量」が600pxの空箱になって、下の段が画面の外へ落ちます。
+
+    揃っていないほうが見苦しい場面もありますが、**開けるものが
+    ある画面では、揃えるほうが高くつきます。**
+  */
+  align-items:start;
+}
+.tile{
+  background:var(--surface); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-1); padding:var(--sp-3);
+  display:flex; flex-direction:column; min-width:0;
+}
+/* 絵と表は幅が要る。狭い画面では auto-fit が1列に畳む */
+.tile--wide{ grid-column:span 2; }
+.tile--full{ grid-column:1 / -1; }
+@media (max-width:720px){
+  .tile--wide, .tile--full{ grid-column:auto; }
+}
+
+.tile__head{
+  display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap;
+  justify-content:space-between; margin-bottom:var(--sp-2);
+}
+/* 題は折らない。**副題のほうが下へ回る** ── 題が2行に割れると、
+   タイルを目で拾うときに引っかかる */
+.tile__title{
+  font-size:var(--fs-sm); font-weight:600; margin:0; white-space:nowrap;
+}
+.tile__note{ font-size:var(--fs-xs); color:var(--faint); }
+.tile__body{ flex:1; min-width:0; }
+.tile__empty{ margin:var(--sp-3) 0; color:var(--faint); }
+.tile__foot{ margin-top:var(--sp-2); font-size:var(--fs-xs); }
+
+/* 大きな数字。**単位は小さく添える** ── 数そのものを最初に読ませる */
+.tile__value{
+  font-family:var(--mono); font-size:44px; line-height:1.1;
+  color:var(--tone, var(--accent)); word-break:break-all;
+}
+.tile__unit{ font-size:var(--fs-sm); color:var(--muted); margin-left:4px; }
+
+/* ------------------------------------------------------------------
+   数字の種類 (`data-tone`)
+
+   **「全部同じ色で気持ち悪い」と言われたところ。** 7つの数字が同じ色で
+   並ぶと目が滑って、どれも読まない画面になる。かといって虹色にすると
+   色が意味を失う ── そこで**量の種類でだけ**分ける。
+
+   どの数字が何色かを決めるのは `presenters/dashboard.py`(`TONE_*`)。
+   ここは「その種類は何色か」だけを持つ。
+
+   色だけに頼らない: タイルの題は前からそこにあるし、左の縦線は色が
+   見分けられなくても**幅の違う帯**として見える。
+   ------------------------------------------------------------------ */
+.tile[data-tone]{
+  border-left:3px solid var(--tone);
+  padding-left:calc(var(--sp-3) - 3px);
+}
+.tile[data-tone="qty"]{ --tone:var(--qty); }
+.tile[data-tone="dur"]{ --tone:var(--dur); }
+.tile[data-tone="stop"]{ --tone:var(--stop); }
+.tile[data-tone="goal"]{ --tone:var(--goal); }
+/* 累積枚数。**下の複合グラフの累積の線と同じ色。** 45度線の赤は
+   その1本だけの色なので、タイルまで赤くしない */
+.tile[data-tone="cumulative"]{ --tone:var(--cumulative); }
+/* 残りの仕事。**0件かどうかだけは良し悪しを言う**(迷いがない) */
+.tile[data-tone="ok"]{ --tone:var(--state-ok); }
+.tile[data-tone="todo"]{ --tone:var(--state-warn); }
+
+/* 上の数字と下の絵を同じ色で繋ぐ ── 「本日の合計重量」と
+   「日別の重量推移」が同じ緑なら、同じものの話だと目で分かる */
+.tile[data-tone] .chart .bar{ fill:var(--tone); }
+.tile[data-tone] .chart .line{ stroke:var(--tone); }
+.tile[data-tone] .chart .dot{ fill:var(--tone); }
+
+/* タイルの中の表。ダッシュボードでは詰めて出す */
+.tile .list{ font-size:var(--fs-xs); }
+.tile .list th, .tile .list td{ padding:2px var(--sp-1); }
+
+/* ---- ドーナツ ---------------------------------------------------- */
+.donut{ width:100%; max-width:200px; height:auto; display:block; margin:0 auto; }
+.donut__total{
+  font-family:var(--mono); font-size:26px; fill:var(--ink);
+}
+.donut__unit{ font-size:11px; fill:var(--muted); font-family:var(--sans); }
+.donut__empty{ fill:none; stroke:var(--hairline); }
+.donut__ring{ fill:none; }
+/* **隣り合う輪の間に地の色の隙間を空ける。** 同じなかまの濃淡が
+   並ぶので、境目が触れていると1つに見える(2px は画面でも紙でも残る) */
+.donut__slice{ stroke:var(--surface); stroke-width:2; }
+
+/* ------------------------------------------------------------------
+   なかまの色 (`mark-qty` / `mark-dur` / `mark-stop`)
+
+   **8色を順番に回すのをやめました。** 回していたころは、同じ画面の
+   数字と絵が別の色で塗られ、色を見ても枚数の話か時間の話か分からない
+   ── 色数だけ多くて、どこが大事なのかが散っていました。
+
+   いまは色が運ぶのは**「何の量か」だけ**です。どの項目がどの
+   なかまかを決めるのはサーバ(`presenters/dashboard.py`)で、ここは
+   「そのなかまは何色か」しか持ちません。
+   ------------------------------------------------------------------ */
+.mark-qty{ fill:var(--qty); }
+.mark-dur{ fill:var(--dur); }
+.mark-stop{ fill:var(--stop); }
+.mark-goal{ fill:var(--goal); }
+.donut__ring.mark-qty{ stroke:var(--qty); }
+.donut__ring.mark-dur{ stroke:var(--dur); }
+.donut__ring.mark-stop{ stroke:var(--stop); }
+.dlg__swatch.mark-qty{ background:var(--qty); }
+.dlg__swatch.mark-dur{ background:var(--dur); }
+.dlg__swatch.mark-stop{ background:var(--stop); }
+.dlg__swatch.mark-goal{ background:var(--goal); }
+
+/* ドーナツの凡例。**色だけでは何の色か分からない。**
+
+   `.legend` は日報入力の表で使っている12pxの色見本なので、名前を
+   分ける ── 同じ名前にすると、あちらの `display:inline-block;
+   width:12px` を受け継いで潰れる(実際に潰れた)。 */
+.dlg{
+  list-style:none; margin:var(--sp-2) 0 0; padding:0;
+  font-size:var(--fs-xs); display:grid; gap:2px;
+}
+.dlg li{ display:flex; align-items:center; gap:var(--sp-1); }
+.dlg__swatch{
+  width:10px; height:10px; border-radius:2px; flex:none;
+  display:inline-block;
+}
+.dlg__text{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dlg li b{ margin-left:auto; font-family:var(--mono); flex:none; }
+
+.chart{ width:100%; height:auto; display:block; }
+.chart .axis{ stroke:var(--grid-line); stroke-width:1; }
+.chart .gridline{ stroke:var(--hairline); stroke-width:1; }
+.chart .bar{ fill:var(--accent); }
+/* 折れ線は**太く**。細いと、積み上げた棒の上で見失います */
+.chart .line{ fill:none; stroke:var(--accent); stroke-width:3; }
+.chart .dot{ fill:var(--accent); }
+
+/* ------------------------------------------------------------------
+   グラフの地 ── ネオン(サイバーパンク)                    [v3.51.0]
+
+   絵と凡例をまとめて濃紺の板に載せます。**凡例も同じ板の上**に置くのは、
+   蛍光色の見本が白い地の上だと読めないからです(緑や水色がとくに)。
+
+   色の値は `tokens.css` の `.chart-skin` に置いてあります ── ここは
+   形と太さだけ。
+   ------------------------------------------------------------------ */
+
+/* **当たるのは集計・グラフの画面だけ**です(「あくまで集計結果とグラフに
+   関してだけです」)。`.chart-skin` はグラフを描くところだけに付き、
+   `.tile` は集計・グラフの画面にしかありません ── 日報入力やGW計算は
+   これまでどおりです。 */
+:root[data-skin="neon"] .chart-skin{
+  background:var(--chart-bg); border-radius:var(--r-md);
+  padding:var(--sp-2); margin-top:var(--sp-2);
+}
+:root[data-skin="neon"] .chart-skin .dlg{ color:var(--ink); }
+
+/* 棒の枠線。**細い明るい線**で段の境をはっきりさせます(指定の
+   `marker_line`)。色は段ごとに、本体より明るいもの */
+:root[data-skin="neon"] .chart-skin .chart .bar{ stroke-width:1; }
+
+/* ほのかな発光。**色は塗りから採ります** ── `drop-shadow` に色を
+   書かないと `color` の値が使われるので、印ごとに `color` を置けば
+   1本の規則で足ります(印の数だけ影の規則を書かずに済む) */
+:root[data-skin="neon"] .chart-skin .chart .bar,
+:root[data-skin="neon"] .chart-skin .chart .line,
+:root[data-skin="neon"] .chart-skin .chart .dot,
+:root[data-skin="neon"] .chart-skin .donut__slice{
+  filter:drop-shadow(0 0 var(--glow) currentColor);
+}
+/* 縁取り(地の色で太く引く線)は光らせない ── 光ると縁の意味が消えます */
+:root[data-skin="neon"] .chart-skin .chart .line--halo{ filter:none; }
+/* 列の多い表は**折り返さず横へ流す**。28列ある表を折り返すと、
+   1行が3段になって行の切れ目が読めなくなる(`.scroll-x` の中に置く) */
+.list--nowrap th, .list--nowrap td{ white-space:nowrap; }
+
+/* ------------------------------------------------------------------
+   同じなかまの中は、**色ではなく形で分ける**
+
+   「その日の枚数」と「累積枚数」はどちらも枚数のなかまなので、同じ緑に
+   なります。ここを緑の濃淡2段で分けようとすると**色覚の検証で必ず
+   落ちます** ── 1色相の2段では、並べて見分けられる差を作れません。
+
+   代わりに形で分けます。塗り潰した棒と2pxの線は、色が分からなくても
+   別物です(凡例の見本も同じ形にしてある ── `.dlg__swatch--line`)。
+   ------------------------------------------------------------------ */
+/* **棒と線は色を分ける。** 一度どちらも枚数の緑にしましたが、線が棒を
+   横切るところで棒に溶けました ── 棒は「その日いくつ出たか」、線は
+   「目標に対してどこまで来たか」で、見ている先が違います */
+.chart .bar.mark-qty{ fill:var(--qty); }
+.chart .bar.mark-dur{ fill:var(--dur); }
+.chart .bar.mark-stop{ fill:var(--stop); }
+.chart .bar.mark-goal{ fill:var(--goal); }
+.chart .line.mark-qty{ stroke:var(--qty); }
+.chart .line.mark-dur{ stroke:var(--dur); }
+.chart .line.mark-stop{ stroke:var(--stop); }
+.chart .line.mark-goal{ stroke:var(--goal); }
+.chart .dot.mark-qty{ fill:var(--qty); }
+.chart .dot.mark-dur{ fill:var(--dur); }
+.chart .dot.mark-stop{ fill:var(--stop); }
+.chart .dot.mark-goal{ fill:var(--goal); }
+
+/* 線の縁取り。**地の色で太く1本下に敷く。**
+
+   SVG の線には外側の縁取りが無いので、同じ道を2回描いて作ります
+   (`chart.js`)。色を2段に分けただけでは、棒の上に重なった1本ぶんの
+   幅で「線がそこにある」と分からせるには足りません ── 地の色の縁が
+   入ると、どんな塗りの上でも線が線として読めます。
+
+   点にも同じ縁を付けます(下の `.chart .dot`)。 */
+.chart .line--halo,
+.tile[data-tone] .chart .line--halo{
+  stroke:var(--surface); stroke-width:6; fill:none;
+  stroke-linecap:round; stroke-linejoin:round;
+}
+.chart .dot{ stroke:var(--surface); stroke-width:1.5; }
+
+/* 凡例の見本を**形で分ける**。棒は四角、線は横棒、目標は破線 ──
+   同じ色の2つが並んだときに、これが唯一の手がかりになる */
+.dlg__swatch--line{
+  height:0; border-radius:0; align-self:center;
+  border-top:3px solid currentColor; background:transparent !important;
+}
+.dlg__swatch--line.mark-qty{ color:var(--qty); }
+.dlg__swatch--line.mark-dur{ color:var(--dur); }
+.dlg__swatch--line.mark-stop{ color:var(--stop); }
+.dlg__swatch--line.mark-goal{ color:var(--goal); }
+/* 累積の線。**この1行が無いと、凡例の見本だけ色が付きません**
+   (線そのものは色が付くので、凡例と線が結び付かない) */
+.dlg__swatch--line.mark-cumulative{ color:var(--cumulative); }
+
+/* 45度線(目標値)。**色だけに頼らない** ── 破線にして、凡例にも
+   「目標値」と書く。VBA も赤い実線で目立たせていた。
+
+   色は**累積と同じ紫**にします ── 目標線と累積線は対で読むもの
+   (「ペースは足りているか」)なので、同じなかまに見えるほうが読めます。
+   実線か破線かで、どちらが実績でどちらが目標かは分かります。
+
+   **タイルの種類色より強く書く。** `.tile[data-tone] .chart .line` の
+   ほうが詳しいので、同じ詳しさで書かないと目標線までなかまの色に
+   塗られます(実際に、日別の枚数推移の目標線が緑になっていました) */
+.chart .line--target,
+.tile[data-tone] .chart .line--target{
+  stroke:var(--goal); stroke-width:3;
+  stroke-dasharray:7 4; fill:none;
+}
+.dlg__swatch--target{
+  background:transparent;
+  border-top:3px dashed var(--goal);
+  border-radius:0; height:0; align-self:center;
+}
+
+/* ------------------------------------------------------------------
+   意味の決まっている色 (`mark-*`)
+
+   ここに並ぶのは**項目そのものに色が決まっている**もの ── 直と、
+   停止の3分類。どちらも1色の濃淡(順番の色)で、`tokens.css` で並びを
+   入れ替え禁止にしてあり、帯・表・グラフのどこでも同じ色になる。
+
+   直は時間のなかま(青)の4段、停止の3分類は停止の色(暖色)の3段。
+   **なかまの色から外れないので、画面全体の統一が崩れない。**
+
+   どの項目にどの印を付けるかはサーバ(`presenters/dashboard.py` の
+   `SHIFT_CLASSES` / `STOP_KIND_MARKS`)。JSは class 名を書くだけ。
+   ------------------------------------------------------------------ */
+.chart .bar.mark-shift-1{ fill:var(--shift-1); stroke:var(--shift-1-edge); }
+.chart .bar.mark-shift-2{ fill:var(--shift-2); stroke:var(--shift-2-edge); }
+.chart .bar.mark-shift-3{ fill:var(--shift-3); stroke:var(--shift-3-edge); }
+.chart .bar.mark-shift-day{ fill:var(--shift-day); stroke:var(--shift-day-edge); }
+/* タイルの種類色より、直の色のほうが強い(横軸が直そのものなので) */
+.tile[data-tone] .chart .bar.mark-shift-1{ fill:var(--shift-1); stroke:var(--shift-1-edge); }
+.tile[data-tone] .chart .bar.mark-shift-2{ fill:var(--shift-2); stroke:var(--shift-2-edge); }
+.tile[data-tone] .chart .bar.mark-shift-3{ fill:var(--shift-3); stroke:var(--shift-3-edge); }
+.tile[data-tone] .chart .bar.mark-shift-day{ fill:var(--shift-day); stroke:var(--shift-day-edge); }
+
+.mark-stop-loss{ fill:var(--stop-loss); }
+.mark-stop-sudden{ fill:var(--stop-sudden); }
+.mark-stop-handling{ fill:var(--stop-handling); }
+.donut__ring.mark-stop-loss{ stroke:var(--stop-loss); }
+.donut__ring.mark-stop-sudden{ stroke:var(--stop-sudden); }
+.donut__ring.mark-stop-handling{ stroke:var(--stop-handling); }
+.dlg__swatch.mark-stop-loss{ background:var(--stop-loss); }
+.dlg__swatch.mark-stop-sudden{ background:var(--stop-sudden); }
+.dlg__swatch.mark-stop-handling{ background:var(--stop-handling); }
+.dlg__swatch.mark-shift-1{ background:var(--shift-1); }
+.dlg__swatch.mark-shift-2{ background:var(--shift-2); }
+.dlg__swatch.mark-shift-3{ background:var(--shift-3); }
+.dlg__swatch.mark-shift-day{ background:var(--shift-day); }
+
+.chart .label{ font-size:10px; fill:var(--muted); font-family:var(--sans); }
+.chart .value{ font-size:10px; fill:var(--ink); font-family:var(--mono); }
+
+/* 空っぽのとき。「壊れている」ではなく「まだ無い」と言う */
+.empty{
+  padding:var(--sp-5); text-align:center; color:var(--muted);
+  font-size:var(--fs-sm);
+}
+
+/* ==================================================================
+   参照パス ── 「設定した値」と「実際に見る道」を上下に並べる
+
+   横に並べると、長いUNC(`\\サーバ\各課共有\…`)が入った瞬間に
+   どちらも読めなくなる。共有フォルダの道は長いのが普通なので、
+   縦に積んで**どちらも最後まで読める**ようにする。
+   ================================================================== */
+.path{
+  padding:var(--sp-3) 0;
+  border-bottom:1px solid var(--hairline);
+}
+.path:last-of-type{ border-bottom:0; }
+
+/* 入力欄は幅いっぱい。共有の道は長い */
+.field--wide{ width:100%; }
+.field--wide > input{ width:100%; }
+
+.path__now{
+  display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--sp-2); margin-top:var(--sp-2);
+}
+/* 道そのものは折り返してよい。切り詰めると確かめられない */
+.path__now > code{ word-break:break-all; }
+
+/* ------------------------------------------------------------------
+   そのフォルダの中で使うファイル
+
+   **フォルダ設定の下にぶら下げる。** フォルダを4つ並べただけでは
+   「どのファイルがどのパスか」は読めない ── 縦線1本で親子を示し、
+   ファイルごとにフルパスと使いみちを出す。行数は増えるが、
+   目で追えるほうを採る。
+   ------------------------------------------------------------------ */
+.path__files{
+  margin:var(--sp-2) 0 0; padding:0 0 0 var(--sp-3);
+  list-style:none; border-left:2px solid var(--accent-line);
+}
+.path__file{
+  display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--sp-2); padding:var(--sp-1) 0;
+}
+.path__file-name{ font-weight:600; min-width:9em; }
+/* 道は最後まで読めること。切り詰めない */
+.path__file-path{ word-break:break-all; color:var(--muted); }
+/* 使いみちは1行落として、道と混ざらないようにする */
+.path__file-uses{
+  flex-basis:100%; padding-left:9em;
+  color:var(--faint); font-size:var(--fs-sm);
+}
+
+/* ==================================================================
+   フォルダを辿る
+
+   ブラウザのファイル選択ダイアログはサーバ側のフォルダを選べないので、
+   一段ずつ辿る小さな一覧を出す
+   ================================================================== */
+.browse{
+  margin-top:var(--sp-3); border:1px solid var(--hairline);
+  border-radius:var(--r-md); background:var(--sunken);
+}
+.browse__head{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:var(--sp-2); padding:var(--sp-2) var(--sp-3);
+  border-bottom:1px solid var(--hairline);
+}
+.browse__head > code{ word-break:break-all; }
+/* 高さを決めておく。共有フォルダは数百件あることがある */
+.browse__body{ max-height:16rem; overflow-y:auto; padding:var(--sp-2); }
+
+.browse__entry{
+  display:block; width:100%; text-align:left;
+  padding:2px var(--sp-2); border:0; border-radius:var(--r-sm);
+  background:transparent; color:var(--ink);
+  font:inherit; cursor:pointer;
+}
+.browse__entry:hover{ background:var(--row-alt); }
+.browse__entry::before{ content:"📁 "; }
+
+/* ファイルは押せない。**そのフォルダで合っているか**の手がかり */
+.browse__file{
+  padding:2px var(--sp-2); color:var(--muted); font-size:var(--fs-sm);
+}
+.browse__file::before{ content:"📄 "; }
+
+.browse .btn-row{ padding:var(--sp-2) var(--sp-3); border-top:1px solid var(--hairline); }
+
+/* ==================================================================
+   横に長いものを、**枠の中だけで**流す
+
+   マスタの中身は列が多い。ページごと横に流れると、レールも帯も
+   一緒に動いて操作できなくなる
+   ================================================================== */
+.scroll-x{ overflow-x:auto; max-width:100%; margin-top:var(--sp-2); }
+
+/* ==================================================================
+   自動で決まった欄 / 直してほしい欄
+
+   **色だけで意味を運ばない。** どちらも文言が別に出ている:
+   自動選択は「自動で選びました(…)」、入力の誤りは断りの一覧。
+   ここの色は、その文言がどの欄の話かを結びつけるためのもの
+   ================================================================== */
+
+/* オーダーから自動で入った。VBA が赤色でしていたこと */
+.is-auto{ border-color:var(--state-info) !important; background:var(--state-info-bg); }
+.check.is-auto{ border:0 !important; padding:0 4px; border-radius:var(--r-sm); }
+
+/* 直してほしい欄。断りの一覧と対で出る */
+.is-bad{ border-color:var(--state-error) !important; background:var(--state-error-bg); }
+
+/* 断りの一覧。箇条書きの詰めを揃えるだけ */
+#calc-problems ul{ margin:0; padding-left:1.2em; }
+
+/* ==================================================================
+   直の終わりの実績確認 (VBA `graphF` を最大化していたもの)
+
+   **画面いっぱいの覆い。** ブラウザは操作なしに本当の全画面
+   (Fullscreen API)にできないので、既定はこちら ── 操作なしで必ず
+   出せて、下の画面(レール・帯)は触れない。本当の全画面にする
+   ボタンも置いてあり、そちらは押した操作が起点なので通る
+   ================================================================== */
+.review{
+  position:fixed; inset:0; z-index:200;
+  display:flex; flex-direction:column;
+  background:var(--ground);
+}
+.review__head{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:var(--sp-3); padding:var(--sp-3) var(--sp-4);
+  border-bottom:2px solid var(--accent);
+  background:var(--surface);
+}
+.review__head h1{ margin:0; font-size:var(--fs-xl); }
+/* 中身は縦に流す。直が3つ+推移2枚で1画面に収まらないことがある */
+.review__body{
+  flex:1; overflow-y:auto; padding:var(--sp-3) var(--sp-4);
+  display:flex; flex-direction:column; gap:var(--sp-3);
+}
+.review__note{ margin:0; }
+
+.review__side{ display:flex; flex-direction:column; gap:var(--sp-3); min-width:0; }
+.review .card{ margin:0; }
+.review .closing{ margin:0; }
+
+/* 推移の絵の枠。**絵は枠の大きさで描く**(`chart.js` の `paintCharts(…, {fit})`) */
+.fit-charts{ display:flex; flex-direction:column; gap:var(--sp-2); }
+.fit-chart{ margin:0; display:flex; flex-direction:column; min-height:0; }
+.fit-chart h3{ margin:0 0 2px; font-size:var(--fs-sm); }
+.fit-chart__plot{ position:relative; height:220px; }
+.fit-chart__plot > svg{ position:absolute; inset:0; width:100%; height:100%; }
+
+/*
+  **画面最大化で1画面に収める**(v3.86.0)
+
+      画面いっぱいにする 大きすぎて見えません
+      画面最大化で収まるサイズに表示してください
+
+  縦に流していたので、推移の絵(幅いっぱいに伸ばした 720×220)が1枚で
+  高さ 560px になり、画面の3倍近い長さでした。左に締めくくりと表、右に
+  推移を置き、**画面ごとは動かさず**、はみ出すぶんは箱の中だけで流します:
+
+      直すところの一覧    締めくくりの箱の中で流す
+      停止の項目          停止の箱の中で流す(長い順なので上から読めばよい)
+      推移の絵3枚         右の高さを3等分し、枠の大きさで描き直す
+
+  狭い画面(幅1100px未満・高さ540px未満)では、これまでどおり縦に流します
+*/
+@media (min-width:1100px) and (min-height:540px){
+  .review__body{
+    display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr);
+    grid-template-rows:minmax(0, 1fr); min-height:0; overflow:hidden;
+  }
+  .review__side{ min-height:0; }
+  .review__side > *{ flex:none; }
+  .review .closing{
+    flex:0 1 auto; min-height:5rem; display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .review .closing__list{ min-height:0; overflow:auto; }
+  /* 締めくくりと停止は、**中身の多さに応じて分け合って縮む**(どちらも
+     基準は中身の高さ)。片方だけを縮めると、直すところが多い日に停止が
+     1行しか見えなくなる */
+  .review__card--grow{
+    flex:1 1 auto; min-height:7rem; display:flex; flex-direction:column;
+  }
+  .review__card--grow .scroll-x{ flex:1; min-height:0; overflow:auto; }
+  /* 表の行を詰める。高さが足りない画面で、停止の行を1行でも多く見せる */
+  .review table.list th, .review table.list td{ padding:var(--sp-1) var(--sp-2); }
+  .review__charts{ display:flex; flex-direction:column; min-height:0; }
+  .review__charts .fit-charts{ flex:1; min-height:0; }
+  .review__charts .fit-chart{ flex:1 1 0; }
+  .review__charts .fit-chart__plot{ flex:1; height:auto; min-height:0; }
+}
+
+/* 低い画面(1366×768 を最大化したときなど)は、頭と見出しを詰める */
+@media (min-width:1100px) and (min-height:540px) and (max-height:760px){
+  .review__head{ padding:var(--sp-2) var(--sp-4); }
+  .review .closing{ padding:var(--sp-2) var(--sp-3); }
+  .review .closing__head b{ font-size:1.1rem; }
+  .review .closing__list{ margin-top:var(--sp-2); }
+}
+
+/* 全画面にしたときは、余白を少し広げる(遠くから見るため) */
+:fullscreen .review__head{ padding:var(--sp-4) var(--sp-5); }
+:fullscreen .review__body{ padding:var(--sp-4) var(--sp-5); }
+:fullscreen .review .list{ font-size:var(--fs-md); }
+
+/* 画面のモジュールを繋げなかったときの知らせ。**本文の頭に出す** ──
+   ボタンが全部効かない状態なので、見落とされる場所に置かない */
+.msg--wire{ margin-bottom:var(--sp-3); }
+
+/* 前の直に1ページも無い、の帯 (`logic/prev_shift.py`)。
+   **保存忘れの最後の網**なので、ほかの案内より強く出す ── ただし
+   一度きりなので、赤一色にはしない(止める話ではない) */
+.prev-shift{
+  display:flex; align-items:flex-start; gap:var(--sp-3);
+  flex-wrap:wrap; justify-content:space-between;
+}
+.prev-shift__text{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+
+/* ------------------------------------------------------------------
+   見るだけの帯 (`views/entry.js:paintReadOnly`)
+
+   他の直の過去データを、管理者モードでないまま開いている状態。保存は
+   前から 403 で断っていましたが、**打つことはできました** ── 断られる
+   のは押したときなので、それまでは直せているつもりで手を動かします。
+
+   出口2つ(作業に戻る / 管理者モードにする)を帯の中に置きます。
+   ------------------------------------------------------------------ */
+.read-only{
+  display:flex; align-items:center; gap:var(--sp-3);
+  flex-wrap:wrap; justify-content:space-between;
+}
+.read-only__text{ flex:1 1 24rem; min-width:0; }
+
+/* ------------------------------------------------------------------
+   いまどこへ書いているか (`#sheet-key`)
+
+   **打っているあいだ、いちばん確かめたいもの**です ── 17:00 をまたいで
+   直が変わったことも、過去データを開いていることも、ここに出ます。
+   小さい薄字(`.lead`)では目に入りませんでした
+   (「この入力中の表示は大きくしたほうがいいね」)。
+
+   題(梱包実績日報表)は添え物なので小さいまま。大きくするのは
+   **日付・直・ライン**だけです。
+   ------------------------------------------------------------------ */
+.sheet-key{ display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap; }
+.sheet-key__title{ font-size:var(--fs-xs); color:var(--muted); }
+.sheet-key__now{
+  font-size:var(--fs-xl); letter-spacing:.02em; color:var(--ink);
+}
+/* 触れない画面だと分かる見た目。**無効の灰色だけでは弱い** ── 欄が
+   多いので、1つずつ見て気づかせるのではなく面で伝える(帯だけ残す) */
+/* ------------------------------------------------------------------
+   いまどこへ打っているか ── **表のすぐ上に、常に**
+
+   打っているあいだ画面に映っているのは表だけです(横に長く、縦に12行)。
+   上のカードまで戻らないと直もページも読めないので、ここに貼ります。
+   ------------------------------------------------------------------ */
+.sheet-now{ position:sticky; top:0; z-index:3; background:var(--surface);
+            padding-top:var(--sp-2); }
+.sheet-now__key{
+  display:inline-flex; align-items:baseline; gap:var(--sp-2);
+  padding:2px var(--sp-3); border-radius:var(--r-sm);
+  background:var(--raised); border:1px solid var(--hairline);
+}
+.sheet-now__shift{ font-size:var(--fs-lg); }
+.sheet-now__page{ font-size:var(--fs-lg); color:var(--accent); }
+.sheet-now__line, .sheet-now__of{ color:var(--muted); font-size:var(--fs-xs); }
+
+/* ------------------------------------------------------------------
+   この直の直すところ ── 押す前から出しておく帯
+
+   「入力しか一般作業者は開かないので、そこで何故ダメかが見えないと
+   意味がない」。7項目の結果は、押して断られたときにしか出ていません
+   でした。
+
+   **強さで3つに塗り分けます**(`logic/entry_findings` が決める):
+
+       error … いま直すものがある。このままでは共有へ出せない
+       todo  … 残りは「直の終わりまでに」だけ。まだ間違いではない
+       ok    … 直すところは無い
+
+   `todo` を赤にしないのが要点です ── 最終時間と休憩は直が終わるまで
+   必ず足りないので、赤にすると1行目から赤い画面になり、そのうち誰も
+   読まなくなります。
+   ------------------------------------------------------------------ */
+/* **`white-space` を戻す。** `.msg` は `pre-wrap` なので、書いたままの
+   改行と字下げが空行として出ます(帯の中身は子要素なので要りません) */
+.findings-now{ display:block; white-space:normal; margin-bottom:var(--sp-3); }
+.findings-now[data-level="error"]{
+  background:var(--state-error-bg); color:var(--state-error);
+  border-color:var(--state-error-line);
+}
+.findings-now[data-level="todo"]{
+  background:var(--sunken); color:var(--ink);
+  border-color:var(--rule);
+}
+.findings-now[data-level="ok"]{
+  background:var(--state-ok-bg); color:var(--state-ok);
+  border-color:var(--state-ok-line);
+}
+.findings-now__head{ font-weight:700; }
+.findings-now__list{ margin:var(--sp-2) 0 0; padding-inline-start:1.4em; }
+.findings-now__list:empty{ display:none; }
+.findings-now__list li{ margin-top:2px; }
+/* 中身は帯の色に引きずられない ── 読むのは字なので、地の色で */
+.findings-now__list, .findings-now__list li{ color:var(--ink); }
+
+/* ------------------------------------------------------------------
+   帯の主語 ── 「前の直のこと」と「いまの直のこと」を分ける
+
+       上には赤文字でダメなところが書いてあって
+       すぐ下には直すところはありませんって出てる
+       …
+       すぐ上に直すところを書いてるのにどういうつもりだよ
+
+   言い合っていたのではありません。**上の赤い帯は前の直のこと**で、
+   **下の帯はいまの直のこと**でした。どちらにも主語が書いていなかった
+   ので、続きとして読めます ── 続きとして読めば、確かに矛盾します。
+
+   直し方は2つで、**両方やります**:
+
+       字で分ける … 帯の頭に「前の直 9月12日 1直 のこと」と置く
+       形で分ける … 左の太い線の色と、札の色を別にする
+
+   色だけでは足りません。赤い帯と灰の帯が隣り合っていても、同じ話の
+   濃淡に見えるためです。**札を1つ置くと、主語が目に入ります。**
+   ------------------------------------------------------------------ */
+.band{ border-left-width:6px; }
+.band__head{
+  display:flex; align-items:baseline; gap:var(--sp-2);
+  margin-bottom:var(--sp-2); flex-wrap:wrap;
+}
+/* 札。**塗って抜き文字**にします ── 枠線だけだと帯の枠と混ざります */
+.band__who{
+  flex:0 0 auto; padding:1px var(--sp-2); border-radius:999px;
+  font-size:var(--fs-xs); font-weight:700; letter-spacing:.04em;
+  background:var(--muted); color:var(--on-fill);
+}
+.band__about{ font-weight:700; font-size:var(--fs-lg); color:var(--ink); }
+.band__of{ font-size:var(--fs-xs); color:var(--muted); }
+/* 前の直 ── 赤。**いま打っている直のことではない** */
+.band--prev{ border-left-color:var(--state-error); }
+.band--prev .band__who{ background:var(--state-error); }
+/* いまの直 ── 骨格のティール。強さ(`data-level`)は帯の地の色で出ます */
+.band--now{ border-left-color:var(--accent); }
+.band--now .band__who{ background:var(--accent); }
+
+/* ------------------------------------------------------------------
+   長い説明 ── 1行だけ置いて、残りはマウスを載せたときに
+
+       この手の情報は関係ある部分にマウスムーブで見れるようにした
+       ほうが良い 個人的には書いてあれば読むけどそうでない人のほうが
+       多いよ(文字多いな...無視しようってなるらしい)
+
+   そのとおりでした。書いてあることは要るのに、**画面に置いたままだと
+   読まれません** ── 5行の段落が4つ続けば、そこは「文字の壁」として
+   飛ばされます。飛ばされた説明は、無い説明と同じです。
+
+   **1行に畳みます。** 残りは載せたとき(`:hover`)か、キーボードで
+   進んだとき(`:focus`)に出します。JS も部品も増やしません ──
+   出す・消すの判断が要らない(載せているあいだだけ)ので、CSS で足ります。
+
+   浮かせて出すのは、**下の行が動かないように**です。押そうとしていた
+   ボタンが手元で動くのが、一番いけません。
+   ------------------------------------------------------------------ */
+.tip{ position:relative; cursor:help; }
+/* 「くわしく」── **続きがあることを見せる印**。無いと畳んだことに
+   気づかれず、1行で言い切っているように読まれます */
+.tip__mark{
+  display:inline-block; margin-inline-start:var(--sp-1);
+  padding:0 var(--sp-1); border-radius:4px;
+  font-size:var(--fs-xs); color:var(--accent);
+  border:1px dotted var(--accent-line); background:var(--accent-soft);
+}
+.tip:hover .tip__mark, .tip:focus .tip__mark, .tip:focus-within .tip__mark{
+  background:var(--accent); color:var(--on-fill); border-style:solid;
+}
+.tip__more{ display:none; }
+.tip:hover .tip__more,
+.tip:focus .tip__more,
+.tip:focus-within .tip__more{
+  display:block; position:absolute; z-index:60;
+  left:0; top:calc(100% + 2px); width:max-content; max-width:min(74ch, 100%);
+  padding:var(--sp-3); line-height:1.8; text-align:start;
+  color:var(--ink); background:var(--surface);
+  border:1px solid var(--rule); border-left:4px solid var(--accent);
+  border-radius:8px; box-shadow:var(--shadow-2);
+}
+/* 画面のいちばん下にあるものは**上へ開く** ── 下へ開くと画面の外に
+   出て、読むのにスクロールが要ります(載せたまま動かすのは難しい) */
+.tip--up:hover .tip__more,
+.tip--up:focus .tip__more,
+.tip--up:focus-within .tip__more{ top:auto; bottom:calc(100% + 2px); }
+/* 帯の中に置いたときは、帯の字の色を継がない(読むのは字なので地の色で) */
+.msg .tip__line{ color:var(--ink); }
+
+/* ------------------------------------------------------------------
+   締めくくり ── 直の終わりの全画面に出す、成り行きと次の1手
+
+   「vbaでは保存するとグラフが全画面で描写されるのでそれが合図に近い
+   ものだったが、いまはなんのメリハリも無い」。画面は出ていたのに、
+   出口が「確認しました」だけで**共有へ渡すところへ繋がっていません**
+   でした。
+
+   **字を大きくするのは見出しだけ。** 直の終わりに読むものなので、
+   離れていても「まだ渡っていない」が判る必要があります。色はその
+   裏づけで、字が主です(色が読めない人・白黒の画面でも同じことが読める)。
+   ------------------------------------------------------------------ */
+.closing{
+  margin-bottom:var(--sp-4); padding:var(--sp-3) var(--sp-4);
+  border:1px solid var(--rule); border-radius:var(--r-md);
+  background:var(--sunken);
+}
+.closing[data-level="error"]{
+  background:var(--state-error-bg); border-color:var(--state-error-line);
+}
+.closing[data-level="ok"]{
+  background:var(--state-ok-bg); border-color:var(--state-ok-line);
+}
+.closing__head{ display:flex; flex-direction:column; gap:4px; }
+.closing__head b{ font-size:1.25rem; line-height:1.35; }
+.closing[data-level="error"] .closing__head b{ color:var(--state-error); }
+.closing[data-level="ok"] .closing__head b{ color:var(--state-ok); }
+.closing__list{ margin:var(--sp-3) 0 0; padding-inline-start:1.4em; }
+.closing__list:empty{ display:none; }
+.closing__list li{ margin-top:2px; color:var(--ink); }
+
+@media (max-width:700px){
+  .closing__head b{ font-size:1.1rem; }
+}
+
+/* ------------------------------------------------------------------
+   紙の束 ── VBA の シートタブ に当たるもの
+
+   「次直が登録すると前直分はどうなりますか？消えるのですか？」と
+   訊かれました。消えません ── 消えていないことが**画面から読めない**
+   のが問題でした。VBA はシートのタブが並んでいたので、発行すれば束に
+   1枚増えて、そこへ移ったことも、前の紙が残っていることも見えました。
+
+   **色だけで伝えません。** 状態は「共有済 / 未送信 / 新しい紙」と
+   字で書いてあり、色はその裏づけです(色が読めない人・白黒の画面でも
+   同じことが読めます)。いまの紙は**太字と枠**でも分かるようにします。
+   ------------------------------------------------------------------ */
+.sheets{ margin-top:var(--sp-4); }
+.sheets__row{ display:flex; flex-wrap:wrap; gap:var(--sp-2); }
+.sheets__tab{
+  font:inherit; cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px;
+  min-height:36px; padding:var(--sp-1) var(--sp-3);
+  background:var(--sunken); color:var(--muted);
+  border:1px solid var(--rule);
+  /* 紙の耳に見えるよう、上だけ丸める(Excel のタブと同じ向き) */
+  border-radius:var(--r-md) var(--r-md) var(--r-sm) var(--r-sm);
+  transition:color .14s ease, background-color .14s ease,
+             border-color .14s ease;
+}
+.sheets__tab:hover{ color:var(--ink); background:var(--raised); }
+.sheets__tab:focus-visible{ outline:2px solid var(--focus); outline-offset:2px; }
+/* いま開いている紙。**押しても動かないので、押せる見た目にしない** */
+.sheets__tab.is-now{
+  color:var(--ink); font-weight:700; cursor:default;
+  background:var(--surface);
+  border-color:var(--accent); border-width:2px;
+  box-shadow:0 -2px 0 0 var(--accent) inset;
+}
+.sheets__tab.is-now:hover{ background:var(--surface); }
+.sheets__label{ font-size:var(--fs-sm); white-space:nowrap; }
+.sheets__mark{
+  font-size:var(--fs-xs); font-weight:700; line-height:1; white-space:nowrap;
+  padding:3px var(--sp-2); border-radius:999px;
+  background:var(--raised); color:var(--muted); border:1px solid transparent;
+}
+.sheets__mark--synced{
+  background:var(--state-ok-bg); color:var(--state-ok);
+  border-color:var(--state-ok-line);
+}
+.sheets__mark--pending{
+  background:var(--state-warn-bg); color:var(--state-warn);
+  border-color:var(--state-warn-line);
+}
+.sheets__mark--new{
+  background:var(--accent-soft); color:var(--accent);
+  border-color:var(--accent-line);
+}
+.sheets__note{ margin:var(--sp-2) 0 0; }
+
+/* ------------------------------------------------------------------
+   直の始まり ── まず作業者を選ぶ
+
+   **表を伏せるのであって、消しません。** 消すと「何も無い画面」に
+   見えますが、伏せてあるだけなら「まだ触れない」と読めます。
+   ------------------------------------------------------------------ */
+.start-shift{ display:flex; gap:var(--sp-3); align-items:center;
+              flex-wrap:wrap; justify-content:space-between; }
+.start-shift__now{ font-size:var(--fs-lg); }
+body.needs-worker table.grid,
+body.needs-worker .btn-row--staged{ opacity:.45; }
+body.needs-worker #start-shift{ opacity:1; }
+/* ラインが決まっていない(v4.3.0)。作業者のカードも伏せ、関門だけを
+   はっきり出す ── 触ってほしいのは「ラインを決める」だけ */
+body.needs-line table.grid,
+body.needs-line .btn-row--staged,
+body.needs-line .flow,
+body.needs-line [data-step-for="worker"]{ opacity:.45; }
+/* 手順の帯の「ここへ」も押させない(行き先の作業者が伏せてあるので) */
+body.needs-line .flow{ pointer-events:none; }
+body.needs-line #terminal-line-note{
+  outline:2px solid var(--state-warn); outline-offset:2px;
+}
+.line-gate{ white-space:normal; }
+/* 作業者のカードだけは、はっきり出す ── そこを触ってほしいので */
+body.needs-worker [data-step-for="worker"]{ opacity:1; }
+body.needs-worker [data-step-for="worker"]{
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+
+/* ==================================================================
+   前の直の始末 (`logic/handover.py`)
+
+   **作業者の帯より強く出します。** 作業者は「まだやっていないこと」
+   ですが、こちらは「**前の直が共有へ出ていない**」── 放っておくと
+   翌月の集計まで誰も気づかない話なので、赤で出します。
+   ================================================================== */
+/* **改行をそのまま出すのは文だけ。** `.msg` は `white-space:pre-wrap` な
+   ので、そのままだと **HTML の字下げと改行がぜんぶ空白として出ます**
+   ── 板の中に大きな空きができて、文と一覧とボタンが離れていました */
+.handover{ margin-bottom:var(--sp-3); white-space:normal; }
+.handover__text{ font-weight:600; white-space:pre-wrap; }
+.handover__list, .handover__notes{
+  margin:var(--sp-2) 0 0; padding-left:var(--sp-4);
+  font-size:var(--fs-sm); line-height:1.8;
+}
+/* 空の一覧は場所を取らない(引き継ぐ前は下、引き継いだ後は上が空く) */
+.handover__list:empty, .handover__notes:empty{ display:none; }
+.handover__notes{ color:var(--muted); }
+.handover .btn-row{ margin-top:var(--sp-2); }
+/* 止められているあいだは、作業者の帯より前の直のほうを見てほしい */
+body.handover-blocked table.grid,
+body.handover-blocked .btn-row--staged,
+body.handover-blocked #start-shift{ opacity:.45; }
+body.handover-blocked #handover{ opacity:1; }
+
+body.is-readonly .card,
+body.is-readonly table.grid,
+body.is-readonly .btn-row--staged{ opacity:.5; }
+body.is-readonly #read-only{ opacity:1; }
+
+/* ==================================================================
+   GW計算の内訳 (`presenters/gw_breakdown.py`)
+
+   **式と数字を、読める形で並べる。** 数字を疑われたときに確かめる場所
+   なので、詰めて小さくするより、1段ずつ離して追えるほうを採る。
+   ================================================================== */
+.bd-cols{
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));
+  gap:var(--sp-3);
+}
+.bd-head{
+  font-size:var(--fs-sm); color:var(--muted);
+  margin:var(--sp-3) 0 var(--sp-1);
+}
+.bd-head:first-child{ margin-top:0; }
+
+/* 資材1つぶん。**枠で囲って、どこまでが1つかを切る** */
+#bd-lines{
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr));
+  gap:var(--sp-2);
+}
+.bd-line{
+  border:1px solid var(--rule); border-radius:var(--r-md);
+  padding:var(--sp-2) var(--sp-3); background:var(--surface);
+}
+/* 使わなかった資材。**消さずに薄くする** ── 並びが変わると
+   「どれが抜けたのか」が読めない */
+.bd-line[data-skipped="1"]{ background:var(--sunken); opacity:.75; }
+.bd-line__head{
+  display:flex; justify-content:space-between; align-items:baseline;
+  gap:var(--sp-2); margin-bottom:var(--sp-1);
+}
+.bd-line__kg{ font-family:var(--mono); font-weight:700; }
+.bd-line p.lead{ margin:var(--sp-1) 0 0; }
+
+/* 式の1段。見出しを左に固定幅で置いて、式の頭をそろえる */
+.bd-step{
+  display:flex; gap:var(--sp-2); align-items:baseline;
+  font-size:var(--fs-sm); margin:2px 0;
+}
+.bd-step__tag{
+  /* 「出どころ」が折れない幅。折れると式の頭がそろわない */
+  flex:0 0 auto; width:4.6em; white-space:nowrap;
+  color:var(--muted); font-size:var(--fs-xs);
+}
+/* 数字を入れた式。**等幅で、折り返す** ── 長いが、切ると読めない */
+.bd-step__mono{
+  font-family:var(--mono); font-size:var(--fs-xs);
+  overflow-wrap:anywhere; line-height:1.5;
+}
+
+/* ==================================================================
+   書き方の見本(設定画面のCSVなど)
+
+   **打ち直せる形で見せる。** 説明文で「カンマで区切って…」と書くより、
+   そのまま写せる3行を出すほうが早い
+   ================================================================== */
+.codeblock{
+  font-family:var(--mono); font-size:var(--fs-xs); line-height:1.6;
+  background:var(--sunken); border:1px solid var(--rule);
+  border-radius:var(--r-md); padding:var(--sp-2);
+  margin:var(--sp-2) 0; overflow-x:auto; white-space:pre;
+}
+
+/* ==================================================================
+   選ばせる行(直が変わったときの2択)
+
+   **どちらを押すと何が起きるかを、押す場所そのものに書く。**
+   「はい / いいえ」を並べると、押した人には結果が見えません ──
+   見出し(何をするか)と添え書き(その結果どうなるか)を1つの釦に
+   収めて、読んでから押せるようにします。
+   ================================================================== */
+.pick{ display:flex; flex-direction:column; gap:var(--sp-2); }
+.pick__row{
+  display:flex; flex-direction:column; gap:var(--sp-1);
+  text-align:left; width:100%;
+  padding:var(--sp-2) var(--sp-3);
+  background:var(--surface); color:var(--ink);
+  border:1px solid var(--rule); border-radius:var(--r-md);
+  cursor:pointer; font:inherit;
+}
+.pick__row:hover{ background:var(--sunken); border-color:var(--accent); }
+.pick__row:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.pick__row b{ font-size:var(--fs-md); }
+.pick__row small{ color:var(--muted); font-size:var(--fs-xs); line-height:1.5; }
+
+/* ==================================================================
+   「◯時◯分時点」
+
+   集計・グラフは開いたときに1度引くだけなので、**開きっぱなしにすると
+   何時間前の数字でも今の顔で並びます。** 時刻を添えて、見た人が自分で
+   判断できるようにします。
+
+   直が変わったら `data-stale` が立ちます。**色だけでは運びません** ──
+   札の文言そのものが「直が変わりました。引き直してください」になります
+   (`static/js/asof.js`)。
+   ================================================================== */
+.asof{
+  font-size:var(--fs-xs); color:var(--muted);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.asof[data-stale="1"]{
+  color:var(--state-warn);
+  background:var(--state-warn-bg);
+  border:1px solid var(--state-warn-line); border-radius:var(--r-sm);
+  padding:0 var(--sp-1); font-weight:700; white-space:normal;
+}
+
+/* ==================================================================
+   計算の途中式
+
+   **ふだんは畳んでおきます。** 数字を見に来た人の前に式が広がって
+   いると、7枚のタイルが読めません ── 疑ったときだけ開くものです。
+
+   3行の並びは `logic/formula.py` が作ったものをそのまま出します
+   (式 / 数を入れた式 / 答え)。**数は等幅**にして、桁が縦に揃うように
+   します ── 1440 と 432 を見比べるのがこの欄の仕事なので。
+   ================================================================== */
+.calc{ margin-top:var(--sp-2); }
+.calc__open{
+  font-size:var(--fs-xs); color:var(--muted); cursor:pointer;
+  padding:2px 0; list-style:revert;
+}
+.calc__open:hover{ color:var(--ink); }
+.calc__list{
+  list-style:none; margin:var(--sp-2) 0 0; padding:0;
+  display:flex; flex-direction:column; gap:var(--sp-2);
+}
+.calc__step{
+  display:flex; flex-direction:column; gap:1px;
+  padding:var(--sp-2); background:var(--sunken);
+  border-radius:var(--r-sm); border-left:2px solid var(--rule);
+}
+.calc__name{ font-size:var(--fs-xs); color:var(--ink); }
+.calc__formula, .calc__sub, .calc__result{
+  font-family:var(--mono); font-size:var(--fs-xs);
+  overflow-wrap:anywhere; line-height:1.6;
+}
+.calc__formula{ color:var(--muted); }
+/* **数を入れた行がいちばん見たいところ。** ここだけ本文の濃さにする */
+.calc__sub{ color:var(--ink); }
+.calc__result{ color:var(--ink); font-weight:700; }
+.calc__note{
+  font-size:var(--fs-xs); color:var(--muted); line-height:1.5;
+  margin-top:2px;
+}
+
+/* ==================================================================
+   面(タブ) ── 縦に積む代わりに分ける
+
+   設定画面は14枚のカードが1本に積まれていて、「機能を確かめたいのに
+   どこにあるか分からない」状態でした。下にあるものほど「無いもの」と
+   して扱われるので、**見出しだけは常に見えている**形に替えます。
+
+   守ること:
+   - 中身に問題がある面は、開いていなくても見出しがそう言う
+   - 選ばれている面は**下線と太字**でも分かる(色だけで伝えない)
+   - 当たり判定 44px
+   ================================================================== */
+.tabs{ display:flex; flex-direction:column; }
+
+.tabs__bar{
+  display:flex; gap:var(--sp-1); flex-wrap:wrap;
+  border-bottom:1px solid var(--rule);
+  padding:0; margin:0 0 var(--sp-4);
+}
+.tab{
+  font:inherit; font-size:var(--fs-lg); font-weight:500; cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px;
+  min-height:44px; padding:var(--sp-2) var(--sp-4);
+  background:transparent; color:var(--muted);
+  border:0; border-bottom:2px solid transparent;
+  border-radius:var(--r-md) var(--r-md) 0 0;
+  margin-bottom:-1px;                     /* 下線を bar の罫線に重ねる */
+  transition:color .14s ease, background-color .14s ease,
+             border-color .14s ease;
+}
+.tab:hover{ color:var(--ink); background:var(--raised); }
+.tab[aria-selected="true"]{
+  color:var(--ink); font-weight:700;
+  border-bottom-color:var(--accent);
+  background:transparent;
+}
+.tab:focus-visible{ outline:2px solid var(--focus); outline-offset:-2px; }
+
+/* その先に何があるか(件数・状態)。**開く前に分かる。**
+   ふだんは輪郭を出さない ── 見出しの隣で数字が枠に囲まれていると、
+   面の数だけ細かい箱が並ぶ。色が要る状態のときだけ枠を足す */
+.tab__badge{
+  font-size:var(--fs-xs); font-weight:700; line-height:1;
+  padding:3px var(--sp-2); border-radius:999px;
+  background:var(--sunken); color:var(--muted);
+  border:1px solid transparent;
+}
+.tab[aria-selected="true"] .tab__badge{ color:var(--ink); }
+.tab__badge[hidden]{ display:none; }
+.tab__badge[data-level="ng"]{
+  background:var(--state-error-bg); color:var(--state-error);
+  border-color:var(--state-error-line);
+}
+.tab__badge[data-level="warn"]{
+  background:var(--state-warn-bg); color:var(--state-warn);
+  border-color:var(--state-warn-line);
+}
+.tab__badge[data-level="ok"]{
+  background:var(--state-ok-bg); color:var(--state-ok);
+  border-color:var(--state-ok-line);
+}
+
+/* 中身に問題がある面は、開いていなくても見出しが赤い印を持つ。
+   **隠したせいで気づけなくなるなら、スクロールのほうがまだまし** */
+.tab[data-level="ng"]:not([aria-selected="true"]){ color:var(--state-error); }
+
+.tabpanel[hidden]{ display:none; }
+.tabpanel > .card + .card{ margin-top:var(--sp-4); }
+
+/* 面の中の面。**外側と同じ形だと、どちらを押したのか分からなくなる**
+   ので、内側は沈んだ盆に白いつまみが乗る形にする */
+.tabs--inner > .tabs__bar{
+  display:inline-flex; gap:3px; flex-wrap:wrap;
+  background:var(--sunken); border:1px solid var(--rule);
+  border-radius:var(--r-lg); padding:3px; margin:0 0 var(--sp-3);
+  align-self:flex-start;
+}
+.tabs--inner > .tabs__bar > .tab{
+  min-height:34px; padding:var(--sp-1) var(--sp-3);
+  border:0; border-radius:var(--r-md); margin:0;
+  font-size:var(--fs-md); font-weight:700; color:var(--muted);
+}
+.tabs--inner > .tabs__bar > .tab[aria-selected="true"]{
+  background:var(--surface); color:var(--ink);
+  box-shadow:var(--shadow-1);
+}
+
+/* ==================================================================
+   鍵の帯 ── この面で何に管理者パスワードが要るか
+
+   「設定でパスがいる場合とそうでない場合が分かりにくい。そうしないと
+   ボタンが効いているのかも分からない」という指摘から置きました。
+   **面を開いた時点で、鍵が要ることと、開いているかどうかが見える**
+   ようにします ── 押してから断られるのは手戻りです。
+
+   鍵の要らない面には、この帯そのものを出しません(「要りません」と
+   書いた帯を全面に並べると、鍵のほうが主役に見えます)。
+   ================================================================== */
+.lockbar{
+  display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-3);
+  padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-4);
+  border:1px solid var(--rule); border-left:3px solid var(--accent);
+  border-radius:var(--r-md); background:var(--sunken);
+}
+.lockbar--open{ border-left-color:var(--state-ok); }
+.lockbar__what{ flex:1 1 22em; min-width:16em; }
+.lockbar .field{ margin:0; }
+
+/* ==================================================================
+   マスタ管理 ── 表の一覧(左)と、行(右)
+
+   選択欄2つ(ファイル・表)だと、**開くまで何があるか分かりません。**
+   左に一覧を出しておくと、どの表が直せてどれが見るだけかが、選ぶ前に
+   読めます。狭い画面では上下に積み替えます。
+   ================================================================== */
+.masterwrap{
+  display:grid; grid-template-columns:minmax(15rem, 19rem) minmax(0, 1fr);
+  gap:var(--sp-4); align-items:start;
+}
+@media (max-width:960px){
+  .masterwrap{ grid-template-columns:minmax(0, 1fr); }
+}
+.mlist{ display:flex; flex-direction:column; gap:var(--sp-1); position:relative; }
+.mlist__group{
+  font-size:var(--fs-xs); color:var(--faint); font-weight:700;
+  margin-top:var(--sp-2); padding:0 var(--sp-1);
+}
+.mlist__group:first-child{ margin-top:0; }
+.mitem{
+  display:flex; align-items:flex-start; gap:var(--sp-2);
+  width:100%; text-align:left; font:inherit; cursor:pointer;
+  padding:var(--sp-2); border:1px solid transparent;
+  border-radius:var(--r-md); background:transparent; color:var(--ink);
+}
+.mitem:hover{ background:var(--raised); }
+.mitem[aria-current="true"]{
+  background:var(--accent-soft); border-color:var(--accent-line);
+}
+.mitem:focus-visible{ outline:2px solid var(--focus); outline-offset:-2px; }
+.mitem__mark{
+  flex:none; width:1.6rem; height:1.6rem; border-radius:var(--r-sm);
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:var(--fs-xs); font-weight:700;
+  background:var(--sunken); color:var(--muted);
+}
+.mitem[data-editable="1"] .mitem__mark{
+  background:var(--accent-soft); color:var(--accent);
+}
+.mitem__body{ min-width:0; display:flex; flex-direction:column; gap:1px; }
+.mitem__name{ font-size:var(--fs-md); font-weight:600; }
+.mitem__note{
+  font-size:var(--fs-xs); color:var(--muted); line-height:1.45;
+  overflow-wrap:anywhere;
+}
+.mbar{
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:var(--sp-2);
+  margin-bottom:var(--sp-2);
+}
+
+/* 鍵が閉まっているあいだ打てない欄。**打てるのに保存で断られる**と、
+   押した人には「ボタンが効いていない」としか見えない。打てないことは
+   見た目でも分かるようにする(文言は「要パスワード」の札が持つ) */
+.path input[readonly]{
+  background:var(--sunken); color:var(--muted);
+  border-style:dashed; cursor:not-allowed;
+}
+
+/* 狭い画面では一覧と表が縦に積まれる。一覧をそのまま伸ばすと、行に
+   辿り着くまでに何十件ぶんスクロールすることになる */
+@media (max-width:960px){
+  .mlist{ max-height:18rem; overflow-y:auto; }
+}
+/* **表の一覧は、それだけで流す。**
+
+       テーブル名だけでスクロールしたい。現状だと全体でスクロールして
+       選んで上に戻ってテーブル確認です
+
+   一覧(表が40近く)をそのまま伸ばしていたので、下のほうの表を選ぶには
+   作業面ごと下へ流すしかなく、選ぶと中身(右)は画面の上に置いてけぼり
+   でした。一覧は画面の高さに収めて**その中だけ**を流し、作業面を流しても
+   上に貼り付けたままにします ── 右の中身はいつも隣に見えています */
+@media (min-width:961px){
+  .masterwrap > aside{ position:sticky; top:0; }
+  .mlist{
+    max-height:calc(100vh - 54px - 2 * var(--sp-4));
+    overflow-y:auto; overscroll-behavior:contain;
+    padding-right:var(--sp-1);
+  }
+}
+
+/* フォルダを選ぶ窓の「いまどこか」。
+   ドライブを頭に並べ、その下に道しるべ ── 一段ずつ上へ辿るだけでは
+   共有(Z:)へ移れないし、いまどのドライブを見ているのかも読めない */
+.browse__where{
+  display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-1);
+  padding:var(--sp-2) var(--sp-3);
+  border-bottom:1px solid var(--hairline); background:var(--sunken);
+}
+.browse__drive{
+  font:inherit; font-size:var(--fs-sm); font-weight:700; cursor:pointer;
+  min-height:28px; padding:2px var(--sp-2);
+  border:1px solid var(--field-line); border-radius:var(--r-sm);
+  background:var(--surface); color:var(--ink);
+}
+.browse__drive:hover{ background:var(--btn-hover); }
+.browse__drive[data-here="1"]{
+  background:var(--accent-soft); border-color:var(--accent);
+  color:var(--accent);
+}
+.browse__crumbs{
+  display:flex; flex-wrap:wrap; align-items:center;
+  margin-left:var(--sp-2); min-width:0;
+}
+.browse__crumb{
+  font:inherit; font-size:var(--fs-sm); cursor:pointer;
+  padding:2px var(--sp-1); border:0; border-radius:var(--r-sm);
+  background:transparent; color:var(--accent); text-decoration:underline;
+}
+.browse__crumb:hover{ background:var(--raised); }
+.browse__crumb + .browse__crumb::before{
+  content:"›"; color:var(--muted); margin-right:var(--sp-1);
+  text-decoration:none; display:inline-block;
+}
+
+/* ==================================================================
+   落として渡す ── 取り込み
+
+   道を打つのは、共有フォルダの深いところだと現実的ではありません。
+   10本あれば10回打つことになります。掴んで落とせるほうが早い。
+   ================================================================== */
+.drop{
+  border:2px dashed var(--field-line); border-radius:var(--r-lg);
+  background:var(--sunken); padding:var(--sp-4);
+  text-align:center; transition:background-color .12s ease,
+                                border-color .12s ease;
+}
+.drop[data-over="1"]{
+  border-color:var(--accent); background:var(--accent-soft);
+}
+.drop[data-locked="1"]{ opacity:.55; }
+.drop__head{ margin:0 0 var(--sp-2); font-size:var(--fs-lg); }
+.drop__head .lead{ display:block; margin-top:2px; }
+.drop .btn-row{ justify-content:center; }
+
+/* 参照パスの欄 ── 打ちかけか、保存済みか。
+   打っただけでは効いていないのに見た目が変わらないと、「もう保存された」
+   と読めてしまう。**保存したら薄くして、触っていないことを示す** */
+.path__edit{ display:flex; gap:var(--sp-2); align-items:center; }
+.path__edit input{ flex:1 1 auto; min-width:0; }
+.path__state{ font-size:var(--fs-xs); font-weight:700; margin-left:var(--sp-2); }
+.path[data-path-state="dirty"] .path__state{ color:var(--state-warn); }
+.path[data-path-state="dirty"] input{
+  border-color:var(--state-warn); background:var(--state-warn-bg);
+}
+.path[data-path-state="saved"] .path__state{ color:var(--state-ok); }
+.path[data-path-state="saved"] input{
+  color:var(--muted); background:var(--sunken); border-color:var(--state-ok-line);
+}
+.btn--lg{ min-height:42px; padding:0 var(--sp-5); font-size:var(--fs-lg); }
+
+/* ------------------------------------------------------------------
+   打てるタブは1枚 (`js/tab_lock.js`)
+
+   **帯では足りませんでした。** 薄くして触れなくしても、12行の表も
+   保存の並びもそこにあるので、画面としては日報入力のままです ──
+   どちらのタブで打っているのかは、結局その帯を読まないと分かりません。
+
+   2枚目を開いた時点で、**日報入力をこの1枚に差し替えます。** 打つものが
+   1つも無い画面にすれば、読まなくても分かります。
+
+   中身は消していません(`display:none` で隠すだけ)。権利が戻れば、
+   打ちかけの値もそのまま元に戻ります。
+   ------------------------------------------------------------------ */
+.tab-lock{
+  max-width:44rem; margin:var(--sp-5) auto;
+  display:flex; flex-direction:column; gap:var(--sp-3);
+}
+.tab-lock h2{ margin:0; }
+.tab-lock__text{ display:flex; flex-direction:column; gap:var(--sp-2); }
+
+/* **本体を隠すのはここ。** JS で1つずつ `display` を触ると、戻すときに
+   元の値(`flex` だったのか `grid` だったのか)が分からなくなります */
+body.is-viewer #main > *:not(#tab-lock){ display:none; }
+
+/* 帯(報告日・ライン・直・ページ)と左の並びは残します ── ここが消えると
+   「どの日報の話なのか」も、他の画面への行き方も無くなります */
+
+/* ------------------------------------------------------------------
+   日報入力の並び(v4.22.0)── 表の上に2枚、表の下に2枚
+
+       表の上  … etc のボタン | 入力のこつ(灰色の列・時刻・近道)
+       表      … 12行
+       表の下  … ③のボタン   | 直実績合計
+
+   「入力ページレイアウトを写真のようにできますか / 現状操作コントロールの間に
+   説明文があったり導線が好みでないです」。**押すものと説明を混ぜない** ──
+   説明は右上の1枚・ボタンに乗せたとき・いちばん下の「くわしく」へ。
+
+   **狭い画面では縦に落とします** ── 横に詰めると、どちらも読めない幅になります
+   (押し間違いのほうが高く付く)。
+   ------------------------------------------------------------------ */
+.entry-panels, .entry-foot{
+  display:grid; gap:var(--sp-3); align-items:stretch;
+  margin:var(--sp-3) 0;
+}
+.entry-panels{ grid-template-columns:minmax(0, 1.25fr) minmax(0, 1fr); }
+/* 下はボタンの幅ぶん(1列に収まる幅)を左に取り、残りを合計へ */
+.entry-foot{ grid-template-columns:max-content minmax(0, 1fr); }
+.entry-panels > .card, .entry-foot > .card{ margin:0; }
+/* 入力のこつ。**見出しを付けない**(並んだ3行が全部) */
+.entry-hints{ display:flex; flex-direction:column; justify-content:center; gap:var(--sp-1); }
+.entry-hints > p{ margin:0; }
+/* ③の囲みは器の中で上下の真ん中に。保存の知らせはボタンの下 */
+.entry-actions{ display:flex; flex-direction:column; justify-content:center; gap:var(--sp-1); }
+.entry-actions > .btn-row{ margin:0; flex-wrap:nowrap; }
+.entry-actions__note{ margin:0; min-height:1.4em; max-width:40rem; }
+/* 合計の4つを1行に(紙の表の下と同じ並び)。値は「4379.4」程度 */
+.entry-foot .totals__cell input{ width:8.5em; }
+@media (max-width:1100px){
+  .entry-panels, .entry-foot{ grid-template-columns:minmax(0, 1fr); }
+}
+/* いちばん下の「くわしく」。**畳んでおく**(開けば、これまでの説明がそのまま) */
+.entry-notes{ margin-top:var(--sp-3); }
+.entry-notes > summary{
+  cursor:pointer; color:var(--muted); font-size:var(--fs-sm);
+  padding:var(--sp-1) 0;
+}
+.entry-notes[open] > summary{ color:var(--ink); }
+.entry-notes > p{ margin:var(--sp-1) 0; }
+
+/* ------------------------------------------------------------------
+   並べて見分けるための10色 (`mark-cat-1` 〜 `mark-cat-10`)  [v3.44.0]
+
+   停止の項目ごとの絵は、項目が属する**3分類の色**で塗っていました。
+   ひと目で「計画された停止か、異常か」が読める代わりに、
+   0 休憩食事 / 2 人員不足 / 6 教育 / 1 TPM活動・清掃 が**4つとも同じ
+   水色**になります ── 見分けるための絵で見分けられない。おまけに
+   「その他」は色が付かず、暗い地では**黒い扇**になって沈んでいました。
+
+   どの項目が何番かを決めるのはサーバ(`presenters/dashboard.py`)で、
+   ここは「その番号は何色か」しか持ちません。
+   ------------------------------------------------------------------ */
+.mark-cat-1{ fill:var(--cat-1); }
+.mark-cat-2{ fill:var(--cat-2); }
+.mark-cat-3{ fill:var(--cat-3); }
+.mark-cat-4{ fill:var(--cat-4); }
+.mark-cat-5{ fill:var(--cat-5); }
+.mark-cat-6{ fill:var(--cat-6); }
+.mark-cat-7{ fill:var(--cat-7); }
+.mark-cat-8{ fill:var(--cat-8); }
+.mark-cat-9{ fill:var(--cat-9); }
+.mark-cat-10{ fill:var(--cat-10); }
+
+.donut__ring.mark-cat-1{ stroke:var(--cat-1); }
+.donut__ring.mark-cat-2{ stroke:var(--cat-2); }
+.donut__ring.mark-cat-3{ stroke:var(--cat-3); }
+.donut__ring.mark-cat-4{ stroke:var(--cat-4); }
+.donut__ring.mark-cat-5{ stroke:var(--cat-5); }
+.donut__ring.mark-cat-6{ stroke:var(--cat-6); }
+.donut__ring.mark-cat-7{ stroke:var(--cat-7); }
+.donut__ring.mark-cat-8{ stroke:var(--cat-8); }
+.donut__ring.mark-cat-9{ stroke:var(--cat-9); }
+.donut__ring.mark-cat-10{ stroke:var(--cat-10); }
+
+.dlg__swatch.mark-cat-1{ background:var(--cat-1); }
+.dlg__swatch.mark-cat-2{ background:var(--cat-2); }
+.dlg__swatch.mark-cat-3{ background:var(--cat-3); }
+.dlg__swatch.mark-cat-4{ background:var(--cat-4); }
+.dlg__swatch.mark-cat-5{ background:var(--cat-5); }
+.dlg__swatch.mark-cat-6{ background:var(--cat-6); }
+.dlg__swatch.mark-cat-7{ background:var(--cat-7); }
+.dlg__swatch.mark-cat-8{ background:var(--cat-8); }
+.dlg__swatch.mark-cat-9{ background:var(--cat-9); }
+.dlg__swatch.mark-cat-10{ background:var(--cat-10); }
+
+/* ------------------------------------------------------------------
+   棒を10色で塗る(停止の項目ごとなど)              [v3.50.0]
+
+   `.mark-cat-N` は `fill` を1クラスぶんの詳しさ(0,1,0)でしか書いて
+   いないので、`.tile[data-tone] .chart .bar` (0,3,0) に負けます ──
+   **棒が全部なかまの色1色**になります(実際にそうなりました)。棒に
+   使うぶんだけ、同じ詳しさまで書き足します。
+
+   直の積み上げはここではなく `--shift-*` です(下)── 2回、
+   「同じ分類だから色相は近くに」で失敗しました。
+   ------------------------------------------------------------------ */
+.chart .bar.mark-cat-1{ fill:var(--cat-1); }
+.chart .bar.mark-cat-2{ fill:var(--cat-2); }
+.chart .bar.mark-cat-3{ fill:var(--cat-3); }
+.chart .bar.mark-cat-4{ fill:var(--cat-4); }
+.chart .bar.mark-cat-5{ fill:var(--cat-5); }
+.chart .bar.mark-cat-6{ fill:var(--cat-6); }
+.chart .bar.mark-cat-7{ fill:var(--cat-7); }
+.chart .bar.mark-cat-8{ fill:var(--cat-8); }
+.chart .bar.mark-cat-9{ fill:var(--cat-9); }
+.chart .bar.mark-cat-10{ fill:var(--cat-10); }
+
+.tile[data-tone] .chart .bar.mark-cat-1{ fill:var(--cat-1); }
+.tile[data-tone] .chart .bar.mark-cat-2{ fill:var(--cat-2); }
+.tile[data-tone] .chart .bar.mark-cat-3{ fill:var(--cat-3); }
+.tile[data-tone] .chart .bar.mark-cat-4{ fill:var(--cat-4); }
+.tile[data-tone] .chart .bar.mark-cat-5{ fill:var(--cat-5); }
+.tile[data-tone] .chart .bar.mark-cat-6{ fill:var(--cat-6); }
+.tile[data-tone] .chart .bar.mark-cat-7{ fill:var(--cat-7); }
+.tile[data-tone] .chart .bar.mark-cat-8{ fill:var(--cat-8); }
+.tile[data-tone] .chart .bar.mark-cat-9{ fill:var(--cat-9); }
+.tile[data-tone] .chart .bar.mark-cat-10{ fill:var(--cat-10); }
+
+/* 段のあいだの境。色が違えば境は見えますが、**棒が細い日**(期間を
+   長く取ると1本が数pxになります)は色の帯が隣り合うだけになるので、
+   地の色の細い線で切っておきます */
+.chart .bar--seg{ stroke:var(--surface); stroke-width:1; }
+
+/* 累積の線。**目標(紫の破線)と色でも分ける**
+   以前は累積も目標も同じ紫で、実線/破線だけで分けていました。点が
+   詰まると、実線も破線も同じ帯に見えます。 */
+/* 累積はいちばん太く。**この絵の主役**(ペースが足りているか) */
+.chart .line.mark-cumulative{ stroke:var(--cumulative); stroke-width:4; }
+.chart .dot.mark-cumulative{ fill:var(--cumulative); }
+.chart .bar.mark-cumulative{ fill:var(--cumulative); }
+.mark-cumulative{ fill:var(--cumulative); }
+.dlg__swatch.mark-cumulative{ background:var(--cumulative); }
+
+/* ======================================================================
+   ネオンのダッシュボード ── 集計結果(KPIカード)とグラフだけ  [v3.51.0]
+
+   **`data-skin="plain"` で全部外れて、前の見た目に戻ります。**
+   ここは上書きの層で、前の姿を別に持ってはいません。
+   ====================================================================== */
+
+/* ---- 発光の色。`currentColor` を印ごとに置く ---------------------- */
+:root[data-skin="neon"] .chart-skin .mark-shift-1{ color:var(--shift-1); }
+:root[data-skin="neon"] .chart-skin .mark-shift-2{ color:var(--shift-2); }
+:root[data-skin="neon"] .chart-skin .mark-shift-3{ color:var(--shift-3); }
+:root[data-skin="neon"] .chart-skin .mark-shift-day{ color:var(--shift-day); }
+:root[data-skin="neon"] .chart-skin .mark-cumulative{ color:var(--cumulative); }
+:root[data-skin="neon"] .chart-skin .line--target{ color:var(--goal); }
+:root[data-skin="neon"] .chart-skin .mark-qty{ color:var(--qty); }
+:root[data-skin="neon"] .chart-skin .mark-dur{ color:var(--dur); }
+:root[data-skin="neon"] .chart-skin .mark-stop{ color:var(--stop); }
+:root[data-skin="neon"] .chart-skin .mark-stop-loss{ color:var(--stop-loss); }
+:root[data-skin="neon"] .chart-skin .mark-stop-handling{ color:var(--stop-handling); }
+:root[data-skin="neon"] .chart-skin .mark-stop-sudden{ color:var(--stop-sudden); }
+
+/* ---- 停止の3分類は、指定の3色へ ---------------------------------- */
+:root[data-skin="neon"] .chart-skin{
+  --stop-loss:var(--neon-stop-loss);
+  --stop-handling:var(--neon-stop-handling);
+  --stop-sudden:var(--neon-stop-sudden);
+}
+
+/* ---- ドーナツの真ん中の数字。**大きく、中央に** ------------------ */
+:root[data-skin="neon"] .chart-skin .donut__total{
+  font-size:36px; font-weight:700;
+  fill:var(--ink); paint-order:stroke;
+}
+:root[data-skin="neon"] .chart-skin .donut__unit{ font-size:13px; }
+/* 輪のあいだの隙間は濃紺(地の色)。`--surface` を差し替えてあるので
+   そのまま効きますが、光らせたぶん太く見えるので細くします */
+:root[data-skin="neon"] .chart-skin .donut__slice{ stroke-width:1.5; }
+
+/* ---- KPIカード ── すりガラス ------------------------------------- */
+:root[data-skin="neon"] .tile{
+  background:var(--glass-bg);
+  border:1px solid var(--glass-edge);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  color:var(--glass-ink);
+}
+:root[data-skin="neon"] .tile .tile__title{ color:var(--glass-ink); }
+:root[data-skin="neon"] .tile .tile__note,
+:root[data-skin="neon"] .tile .tile__unit,
+:root[data-skin="neon"] .tile .tile__empty,
+:root[data-skin="neon"] .tile .lead{ color:var(--glass-muted); }
+
+/* 数字。**太いサンセリフ**で高発色に ── 等幅の細字だと、蛍光色でも
+   痩せて見えます。名前を並べておいて、入っていない端末では
+   そのまま次の候補へ落ちます(外から読み込まないので、繋がっていない
+   現場でも同じ見え方になります) */
+:root[data-skin="neon"] .tile .tile__value{
+  font-family:Inter, Montserrat, Roboto, "Segoe UI", var(--sans);
+  font-weight:700; letter-spacing:-.01em;
+  text-shadow:0 0 12px currentColor;
+}
+:root[data-skin="neon"] .tile[data-tone="qty"]{ --tone:var(--neon-qty); }
+:root[data-skin="neon"] .tile[data-tone="dur"]{ --tone:var(--neon-dur); }
+:root[data-skin="neon"] .tile[data-tone="stop"]{ --tone:var(--neon-stop); }
+:root[data-skin="neon"] .tile[data-tone="goal"]{ --tone:var(--neon-goal); }
+:root[data-skin="neon"] .tile[data-tone="cumulative"]{ --tone:var(--neon-cumulative); }
+
+/* 表もカードの中に載るので、字と罫線を濃紺むけに */
+:root[data-skin="neon"] .tile .list th,
+:root[data-skin="neon"] .tile .list td{
+  color:var(--glass-ink); border-color:var(--glass-edge);
+}
+
+/* ------------------------------------------------------------------
+   進み具合の棒 ── 長くかかる仕事の「動いている」を出す
+
+       件数が多いときはプログレス表示させてください
+
+   何百ページもある過去データの取り込みは何十秒もかかります。その
+   あいだ画面は押したまま止まって見える ── **止まっているのか動いて
+   いるのかが分からない**と、人はもう一度押すか、閉じるかします。
+
+   棒は `<progress>` をそのまま使います(部品を作りません)。見出しと
+   添え書きは**サーバが作った字**(`logic/progress.py`)をそのまま。
+   ------------------------------------------------------------------ */
+.job{
+  margin-top:var(--sp-3); padding:var(--sp-3);
+  border:1px solid var(--accent-line); border-left:6px solid var(--accent);
+  border-radius:8px; background:var(--accent-soft);
+}
+.job__head{ font-weight:700; color:var(--ink); }
+/* 幅いっぱい。**細くしない** ── 遠目にも動きが見えることが仕事です */
+.job__bar{
+  display:block; width:100%; height:14px; margin:var(--sp-2) 0;
+  appearance:none; border:none; border-radius:999px;
+  background:var(--surface); color:var(--accent);
+}
+.job__bar::-webkit-progress-bar{
+  background:var(--surface); border-radius:999px;
+}
+.job__bar::-webkit-progress-value{
+  background:var(--accent); border-radius:999px;
+}
+.job__bar::-moz-progress-bar{ background:var(--accent); border-radius:999px; }
+/* いま触っているものの名前。**長い道でも折り返す** */
+.job__note{ overflow-wrap:anywhere; color:var(--ink); }
+/* **浮かせる枠**(共有へ保存・マスタを直す)。画面ごとに置き場所を作らず、
+   どの画面でも上の真ん中に出す(`static/js/progress.js`)。マスタの窓
+   (z-index 80)の上、全画面の確認(200)の下 */
+.job--float{
+  position:fixed; top:64px; left:50%; transform:translateX(-50%);
+  width:min(560px, calc(100vw - 2 * var(--sp-4))); margin:0; z-index:90;
+  box-shadow:0 8px 24px rgba(0,0,0,.18);
+}
+.job__title{ font-size:var(--fs-xs); color:var(--muted); font-weight:700; }
+
+/* 標準作業時間: 欄のつなぎ方(AND / OR)。**枠で囲んで1つの選択に見せる** */
+.join{
+  display:inline-flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap;
+  margin:0; padding:var(--sp-1) var(--sp-3);
+  border:1px solid var(--rule); border-radius:var(--r-sm);
+}
+.join legend{ padding:0 var(--sp-1); font-size:var(--fs-xs); }
+
+/* 共有保存の履歴: 期間をすぐ選ぶボタン。**いま出している幅に印** ──
+   色だけに頼らず、枠と太字でも分かるように(`aria-pressed` と対) */
+.preset[aria-pressed="true"]{
+  border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent);
+  font-weight:700;
+}
+
+/* ------------------------------------------------------------------
+   共有保存を押したタイミング (`chart.js` の paintTimingChart)
+
+   色と形は直に付く(1直 ● 2直 ■ 3直 ◆ 日勤 ▲)。点のまわりに地の色の
+   縁を2px 付けて、重なった点どうしを分ける。白抜きは「押したあとも
+   共有に出ていない」(関門で止めた・送れなかった)。
+   ------------------------------------------------------------------ */
+.timing .pt{ stroke:var(--surface); stroke-width:2; }
+.timing .pt.is-open{ fill:var(--surface); stroke-width:2; }
+.timing .pt.is-open.mark-cat-1{ stroke:var(--cat-1); }
+.timing .pt.is-open.mark-cat-2{ stroke:var(--cat-2); }
+.timing .pt.is-open.mark-cat-3{ stroke:var(--cat-3); }
+.timing .pt.is-open.mark-cat-4{ stroke:var(--cat-4); }
+/* 直の終わり(0 分)。**ここを境に上下を読む**ので、目盛りより強く */
+.timing .timing__zero{ stroke:var(--muted); stroke-width:1.5; }
+.timing .timing__hit{ fill:transparent; }
+.timing .timing__pt:hover .pt{ stroke:var(--ink); }
+.timing__legend{ display:flex; flex-wrap:wrap; gap:var(--sp-1) var(--sp-3);
+                 list-style:none; padding:0; margin:var(--sp-1) 0 0; }
+.timing__swatch{ flex:none; overflow:visible; }
+.timing__swatch .pt{ stroke:none; }
+.timing__fill-note{ color:var(--muted); font-size:var(--fs-xs); }
+
+/* ==================================================================
+   VC長さ計算(vc-calculator の移植) ── `views/vc.js` / `vc_roll.js`
+
+   **どの名前も `vc-` で始める。** 日報の画面にも `.steps` や `.fields` が
+   あるので、同じ名前を使うと片方を直したときにもう片方が崩れます。
+   色は `tokens.css` の `--vc-*` だけ(紙の早見表の枠の色・ロールの図)。
+   ================================================================== */
+.vc-calc{ display:grid; grid-template-columns:minmax(0, 1fr) minmax(340px, 440px);
+  gap:var(--sp-4); align-items:start; }
+.vc-card{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-md);
+  box-shadow:var(--shadow-1); }
+.vc-card > header{ display:flex; align-items:center; gap:var(--sp-2); padding:var(--sp-2) var(--sp-3);
+  border-bottom:1px solid var(--hairline); }
+.vc-card > header h2, .vc-card > header h3{ margin:0; font-size:var(--fs-md); }
+.vc-card > .vc-pad{ padding:var(--sp-3); }
+.vc-step-no{ display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%;
+  background:var(--accent-soft); color:var(--accent); font-weight:700; font-size:var(--fs-xs); }
+.vc-ops{ position:sticky; top:var(--sp-3); }
+
+.vc-picked{ display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; padding:10px 12px;
+  border-radius:var(--r-sm); background:var(--sunken); }
+.vc-picked__vendor{ font-size:var(--fs-sm); color:var(--muted); }
+.vc-picked__name{ font-size:var(--fs-lg); }
+.vc-picked__spec{ font-family:var(--mono); font-size:var(--fs-sm); color:var(--muted); margin-left:auto; }
+
+.vc-hero{ display:flex; align-items:baseline; gap:10px; padding:18px 4px 10px;
+  border-bottom:1px solid var(--hairline); }
+.vc-hero__label{ font-weight:700; color:var(--muted); min-width:5.5em; }
+.vc-hero__value{ font-family:var(--mono); font-size:34px; font-weight:700; color:var(--ink); }
+.vc-hero__unit{ color:var(--muted); font-weight:700; }
+.vc-sub{ margin:14px 0 8px; font-size:var(--fs-sm); color:var(--muted); }
+.vc-counts{ display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px; }
+.vc-count{ padding:10px 12px; border-radius:var(--r-sm); background:var(--sunken);
+  display:grid; gap:2px; }
+.vc-count__k{ font-size:var(--fs-xs); color:var(--muted); font-weight:700; }
+.vc-count__v{ font-family:var(--mono); font-size:var(--fs-xl); font-weight:700; }
+.vc-count__v small{ font-size:var(--fs-sm); color:var(--muted); font-weight:600; margin-left:4px; }
+.vc-count--none .vc-count__v{ color:var(--faint); }
+/* 入力を直したら、出ている結果は古い。**数を薄くして、札でも言う** */
+.vc-result.is-stale .vc-hero__value, .vc-result.is-stale .vc-count__v{ color:var(--faint); }
+.vc-notes{ margin:10px 0 0; padding-left:18px; color:var(--state-warn); font-weight:600; }
+
+.vc-explain{ margin-top:16px; border-top:1px solid var(--hairline); padding-top:4px; }
+.vc-explain__grid{ display:grid; grid-template-columns:minmax(280px, 1.15fr) minmax(0, 1fr);
+  gap:14px; align-items:start; }
+.vc-roll{ margin:0; }
+.vc-rollsvg{ width:100%; height:auto; display:block; font-family:var(--sans); font-size:12px; }
+.vc-rollsvg text{ fill:var(--ink); }
+.vc-rollsvg .rs-ghost path{ fill:none; stroke:var(--vc-roll-ghost); stroke-dasharray:5 5; stroke-width:1.2; }
+.vc-rollsvg .rs-hollow{ fill:url(#vcRollHollow); }
+.vc-rollsvg .rs-back{ fill:var(--vc-roll-film-line); opacity:.45; }
+.vc-rollsvg .rs-hollow-a{ stop-color:var(--vc-roll-hollow-a); }
+.vc-rollsvg .rs-hollow-b{ stop-color:var(--vc-roll-hollow-b); }
+.vc-rollsvg .rs-film-a{ stop-color:var(--vc-roll-film-a); }
+.vc-rollsvg .rs-film-b{ stop-color:var(--vc-roll-film-b); }
+.vc-rollsvg .rs-film-top{ fill:var(--vc-roll-film-a); stroke:var(--vc-roll-film-line); stroke-width:1; }
+.vc-rollsvg .rs-film-cut{ fill:url(#vcRollFilm); stroke:var(--vc-roll-film-line); stroke-width:1; }
+.vc-rollsvg .rs-rings path, .vc-rollsvg .rs-stripes line, .vc-rollsvg .rs-layer{
+  fill:none; stroke:var(--vc-roll-film-line); stroke-width:.8; opacity:.75; }
+.vc-rollsvg .rs-core{ fill:var(--vc-roll-core); stroke:var(--vc-roll-core-line); stroke-width:1; }
+.vc-rollsvg .rs-axis{ stroke:var(--vc-roll-ghost); stroke-dasharray:8 4 2 4; stroke-width:1; }
+.vc-rollsvg .rs-dim line{ stroke:var(--ink); stroke-width:1.2; }
+.vc-rollsvg .rs-dim .rs-ext{ stroke:var(--faint); stroke-width:.8; stroke-dasharray:2 3; }
+.vc-rollsvg .rs-arrowhead{ fill:var(--ink); }
+.vc-rollsvg .rs-dim text{ font-weight:700; font-family:var(--mono); }
+.vc-rollsvg .rs-onfilm{ paint-order:stroke; stroke:var(--vc-roll-film-a); stroke-width:4px; }
+.vc-rollsvg .rs-lens{ fill:none; stroke:var(--ink); stroke-width:1.5; }
+.vc-rollsvg .rs-lead{ stroke:var(--faint); stroke-width:1; stroke-dasharray:3 3; }
+.vc-rollsvg .rs-mag text, .vc-rollsvg .rs-title{ font-weight:700; font-family:var(--mono); }
+.vc-rollsvg .rs-title{ font-size:16px; fill:var(--accent) !important; }
+.vc-rollsvg .rs-small{ font-size:11px; fill:var(--muted) !important; font-weight:400 !important; }
+/* 計算の経過の段にカーソルを当てると、図のその部分が光る(`data-hl`) */
+.vc-rollsvg[data-hl="film"] .rs-film-top, .vc-rollsvg[data-hl="film"] .rs-film-cut,
+.vc-rollsvg[data-hl="core"] .rs-core, .vc-rollsvg[data-hl="core"] .rs-hollow,
+.vc-rollsvg[data-hl="layer"] .rs-film-cut{ fill:var(--vc-roll-hl); }
+.vc-rollsvg[data-hl="layer"] .rs-rings path, .vc-rollsvg[data-hl="layer"] .rs-stripes line,
+.vc-rollsvg[data-hl="layer"] .rs-layer{ stroke:var(--ink); opacity:1; }
+.vc-rollsvg[data-hl="outer"] .rs-ghost path{ stroke:var(--vc-roll-hl); stroke-width:2.5; stroke-dasharray:none; }
+.vc-rollsvg[data-hl="outer"] g[data-part="outer"] line, .vc-rollsvg[data-hl="core"] g[data-part="core"] line,
+.vc-rollsvg[data-hl="film"] g[data-part="film"] line{ stroke:var(--vc-roll-hl); stroke-width:2.4; }
+
+.vc-steps{ list-style:none; margin:0; padding:0; display:grid; gap:6px; counter-reset:vcst; }
+.vc-stepline{ counter-increment:vcst; display:grid; gap:2px; padding:8px 10px 8px 34px; position:relative;
+  border-radius:var(--r-sm); background:var(--sunken); cursor:default; outline-offset:1px; }
+.vc-stepline::before{ content:counter(vcst); position:absolute; left:10px; top:8px; font-family:var(--mono);
+  font-weight:700; color:var(--accent); }
+.vc-stepline[data-part]:hover, .vc-stepline[data-part]:focus-visible{ box-shadow:inset 3px 0 0 var(--vc-roll-hl); }
+.vc-stepline__head{ display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; }
+.vc-stepline__formula{ font-size:var(--fs-xs); color:var(--muted); }
+.vc-stepline__work{ font-family:var(--mono); font-size:var(--fs-sm); overflow-wrap:anywhere; }
+.vc-stepline__work strong{ color:var(--accent); }
+.vc-stepline__note{ font-size:var(--fs-xs); color:var(--muted); }
+
+.vc-products{ display:grid; gap:4px; max-height:300px; overflow:auto; padding:2px; }
+.vc-product{ all:unset; box-sizing:border-box; cursor:pointer; display:grid;
+  grid-template-columns:auto 1fr auto; align-items:center; gap:2px 10px;
+  padding:6px 12px; min-height:40px; border-radius:var(--r-sm);
+  border:1px solid var(--rule); background:var(--surface); }
+.vc-product:hover{ border-color:var(--accent-line); background:var(--accent-soft); }
+.vc-product:focus-visible{ outline:2px solid var(--focus); outline-offset:1px; }
+.vc-product[aria-pressed="true"]{ border-color:var(--accent); background:var(--accent-soft);
+  box-shadow:inset 4px 0 0 var(--accent); }
+.vc-product__vendor{ font-size:var(--fs-xs); color:var(--muted); min-width:4.5em; }
+.vc-product__name{ font-weight:700; overflow-wrap:anywhere; }
+.vc-product__spec{ font-family:var(--mono); font-size:var(--fs-xs); color:var(--muted); text-align:right; }
+.vc-product__warn{ grid-column:2 / -1; font-size:var(--fs-xs); color:var(--state-warn); }
+
+/* 内径を選ぶ品種だけに出る枠(VBA の Nittou 枠)。**選ぶまで内径は空** */
+.vc-insides{ margin-top:10px; padding:10px 12px; border-radius:var(--r-sm);
+  background:var(--vc-choose-bg); display:grid; gap:8px; }
+.vc-insides__label{ font-weight:700; color:var(--vc-choose-fg); font-size:var(--fs-sm); }
+.vc-seg{ display:flex; gap:6px; flex-wrap:wrap; }
+.vc-seg button{ min-width:110px; }
+.vc-seg button[aria-checked="true"]{ background:var(--primary); border-color:var(--primary);
+  color:var(--primary-ink); }
+
+.vc-fields{ display:grid; grid-template-columns:5.5em 1fr; gap:8px 10px; align-items:start; }
+.vc-fields > label{ padding-top:7px; font-weight:700; }
+.vc-field{ display:grid; grid-template-columns:1fr 2.4em; gap:2px 6px; align-items:center; }
+.vc-field input{ font-family:var(--mono); text-align:right; }
+.vc-field .vc-unit{ color:var(--muted); font-weight:600; }
+.vc-field .vc-hint, .vc-field .vc-err{ grid-column:1 / -1; font-size:var(--fs-xs); }
+.vc-field .vc-hint{ color:var(--muted); }
+.vc-field .vc-err{ color:var(--state-error); font-weight:700; }
+/* 計算で入った欄。**手で入れた欄と見分ける**(直すと消える欄だと分かる) */
+.vc-field input.is-auto{ background:var(--accent-soft); }
+.vc-go{ grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+.vc-go #vc-run{ flex:1; }
+
+/* ---- 早見表 ---- */
+.vc-quick{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-md);
+  box-shadow:var(--shadow-1); padding:16px 18px; }
+.vc-quick__head{ display:flex; align-items:baseline; justify-content:center; gap:16px; position:relative;
+  margin-bottom:12px; }
+.vc-quick__head h2{ margin:0; font-size:22px; letter-spacing:.06em; }
+.vc-quick__rev{ position:absolute; right:0; top:0; font-size:var(--fs-xs); color:var(--muted); }
+.vc-quick__blocks{ display:grid; gap:12px; }
+.vc-quick__foot{ text-align:right; margin-top:8px; color:var(--muted); font-size:var(--fs-xs); }
+.vc-qblock{ --tone:var(--vc-tone-navy); display:grid; grid-template-columns:150px minmax(0, 1fr);
+  border:3px solid var(--tone); border-radius:4px; overflow:hidden; }
+.vc-qblock[data-tone="red"]{ --tone:var(--vc-tone-red); }
+.vc-qblock[data-tone="blue"]{ --tone:var(--vc-tone-blue); }
+.vc-qblock[data-tone="orange"]{ --tone:var(--vc-tone-orange); }
+.vc-qblock[data-tone="green"]{ --tone:var(--vc-tone-green); }
+.vc-qblock[data-tone="teal"]{ --tone:var(--vc-tone-teal); }
+.vc-qblock__name{ display:grid; place-content:center; text-align:center; padding:6px;
+  border-right:1px solid var(--rule); font-size:var(--fs-sm); line-height:1.35; }
+.vc-qblock__name b{ display:block; font-size:var(--fs-md); overflow-wrap:anywhere; }
+.vc-qblock__src{ display:block; color:var(--muted); font-size:10px; margin-top:2px; }
+.vc-qblock__warn{ display:block; color:var(--state-error); font-size:10px; font-weight:700; }
+.vc-qblock__table{ overflow-x:auto; }
+.vc-qtable{ border-collapse:collapse; width:100%; table-layout:fixed; }
+.vc-qtable th, .vc-qtable td{ border:1px solid var(--rule); height:34px; text-align:center; padding:0 2px; }
+.vc-qtable th[scope="row"]{ width:100px; white-space:nowrap; font-size:var(--fs-xs); font-weight:600;
+  text-align:left; padding-left:6px; }
+.vc-qtable thead th{ font-size:var(--fs-xs); font-weight:600; color:var(--muted); }
+.vc-qtable thead th.corner{ font-size:10px; width:100px; white-space:nowrap; }
+.vc-qtable td{ font-family:var(--mono); font-size:var(--fs-lg); color:var(--tone); font-weight:600; }
+/* 早見表のマスをまとめて作る(管理者) */
+.vc-grid{ display:grid; gap:8px; }
+.vc-grid__form{ display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:6px 12px;
+  align-items:center; }
+.vc-grid__form label{ font-weight:600; font-size:var(--fs-sm); }
+.vc-grid__label{ font-weight:600; font-size:var(--fs-sm); }
+.vc-grid__length{ display:grid; gap:4px; }
+.vc-grid__length .lead{ margin:0; }
+.vc-grid__length label{ font-weight:400; }
+#vc-grid-length-fixed{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+#vc-grid-length-fixed[hidden]{ display:none; }
+/* 早見表の品種: 一覧・足す・直す・消す(v3.97.0) */
+.vc-grid__title{ margin:var(--sp-3) 0 0; font-size:var(--fs-md); padding-top:var(--sp-2);
+  border-top:1px solid var(--rule); }
+.vc-grid__key{ align-items:center; }
+.vc-grid__inline{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+.vc-grid__inline[hidden], .vc-grid__label[hidden]{ display:none; }
+.vc-grid__inline label{ font-weight:400; }
+.vc-grid__actions{ align-items:center; gap:8px; }
+.vc-blocks-wrap{ overflow-x:auto; }
+.vc-blocks td{ vertical-align:middle; }
+.vc-blocks__tone{ --tone:var(--vc-tone-navy); display:inline-block; width:10px; height:10px;
+  margin-right:6px; border-radius:2px; background:var(--tone); }
+.vc-blocks__tone[data-tone="red"]{ --tone:var(--vc-tone-red); }
+.vc-blocks__tone[data-tone="blue"]{ --tone:var(--vc-tone-blue); }
+.vc-blocks__tone[data-tone="orange"]{ --tone:var(--vc-tone-orange); }
+.vc-blocks__tone[data-tone="green"]{ --tone:var(--vc-tone-green); }
+.vc-blocks__tone[data-tone="teal"]{ --tone:var(--vc-tone-teal); }
+.vc-blocks__kind{ font-size:var(--fs-sm); }
+/* 固定値は**目に付くように**(知らない間に固定値になっていた、を見落とさない) */
+.vc-blocks__kind--fixed, .vc-edit-kind--fixed{ color:var(--state-warn); font-weight:600; }
+.vc-blocks__act{ white-space:nowrap; text-align:right; }
+.vc-blocks__act .btn + .btn{ margin-left:4px; }
+.vc-btn-danger{ color:var(--danger); border-color:var(--danger); }
+.vc-edit-cells{ display:grid; gap:4px; }
+.vc-edit-cells .lead{ margin:0; }
+.vc-chip{ padding:2px 8px; font-family:var(--mono); font-size:var(--fs-sm); }
+.vc-edit-kind{ font-size:var(--fs-sm); }
+
+/* ---- コイル・平板(ツールを枠で載せる)---- */
+/* 高さは views/vc.js が作業面の残りちょうどに合わせる(ここは JS の前の仮の高さ)。
+   地は外の画面と同じ色 ── ダークで読み込み中に白く光らせない */
+.vc-coilframe{ display:block; width:100%; height:calc(100vh - 150px); min-height:480px;
+  border:1px solid var(--rule); border-radius:var(--r-md); background:var(--ground); }
+
+@media (max-width: 1280px){
+  .vc-explain__grid{ grid-template-columns:1fr; }
+}
+@media (max-width: 1080px){
+  .vc-calc{ grid-template-columns:1fr; }
+  .vc-ops{ position:static; order:-1; }
+}
+@media (max-width: 640px){
+  .vc-qblock{ grid-template-columns:1fr; }
+  .vc-qblock__name{ border-right:0; border-bottom:1px solid var(--rule); }
+}
+
+/* ---- 早見表の印刷(A4 横)----
+   プリンタは紙の縁から約 4mm に刷れない。@page の余白は 0 にして(日付や URL を
+   刷らせない)、中身は紙の端から 12mm 内側に置く(`views/vc.js` が紙を組む)。
+   **ほかの画面の印刷に効かせない** ── 紙の形は名前つきの頁(`vcquick`)にし、
+   画面を隠すのも早見表を刷っているあいだ(`body.vc-printing`)だけ。 */
+@page vcquick{ size:A4 landscape; margin:0; }
+#vc-qprint{ display:none; }
+#vc-qprint.is-measuring{ display:block; position:absolute; left:-10000px; top:0; visibility:hidden; }
+.vc-qpage{ page:vcquick; box-sizing:border-box; width:297mm; height:209mm; padding:12mm; overflow:hidden;
+  background:#fff; color:#000; display:flex; flex-direction:column; gap:3mm;
+  --surface:#fff; --ink:#000; --rule:#555; --muted:#333;
+  --vc-tone-navy:#1f3a78; --vc-tone-red:#c01f1f; --vc-tone-blue:#3a6597;
+  --vc-tone-orange:#b85c0a; --vc-tone-green:#17693a; --vc-tone-teal:#23798a;
+  -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+.vc-qpage .vc-quick__head{ flex:none; }
+.vc-qpage__blocks{ display:grid; gap:3mm; align-content:start; grid-auto-rows:max-content;
+  flex:1 1 auto; min-height:0; overflow:hidden; }
+.vc-qpage .vc-qblock{ grid-template-columns:150px minmax(0, 1fr); break-inside:avoid; }
+.vc-qpage .vc-qblock__name{ border-right:1px solid var(--rule); border-bottom:0; }
+.vc-qpage .vc-qtable th, .vc-qpage .vc-qtable td{ height:26px; }
+.vc-qpage__foot{ flex:none; display:flex; justify-content:space-between; font-size:9pt; color:#333; }
+@media print{
+  body.vc-printing{ background:#fff !important; }
+  body.vc-printing > *:not(#vc-qprint){ display:none !important; }
+  body.vc-printing #vc-qprint{ display:block; }
+  .vc-qpage{ break-after:page; }
+  .vc-qpage:last-child{ break-after:auto; }
+}
+
+/* ファイルの置き場所(この端末だけ / 共有)。**パスは折り返す** ── 長い共有の
+   道が切れると探しに行けない。消すと戻らない行(手元の日報)は地の色で分ける */
+.list.storage code{ overflow-wrap:anywhere; word-break:break-all; }
+.list.storage td{ vertical-align:top; }
+.list.storage .storage__important td{ background:var(--state-warn-bg); }
+
+/* ================================================================
+   ログ ── エラーの一覧となぜなぜシート(v4.1.0)
+   **色はトークンだけ**(明るい/暗いの両方で読めるように)
+   ================================================================ */
+.log-where code, .why-sheet code{ font-family:var(--mono); }
+.log-filters{ align-items:flex-end; flex-wrap:wrap; gap:var(--sp-2); }
+.log-table-wrap{ max-height:420px; overflow:auto; }
+.log-table .log-row{ cursor:pointer; }
+.log-table .log-row:hover, .log-table .log-row:focus-visible{ background:var(--row-focus); outline:none; }
+.log-table .log-row.is-open{ background:var(--row-focus); box-shadow:inset 3px 0 0 var(--accent); }
+.log-table .log-message{ max-width:420px; overflow:hidden; text-overflow:ellipsis; }
+.log-tip{ margin-top:var(--sp-2); }
+.why-sheet h3{ margin:var(--sp-3) 0 var(--sp-1); font-size:1rem; }
+.why-sheet__facts{ display:grid; gap:var(--sp-3);
+  grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); }
+dl.kv{ display:grid; grid-template-columns:max-content 1fr; gap:2px var(--sp-2); margin:0; }
+dl.kv dt{ color:var(--role-read, inherit); opacity:.75; }
+dl.kv dd{ margin:0; overflow-wrap:anywhere; }
+.why-steps{ margin:0; padding-left:1.4em; }
+.why-step{ padding:1px 0; }
+.why-step--error, .why-step--client{ color:var(--state-error); }
+.why-step--refused, .why-step--warn{ color:var(--state-warn); }
+.why-step.is-target{ font-weight:bold; }
+.why-more{ margin-top:var(--sp-2); }
+.why-trace{ max-height:260px; overflow:auto; font-family:var(--mono); font-size:12px;
+  white-space:pre-wrap; border:1px solid var(--rule); padding:var(--sp-2); }
+.why-list{ margin:0; padding-left:0; list-style:none; display:grid; gap:var(--sp-2); }
+.why-field{ display:flex; flex-direction:column; gap:2px; }
+.why-field textarea{ width:100%; box-sizing:border-box; font:inherit; }
+@media (max-width:600px){
+  dl.kv{ grid-template-columns:1fr; }
+  .log-table .log-message{ max-width:220px; }
+}

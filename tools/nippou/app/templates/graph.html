@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}集計・グラフ — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>集計・グラフ</h1>
+  <span class="lead">{{ dashboard.report_date }} / {{ dashboard.line | line_label }}</span>
+  {#
+    **いつ引いた数字か。**
+
+    この画面は開いたときに1度引くだけです。開きっぱなしにできるので、
+    そのまま置いておくと3時間前の数字が今の顔で並びます ── 時刻を
+    添えておけば、見た人が自分で判断できます。
+
+    直が変わったら、ここに「古くなっています」が付きます
+    (`static/js/asof.js`)。
+  #}
+  <span class="asof" id="graph-asof"
+        data-at="{{ dashboard.generated_at }}"
+        data-opened-date="{{ dashboard.report_date }}"
+        data-opened-shift="{{ ribbon.shift }}"
+        data-opened-page="1">{{ dashboard.generated_at }}時点</span>
+</div>
+
+{# 「見る」は3通りある。**いま居る場所と、他の2つを常に見せる** ──
+   どれか1つに入り込むと、他の見方があることを忘れる #}
+<p class="lead views-switch">
+  見かた:
+  <a href="/records">紙(印刷用)</a> ・
+  <a href="/agg">表(集計管理)</a> ・
+  <b>グラフ(この画面)</b>
+</p>
+
+{# ================================================================
+   期間と書き出し
+
+   既定は月初〜当日。VBA の集計シートが常に「月初〜出力タイミングまで」
+   を描いていたのに合わせてある。
+   ================================================================ #}
+<div class="card">
+  <div class="row">
+    <div class="field">
+      <label for="start">開始日</label>
+      <input id="start" type="date" value="{{ dashboard.start }}">
+    </div>
+    <div class="field">
+      <label for="end">終了日</label>
+      <input id="end" type="date" value="{{ dashboard.end }}">
+    </div>
+    {# ---- その日 / 期間 ----
+
+           期間集計してしまうと累計枚数しか表示しないのがさみしい
+           期間表示は本日系の表示を切り替えてでも
+           期間でしか見れないデータを見せるべき
+           停止累計の円グラフ が出ないですね
+
+       期間を選んでも、上の数字は「本日の…」のままで、停止の輪はその日の
+       ぶんだけでした。**主役を切り替えます** ── 上の数字・直別・停止の
+       輪と表が、まとめて期間のものになります(推移と累積は元から期間)。 #}
+    <div class="field">
+      <label for="mode">見せ方</label>
+      <select id="mode">
+        <option value="day" {% if dashboard.mode != "period" %}selected{% endif %}
+          >その日(直の終わりに見る)</option>
+        <option value="period" {% if dashboard.mode == "period" %}selected{% endif %}
+          >期間(まとめて見る)</option>
+      </select>
+    </div>
+    {# 45度線の出し入れ (VBA `UFdaily.Targetline`)。**人が決める** ──
+       実績だけを見たい場面があるので、VBA と同じく切れるようにする #}
+    <label class="check">
+      <input type="checkbox" id="with-target" checked>
+      目標線(45度線)
+    </label>
+    {# グラフと集計の見た目。**当たるのはこの画面と集計管理だけ**で、
+       日報入力やGW計算は変わりません。選んだほうはこの端末が覚えます
+       (`static/js/skin.js`)。既定はネオン #}
+    <label class="check">
+      <input type="checkbox" id="neon-skin" checked>
+      ネオン表示
+    </label>
+    <button class="btn" type="button" id="reload">表示</button>
+    <button class="btn" type="button" id="csv">この期間の集計CSVを出力</button>
+    <span class="lead">
+      <b>いま出している期間ぶん</b>を、1日ずつ3本で出します ──
+      直ごとの合計、明細(用途コード・納入先など<b>紙に載らない欄は
+      こちら</b>)、<b>停止内訳</b>(直ごと・分類ごと・記号ごと)。
+      出し先は下のパスの下に
+      <b>ライン名 / 集計 / 年月 / 日</b> のフォルダを作ります。
+      列の説明(<b>CSVの読み方.txt</b>)と式の説明(<b>計算内容.csv</b>)は
+      <b>年月のフォルダに1つだけ</b>(無いときだけ置きます)。
+      <b>実績のある日だけ</b>出します(操業していない日は作りません) ──
+      過去の日報をExcelから取り込んだぶんも、ここから出せます
+    </span>
+  </div>
+  {% include "_out_dir.html" %}
+  <p class="lead" id="target-note">
+    {% if dashboard.target %}
+    {{ dashboard.line | line_label }}の目標は <b>1日 {{ dashboard.target_text }}枚</b>。
+    目標線を入れると、累積枚数には <b>目標×日数</b> の45度線を、
+    日別枚数には同じ値の横ばい線を重ねます。
+    {% else %}
+    このラインの目標が設定されていないので、目標線は出ません。
+    {% endif %}
+    値は<strong>マスタとCSVの2か所</strong>から読みます ──
+    同じラインが両方にあれば<strong>CSVが勝ちます</strong>(ラインごと)。
+    どちらが効いているかは
+    <a href="/settings?tab=master">設定・管理者</a>の
+    「ライン毎目標(45度線)」で確かめられます。
+  </p>
+  {# 出した結果は**残す**。知らせ(トースト)は消えるので、出したあとに
+     「どこに出たんだったか」を確かめる先が無くなる #}
+  <div class="msg msg--info" id="csv-note" hidden
+       style="margin-top:var(--sp-2)"></div>
+</div>
+
+{# ================================================================
+   主表示 ── 並べて見る (VBAは graphF のタブで1枚ずつだった)
+
+   **数字・棒・ドーナツ・表を1画面に置く。** 切り替えないと隣が
+   見えない作りだと、「重量は出ているのに稼働率が低い」のような
+   **並べて初めて分かること**が見えません。
+
+   何を出すか・並びは `presenters/dashboard.py` が決めます。ここは
+   器を並べるだけ ── 数字と表は**サーバが描いたものをそのまま出す**
+   ので、JSが動かなくても読めます(絵だけ JS が後から入れます)。
+   ================================================================ #}
+<div class="tiles" id="tiles">
+  {% for tile in dashboard.tiles %}
+  {# data-tone は**数字の種類**(出来高 / 時間 / 停止 / 残り)。
+     どの数字が何色かは `presenters/dashboard.py` が決めます #}
+  <div class="tile{% if tile.kind in ('bar', 'line', 'donut') %} tile--wide{% endif %}{% if tile.kind == 'combo' %} tile--full{% endif %}{% if tile.kind == 'table' %} tile--full{% endif %}"
+       data-tile="{{ tile.key }}"{% if tile.tone %} data-tone="{{ tile.tone }}"{% endif %}>
+    <div class="tile__head">
+      <h2 class="tile__title">{{ tile.title }}</h2>
+      <span class="tile__note">{{ tile.note }}</span>
+    </div>
+
+    <div class="tile__body" data-tile-body="{{ tile.key }}">
+      {% if tile.kind == 'number' %}
+      <div class="tile__value">
+        {{ tile.value }}<span class="tile__unit">{{ tile.unit }}</span>
+      </div>
+      {#
+        計算の途中式。**割り算・引き算の入るものだけ**に付きます
+        (足すだけの合計重量には付きません ── 読むものがないので)。
+
+        `<details>` にするのは、**ふだんは邪魔だから**です。数字を見に
+        来た人の前に式が広がっていると、7枚のタイルが読めません。
+        疑ったときだけ開けばよい ── 開いたかどうかはブラウザが覚えます。
+
+        中身はサーバが作った3行(式 / 数を入れた式 / 答え)をそのまま
+        出すだけです(`logic/formula.py`)── ここで式を組み立てると、
+        画面とCSVで違う式が出ます。
+      #}
+      {% if tile.steps %}
+      <details class="calc">
+        <summary class="calc__open">計算内容を見る</summary>
+        <ol class="calc__list">
+          {% for step in tile.steps %}
+          <li class="calc__step">
+            <b class="calc__name">{{ step.name }}</b>
+            <code class="calc__formula">{{ step.formula }}</code>
+            <code class="calc__sub">= {{ step.substituted }}</code>
+            <code class="calc__result">= {{ step.result }}</code>
+            {% if step.note %}
+            <span class="calc__note">{{ step.note }}</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ol>
+      </details>
+      {% endif %}
+      {% elif tile.kind == 'table' %}
+      {% if tile.rows %}
+      <div class="scroll-x">
+        <table class="list">
+          <thead><tr>
+            {% for column in tile.columns %}
+            <th{% if not loop.first %} class="num"{% endif %}>{{ column }}</th>
+            {% endfor %}
+          </tr></thead>
+          <tbody>
+            {% for row in tile.rows %}
+            <tr>
+              {% for cell in row %}
+              <td{% if not loop.first %} class="num"{% endif %}>{{ cell }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="lead tile__empty">{{ tile.empty }}</p>
+      {% endif %}
+      {% else %}
+      {# 絵は JS が入れる。**入らなくても題は出ている** #}
+      <p class="lead tile__empty">…</p>
+      {% endif %}
+    </div>
+
+    <div class="tile__foot">
+      {% if tile.link %}
+      <a href="{{ tile.link }}">{{ tile.link_text }}</a>
+      {% elif tile.kind in ('bar', 'line', 'donut') %}
+      <button class="btn btn--sm" type="button"
+              data-focus="{{ tile.key }}">大きく見る</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ================================================================
+   1つずつ大きく見る (VBA `graphF` の MultiPage と同じ使い方)
+
+   並べて眺めたあと、**細かい値を読むときは大きいほうが早い**。
+   タイルの「大きく見る」からもここへ来ます。
+   ================================================================ #}
+<div class="card">
+  <div class="card__head">
+    <h2>1つずつ大きく見る</h2>
+    <span class="lead">VBAの「グラフを切り替えて見る」と同じ使い方</span>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="focus-pick">見るもの</label>
+      <select id="focus-pick">
+        {% for choice in dashboard.choices %}
+        <option value="{{ choice.key }}">{{ choice.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <span class="lead" id="focus-note"></span>
+  </div>
+  <div id="focus-body" style="margin-top:var(--sp-3)"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script id="dashboard-data" type="application/json">{{ dashboard | tojson }}</script>
+<script type="module" data-view="{{ url_for('static', filename='js/views/graph.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,176 @@
+/* 色・寸法の唯一の出どころ
+ *
+ * **色をここ以外に書かない**(設計 §1 の規則7)。サーバは状態の名前だけを
+ * 渡し(`ordered` / `shipped` / `held` / `neutral`)、実際の色はここが決める。
+ * 2か所に書くと、片方を直した日に食い違う。
+ *
+ * 状態色は VBA の RGB(...) をそのまま引き継いでいる。現場が10年見てきた
+ * 色なので、Web 化を理由に変えない。
+ *
+ *   発注中   RGB(255,100,100)
+ *   発送済み RGB(100,255,100)
+ *   注文中   RGB(255,255,0)
+ *   既定     RGB(240,240,240)
+ *
+ * 【ライト / ダーク】(帯の「☀ / ☾」で切り替える。app/static/js/theme.js)
+ * 下の `:root` がライト、`:root[data-theme="dark"]` がダーク。**同じ名前の色を
+ * 2 通りに決めるだけ**で、部品の CSS は色の名前しか書かない。
+ * 赤・緑・黄の状態色はダークでも同じ色のまま(10年見てきた色は変えない)。
+ * 地に溶ける「既定」の灰色だけ、ダークでは暗い灰色にする(白い板が並ぶと眩しい)。
+ * 帳票(印刷)は紙に出すものなので、いつもライト。
+ */
+
+:root {
+  /* --- 状態色(VBA と一対一) --- */
+  --st-ordered: #ff6464;
+  --st-shipped: #64ff64;
+  --st-held: #ffff00;
+  --st-neutral: #f0f0f0;
+
+  /* 状態色の上に乗せる文字。どれも明るい色なので黒で読める */
+  --st-ink: #16191c;
+  /* 「既定」の看板の文字(ダークでは地が暗くなるので白に替わる) */
+  --st-neutral-ink: #16191c;
+
+  /* 押せない状態のボタン。色は残したまま**沈める** ── 色が消えると
+     状態が読めなくなり、灰色にすると「無い」ように見える */
+  --st-disabled-veil: rgba(255, 255, 255, .45);
+
+  /* --- 画面の地 --- */
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --surface-2: #f7f9fb;
+  --line: #d7dde3;
+  --line-strong: #b9c3cc;
+  --fg: #1b1f23;
+  --muted: #5b6672;
+  /* 色の付いた地(青・赤・緑のボタン、トースト)に乗せる文字 */
+  --on-fill: #ffffff;
+  /* モードの札の文字(モードの色はライト・ダークで変えない) */
+  --on-mode: #ffffff;
+  /* 覆い(パスワード確認・この画面では操作できません)の下の暗がり */
+  --scrim: rgba(16, 24, 32, .45);
+  --scrim-strong: rgba(16, 24, 32, .62);
+  /* トースト(ふつうの知らせ)の地 */
+  --toast-bg: #23282d;
+
+  /* --- モードの色 --- */
+  --mode-site: #d94040;
+  --mode-warehouse: #2e9e51;
+  --mode-view: #8a949e;
+
+  /* --- 合図 --- */
+  --accent: #0f6fc5;
+  --ok: #2e9e51;
+  --warn: #b8860b;
+  --bad: #b3261e;
+  --bad-bg: #fdf0ef;
+  --bad-line: #f2c8c4;
+  --warn-bg: #fdf6e3;
+  --warn-line: #e8d9a8;
+  --warn-ink: #7a5c00;
+  --ok-bg: #f1faf3;
+  /* 青みの淡い地(自分のコメント・共有の札・行の選択など) */
+  --accent-bg: #eef5fc;
+  --accent-line: #c6dcf2;
+
+  /* 非常設品。VBA は現場 RGB(51,102,255) / 倉庫 RGB(0,0,200) と
+     濃さを変えていた。Web は1つに寄せる ── 同じ意味に2つの色を
+     割り当てても、読む側は区別を覚えられない */
+  --non-permanent: #2a5cdb;
+  /* 「既定」の看板(ダークでは暗い灰色)の上と、地の上に置く非常設品の文字 */
+  --non-permanent-on-neutral: #2a5cdb;
+  --non-permanent-text: #2a5cdb;
+
+  /* --- グラフの系列(看板集計)---
+     ラインごとの色。**並びは LINE_MASTER の順に固定**(絞り込んでも残った
+     ラインの色が変わらない)。8 色は白地で色覚の違いがあっても隣どうしが
+     見分けられることを確かめた並び。3 色(3・4・5)は白地との差が小さいので、
+     凡例と「表で見る」を必ず付ける。ダークは同じ 8 色相を暗い地向けに
+     選び直したもの(下。暗い地で 8 色とも 3:1 以上・隣どうしも見分けられる) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  /* --- 寸法 --- */
+  --rail-w: 12.5rem;
+  --ribbon-h: 3.25rem;
+  --radius: 7px;
+  --radius-sm: 4px;
+  --gap: .75rem;
+
+  /* --- 影 --- */
+  --shadow-1: 0 1px 3px rgba(16, 24, 32, .08);
+  --shadow-2: 0 4px 16px rgba(16, 24, 32, .12);
+
+  /* --- 文字 --- */
+  --font: "Meiryo UI", "Yu Gothic UI", "Hiragino Kaku Gothic ProN",
+          system-ui, sans-serif;
+  --fs-base: .875rem;
+  --fs-sm: .78rem;
+  --fs-lg: 1rem;
+
+  /* 入力欄・選択肢・スクロールバーなど、ブラウザが描く部品もライトにそろえる */
+  color-scheme: light;
+}
+
+/* --- ダーク ---------------------------------------------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* 状態色(赤・緑・黄)はそのまま。「既定」だけ暗い灰色にする */
+  --st-neutral: #3a4148;
+  --st-neutral-ink: #e4e8ec;
+  --st-disabled-veil: rgba(16, 20, 24, .22);
+
+  --bg: #15191d;
+  --surface: #1e2328;
+  --surface-2: #262c32;
+  --line: #353d45;
+  --line-strong: #4b5560;
+  --fg: #e4e8ec;
+  --muted: #9ba6b2;
+  --on-fill: #10151a;
+  --scrim: rgba(0, 0, 0, .55);
+  --scrim-strong: rgba(0, 0, 0, .7);
+  --toast-bg: #2f363d;
+
+  --accent: #5aa3ec;
+  --ok: #4cc274;
+  --warn: #e0b03a;
+  --bad: #f0716a;
+  --bad-bg: #3a1f1e;
+  --bad-line: #6b2f2b;
+  --warn-bg: #352c14;
+  --warn-line: #6b5a22;
+  --warn-ink: #e8c766;
+  --ok-bg: #17301f;
+  --accent-bg: #1b2c3e;
+  --accent-line: #2d4c6c;
+
+  --non-permanent-on-neutral: #9db8ff;
+  --non-permanent-text: #9db8ff;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, .35);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, .5);
+}
+
+/* 状態の名前 → 色。HTML 側は `data-state="ordered"` と書くだけでよい */
+[data-state="ordered"] { background: var(--st-ordered); color: var(--st-ink); }
+[data-state="shipped"] { background: var(--st-shipped); color: var(--st-ink); }
+[data-state="held"]    { background: var(--st-held);    color: var(--st-ink); }
+[data-state="neutral"] { background: var(--st-neutral); color: var(--st-neutral-ink); }

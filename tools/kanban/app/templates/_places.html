@@ -1,0 +1,16 @@
+{# ファイルの置き場所の一覧(settings.html の「ファイルの場所」)。places = [{label, path, what, exists}] #}
+<div class="master-table-wrap" style="max-height:none;margin-top:0">
+  <table class="master places">
+    <thead><tr><th>もの</th><th>場所</th><th>中身</th><th>いま</th></tr></thead>
+    <tbody>
+      {% for f in places %}
+      <tr>
+        <td><b>{{ f.label }}</b></td>
+        <td><code>{{ f.path }}</code></td>
+        <td>{{ f.what }}</td>
+        <td>{{ 'あり' if f.exists else 'まだ無い・届かない' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% block title %}標準作業時間 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{# ================================================================
+   標準作業時間 ── **同じ条件・同じ班で、ふつうのペースの作業時間**
+
+       標準作業時間は別タブ管理とし csv出力 同条件作業抽出 作業時間を表示
+
+   集計管理のいちばん下に置いていたものを、1枚の画面にしました。面は5つ
+   (並びはサーバ `presenters/standard_time.TABS`)。組み立てもサーバで、
+   画面は写すだけです。
+   ================================================================ #}
+<div class="page-head">
+  <h1>標準作業時間</h1>
+  <span class="lead">{{ line | line_label }} / 共有の 標準作業時間.sqlite3</span>
+  {# 作業者名で見る(v4.12.4)。**普段は出さない**ので既定は切。入れると、標準の面に
+     「作業者ごと」、梱包力の面のまとめ方に「作業者ごと」が出る。覚えない(開くたびに切) #}
+  <label class="check worker-mode" for="worker-mode"
+         data-hint="班ごとの集計を、作業者の名前ごとにも分けて見られるようにします(普段は出しません。画面を開き直すと切に戻ります)">
+    <input type="checkbox" id="worker-mode"> 作業者名で見る</label>
+</div>
+
+<div class="card">
+  <p class="lead">
+    「共有へ保存」で送った直のロット行から、<b>ライン・班・用途コード・
+    包装仕様NO・サイズ</b>が同じ作業を集め、<b>1梱包あたり(1枚あたり)の
+    人・分 = 作業時間×作業人数÷梱包数(枚数)</b> の<b>中央値</b>を標準に
+    しています(通常のペース ── 飛び抜けて遅い日・速い日に引っ張られない)。
+    作業時間は停止を引いたあとの値です。
+    <b>標準作業時間(分) = 標準(人分/梱包) × 梱包数 ÷ 作業人数</b>
+  </p>
+  {# CSVの出力先。**この画面の上で変えられる**(設定・参照設定の
+     「標準作業時間CSVの出力パス」と同じ設定)。空なら集計CSVと同じ先 #}
+  <div class="out-dir std-out" id="std-out" data-key="{{ out_dir.key }}">
+    <p class="lead">
+      CSVの出力先: <code class="out-dir__path" id="std-out-path">{{ out_dir.path }}</code>
+      <span class="out-dir__note" id="std-out-same" {% if not out_dir.same_as_report %}hidden{% endif %}>
+        (集計CSVと同じ先{% if out_dir.is_default %} ── <b>この端末の中</b>です{% endif %})</span>
+    </p>
+    <div class="row std-out__edit">
+      <label for="std-out-dir">出力先フォルダ</label>
+      <input id="std-out-dir" type="text" size="48" autocomplete="off"
+             value="{{ out_dir.value }}" placeholder="空なら集計CSVと同じ先({{ out_dir.report_path }})">
+      <label for="std-out-pw" id="std-out-pw-label" hidden>管理者パスワード</label>
+      <input id="std-out-pw" type="password" size="12" hidden>
+      <button class="btn" type="button" id="std-out-save">出力先を保存</button>
+      <a href="{{ out_dir.settings_url }}">設定・参照設定(フォルダを選ぶ窓)</a>
+    </div>
+    <div class="msg" id="std-out-note" hidden></div>
+  </div>
+</div>
+
+<div class="tabs" data-tabs="standard" id="standardTabs">
+  <div class="tabs__bar" role="tablist" aria-label="標準作業時間の面">
+    {% for t in tabs %}
+    <button class="tab" type="button" role="tab" data-key="{{ t.key }}"
+            {% if t.key == default_tab %}data-default="1"{% endif %}
+            id="tab-{{ t.key }}" aria-controls="panel-{{ t.key }}"
+            aria-selected="false" title="{{ t.note }}">
+      <span class="tab__label">{{ t.label }}</span>
+      <span class="tab__badge" id="badge-{{ t.key }}" hidden></span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <div class="tabs__panels">
+
+  {# ==============================================================
+     標準(条件×班)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="standards" id="panel-standards" role="tabpanel"
+           aria-labelledby="tab-standards" {% if default_tab != "standards" %}hidden{% endif %}>
+    <div class="card" data-table="standard_time">
+      <div class="card__head">
+        <h2>標準(条件×班)</h2>
+        <span class="lead" data-table-note>読み込み中…</span>
+      </div>
+      <p class="lead">
+        「全班」はライン全体。<b>仮</b>は件数が3件未満。行の<b>「抽出」</b>を押すと、
+        その条件の作業を1件ずつ「同条件の作業」の面に出します。
+        用途コード・包装仕様NO・サイズは<b>部分一致</b>で、欄と欄のつなぎ方を
+        下の「欄のつなぎ方」で選べます。欄の中を「,」で区切ると、そのどれか。
+        <a href="#guide-calc" data-goto-tab="guide">標準の出し方(考え方と計算)</a>
+      </p>
+      <div class="row">
+        <div class="field">
+          <label for="standard-scope">ライン</label>
+          <select id="standard-scope">
+            <option value="line">このライン({{ line | line_label }})</option>
+            <option value="all">全ライン</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="standard-team">班</label>
+          <select id="standard-team"><option value="">全部</option></select>
+        </div>
+        {# まとめ方。オペレーター構成ごと(v4.15.0)は名前を出さないのでいつでも、
+           作業者ごとは「作業者名で見る」のときだけ #}
+        <div class="field">
+          <label for="standard-group">まとめ方</label>
+          <select id="standard-group" class="select--wide">
+            <option value="team">班ごと</option>
+            <option value="operator">オペレーター構成ごと</option>
+            <option value="worker" data-worker-only hidden disabled>作業者ごと</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="standard-purpose">用途コード</label>
+          <input id="standard-purpose" type="text" size="8" placeholder="H176">
+        </div>
+        <div class="field">
+          <label for="standard-spec">包装仕様NO</label>
+          <input id="standard-spec" type="text" size="8" placeholder="1P0001">
+        </div>
+        <div class="field">
+          <label for="standard-size">サイズ</label>
+          <input id="standard-size" type="text" size="14" placeholder="8×1528×3053">
+        </div>
+        <button class="btn" type="button" id="standard-reload">表示</button>
+        <button class="btn" type="button" id="standard-csv">CSVに出す</button>
+      </div>
+      <div class="row" style="margin-top:var(--sp-2)">
+        {# **AND か OR かを必ず見せる。** 欄が並んでいるだけだと、どちらで
+           探しているのか読めない(「or条件に見えるのですが」) #}
+        <fieldset class="join" id="standard-join">
+          <legend class="lead">欄のつなぎ方(用途コード・包装仕様NO・サイズ)</legend>
+          <label class="check"><input type="radio" name="standard-join" value="and" checked>
+            すべて一致(AND)</label>
+          <label class="check"><input type="radio" name="standard-join" value="or">
+            どれか一致(OR)</label>
+        </fieldset>
+        <label class="check"><input type="checkbox" id="standard-formulas">
+          計算式を出す(表とCSVに式の列が付きます)</label>
+      </div>
+      {# 見積り: 梱包数と人数を入れると「その条件をこの梱包数・人数でやると何分か」の列が付く #}
+      <div class="row" style="margin-top:var(--sp-2)">
+        <span class="lead">見積り:</span>
+        <div class="field">
+          <label for="standard-packages">梱包数</label>
+          <input id="standard-packages" type="number" min="0" step="1" size="5">
+        </div>
+        <div class="field">
+          <label for="standard-workers">作業人数</label>
+          <input id="standard-workers" type="number" min="0" step="1" size="5">
+        </div>
+        <span class="lead">→ 表に「◯梱包を◯人で(分)」の列が付きます</span>
+      </div>
+      <div class="msg msg--info" id="standard-msg" hidden style="margin-top:var(--sp-2)"></div>
+      <div class="msg msg--warn" id="standard-warning" hidden style="margin-top:var(--sp-2)"></div>
+      <p class="lead" id="standard-source"></p>
+      <div class="scroll-x" data-table-body data-nowrap></div>
+    </div>
+  </section>
+
+  {# ==============================================================
+     同条件の作業 ── 同じ条件の作業を1件ずつ、作業時間と標準との差つきで
+     ============================================================== #}
+  <section class="tabpanel" data-panel="works" id="panel-works" role="tabpanel"
+           aria-labelledby="tab-works" {% if default_tab != "works" %}hidden{% endif %}>
+    <div class="card" data-table="works">
+      <div class="card__head">
+        <h2>同条件の作業</h2>
+        <span class="lead" data-table-note>条件を入れて「抽出」</span>
+      </div>
+      <p class="lead">
+        用途コード・包装仕様NO・サイズで作業を探し、<b>1件ずつ作業時間つき</b>で
+        出します(<b>完全一致</b>。サイズは「8x1528x3053」のように書いても揃えて比べます)。
+        <b>標準作業時間</b>はその作業の梱包数・人数を標準でやったら何分か、
+        <b>標準との差</b>は「作業時間 − 標準作業時間」(+ は標準より長くかかった)。
+        各行は<b>その行の条件の標準</b>と比べます。
+      </p>
+      <ul class="lead">
+        <li><b>欄と欄</b>は「すべて一致(AND)」か「どれか一致(OR)」を選びます。
+            空の欄は問いません</li>
+        <li><b>欄の中</b>を「,」で区切ると、そのどれか(例: <code>H176,H162</code>)</li>
+        <li><b>ライン・班・期間</b>はいつも絞り込み。ラインを空にすると全ライン、
+            班を「全班」にすると班を問わず(標準も全班のものと比べます)</li>
+      </ul>
+      <div class="row">
+        <div class="field">
+          <label for="works-purpose">用途コード</label>
+          <input id="works-purpose" type="text" size="12" placeholder="H176,H162">
+        </div>
+        <div class="field">
+          <label for="works-spec">包装仕様NO</label>
+          <input id="works-spec" type="text" size="12" placeholder="1P0001">
+        </div>
+        <div class="field">
+          <label for="works-size">サイズ</label>
+          <input id="works-size" type="text" size="16" placeholder="8×1528×3053">
+        </div>
+        <fieldset class="join" id="works-join">
+          <legend class="lead">欄のつなぎ方</legend>
+          <label class="check"><input type="radio" name="works-join" value="and" checked>
+            すべて一致(AND)</label>
+          <label class="check"><input type="radio" name="works-join" value="or">
+            どれか一致(OR)</label>
+        </fieldset>
+      </div>
+      <div class="row" style="margin-top:var(--sp-2)">
+        <div class="field">
+          <label for="works-line">ライン(空なら全ライン)</label>
+          <input id="works-line" type="text" size="6" value="{{ line | line_label }}">
+        </div>
+        <div class="field">
+          <label for="works-team">班</label>
+          <select id="works-team"><option value="">全班</option></select>
+        </div>
+        <div class="field">
+          <label for="works-start">開始日(報告日・空なら全期間)</label>
+          <input id="works-start" type="date">
+        </div>
+        <div class="field">
+          <label for="works-end">終了日(報告日)</label>
+          <input id="works-end" type="date">
+        </div>
+      </div>
+      <div class="row" style="margin-top:var(--sp-2)">
+        <label class="check"><input type="checkbox" id="works-excluded">
+          標準に数えない作業も出す</label>
+        <label class="check"><input type="checkbox" id="works-formulas">
+          計算式を出す(表とCSVに式の列が付きます)</label>
+        <button class="btn btn--primary" type="button" id="works-run">抽出</button>
+        <button class="btn" type="button" id="works-csv">CSVに出す</button>
+      </div>
+      <div class="msg msg--info" id="works-msg" hidden style="margin-top:var(--sp-2)"></div>
+      <div class="msg msg--warn" id="works-warning" hidden style="margin-top:var(--sp-2)"></div>
+      <p class="lead" id="works-standard" style="margin-top:var(--sp-2)"></p>
+      <dl class="facts" id="works-summary"></dl>
+      <p class="lead" id="works-source"></p>
+      <div class="scroll-x" data-table-body data-nowrap></div>
+    </div>
+  </section>
+
+  {# ==============================================================
+     梱包力 ── ゲームの DPS のように、標準を 100 とした梱包の速さ
+     (`logic/standard_time.packing_power`)。説明は**1行だけ**出し、
+     式は乗せたときに出す(長い説明は読まれない)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="power" id="panel-power" role="tabpanel"
+           aria-labelledby="tab-power" {% if default_tab != "power" %}hidden{% endif %}>
+    <div class="card" data-table="power">
+      <div class="card__head">
+        <h2>梱包力</h2>
+        <span class="lead" data-table-note>読み込み中…</span>
+      </div>
+      <p class="lead power-lead" data-hint="{{ power_definition }}">{{ power_lead }}
+        <a class="power-lead__how" href="#guide-power" data-goto-tab="guide">しくみ</a></p>
+      <div class="row">
+        <div class="field">
+          <label for="power-scope">ライン</label>
+          <select id="power-scope">
+            <option value="line">このライン({{ line | line_label }})</option>
+            <option value="all">全ライン</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="power-team">班</label>
+          <select id="power-team"><option value="">全班</option></select>
+        </div>
+        <div class="field">
+          <label for="power-group">まとめ方</label>
+          <select id="power-group" class="select--wide">
+            {% for key, label in power_groups %}
+            <option value="{{ key }}"{% if key == "worker" %} data-worker-only hidden disabled{% endif %}>{{ label }}ごと</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="power-start">開始日(報告日)</label>
+          <input id="power-start" type="date" value="{{ month_start }}">
+        </div>
+        <div class="field">
+          <label for="power-end">終了日</label>
+          <input id="power-end" type="date" value="{{ today }}">
+        </div>
+        <label class="check"><input type="checkbox" id="power-formulas">
+          計算式を出す</label>
+        <button class="btn" type="button" id="power-reload">表示</button>
+        <button class="btn" type="button" id="power-csv">CSVに出す</button>
+      </div>
+      <div class="msg msg--info" id="power-msg" hidden style="margin-top:var(--sp-2)"></div>
+      <div class="msg msg--warn" id="power-warning" hidden style="margin-top:var(--sp-2)"></div>
+      {# いちばん大きく出すのは**全体の梱包力ひとつだけ** #}
+      <div class="power-hero" id="power-hero">
+        <span class="power-hero__value" id="power-value">—</span>
+        <span class="power-hero__text">
+          <span class="power-hero__label">全体の梱包力</span>
+          <span class="power-hero__meaning" id="power-meaning"></span>
+          <span class="lead" id="power-compared"></span>
+        </span>
+      </div>
+      {# DPS メーターのような棒。100 の縦線が標準のペース #}
+      <ol class="power-meter" id="power-meter" aria-label="梱包力(100が標準)"></ol>
+      <p class="lead" id="power-more" hidden></p>
+      <p class="lead" id="power-source"></p>
+      <div class="scroll-x" data-table-body data-nowrap></div>
+    </div>
+  </section>
+
+  {# ==============================================================
+     考え方と計算 (v4.11.0) ── 読むだけの面
+
+         標準時間 梱包力 概念と計算方法は参照できるようにしてください(専用タブ)
+         ちなみに計算方法に根拠はあるんですか？
+
+     **例の数はサーバが本物の計算に通して出したもの**(`presenters/
+     standard_time.guide`)。ここで数を手書きしない(計算を直したら食い違う)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="guide" id="panel-guide" role="tabpanel"
+           aria-labelledby="tab-guide" {% if default_tab != "guide" %}hidden{% endif %}>
+    <div class="card guide">
+      <div class="card__head">
+        <h2>考え方と計算</h2>
+        <span class="lead">標準作業時間と梱包力が、何を・どう数えているか</span>
+      </div>
+      <nav class="guide__toc" aria-label="この面の目次">
+        <a href="#guide-standard">1. 標準作業時間とは</a>
+        <a href="#guide-calc">2. 標準の出し方</a>
+        <a href="#guide-power">3. 梱包力とは</a>
+        <a href="#guide-example">4. 計算の例</a>
+        <a href="#guide-basis">5. 根拠</a>
+        <a href="#guide-limits">6. 気をつけること</a>
+        <a href="#guide-operator">7. オペレーター構成</a>
+      </nav>
+
+      <section class="guide__part" id="guide-standard">
+        <h3>1. 標準作業時間とは</h3>
+        <p><b>その作業を、決められた条件で、ふつうのペースで行ったら何分かかるか</b>、です。</p>
+        <p>「決められた条件」は、<b>ライン・用途コード・包装仕様NO・サイズ(厚×幅×丈)</b>が同じこと。
+          班ごとの標準と、班をまたいだライン全体の標準(<b>全班</b>)の両方を作ります。</p>
+      </section>
+
+      <section class="guide__part" id="guide-calc">
+        <h3>2. 標準の出し方</h3>
+        <ol class="guide__steps">
+          <li>
+            <b>1作業ごとに「人分」にする</b> ── 人数が多いと時間は短くなるので、時間と人数を掛けて
+            「何人で何分ぶんの仕事だったか」にしてから、梱包数で割ります。
+            <pre class="guide__formula">1梱包あたりの人分 = 作業時間 × 作業人数 ÷ 梱包数</pre>
+            梱包数の無い作業は、枚数で同じように割ります(1枚あたりの人分)。
+          </li>
+          <li>
+            <b>同じ条件の作業を集めて、真ん中の値(中央値)</b>を標準にします。
+            件数が{{ guide.min_samples }}件より少ない条件は<b>「仮」</b>の印が付きます。
+            <pre class="guide__formula">標準(人分/梱包) = 同じ条件の「1梱包あたりの人分」の中央値</pre>
+          </li>
+          <li>
+            <b>使うときは元に戻す</b> ── 梱包数と人数を入れると、標準なら何分かが出ます。
+            <pre class="guide__formula">標準作業時間(分) = 標準(人分/梱包) × 梱包数 ÷ 作業人数
+標準との差(分)   = 実際の作業時間 − 標準作業時間    (+ は標準より長くかかった)</pre>
+          </li>
+        </ol>
+        <p>作業時間は日報の「作業時間」(開始〜終了から<b>停止時間を引いたもの</b>)です。
+          次の作業は標準に数えません(実績には理由つきで残ります):
+          {% for reason in guide.excluded %}<span class="guide__tag">{{ reason }}</span>{% endfor %}</p>
+      </section>
+
+      <section class="guide__part" id="guide-power">
+        <h3>3. 梱包力とは</h3>
+        <p>ゲームの <b>DPS</b>(1秒あたりに与えるダメージ)の梱包版です。
+          ただし<b>ダメージのかわりに標準作業時間</b>で数えます。</p>
+        <pre class="guide__formula">梱包力 = 標準人分の合計 ÷ 実人分の合計 × {{ guide.base }}
+  標準人分 = 全班の標準(人分/梱包) × 梱包数     … 標準のペースなら何人分かかる仕事か
+  実人分   = 作業時間 × 作業人数               … 実際に何人分かかったか</pre>
+        <div class="scroll-x"><table class="list guide__scale">
+          <thead><tr><th class="num">梱包力</th><th>意味</th></tr></thead>
+          <tbody>
+            <tr><td class="num">120</td><td>標準の1.2倍の速さ(標準なら72分かかる仕事を60分で)</td></tr>
+            <tr><td class="num">{{ guide.base }}</td><td>標準どおり(全班の中央値と同じペース)</td></tr>
+            <tr><td class="num">80</td><td>標準の0.8倍(標準なら48分の仕事に60分かかった)</td></tr>
+          </tbody>
+        </table></div>
+        <p><b>なぜ「1時間に何梱包」ではないのか。</b> 大きい板・手間のかかる包装をやった人ほど、
+          梱包数は少なくなります。同じ1時間を同じペースで働いても:</p>
+        <div class="scroll-x"><table class="list">
+          <thead><tr><th>やった仕事(2人で60分)</th><th class="num">標準(人分/梱包)</th>
+            <th class="num">梱包数</th><th class="num">1人1時間あたり梱包数</th>
+            <th class="num">標準人分</th><th class="num">梱包力</th></tr></thead>
+          <tbody>
+            {% for d in guide.difficulty %}
+            <tr><td>{{ d.label }}</td><td class="num">{{ d.standard }}</td>
+              <td class="num">{{ d.packages }}</td><td class="num">{{ d.per_hour }}</td>
+              <td class="num">{{ d.standard_pm }}</td><td class="num">{{ d.power }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table></div>
+        <p>梱包数で比べると倍ちがいますが、梱包力はどちらも{{ guide.base }}です。
+          難しい仕事は標準人分が大きい(=大きいダメージ)ので、<b>やった仕事の重さで比べられます</b>。</p>
+        <ul class="guide__rules">
+          <li><b>比べる標準はいつも全班のもの。</b> 班の標準と比べると、どの班も自分のふつうと比べて
+            {{ guide.base }}前後になり、班どうしを比べられません。</li>
+          <li><b>標準がまだ無い・「仮」の条件の作業は比べません。</b> 1件だけの標準はその作業そのものなので、
+            比べると必ず{{ guide.base }}になります。外したぶんは「比べた作業 ◯/◯件」に出ます。</li>
+          <li><b>作業者ごとは、その直に居た全員に同じ数を入れます。</b> 作業者欄は直ごとに全員の名前で、
+            行ごとに誰がやったかは分からないためです(全体には1回だけ数えます)。</li>
+          <li><b>1件ずつの梱包力の平均ではなく、合計どうしで割ります。</b> 小さいロット1件の極端な値に
+            引っ張られないように、仕事の量で重みが付きます。</li>
+        </ul>
+      </section>
+
+      <section class="guide__part" id="guide-example">
+        <h3>4. 計算の例(架空の4作業)</h3>
+        <p>同じ条件(H176・1P0001・8×1528×3053)を、{{ guide.packages }}梱包・{{ guide.workers }}人でやった4作業:</p>
+        <div class="scroll-x"><table class="list">
+          <thead><tr><th>作業</th><th>班</th><th class="num">作業時間(分)</th>
+            <th class="num">人分(× {{ guide.workers }}人)</th><th class="num">1梱包あたりの人分(÷ {{ guide.packages }})</th></tr></thead>
+          <tbody>
+            {% for w in guide.works %}
+            <tr><td>{{ w.no }}</td><td>{{ w.team }}</td><td class="num">{{ w.minutes }}</td>
+              <td class="num">{{ w.person_minutes }}</td><td class="num">{{ w.per_package }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table></div>
+        <ol class="guide__steps">
+          <li><b>標準</b>: 並べると {{ guide.sorted }} → 真ん中の2つの間で <b>{{ guide.median }} 人分/梱包</b>
+            (平均なら {{ guide.mean }})。<br>
+            4つ目がトラブルで{{ guide.trouble_minutes }}分かかっていたら({{ guide.trouble_per_package }} 人分/梱包)、
+            平均は {{ guide.trouble_mean }} に跳ねますが、中央値は <b>{{ guide.trouble_median }}</b> のまま
+            ── だから中央値を「ふつうのペース」にしています。</li>
+          <li><b>標準作業時間</b>: {{ guide.estimate_packages }}梱包を{{ guide.estimate_workers }}人でやるなら
+            {{ guide.median }} × {{ guide.estimate_packages }} ÷ {{ guide.estimate_workers }} = <b>{{ guide.estimate }}分</b>。
+            作業1は標準 {{ guide.standard_first }}分のところ実際60分なので、標準との差は <b>{{ guide.diff_first }}分</b>。</li>
+          <li><b>梱包力</b>: 1作業の標準人分は {{ guide.median }} × {{ guide.packages }} = {{ guide.standard_pm_one }}人分。
+            <div class="scroll-x"><table class="list guide__inline">
+              <thead><tr><th></th><th class="num">標準人分</th><th class="num">実人分</th>
+                <th class="num">梱包力</th><th>意味</th></tr></thead>
+              <tbody>
+                {% for row in guide.teams + [guide.total] %}
+                <tr><td>{{ row.label }}{% if row.label != "全体" %}班{% endif %}</td>
+                  <td class="num">{{ row.standard_pm }}</td><td class="num">{{ row.actual_pm }}</td>
+                  <td class="num"><b>{{ row.power }}</b></td><td>{{ row.meaning }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table></div>
+            (A班 = {{ guide.teams[0].standard_pm }} ÷ {{ guide.teams[0].actual_pm }} × {{ guide.base }}。
+            全体はA班とB班の平均ではなく、合計どうしで割ります)</li>
+        </ol>
+      </section>
+
+      <section class="guide__part" id="guide-basis">
+        <h3>5. 根拠 ── 生産管理(IE)の考え方との対応</h3>
+        <p>考え方そのものは、工場の生産管理(IE: インダストリアル・エンジニアリング)で昔から使われている
+          ものと同じ形です。<b>標準の決め方は、それの簡易版</b>です。</p>
+        <div class="scroll-x"><table class="list guide__basis">
+          <thead><tr><th>このツール</th><th>生産管理(IE)でいうと</th><th>同じところ・違うところ</th></tr></thead>
+          <tbody>
+            <tr><td>標準作業時間</td>
+              <td><b>標準時間</b>(JIS Z 8141「生産管理用語」)── 慣れた人が、決められた条件で、
+                ふつうのペースで仕事をするのに要る時間</td>
+              <td>考え方は同じ</td></tr>
+            <tr><td>標準を過去の実績から出す</td>
+              <td><b>実績資料法</b> ── 標準時間の決め方の1つ。ほかにストップウォッチで測る方法(時間研究)、
+                動作から組み立てる方法(PTS法)などがある</td>
+              <td>IE の正式な標準時間は、測った時間を「ふつうのペース」に直し(レイティング)、
+                余裕(疲れ・用足しなど)を足して作る。このツールは<b>どちらもせず</b>、実績の中央値をそのまま使う</td></tr>
+            <tr><td>中央値</td>
+              <td>統計の代表値のうち、外れ値に強いもの</td>
+              <td>トラブルで長引いた日に標準が引っ張られない(4. の例)</td></tr>
+            <tr><td>梱包力</td>
+              <td><b>作業能率</b> = 標準時間で数えた出来高 ÷ 実際にかかった時間 × 100。
+                設備総合効率(OEE)の<b>性能稼働率</b>(基準サイクルタイム × 加工数 ÷ 稼働時間)も同じ形</td>
+              <td>式の形は同じ。名前と「ゲームの DPS」のたとえはこのツールのもの</td></tr>
+            <tr><td>合計どうしで割る</td>
+              <td>期間の能率は「標準時間の合計 ÷ 実際の時間の合計」で出すのがふつう</td>
+              <td>同じ</td></tr>
+          </tbody>
+        </table></div>
+        <p><b>このツールで決めたこと</b>(決まった根拠は無く、使いながら見直すもの):</p>
+        <ul class="guide__rules">
+          <li>件数{{ guide.min_samples }}件未満を「仮」にする(少なすぎると中央値が当てにならない、の目安)</li>
+          <li>人分 = 作業時間 × 作業人数(仕事の量は人数に比例する、と置いている)</li>
+          <li>作業者ごとは、直に居た全員に同じ数を入れる</li>
+        </ul>
+      </section>
+
+      <section class="guide__part" id="guide-limits">
+        <h3>6. 気をつけること</h3>
+        <ul class="guide__rules">
+          <li><b>標準は「この現場のこれまでのふつう」</b>で、「あるべき速さ」ではありません。自分たちの実績の
+            真ん中と比べるので、全体の梱包力は{{ guide.base }}前後に来やすい作りです。</li>
+          <li><b>人数を倍にしても、時間がちょうど半分になるとは限りません。</b> 人数の違う作業どうしは、
+            少し割り引いて見てください。</li>
+          <li><b>停止は入っていません。</b> 作業時間は停止を引いたあとなので、梱包力は「動いているときの速さ」です。
+            止まりが多いかどうかは、停止の集計で見てください。</li>
+          <li><b>ロットごとの段取りも、梱包数に比例として数えています。</b> 少ない梱包数のロットは、
+            段取りのぶん遅く見えることがあります。</li>
+          <li><b>作業者ごとの数は、その人が居た直の速さ</b>です。個人の腕前そのものではありません。</li>
+          <li><b>件数が少ない条件</b>(「仮」)は比べないので、珍しい仕事が多い期間は「比べた作業」が少なくなります。</li>
+        </ul>
+      </section>
+
+      {# オペレーター構成(v4.15.0)── 班員名簿の「オペレーター」 #}
+      <section class="guide__part" id="guide-operator">
+        <h3>7. オペレーター構成</h3>
+        <p>班員名簿の「オペレーター」で、作業をした顔ぶれを分けます。
+          {% for kind, meaning in guide.operator_kinds %}<span class="guide__tag">{{ kind }} {{ meaning }}</span>{% endfor %}</p>
+        <pre class="guide__formula">オペレーター構成 = 作業者欄の名前を、名簿の区分で数えたもの
+例: 作業者「{{ guide.operator_example.workers }}」 → {{ guide.operator_example.label }}</pre>
+        <ul class="guide__rules">
+          <li><b>標準の面</b>のまとめ方「オペレーター構成ごと」で、条件 × 構成の標準が出ます(班で絞ると、その班の作業だけで)。</li>
+          <li><b>同条件の作業</b>には、1件ずつ「オペレーター構成」の列が付きます。</li>
+          <li><b>梱包力</b>のまとめ方「オペレーター構成」で、構成ごとの速さを比べます(比べる標準は、いつもの全班のもの)。
+            作業者ごとには、その人の区分が名前の右に出ます。</li>
+          <li><b>いまの名簿で数えます。</b> 名簿を直すと、過去の作業の構成も変わります。</li>
+          <li><b>{{ guide.operator_kinds | map("first") | join(" / ") }} 以外の値</b>・空・名簿に無い名前は
+            「{{ guide.no_kind }}」です。読めない値は画面の上とマスタ管理の班員名簿に出ます。</li>
+        </ul>
+      </section>
+    </div>
+  </section>
+
+  {# ==============================================================
+     過去ぶんを入れる (`services/standard_time.backfill`)
+     ============================================================== #}
+  <section class="tabpanel" data-panel="backfill" id="panel-backfill" role="tabpanel"
+           aria-labelledby="tab-backfill" {% if default_tab != "backfill" %}hidden{% endif %}>
+    <div class="card">
+      <div class="card__head">
+        <h2>過去ぶんを入れる</h2>
+        <span class="lead">この端末の集計から、共有の 標準作業時間.sqlite3 へ</span>
+      </div>
+      <p class="lead">
+        実績は「共有へ保存」で送った直のぶんが自動で入ります。<b>ふだんは押しません。</b>
+        押すのは次の2つのときだけです。
+      </p>
+      <ul class="lead">
+        <li>この仕組みが入る<b>前に</b>保存したぶんを入れたいとき</li>
+        <li>班員名簿が読めずに班が「不明」で入ったぶんを、班付きで入れ直したいとき</li>
+      </ul>
+      <p class="lead">
+        読むのはこの端末(このライン {{ line | line_label }})の集計。同じ直は<b>置き換え</b>なので、
+        何度押しても二重にはなりません。入れたあと、そのラインの標準を出し直します。
+        書き先: <code>{{ db_path }}</code>
+      </p>
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <label class="lead" for="backfill-start">開始</label>
+        <input class="input" type="date" id="backfill-start" value="{{ month_start }}">
+        <label class="lead" for="backfill-end">終了</label>
+        <input class="input" type="date" id="backfill-end" value="{{ today }}">
+        <button class="btn" type="button" id="backfill-run">入れる</button>
+      </div>
+      <div class="msg msg--info" id="backfill-note" hidden style="margin-top:var(--sp-2)"></div>
+    </div>
+  </section>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" data-view="{{ url_for('static', filename='js/views/standard_time.js') }}"></script>
+{% endblock %}

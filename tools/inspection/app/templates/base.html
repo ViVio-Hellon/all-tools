@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ja" data-theme="{{ 'dark' if dark else 'light' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{# タブの名前にも版を出す。タスクバーやタブの一覧からでも「どれが動いているか」が読める #}
+<title>{% block title %}{{ display_name }} {{ version_label }}{% endblock %}</title>
+{# 外部ファイルにしないのは、要求を1本減らすため(python-web-tools と同じ) #}
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%230b6d86'/%3E%3Cpath d='M7 5h7l3 3v11H7z' fill='none' stroke='white' stroke-width='1.8' stroke-linejoin='round'/%3E%3Cpath d='M9.5 13l2 2 3.5-4' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/inspection.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<!--
+  アプリの外枠(python-web-tools の base.html と同じ骨格)
+
+  ・ステータスリボン … いま何が決まっているかを常時見せる
+  ・接続断の帯       … 基盤仕様書 2.9。黙って古い表示を出し続けない
+  画面は1枚なので、左のレールは置かない(`.shell--single`)。
+-->
+
+<div class="offline" id="offline" hidden role="alert">
+  <span>バックエンドに接続できません<small class="offline__hint">アプリを起動し直すと、この画面は自動でつながり直します</small></span>
+  <button class="btn" type="button" id="reconnect">再接続</button>
+  <button class="btn" type="button" onclick="location.reload()">再読込</button>
+</div>
+
+{# 共有フォルダのアプリが入れ替えられたとき(health.js が出す) #}
+<div class="updated" id="updated" hidden role="status">
+  <span id="updated-text">新しい版が置かれました。</span>
+  <span>印刷が終わっていれば、右上の「終了」を押してから Start.vbs で起動し直してください。</span>
+</div>
+
+<header class="ribbon">
+  {# アプリの名前と版。**どの場面でも消えない**。版の出どころは config/app.json だけ #}
+  <div class="brand">
+    <b class="brand__name">{{ display_name }}</b>
+    <span class="ver" title="このアプリの版">{{ version_label }}</span>
+    {% if demo %}<span class="demo-chip" title="Excel を使わない確認用の動作です">模擬モード</span>{% endif %}
+  </div>
+  <div class="ribbon__slots">
+    {% block slots %}{% endblock %}
+  </div>
+  {# いま動いているもの(印刷・プレビュー・フォルダ検索)。止まっていれば消える #}
+  <div class="running" id="rb-running" hidden>
+    <span class="running__dot" aria-hidden="true"></span>
+    <span class="running__text">
+      <b id="rb-run-what"></b>
+      <small id="rb-run-how"></small>
+    </span>
+    <span class="running__track" aria-hidden="true"><i id="rb-run-fill"></i></span>
+  </div>
+  <div class="ribbon__end">
+    {% block ribbon_tools %}{% endblock %}
+    <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
+  </div>
+</header>
+
+<div class="shell shell--single">
+  <main class="work" id="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% block dialogs %}{% endblock %}
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  // サーバから渡す起動時の値。JSはここ以外から設定を読まない
+  window.APP = {
+    token: {{ token | tojson }},
+    // このタブの番号(自動終了の見張りが「どの画面か」を知るため)
+    screenId: {{ screen_id | tojson }},
+    demo: {{ demo | tojson }},
+    maxCopies: {{ max_copies }},
+    healthPollMs: {{ health_poll_ms }},
+    alivePollMs: {{ alive_poll_ms }},
+    jobPollMs: {{ job_poll_ms }},
+    version: {{ version | tojson }}
+  };
+</script>
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
