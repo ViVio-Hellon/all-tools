@@ -680,8 +680,12 @@ def _unlock(fh) -> None:
         pass
 
 
-def hold_desktop_lock() -> bool:
-    """デスクトップ版として動くあいだ、錠を握る。取れたら(握っていたら)`True`。"""
+def hold_desktop_lock(wait_sec: float = 3.0) -> bool:
+    """デスクトップ版として動くあいだ、錠を握る。取れたら(握っていたら)`True`。
+
+    立て直し(前の Python が終わってから次が起きる)の終わり際の重なりで
+    断らないよう、`wait_sec` 秒までは取り直す。
+    """
     global _desktop_lock
     if _desktop_lock is not None:
         return True
@@ -694,9 +698,12 @@ def hold_desktop_lock() -> bool:
         # 弱まるが、日報が打てないよりはよい
         log.warning("デスクトップ版の錠を作れませんでした: %s", exc)
         return True
-    if not _try_lock(fh):
-        fh.close()
-        return False
+    deadline = time.monotonic() + max(0.0, wait_sec)
+    while not _try_lock(fh):
+        if time.monotonic() >= deadline:
+            fh.close()
+            return False
+        time.sleep(0.2)
     _desktop_lock = fh
     log.info("デスクトップ版の錠を握りました: %s", path)
     return True

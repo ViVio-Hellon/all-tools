@@ -258,6 +258,13 @@ def start(*, open_browser: bool = True) -> int:
         log().info("ほぼ同時にもう1つ起動されました。先の1つへ合流します")
         return _join_or_explain(launch_guard.check_existing(),
                                 open_browser=open_browser)
+    # 名乗ってから、デスクトップ版をもう一度見る(調べてから名乗るまでの間に
+    # 統合ツールの窓で日報が開いていたら、こちらが止まる。デスクトップ版は
+    # 自分の錠を取ってからこの印を見るので、少なくとも一方が相手に気づく)
+    if launch_guard.desktop_running():
+        launch_guard.release_lock()
+        log().warning("デスクトップ版が動いているので、ブラウザ版は起動しません")
+        raise StartupError(DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
 
     # --- ポート選び ---
     port = launch_guard.pick_port()
@@ -358,14 +365,16 @@ def start_bridge(*, token: str = "", server_factory) -> int:
     import server as server_module
 
     log_environment()
-    running = launch_guard.browser_running()
-    if running is not None:
-        log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません: "
-                      "pid=%s port=%s", running.pid, running.port)
-        raise StartupError(BROWSER_RUNNING_MESSAGE, BROWSER_RUNNING_HINT)
+    # **自分の錠を取ってから**相手を見る(同時に開いても、少なくとも一方が気づく)
     if not launch_guard.hold_desktop_lock():
         raise StartupError("日報管理ツールがほかの窓で動いています",
                            "開いている窓をお使いください。")
+    running = launch_guard.browser_running()
+    if running is not None:
+        launch_guard.release_desktop_lock()
+        log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません: "
+                      "pid=%s port=%s", running.pid, running.port)
+        raise StartupError(BROWSER_RUNNING_MESSAGE, BROWSER_RUNNING_HINT)
 
     srv = server_factory(token or secrets.token_urlsafe(24))
     thread = server_module.run_in_background(srv)

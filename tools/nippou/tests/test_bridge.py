@@ -340,7 +340,7 @@ class DesktopLockTests(unittest.TestCase):
         self.addCleanup(holder.kill)
         self.assertEqual(holder.stdout.readline().strip(), b"held", holder.stderr.read(2000) if holder.poll() else b"")
         self.assertTrue(guard.desktop_running(), "デスクトップ版が握っている")
-        self.assertFalse(guard.hold_desktop_lock(), "2つ目のデスクトップ版は握れない")
+        self.assertFalse(guard.hold_desktop_lock(wait_sec=0), "2つ目のデスクトップ版は握れない")
         holder.kill()
         holder.wait(timeout=10)
         self.assertFalse(guard.desktop_running(), "終われば OS が外す")
@@ -377,6 +377,34 @@ class DesktopLockTests(unittest.TestCase):
             start_app.start_bridge(token="x", server_factory=lambda token: None)
         self.assertIn("ブラウザ版", str(caught.exception))
         self.assertFalse(guard.desktop_running(), "止まったほうは錠を握らない")
+
+
+# 統合ツールの一式(このツールは `tools/nippou/` にある)
+INTEGRATED = ROOT.parent.parent
+
+
+class IntegratedShellTests(unittest.TestCase):
+    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+
+    def entry(self) -> dict:
+        tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
+        return next(t for t in tools["tools"] if t["id"] == "nippou")
+
+    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+        """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
+        entry = self.entry()
+        self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())
+        # 外枠は <頭>_TOKEN / <頭>_PYTHON / <頭>_LOCAL_DIR を使う
+        self.assertEqual(entry["env_prefix"], "NIPPOU")
+        self.assertIn("NIPPOU_TOKEN", (ROOT / "bridge.py").read_text(encoding="utf-8"))
+        app = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        self.assertEqual(entry["local_dir_name"], app["local_dir_name"])
+
+    def test_外枠が渡す宛先名を受け付ける(self) -> None:
+        from nippou import app_config
+        relay = (INTEGRATED / "src-tauri" / "src" / "relay.rs").read_text(encoding="utf-8")
+        self.assertIn('pub const TOOL_HOST: &str = "app.localhost";', relay)
+        self.assertIn("app.localhost", app_config.BRIDGE_HOSTS)
 
 
 class WiringTests(unittest.TestCase):
