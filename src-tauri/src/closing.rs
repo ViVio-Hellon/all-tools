@@ -51,22 +51,29 @@ fn ask_all(shell: &Arc<Shell>, quitting: Option<&str>) -> Vec<(String, String)> 
             thread::spawn(move || {
                 let reply = bridge.call_json("POST", "/api/shutdown", &json!({"check": true}), ASK_LIMIT);
                 match reply {
-                    Ok((409, body)) => {
-                        let reason = body
-                            .get("message")
-                            .or_else(|| body.get("busy"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| body.pointer("/error/message").and_then(|v| v.as_str()))
-                            .unwrap_or("実行中の処理があります")
-                            .to_string();
-                        Some((title, reason))
-                    }
+                    Ok((409, body)) => Some((title, busy_reason(&body))),
                     _ => None,
                 }
             })
         })
         .collect();
     asks.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+}
+
+/// 「途中の処理がある」と断った理由。何をしているか(`running` の一覧・`busy`)を先に使う
+/// (`message` は単体の画面向けの「中断して終了しますか?」で、まとめた確認では問いが重なる)
+fn busy_reason(body: &serde_json::Value) -> String {
+    let running = body
+        .get("running")
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("・"))
+        .filter(|text| !text.is_empty());
+    running
+        .or_else(|| body.get("busy").and_then(|v| v.as_str()).map(str::to_string))
+        .or_else(|| body.pointer("/error/message").and_then(|v| v.as_str()).map(str::to_string))
+        .or_else(|| body.get("message").and_then(|v| v.as_str()).map(str::to_string))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| "実行中の処理があります".to_string())
 }
 
 fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
@@ -118,4 +125,22 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
     crate::places::shell_log(&shell.root, &format!("終了しました(途中の処理: {})", busy.len()));
     app.exit(0);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 断った理由は何をしているかを先に使う() {
+        // 日報・カレンダー・点検表: 一覧と「中断して終了しますか?」
+        let body = json!({"reason": "busy", "running": ["取り込み", "印刷"], "message": "中断して終了しますか?"});
+        assert_eq!(busy_reason(&body), "取り込み・印刷");
+        // 看板: 理由の文
+        let body = json!({"busy": "書き戻しの途中です", "error": {"code": "busy", "message": "書き戻しの途中です"}});
+        assert_eq!(busy_reason(&body), "書き戻しの途中です");
+        assert_eq!(busy_reason(&json!({"error": {"message": "x"}})), "x");
+        assert_eq!(busy_reason(&json!({"running": [], "message": "y"})), "y");
+        assert_eq!(busy_reason(&json!({})), "実行中の処理があります");
+    }
 }

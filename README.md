@@ -133,7 +133,7 @@ cd tools\nippou     && python -m unittest discover -s tests       # 日報(3,789
 cd tools\kanban     && python -m unittest discover -s tests       # 看板(866 件)
 cd tools\calendar   && python -m unittest discover -s tests -t .  # カレンダー(720 件)
 cd tools\inspection && python -m unittest discover -s tests -t .  # 点検表(245 件)
-cd src-tauri && cargo test && cargo build --release              # 外枠(21 件)・exe
+cd src-tauri && cargo test && cargo build --release              # 外枠(22 件)・exe
 python scripts\desktop_smoke.py --exe src-tauri\target\release\AllTools.exe   # exe を起動して確かめる
 ```
 
