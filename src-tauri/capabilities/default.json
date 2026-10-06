@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "大きなタブの画面(入口)と各ツールの別窓から呼んでよいもの。各ツールからの頼みごと(別窓・保存/選択のダイアログ・既定のブラウザ・立て直し)は tool_invoke / tool_invoke_raw に1本化し、外枠がどのツールの頼みかを確かめる",
+  "windows": ["main", "report-*"],
+  "remote": {
+    "urls": [
+      "http://portal.localhost/*", "portal://localhost/*",
+      "http://nippou.localhost/*", "nippou://localhost/*",
+      "http://kanban.localhost/*", "kanban://localhost/*",
+      "http://calendar.localhost/*", "calendar://localhost/*",
+      "http://inspection.localhost/*", "inspection://localhost/*"
+    ]
+  },
+  "permissions": ["core:default"]
+}
