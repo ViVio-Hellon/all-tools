@@ -62,10 +62,18 @@ class StartupError(RuntimeError):
 def desktop_running_error() -> StartupError:
     """デスクトップ版が動いているので、ブラウザ版は起動しない(`core/instance_guard.py`)。"""
     return StartupError(
-        "デスクトップ版(InspectionSheet.exe)が動いています",
-        "ブラウザ版とデスクトップ版は同時には使えません。デスクトップ版の窓で操作してください。\n"
-        "ブラウザ版を使うときは、デスクトップ版の窓を閉じてから開き直してください。",
+        "点検表はデスクトップ版(統合ツールの窓)で動いています",
+        "ブラウザ版とデスクトップ版は同時には使えません。統合ツールの窓の「点検表」のタブで操作してください。\n"
+        "ブラウザ版を使うときは、統合ツールの窓を閉じてから開き直してください。",
         show_page=False)
+
+
+def browser_running_error() -> StartupError:
+    """ブラウザ版が動いているので、デスクトップ版(統合ツールの窓の「点検表」)は起動しない。"""
+    return StartupError(
+        "点検表のブラウザ版が動いています",
+        "ブラウザ版とデスクトップ版は同時には使えません。"
+        "ブラウザの画面の「終了」(または stop.bat)で閉じてから、このタブの「もう一度開く」を押してください。")
 
 
 # ------------------------------------------------------------------
@@ -451,17 +459,27 @@ SCAN_WAIT_LIMIT_SEC = 60
 def start_bridge(*, token: str = "", options: Optional[dict] = None, server_factory) -> int:
     """デスクトップ版の起動(`bridge.py` から)。**ポートも、ブラウザ版のロックも使わない。**
 
-    窓・多重起動の防止・ブラウザ版との同時起動の防止・終わり方は外枠
-    (Rust/Tauri、`src-tauri/`)が持つ。ここでするのはブラウザ版と同じ
+    窓・終わり方は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのはブラウザ版と同じ
     「待機画面 → 本体を組み立てる → 重い初期化」だけで、中身(`_initialize`)は
     共有する ── 2本持つと片方だけ直すことになる。
+
+    ブラウザ版とは同時に動かさない(`core/instance_guard.py`): デスクトップ版の
+    錠を取れなければ(ブラウザ版が先に動いている)**こちらが止まる**。取れたら、
+    終わるまで握る(ブラウザ版はそれを見て起動しない)。
     """
     import secrets
 
     import server as server_module
+    from core import instance_guard
     from core.console_progress import ConsoleProgress
 
     log_environment()
+    claim = instance_guard.claim(instance_guard.DESKTOP)
+    if not claim.ok:
+        if claim.other_kind_running:
+            log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません")
+            raise browser_running_error()
+        raise StartupError("点検表がほかの窓で動いています", "開いている窓をお使いください。")
     srv = server_factory(token or secrets.token_urlsafe(24), options or {})
     thread = server_module.run_in_background(srv)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)

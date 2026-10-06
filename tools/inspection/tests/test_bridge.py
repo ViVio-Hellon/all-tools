@@ -248,37 +248,61 @@ class BridgeProcessTests(unittest.TestCase):
         self.assertEqual(self.proc.wait(timeout=20), 0, "\n".join(self.err[-30:]))
 
 
-class DesktopVersionTest(unittest.TestCase):
-    def test_版は3か所で揃っている(self) -> None:
-        """config/app.json・Cargo.toml・tauri.conf.json。食い違うと exe の版がずれる。"""
-        import re
+# 統合ツールの一式(このツールは `tools/inspection/` にある)
+INTEGRATED = ROOT.parent.parent
+
+
+class IntegratedShellTest(unittest.TestCase):
+    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が揃っているか。"""
+
+    def entry(self) -> dict:
+        tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
+        return next(t for t in tools["tools"] if t["id"] == "inspection")
+
+    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
         from core import app_config
-        cargo = (ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
-        conf = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
-        self.assertEqual(re.search(r'^version = "([^"]+)"', cargo, re.M).group(1), app_config.version())
-        self.assertEqual(conf["version"], app_config.version())
+        entry = self.entry()
+        self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())
+        # 外枠は <頭>_TOKEN / <頭>_PYTHON / <頭>_LOCAL_DIR を使う
+        self.assertEqual(entry["env_prefix"], "INSPECTION")
+        self.assertEqual(entry["demo_env"], "INSPECTION_DEMO")
+        self.assertEqual(entry["local_dir_name"], app_config.load()["local_dir_name"])
 
-    def test_exeの名前はPythonとRustで揃っている(self) -> None:
-        from core import instance_guard
-        cargo = (ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
-        self.assertIn(f'name = "{instance_guard.DESKTOP_EXE[:-4]}"', cargo)
-
-    def test_錠の名前の作り方はPythonとRustで揃っている(self) -> None:
-        from core import instance_guard
-        rust = (ROOT / "src-tauri" / "src" / "instance.rs").read_text(encoding="utf-8")
-        for suffix in ("instance", "desktop", "browser"):
-            self.assertIn(f'"{{base}}.{suffix}"', rust)
-            self.assertTrue(instance_guard.names()[suffix if suffix == "instance" else suffix]
-                            .endswith(f".{suffix}"))
-        self.assertIn('format!("Local\\\\{name}")', rust)
-
-
-class BridgeHostsTest(unittest.TestCase):
-    def test_外枠の宛先名はRust側と揃っている(self) -> None:
+    def test_外枠が渡す宛先名を受け付ける(self) -> None:
         from core import app_config
-        main_rs = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
-        self.assertIn('const SCHEME: &str = "app";', main_rs)
+        relay = (INTEGRATED / "src-tauri" / "src" / "relay.rs").read_text(encoding="utf-8")
+        self.assertIn('pub const TOOL_HOST: &str = "app.localhost";', relay)
         self.assertIn("app.localhost", app_config.BRIDGE_HOSTS)
+
+    def test_窓を前に出すexeは一式のフォルダの直下(self) -> None:
+        from unittest import mock
+
+        from core import instance_guard
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"ALLTOOLS_ROOT": tmp}):
+                (Path(tmp) / "AllTools.exe").write_bytes(b"")
+                self.assertEqual(instance_guard.desktop_exe(), str(Path(tmp) / "AllTools.exe"))
+                # 日本語の名前の exe があれば、そちら(配るときの名前)
+                (Path(tmp) / "統合ツール.exe").write_bytes(b"")
+                self.assertEqual(instance_guard.desktop_exe(), str(Path(tmp) / "統合ツール.exe"))
+
+
+class BridgeGuardTest(unittest.TestCase):
+    """ブラウザ版とは同時に動かさない(後から開いたほうが止まる)。"""
+
+    def setUp(self) -> None:
+        from core import instance_guard
+        instance_guard.release_all()
+        self.addCleanup(instance_guard.release_all)
+
+    def test_ブラウザ版が先に動いていればデスクトップ版は起動しない(self) -> None:
+        import start_app
+        from core import instance_guard
+        self.assertTrue(instance_guard.claim(instance_guard.BROWSER).ok)
+        with self.assertRaises(start_app.StartupError) as ctx:
+            start_app.start_bridge(server_factory=lambda *a: self.fail("起こしてはいけない"))
+        self.assertIn("ブラウザ版", str(ctx.exception))
+        self.assertIn("もう一度開く", ctx.exception.hint)
 
 
 if __name__ == "__main__":

@@ -260,8 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     import launch_guard
 
     if launch_guard.desktop_running():
-        message = ("デスクトップ版(資材発注看板システム.exe)が動いています。"
-                   "そちらの窓を使ってください(ブラウザ版は開きません)。")
+        message = (f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}")
         log.info("起動しません: %s", message)
         print(message)
         store.close()
@@ -310,10 +309,19 @@ def main(argv: list[str] | None = None) -> int:
                 grant=grant, access_notice=access_notice)
 
 
-def start_bridge(argv: list[str] | None = None, *, token: str = "", server_factory) -> int:
-    """デスクトップ版の起動(``bridge.py`` から)。**ポートもロックファイルも使わない。**
+DESKTOP_RUNNING_MESSAGE = "資材発注看板システムはデスクトップ版(統合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("統合ツールの窓の「看板」のタブをお使いください"
+                        "(ブラウザ版は開きません。開くときは統合ツールの窓を閉じてから)。")
+BROWSER_RUNNING_MESSAGE = "資材発注看板システムのブラウザ版が動いています"
+BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
+                        "ブラウザの画面の「終了」(または stop.bat)で閉じてから、"
+                        "このタブの「もう一度開く」を押してください。")
 
-    多重起動の防止・窓・終了は外枠(Rust/Tauri)が持つ。ここでするのはブラウザ版と
+
+def start_bridge(argv: list[str] | None = None, *, token: str = "", server_factory) -> int:
+    """デスクトップ版の起動(``bridge.py`` から)。**ポートも印のファイルも使わない。**
+
+    窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのはブラウザ版と
     同じ「設定・権限・モードを決める → 待機画面 → 本体を組み立てる → 取り込み」だけで、
     その中身(:func:`_prepare` と :func:`_serve`)はブラウザ版と共有する ──
     2 本持つと片方だけ直すことになる。
@@ -322,7 +330,9 @@ def start_bridge(argv: list[str] | None = None, *, token: str = "", server_facto
 
     * 待ち受けない(``server_factory`` が標準入出力で受けるサーバを作る)
     * 心拍による自動終了を使わない(窓を閉じたら外枠が終わらせる)
-    * ブラウザ版が動いていたら、先に終わってもらう(同じ SQLite に 2 つが書かないように)
+    * ブラウザ版が動いていたら**こちらが止まる**(後から開いたほうが止まる。
+      同じ SQLite に 2 つが書かないように)。動き始めたら ``runtime/desktop.lock`` を
+      握り続ける(ブラウザ版はそれを見て起動しない)
     """
     import secrets
 
@@ -339,8 +349,19 @@ def start_bridge(argv: list[str] | None = None, *, token: str = "", server_facto
             f"作業用フォルダを作れません: {exc}",
             f"{app_config.local_root()} に書き込めるか確かめてください。",
         ) from exc
+    import launch_guard
+
+    # **自分の錠を取ってから**相手を見る(ブラウザ版は印を書いてからこの錠を見直す。
+    # 同時に開いても、少なくとも一方が相手に気づく)
+    if not launch_guard.hold_desktop_lock():
+        raise StartupError("資材発注看板システムがほかの窓で動いています",
+                           "開いている窓をお使いください。")
+    running = launch_guard.browser_running()
+    if running:
+        launch_guard.release_desktop_lock()
+        log.warning("ブラウザ版が動いているので、デスクトップ版は起動しません: %s", running)
+        raise StartupError(f"{BROWSER_RUNNING_MESSAGE}({running})", BROWSER_RUNNING_HINT)
     cfg, store, mode, line, grant, access_notice = _prepare(args)
-    _stop_browser_version(store)
 
     srv = server_factory(mode, token or secrets.token_urlsafe(24))
     thread = server_module.run_in_background(srv)
@@ -369,20 +390,6 @@ def _check_bridge_environment() -> None:
             "コマンドプロンプトでこのフォルダへ移り、次を1度だけ実行してください:\n"
             "python -m pip install -r requirements.txt",
         ) from exc
-
-
-def _stop_browser_version(store) -> None:
-    """ブラウザ版が動いていたら終わってもらう。終われない(未反映がある)なら起動しない。"""
-    import launch_guard
-
-    refused = launch_guard.stop_browser_instances()
-    if refused:
-        store.close()
-        raise StartupError(
-            f"ブラウザ版が動いていて、終わらせられませんでした({refused})。",
-            "ブラウザ版の画面で「終了」を押す(または stop.bat を実行する)と、"
-            "未反映の操作を送ってから終わります。そのあとでもう一度開いてください。",
-        )
 
 
 def _prepare(args):
@@ -557,6 +564,15 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     srv = server.AppServer(mode, port)
     lock = launch_guard.build_lock_info(mode, port, srv.token)
     launch_guard.write_lock(lock)
+    # 印を書いてから、デスクトップ版をもう一度見る(調べてから印を書くまでの
+    # 間に統合ツールの窓で看板が開いていたら、こちらが止まる)
+    if launch_guard.desktop_running():
+        launch_guard.remove_lock(mode)
+        message = f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}"
+        log.info("起動しません: %s", message)
+        print(message)
+        store.close()
+        return 0
 
     thread = server.run_in_background(srv)
 
@@ -575,9 +591,12 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     print(f"起動しました: {srv.url}")
     log.info("ブラウザを開きました: %s", srv.url)
 
+    # 統合ツールのブラウザ版(予備)が起こしたときは、ブラウザを開かないが
+    # 心拍の見張りは立てる(大きなタブの枠が消えたら終わる。入口が先に落ちても残らない)
+    under_portal = os.environ.get("ALLTOOLS_PORTAL", "") == "1"
     code = _serve(args, cfg, store, mode, line, root, srv, thread,
                   grant=grant, access_notice=access_notice,
-                  watch_idle=not args.no_browser)
+                  watch_idle=(not args.no_browser) or under_portal)
     launch_guard.remove_lock(mode)
     from kanban import trace
 

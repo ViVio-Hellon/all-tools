@@ -291,6 +291,12 @@ def start(*, open_browser: bool = True) -> int:
         if joined is not None:
             return joined
     try:
+        # デスクトップ版(統合ツールの窓)が動いていれば、こちらが止まる。
+        # **入口を取ってから**確かめる(デスクトップ版は自分の錠を取ってから
+        # この入口を見る。同時に開いても、少なくとも一方が相手に気づく)
+        if launch_guard.desktop_running():
+            log().info("デスクトップ版が動いているので、ブラウザ版は起動しません")
+            raise StartupError(DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
         return _start_locked(open_browser=open_browser)
     finally:
         startup.release()
@@ -468,18 +474,39 @@ def _hard_exit() -> None:
     os._exit(0)
 
 
-def start_bridge(*, token: str = "", server_factory) -> int:
-    """デスクトップ版の起動(``bridge.py`` から)。**ポートもロックも使わない。**
+DESKTOP_RUNNING_MESSAGE = "ライン管理カレンダーはデスクトップ版(統合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("統合ツールの窓の「カレンダー」のタブをお使いください。"
+                        "ブラウザ版で開くときは、統合ツールの窓を閉じてからにしてください。")
+BROWSER_RUNNING_MESSAGE = "ライン管理カレンダーのブラウザ版が動いています"
+BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
+                        "ブラウザの画面の「終了」(または stop.bat)で閉じてから、"
+                        "このタブの「もう一度開く」を押してください。")
 
-    多重起動の防止・窓・終了は外枠(Rust/Tauri)が持つ。ここでするのは
+
+def start_bridge(*, token: str = "", server_factory) -> int:
+    """デスクトップ版の起動(``bridge.py`` から)。**ポートを使わない。**
+
+    窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのは
     ブラウザ版と同じ「待機画面 → 本体を組み立てる → 重い初期化」だけで、
     その中身(``_initialize``)は共有する ── 2本持つと片方だけ直すことになる。
+
+    ブラウザ版とは同時に動かさない: ブラウザ版が先に動いていれば**こちらが止まる**。
+    動き始めたら ``runtime/desktop.lock`` を握り続ける(ブラウザ版はそれを見て起動しない)。
     """
     import secrets
 
+    import launch_guard
     import server as server_module
 
     log_environment()
+    # **自分の錠を取ってから**相手を見る(同時に開いても、少なくとも一方が気づく)
+    if not launch_guard.hold_desktop_lock():
+        raise StartupError("ライン管理カレンダーがほかの窓で動いています",
+                           "開いている窓をお使いください。")
+    if launch_guard.browser_running():
+        launch_guard.release_desktop_lock()
+        log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません")
+        raise StartupError(BROWSER_RUNNING_MESSAGE, BROWSER_RUNNING_HINT)
     srv = server_factory(token or secrets.token_urlsafe(24))
     thread = server_module.run_in_background(srv)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)

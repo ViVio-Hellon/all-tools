@@ -1,9 +1,13 @@
 """ブラウザ版とデスクトップ版を同時に動かさない(どちらを後から開いても止まる)
 
 ブラウザ版(`Start.vbs` / `start.bat` → `start_app.py`)とデスクトップ版
-(`InspectionSheet.exe` = Rust/Tauri の外枠、`src-tauri/src/instance.rs`)は
+(統合ツールの窓の「点検表」= 統合ツールの外枠が起こす `bridge.py`)は
 同じ点検表・同じ Excel・同じ設定を扱う。両方が動くと、二重の印刷・Excel の
 取り合い・設定の書き合いが起きる。
+
+デスクトップ版の錠は、統合ツールの外枠ではなく**点検表の Python が握る**
+(`start_app.start_bridge`)。統合ツールの外枠は4つのツールを載せるので、
+ツールごとの錠までは持たない。
 
 【錠は OS の名前付きの錠にする(ファイルにしない)】
 ラインPCの Python は Microsoft Store 版で、`%LOCALAPPDATA%` に書いたファイルは
@@ -32,6 +36,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, List, Optional
 
 from . import app_config
@@ -41,8 +46,8 @@ DESKTOP = "desktop"
 KINDS = (BROWSER, DESKTOP)
 LABELS = {BROWSER: "ブラウザ版", DESKTOP: "デスクトップ版"}
 
-# デスクトップ版の exe の名前(アプリのフォルダの直下に置く)
-DESKTOP_EXE = "InspectionSheet.exe"
+# デスクトップ版の exe の名前(統合ツール。一式のフォルダの直下に置く)
+DESKTOP_EXES = ("統合ツール.exe", "AllTools.exe")
 
 
 def base_name() -> str:
@@ -195,9 +200,22 @@ def release_all() -> None:
 
 
 def desktop_exe() -> Optional[str]:
-    """デスクトップ版の exe(あれば)。ブラウザ版から窓を前に出してもらうのに使う。"""
-    path = app_config.APP_ROOT / DESKTOP_EXE
-    return str(path) if path.is_file() else None
+    """デスクトップ版の exe(あれば)。ブラウザ版から窓を前に出してもらうのに使う。
+
+    点検表は統合ツールの一式の `tools/inspection/` にある。exe は一式のフォルダの直下
+    (`ALLTOOLS_ROOT` があればそこ)。
+    """
+    roots = []
+    custom = os.environ.get("ALLTOOLS_ROOT", "").strip()
+    if custom:
+        roots.append(Path(custom))
+    roots.append(app_config.APP_ROOT.parent.parent)
+    for root in roots:
+        for name in DESKTOP_EXES:
+            path = root / name
+            if path.is_file():
+                return str(path)
+    return None
 
 
 def bring_desktop_to_front() -> bool:

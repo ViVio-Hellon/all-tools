@@ -198,6 +198,78 @@ def _unlock_file(fd: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# デスクトップ版(統合ツールの窓)との取り合い
+# ---------------------------------------------------------------------------
+#: デスクトップ版として動いている Python が握る錠(``start_app.start_bridge``)。
+#: ブラウザ版は ``instance.lock``(``StartupLock``)を動いているあいだ握り続ける。
+#: **互いに相手の錠を見て、後から開いたほうが止まる**(同じ手元の SQLite と
+#: 取り込み元へ、2つのプロセスが書きに行かないように)
+DESKTOP_LOCK_NAME = "desktop.lock"
+
+# 握っている錠(プロセスが終わるまで持っておく)
+_desktop_lock: Optional["StartupLock"] = None
+
+
+def desktop_lock_path() -> Path:
+    return app_config.local_dir("runtime") / DESKTOP_LOCK_NAME
+
+
+def hold_desktop_lock(wait_sec: float = 3.0) -> bool:
+    """デスクトップ版として動くあいだ、錠を握る。取れたら(握っていたら)``True``。
+
+    立て直し(前の Python が終わってから次が起きる)の終わり際の重なりで
+    断らないよう、``wait_sec`` 秒までは取り直す。
+    """
+    global _desktop_lock
+    if _desktop_lock is not None:
+        return True
+    lock = StartupLock(desktop_lock_path())
+    deadline = time.monotonic() + max(0.0, wait_sec)
+    while not lock.acquire():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+    _desktop_lock = lock
+    log.info("デスクトップ版の錠を握りました: %s", lock.path)
+    return True
+
+
+def release_desktop_lock() -> None:
+    """握っている錠を放す(起動をやめるとき・試験。ふだんはプロセスが終われば外れる)。"""
+    global _desktop_lock
+    lock, _desktop_lock = _desktop_lock, None
+    if lock is not None:
+        lock.release()
+
+
+def _held_by_other(path: Path) -> bool:
+    """その錠を、ほかのプロセスが握っているか(取れるか試してすぐ放す)。"""
+    if not path.is_file():
+        return False
+    probe = StartupLock(path)
+    if probe.acquire():
+        probe.release()
+        return False
+    return True
+
+
+def desktop_running() -> bool:
+    """デスクトップ版(統合ツールの窓の「カレンダー」)がこの PC で動いているか。"""
+    if _desktop_lock is not None:
+        return True
+    return _held_by_other(desktop_lock_path())
+
+
+def browser_running() -> bool:
+    """ブラウザ版がこの PC で動いている(または起動の途中)か。
+
+    ブラウザ版は起動の入口(``instance.lock``)を、終わるまで握っている。
+    **ポートは叩かない**(デスクトップ版はソケットを開かない)。
+    """
+    return _held_by_other(instance_lock_path())
+
+
+# ---------------------------------------------------------------------------
 # ロックファイル
 # ---------------------------------------------------------------------------
 def write_lock(info: LockInfo) -> Path:

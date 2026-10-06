@@ -336,30 +336,60 @@ class DesktopLockTests(unittest.TestCase):
             fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.assertTrue(launch_guard.desktop_running(), "外枠が握っている")
 
-    def test_ブラウザ版が居なければ何もしない(self) -> None:
+    def test_ブラウザ版が居なければ空(self) -> None:
         import launch_guard
 
-        self.assertEqual(launch_guard.stop_browser_instances(), "")
+        self.assertEqual(launch_guard.browser_running(), "")
 
-
-class VersionTests(unittest.TestCase):
-    def test_外枠の版はアプリの版と同じ(self) -> None:
-        """exe のプロパティに出る版と、画面の帯に出る版を食い違わせない。"""
-        import re
-        app = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))["version"]
-        conf = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
-        cargo = re.search(r'^version = "([^"]+)"', (ROOT / "src-tauri" / "Cargo.toml")
-                          .read_text(encoding="utf-8"), re.M).group(1)
-        self.assertEqual((conf["version"], cargo), (app, app))
-
-    def test_画面の宛先の名前と錠の名前は外枠と同じ(self) -> None:
+    def test_デスクトップ版の錠を握ると_ほかのプロセスからは動いていると見える(self) -> None:
         import launch_guard
+
+        self.assertTrue(launch_guard.hold_desktop_lock(wait_sec=0))
+        self.addCleanup(launch_guard.release_desktop_lock)
+        self.assertTrue(launch_guard.desktop_running(), "自分が握っている")
+        # 別のプロセス(単体のブラウザ版の起動)から見ても、動いていると分かる
+        probe = ("import sys; sys.path.insert(0, sys.argv[1]); import launch_guard; "
+                 "print(launch_guard.desktop_running())")
+        done = subprocess.run([sys.executable, "-c", probe, str(ROOT)], capture_output=True,
+                              text=True, timeout=60, env=dict(os.environ))
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "True", done.stderr[-500:])
+        launch_guard.release_desktop_lock()
+        done = subprocess.run([sys.executable, "-c", probe, str(ROOT)], capture_output=True,
+                              text=True, timeout=60, env=dict(os.environ))
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "False", done.stderr[-500:])
+
+
+# 統合ツールの一式(このツールは ``tools/kanban/`` にある)
+INTEGRATED = ROOT.parent.parent
+
+
+class IntegratedShellTests(unittest.TestCase):
+    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+
+    def entry(self) -> dict:
+        tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
+        return next(t for t in tools["tools"] if t["id"] == "kanban")
+
+    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+        """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
+        entry = self.entry()
+        self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())
+        # 外枠は <頭>_TOKEN / <頭>_PYTHON / <頭>_LOCAL_DIR を使う
+        self.assertEqual(entry["env_prefix"], "KANBAN")
+        self.assertIn("KANBAN_TOKEN", (ROOT / "bridge.py").read_text(encoding="utf-8"))
+        app = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        self.assertEqual(entry["local_dir_name"], app["local_dir_name"])
+
+    def test_外枠が渡す宛先名を受け付ける(self) -> None:
         from kanban import app_config
-        main_rs = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
-        self.assertIn('const SCHEME: &str = "app";', main_rs)
+        relay = (INTEGRATED / "src-tauri" / "src" / "relay.rs").read_text(encoding="utf-8")
+        self.assertIn('pub const TOOL_HOST: &str = "app.localhost";', relay)
         self.assertIn("app.localhost", app_config.BRIDGE_HOSTS)
-        self.assertIn(f'join("{launch_guard.DESKTOP_LOCK_NAME}")', main_rs)
-        self.assertIn('"KANBAN_LOCAL_DIR"', main_rs)
+
+    def test_モードの切り替えは外枠の立て直しで受ける(self) -> None:
+        """看板はモードを切り替えると Python を起こし直す(``restart_app``)。外枠が受け持つ。"""
+        services = (INTEGRATED / "src-tauri" / "src" / "services.rs").read_text(encoding="utf-8")
+        self.assertIn('"restart_app"', services)
 
 
 if __name__ == "__main__":                        # pragma: no cover

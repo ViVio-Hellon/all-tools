@@ -10,7 +10,8 @@
 - 「終了」で ``quit`` を知らせ、標準入力を閉じればプロセスが終わる
 - **未送信を抱えたまま終わらない**(終わる前に送り切る。送れなければ覚える)
 - 起動できないときは理由(``fatal``)を外枠へ渡す
-- 外枠と Python で、版と宛先の名前が食い違わない
+- 統合ツールの外枠と Python で、宛先と環境変数の名前が食い違わない
+- ブラウザ版とは同時に動かさない(後から開いたほうが止まる)
 """
 from __future__ import annotations
 
@@ -398,29 +399,74 @@ class FatalTests(unittest.TestCase):
         self.assertIn("hint", event)
 
 
-class VersionTests(unittest.TestCase):
-    def test_外枠の版はアプリの版と同じ(self) -> None:
-        """exe のプロパティに出る版と、画面の帯に出る版を食い違わせない。"""
-        app = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))["version"]
-        conf = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
-        cargo = re.search(r'^version = "([^"]+)"', (ROOT / "src-tauri" / "Cargo.toml")
-                          .read_text(encoding="utf-8"), re.M).group(1)
-        self.assertEqual((conf["version"], cargo), (app, app))
+# 統合ツールの一式(このツールは ``tools/calendar/`` にある)
+INTEGRATED = ROOT.parent.parent
 
-    def test_画面の宛先の名前は外枠と同じ(self) -> None:
+
+class IntegratedShellTests(unittest.TestCase):
+    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+
+    def entry(self) -> dict:
+        tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
+        return next(t for t in tools["tools"] if t["id"] == "calendar")
+
+    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+        """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
         from calendar_app import app_config
-        main_rs = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
-        self.assertIn('const SCHEME: &str = "app";', main_rs)
+        entry = self.entry()
+        self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())
+        # 外枠は <頭>_TOKEN / <頭>_PYTHON / <頭>_LOCAL_DIR を使う
+        self.assertEqual(entry["env_prefix"], "CALENDAR")
+        self.assertIn("CALENDAR_TOKEN", (ROOT / "bridge.py").read_text(encoding="utf-8"))
+        self.assertEqual(entry["local_dir_name"], app_config.load()["local_dir_name"])
+
+    def test_外枠が渡す宛先名を受け付ける(self) -> None:
+        from calendar_app import app_config
+        relay = (INTEGRATED / "src-tauri" / "src" / "relay.rs").read_text(encoding="utf-8")
+        self.assertIn('pub const TOOL_HOST: &str = "app.localhost";', relay)
         self.assertIn("app.localhost", app_config.BRIDGE_HOSTS)
 
-    def test_環境変数の名前は外枠と同じ(self) -> None:
-        """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
-        rust = "".join(p.read_text(encoding="utf-8")
-                       for p in (ROOT / "src-tauri" / "src").glob("*.rs"))
-        for name in ("CALENDAR_TOKEN", "CALENDAR_LOCAL_DIR", "CALENDAR_PYTHON",
-                     "CALENDAR_ROOT"):
-            self.assertIn(f'"{name}"', rust, name)
-        self.assertIn("CALENDAR_TOKEN", (ROOT / "bridge.py").read_text(encoding="utf-8"))
+
+class DesktopGuardTests(unittest.TestCase):
+    """ブラウザ版とデスクトップ版(統合ツールの窓)を同時に動かさない。後から開いたほうが止まる。"""
+
+    def setUp(self) -> None:
+        import launch_guard
+        self.guard = launch_guard
+        launch_guard.release_desktop_lock()
+        self.addCleanup(launch_guard.release_desktop_lock)
+
+    def test_錠が無い_握った_ほかのプロセスからも動いていると見える(self) -> None:
+        self.assertFalse(self.guard.desktop_running())
+        self.assertTrue(self.guard.hold_desktop_lock(wait_sec=0))
+        self.assertTrue(self.guard.desktop_running(), "自分が握っている")
+        probe = ("import sys; sys.path.insert(0, sys.argv[1]); import launch_guard; "
+                 "print(launch_guard.desktop_running())")
+        done = subprocess.run([sys.executable, "-c", probe, str(ROOT)], capture_output=True,
+                              text=True, timeout=60, cwd=str(ROOT))
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "True", done.stderr[-500:])
+        self.guard.release_desktop_lock()
+        self.assertFalse(self.guard.desktop_running(), "放せば動いていない")
+
+    def test_デスクトップ版が動いていればブラウザ版は起動しない(self) -> None:
+        import start_app
+        self.assertTrue(self.guard.hold_desktop_lock(wait_sec=0))
+        with self.assertRaises(start_app.StartupError) as ctx:
+            start_app.start(open_browser=False)
+        self.assertIn("統合ツールの窓", str(ctx.exception))
+        self.assertFalse(self.guard.browser_running(), "入口(instance.lock)は放してある")
+
+    def test_ブラウザ版が動いていればデスクトップ版は起動しない(self) -> None:
+        import start_app
+        browser = self.guard.StartupLock()           # ブラウザ版は動いているあいだ入口を握る
+        self.assertTrue(browser.acquire())
+        self.addCleanup(browser.release)
+        self.assertTrue(self.guard.browser_running())
+        with self.assertRaises(start_app.StartupError) as ctx:
+            start_app.start_bridge(server_factory=lambda token: self.fail("起こしてはいけない"))
+        self.assertIn("ブラウザ版", str(ctx.exception))
+        self.assertIn("もう一度開く", ctx.exception.hint)
+        self.assertFalse(self.guard.desktop_running(), "断ったら錠を放す")
 
 
 if __name__ == "__main__":                        # pragma: no cover

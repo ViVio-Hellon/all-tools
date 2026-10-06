@@ -462,60 +462,118 @@ def request_shutdown(port: int, token: str, *, force: bool = False) -> bool:
 
 
 # ------------------------------------------------------------------
-# デスクトップ版(Rust/Tauri)との取り合い
+# デスクトップ版(統合ツールの窓)との取り合い
 # ------------------------------------------------------------------
-#: デスクトップ版の外枠が握る錠(``src-tauri/src/main.rs`` の ``take_instance_lock``)。
-#: 中身は無い。**OS のファイルロックを握っているか**だけを見る(プロセスが終われば外れる)
+#: デスクトップ版として動いている Python が握る錠(``start_app.start_bridge``)。
+#: 中身は無い。**OS のファイルロックを握っているか**だけを見る(プロセスが終われば外れる)。
+#: 統合ツールの窓は看板の Python を子として起こし、その Python がこれを握る
 DESKTOP_LOCK_NAME = "desktop.lock"
+
+# 握っている錠(プロセスが終わるまで持っておく)
+_desktop_lock = None
 
 
 def desktop_lock_path() -> Path:
     return app_config.local_root() / "runtime" / DESKTOP_LOCK_NAME
 
 
-def desktop_running() -> bool:
-    """デスクトップ版がこの利用者のこの PC で動いているか。
+def _try_lock(fh) -> bool:
+    """開いたファイルの錠を取る(取れなければ ``False``)。待たない。"""
+    try:
+        if os.name == "nt":
+            import msvcrt
 
-    外枠が握っている錠を、**取れるか試してすぐ放す**。取れなければ動いている。
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fh) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def hold_desktop_lock(wait_sec: float = 3.0) -> bool:
+    """デスクトップ版として動くあいだ、錠を握る。取れたら(握っていたら)``True``。
+
+    モードを切り替えたときは、前の Python が終わってから次が起きる。終わり際の
+    わずかな重なりで断らないよう、``wait_sec`` 秒までは取り直す。
+    """
+    global _desktop_lock
+    if _desktop_lock is not None:
+        return True
+    path = desktop_lock_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(path, "a+b")
+    except OSError as exc:  # noqa: BLE001
+        # 錠そのものが作れない(めったに無い)。止めずに進む ── 守りは
+        # 1枚減るが、看板が使えないよりはよい
+        log.warning("デスクトップ版の錠を作れませんでした: %s", exc)
+        return True
+    deadline = time.monotonic() + max(0.0, wait_sec)
+    while not _try_lock(fh):
+        if time.monotonic() >= deadline:
+            fh.close()
+            return False
+        time.sleep(0.2)
+    _desktop_lock = fh
+    log.info("デスクトップ版の錠を握りました: %s", path)
+    return True
+
+
+def release_desktop_lock() -> None:
+    """握っている錠を放す(試験用。ふだんはプロセスが終われば外れる)。"""
+    global _desktop_lock
+    fh, _desktop_lock = _desktop_lock, None
+    if fh is not None:
+        _unlock(fh)
+        fh.close()
+
+
+def desktop_running() -> bool:
+    """デスクトップ版(統合ツールの窓の「看板」)がこの利用者のこの PC で動いているか。
+
+    錠を**取れるか試してすぐ放す**。取れなければ動いている。
     ブラウザ版とデスクトップ版が同時に動くと、同じ手元の SQLite と共有DBへ
     2 つのプロセスが書き戻しに行く(押した操作が二重に届く)。
     """
+    if _desktop_lock is not None:
+        return True
     path = desktop_lock_path()
     if not path.is_file():
         return False
     try:
         with open(path, "a+b") as fh:
-            if os.name == "nt":
-                import msvcrt
-
-                fh.seek(0)
-                try:
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError:
-                    return True
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                try:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    return True
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if not _try_lock(fh):
+                return True
+            _unlock(fh)
     except OSError as exc:
         log.info("デスクトップ版の錠を確かめられませんでした: %s", exc)
     return False
 
 
-def stop_browser_instances() -> str:
-    """デスクトップ版を開くとき、動いているブラウザ版に終わってもらう。
+def browser_running() -> str:
+    """ブラウザ版がこの PC で動いていれば、その説明(居なければ空文字)。
 
-    終わらせられたら(または居なければ)空文字。終わらせられなければ、その相手の説明。
-
-    **未反映の操作があっても終わってもらう**(``force``)。終わるときに最後の
-    書き戻しをするうえ、送れなかった操作は手元の SQLite に残り、同じ SQLite を
-    使うデスクトップ版が送り直す。まずは ``force`` なしで頼み、断られたら付ける。
+    **後から開いたほうが止まる**(デスクトップ版は、動いているブラウザ版を止めない)。
+    印(``<mode>.lock``)が無ければポートは叩かない。
     """
     try:
         live = _live_instances()
@@ -523,22 +581,9 @@ def stop_browser_instances() -> str:
         log.exception("動いているブラウザ版を確かめられませんでした")
         return ""
     for other in live:
-        info = other.info
-        label = f"{config.mode_display_name(other.mode)} pid={info.pid}"
-        log.warning("ブラウザ版が動いています(%s port=%s)。終わってもらいます", label, info.port)
-        if not request_shutdown(info.port, info.token) and not request_shutdown(
-            info.port, info.token, force=True
-        ):
-            return label
-        deadline = time.monotonic() + REPLACE_WAIT_SEC + 20
-        while time.monotonic() < deadline:
-            if probe_health(info.port, timeout=0.3) is None and not is_process_alive(info.pid):
-                break
-            time.sleep(0.2)
-        else:
-            return label
-        remove_lock(other.mode)
-        log.info("ブラウザ版を終わらせました: %s", label)
+        if other.info.pid == os.getpid():
+            continue
+        return f"{config.mode_display_name(other.mode)} pid={other.info.pid}"
     return ""
 
 
