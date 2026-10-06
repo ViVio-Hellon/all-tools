@@ -31,9 +31,11 @@ export function openExternal(url) {
   window.open(url, "_blank", "noopener");
 }
 
-/** デスクトップ版のときだけ出す部品(`data-desktop-only`)を見せる。 */
+/** デスクトップ版のときだけ出す部品(`data-desktop-only`)を見せ、ブラウザ版だけの部品
+ *  (`data-browser-only`。Start.vbs から起動し直す案内など)を隠す。 */
 export function revealDesktopOnly(scope = document) {
   if (!isDesktop) return;
   for (const node of scope.querySelectorAll("[data-desktop-only]")) node.hidden = false;
+  for (const node of scope.querySelectorAll("[data-browser-only]")) node.hidden = true;
   document.documentElement.dataset.edition = "desktop";
 }

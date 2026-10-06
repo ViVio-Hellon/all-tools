@@ -17,6 +17,8 @@
   </div>
   <nav class="bigtabs" id="bigtabs" role="tablist" aria-label="ツール"></nav>
   <div class="bar__end">
+    <button type="button" class="help" id="help" aria-controls="manual" aria-expanded="false"
+            title="いま開いているタブの操作説明書(F1)">説明書</button>
     <button type="button" class="who" id="who" title="ログインID @ PC名(押すと写します)">{{ identity.label() }}</button>
     <button type="button" class="quit" id="quit">終了</button>
   </div>
@@ -28,6 +30,17 @@
   </section>
 
   {% include "settings.html" %}
+
+  <!-- 操作説明書(いまのタブの上に重ねる) -->
+  <section class="manual" id="manual" hidden aria-label="操作説明書">
+    <div class="manual__bar">
+      <b>操作説明書</b>
+      <button type="button" class="btn btn--small" id="manual-index">説明書の一覧</button>
+      <span class="manual__hint">F1 でも開け閉めできます</span>
+      <button type="button" class="btn btn--primary btn--small" id="manual-close">閉じる(Esc)</button>
+    </div>
+    <iframe id="manual-frame" title="操作説明書"></iframe>
+  </section>
 </main>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

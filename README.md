@@ -29,6 +29,12 @@
 - **F5 / Ctrl+R はいま出しているタブだけ** を読み直します(ほかのタブの打ちかけは消えません)。
   **Alt+1〜9** で大きなタブを切り替えます
 - 1つのツールが止まったら、そのタブにだけ理由と「もう一度開く」が出ます
+- 大きなタブには **各ツールの版**(`VER4.22.0` など。各ツールの `config\app.json`)が出ます。
+  窓が狭いときは版を隠し、タブに指を置くと出ます
+- 右上の **「説明書」** (または **F1**。ツールの画面の中で押しても同じ)で、**いま開いているタブの
+  操作説明書** を窓の中に重ねて開きます(画面の写真と番号の札入り。**Esc** で閉じる)。
+  大設定のタブでは統合ツール・大設定の説明書が出ます。説明書は一式の中の
+  `portal\static\manual\`(HTML と写真)にあり、社外のサイトにはつなぎません
 
 ### ブラウザ版とデスクトップ版は同時に動きません(どちらを後から開いても止まります)
 
@@ -82,6 +88,7 @@
 ├─ process_manager.py      ブラウザ版を止める(stop.bat)
 ├─ config\                 app.json(版・名前)・tools.json(載せるツール。並び = 大きなタブの並び)
 ├─ portal\                 入口: 大きなタブの画面・大設定・タブ表示権限・配布設定(Flask)
+│   └─ static\manual\       操作説明書(index・portal・各ツールの HTML と img\ の画面写真)
 ├─ tools\                  4つのツール(それぞれ今までどおりの一式。単体のブラウザ版も動く)
 │   ├─ nippou\ kanban\ calendar\ inspection\
 ├─ src-tauri\              デスクトップ版の外枠(Rust/Tauri)
@@ -128,7 +135,7 @@
 ## 開発
 
 ```
-python -m unittest discover -s tests -t .                       # 入口(89 件)
+python -m unittest discover -s tests -t .                       # 入口(95 件)
 cd tools\nippou     && python -m unittest discover -s tests       # 日報(3,789 件)
 cd tools\kanban     && python -m unittest discover -s tests       # 看板(866 件)
 cd tools\calendar   && python -m unittest discover -s tests -t .  # カレンダー(720 件)
@@ -138,3 +145,7 @@ python scripts\desktop_smoke.py --exe src-tauri\target\release\AllTools.exe   # 
 ```
 
 GitHub Actions(`.github/workflows/desktop-windows.yml`)が Windows の上で、上の全部と exe の起動確認を流します。
+
+**ツールの版を上げたら、説明書(`portal\static\manual\<ツール>.html`)の `VER…` と中身も見直します。**
+版が食い違うと入口の試験(`tests\test_manuals.py`)が落ちます。この試験は、説明書が全部あって互いに
+辿れること・社外のサイトのものを使っていないこと・写真が手元にあって重すぎないことも見ます。

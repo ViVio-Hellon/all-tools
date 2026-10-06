@@ -70,7 +70,7 @@ class Tool:
         return {fold(w) for w in (self.id, self.title, self.name, *self.aliases) if w}
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "title": self.title, "name": self.name}
+        return {"id": self.id, "title": self.title, "name": self.name, "version": self.version()}
 
 
 def fold(text: str) -> str:

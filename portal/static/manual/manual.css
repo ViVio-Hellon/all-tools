@@ -1,0 +1,175 @@
+/*
+  manual.css — 操作説明書(portal/static/manual/*.html)の共通の見た目
+
+  **外のサイトの部品(フォント・台本)を使わない。** ラインPCは社外に出られないことが
+  あり、説明書は統合ツールの中(大きなタブの「説明書」)で開く。フォントは Windows に
+  入っているもの。明るい/暗いの両方に合わせる(統合ツールの画面と同じ考え方)。
+
+  画面写真の上に番号の札を置くときは:
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-board.jpg" alt="…">
+        <span class="pin" style="left:12%;top:8%">1</span></div>
+      <figcaption>…</figcaption>
+    </figure>
+    <ol class="pins"><li>…(1 の説明)</li></ol>
+*/
+:root {
+  --ground: #f3f5f6;
+  --surface: #ffffff;
+  --ink: #17252e;
+  --muted: #586771;
+  --rule: #d6dee2;
+  --navy: #153247;
+  --on-navy: #f1f6f8;
+  --accent: #1f6f8b;
+  --pin: #d1361b;
+  --pin-ink: #ffffff;
+  --tip-bg: #e6f2f6;
+  --tip-line: #1f6f8b;
+  --warn-bg: #fbf0dc;
+  --warn-line: #b7791f;
+  --ng-bg: #fbe9e7;
+  --ng-line: #c0392b;
+  --code-bg: #eef2f4;
+  --key-bg: #ffffff;
+  --tool: var(--accent);
+  --tool-nippou: #265aa0;
+  --tool-kanban: #b45309;
+  --tool-calendar: #2d6940;
+  --tool-inspection: #923d23;
+  --tool-portal: #5b6770;
+  --font: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-head: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --mono: "BIZ UDGothic", "Consolas", "MS Gothic", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10181d; --surface: #182630; --ink: #e3eaee; --muted: #9eadb6; --rule: #2c3d48;
+    --navy: #0f2534; --on-navy: #e8f1f5; --accent: #5fb0cf; --pin: #ff6b4a; --pin-ink: #10181d;
+    --tip-bg: #15303b; --tip-line: #5fb0cf; --warn-bg: #352a14; --warn-line: #e0b050;
+    --ng-bg: #3a1d1a; --ng-line: #ff8a7a; --code-bg: #0f1b22; --key-bg: #22323d;
+    --tool-nippou: #79a3e6; --tool-kanban: #e6913f; --tool-calendar: #6fbb88; --tool-inspection: #dc8566;
+    --tool-portal: #a3b0b8;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10181d; --surface: #182630; --ink: #e3eaee; --muted: #9eadb6; --rule: #2c3d48;
+  --navy: #0f2534; --on-navy: #e8f1f5; --accent: #5fb0cf; --pin: #ff6b4a; --pin-ink: #10181d;
+  --tip-bg: #15303b; --tip-line: #5fb0cf; --warn-bg: #352a14; --warn-line: #e0b050;
+  --ng-bg: #3a1d1a; --ng-line: #ff8a7a; --code-bg: #0f1b22; --key-bg: #22323d;
+  --tool-nippou: #79a3e6; --tool-kanban: #e6913f; --tool-calendar: #6fbb88; --tool-inspection: #dc8566;
+  --tool-portal: #a3b0b8;
+  color-scheme: dark;
+}
+body.t-nippou { --tool: var(--tool-nippou); }
+body.t-kanban { --tool: var(--tool-kanban); }
+body.t-calendar { --tool: var(--tool-calendar); }
+body.t-inspection { --tool: var(--tool-inspection); }
+body.t-portal { --tool: var(--tool-portal); }
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--ground); color: var(--ink); font-family: var(--font);
+  font-size: 16px; line-height: 1.8; padding: 0 16px 64px;
+}
+.page { max-width: 1040px; margin: 0 auto; display: grid; gap: 32px; }
+h1, h2, h3 { font-family: var(--font-head); line-height: 1.4; text-wrap: balance; margin: 0; }
+h1 { font-size: 30px; }
+h2 { font-size: 22px; padding-bottom: 6px; border-bottom: 3px solid var(--tool); scroll-margin-top: 64px; }
+h3 { font-size: 18px; margin-top: 8px; scroll-margin-top: 64px; }
+p { margin: 0; max-width: 72ch; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+code { font-family: var(--mono); background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: .92em; overflow-wrap: anywhere; }
+kbd { font-family: var(--mono); font-size: .88em; background: var(--key-bg); border: 1px solid var(--rule);
+  border-bottom-width: 3px; border-radius: 5px; padding: 0 6px; white-space: nowrap; }
+.btnname { display: inline-block; font-weight: 700; border: 1px solid var(--rule); background: var(--surface);
+  border-radius: 6px; padding: 0 8px; line-height: 1.6; white-space: nowrap; }
+
+/* ---- 上の帯(どの説明書かと、ほかの説明書へ) ---- */
+.top { position: sticky; top: 0; z-index: 5; background: var(--navy); color: var(--on-navy);
+  margin: 0 -16px; padding: 8px 16px; }
+.top__in { max-width: 1040px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.top__brand { font-weight: 700; margin-right: 8px; }
+.top nav { display: flex; flex-wrap: wrap; gap: 4px; }
+.top nav a { color: var(--on-navy); text-decoration: none; padding: 2px 10px; border-radius: 999px; font-size: 14px;
+  border: 1px solid transparent; }
+.top nav a:hover { border-color: color-mix(in srgb, var(--on-navy) 40%, transparent); }
+.top nav a[aria-current="page"] { background: var(--on-navy); color: var(--navy); font-weight: 700; }
+
+/* ---- 頭 ---- */
+.head { display: grid; gap: 10px; padding-top: 24px; }
+.head__mark { width: 52px; height: 52px; border-radius: 12px; background: var(--tool); color: #fff;
+  display: grid; place-items: center; font-weight: 700; font-size: 26px; }
+.head__row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ver { font-family: var(--mono); font-size: 14px; font-weight: 700; border: 1px solid var(--rule);
+  background: var(--surface); border-radius: 999px; padding: 1px 10px; }
+.lead { font-size: 17px; color: var(--muted); }
+
+/* ---- 目次 ---- */
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; }
+.toc h2 { border: 0; font-size: 16px; padding: 0; margin-bottom: 6px; }
+.toc ol { margin: 0; padding-left: 1.4em; columns: 2 260px; column-gap: 32px; }
+.toc li { break-inside: avoid; }
+
+section { display: grid; gap: 14px; min-width: 0; }
+
+/* ---- 画面写真と番号の札 ---- */
+.shot { margin: 0; display: grid; gap: 8px; min-width: 0; }
+.shot__img { position: relative; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+  background: var(--surface); }
+.shot__img img { display: block; width: 100%; height: auto; }
+.shot figcaption { font-size: 14px; color: var(--muted); }
+.pin { position: absolute; transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%;
+  background: var(--pin); color: var(--pin-ink); font-weight: 700; font-size: 16px; line-height: 30px;
+  text-align: center; box-shadow: 0 0 0 3px rgba(255,255,255,.85), 0 2px 6px rgba(0,0,0,.35); }
+.box { position: absolute; border: 3px solid var(--pin); border-radius: 6px; box-shadow: 0 0 0 2px rgba(255,255,255,.7); }
+ol.pins { margin: 0; padding: 0; list-style: none; counter-reset: pin; display: grid; gap: 6px; }
+ol.pins > li { counter-increment: pin; position: relative; padding-left: 38px; min-height: 28px; }
+ol.pins > li::before { content: counter(pin); position: absolute; left: 0; top: 2px; width: 26px; height: 26px;
+  border-radius: 50%; background: var(--pin); color: var(--pin-ink); font-weight: 700; display: grid;
+  place-items: center; font-size: 14px; }
+
+/* ---- 手順 ---- */
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
+ol.steps > li { counter-increment: step; position: relative; padding-left: 50px; min-height: 36px; }
+ol.steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 34px; height: 34px;
+  border-radius: 8px; background: var(--tool); color: #fff; font-weight: 700; display: grid; place-items: center; }
+ol.steps > li > div { min-width: 0; display: grid; gap: 8px; }
+
+/* ---- 知らせの箱 ---- */
+.tip, .warn, .ng { border-radius: 8px; padding: 10px 14px; border-left: 5px solid; font-size: 15px; }
+.tip { background: var(--tip-bg); border-color: var(--tip-line); }
+.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.ng { background: var(--ng-bg); border-color: var(--ng-line); }
+.tip b:first-child, .warn b:first-child, .ng b:first-child { margin-right: 6px; }
+
+/* ---- 表 ---- */
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: color-mix(in srgb, var(--ground) 70%, var(--surface)); font-size: 14px; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+
+/* ---- 2つ並べ(狭いと1列) ---- */
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+
+/* ---- 説明書の一覧 ---- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.card { display: grid; grid-template-columns: 48px 1fr; gap: 4px 14px; align-items: center; text-decoration: none;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px; }
+.card:hover { border-color: var(--accent); }
+.card .head__mark { width: 48px; height: 48px; font-size: 22px; grid-row: span 2; }
+.card b { font-size: 18px; }
+.card small { color: var(--muted); grid-column: 2; }
+
+.foot { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 12px; }
+
+@media print {
+  .top { display: none; }
+  body { background: #fff; padding: 0; }
+  .shot__img { break-inside: avoid; }
+}

@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点検表 選択・印刷 操作説明書</title>
+<link rel="stylesheet" href="manual.css">
+<style>
+  /* 小さい切り抜きの写真は、横いっぱいに引き伸ばさない */
+  .shot--s { max-width: 520px; }
+  .shot--m { max-width: 700px; }
+  .glyph { display: inline-block; min-width: 1.6em; text-align: center; font-weight: 700;
+    border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+</style>
+</head>
+<body class="t-inspection">
+<header class="top"><div class="top__in">
+  <span class="top__brand">統合ツール 操作説明書</span>
+  <nav aria-label="説明書">
+    <a href="index.html">一覧</a><a href="portal.html">統合ツール・大設定</a><a href="nippou.html">日報</a><a href="kanban.html">看板</a><a href="calendar.html">カレンダー</a><a href="inspection.html" aria-current="page">点検表</a>
+  </nav></div></header>
+<main class="page">
+  <div class="head">
+    <div class="head__row"><span class="head__mark">点</span><h1>点検表 選択・印刷</h1><span class="ver">VER2.0.0</span></div>
+    <p class="lead">共有フォルダにある Excel の点検表を、画面で探して選び、部数を決めて印刷します。印刷の前に、中身をプレビューで確かめられます。</p>
+  </div>
+
+  <nav class="toc" aria-label="目次"><h2>目次</h2><ol>
+    <li><a href="#about">このツールでできること</a></li>
+    <li><a href="#screen">画面の見かた</a></li>
+    <li><a href="#daily">毎日の操作(探す → 選ぶ → 部数 → プレビュー → 印刷)</a></li>
+    <li><a href="#more">そのほかの操作</a></li>
+    <li><a href="#settings">設定(班長・管理者)</a></li>
+    <li><a href="#trouble">困ったとき</a></li>
+    <li><a href="#quit">終わるとき</a></li>
+  </ol></nav>
+
+  <!-- ============================================================ -->
+  <section id="about">
+    <h2>1. このツールでできること</h2>
+    <ul>
+      <li>点検表フォルダの中の Excel の点検表が、<b>カテゴリー(例: 梱包・押出・品質)</b>と<b>サブカテゴリー(例: 日常点検・月次点検)</b>に分かれて一覧で出ます。</li>
+      <li>点検表を押して選びます。いくつでも選べます。<b>選んだ順番に印刷されます。</b></li>
+      <li>印刷部数(1〜100 部)を決めて、まとめて印刷します。印刷の前に<b>プレビュー</b>で中身を見られます。</li>
+      <li>印刷は Windows の<b>ふだん使うプリンター(既定のプリンター)</b>に出ます。用紙・余白・印刷範囲は、点検表の Excel に決めてあるとおりです。</li>
+    </ul>
+    <p>開きかた: 統合ツールの上の大きなタブの<span class="btnname">点検表</span>を押します。</p>
+    <div class="tip"><b>こつ</b>この説明書は、統合ツールの右上の<span class="btnname">説明書</span>(または <kbd>F1</kbd>)で、いつでも開けます。</div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="screen">
+    <h2>2. 画面の見かた</h2>
+    <p>左が<b>点検表の一覧</b>、右が<b>選んだ点検表と印刷のボタン</b>です。上の帯に、いまの様子とボタンがあります。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/inspection-overview.jpg" loading="lazy" width="1100" height="688"
+        alt="点検表 選択・印刷の画面全体。左に梱包カテゴリーの日常点検の一覧、右に選択中の4件と印刷部数・プレビュー・印刷のボタン">
+        <span class="pin" style="left:23.8%;top:3.5%">1</span>
+        <span class="pin" style="left:77%;top:7.75%">2</span>
+        <span class="pin" style="left:83.75%;top:7.75%">3</span>
+        <span class="pin" style="left:89.8%;top:7.75%">4</span>
+        <span class="pin" style="left:95.8%;top:7.75%">5</span>
+        <span class="pin" style="left:32.8%;top:13.75%">6</span>
+        <span class="pin" style="left:20.2%;top:21.5%">7</span>
+        <span class="pin" style="left:44.9%;top:21.6%">8</span>
+        <span class="pin" style="left:60.5%;top:27.5%">9</span>
+        <span class="pin" style="left:21.1%;top:35.25%">10</span>
+        <span class="pin" style="left:68.75%;top:15%">11</span>
+        <span class="pin" style="left:68.75%;top:51%">12</span>
+        <span class="pin" style="left:68.75%;top:58.5%">13</span>
+      </div>
+      <figcaption>点検表の画面(写真の点検表の名前とフォルダの場所は例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>いまの様子</b> … 選択(選んだ件数)・検出(見つかった点検表の数)・更新(一覧を読んだ時刻)・点検表フォルダ(読んでいる場所)。</li>
+      <li><span class="btnname">再読込</span> … 点検表フォルダを読み直します。点検表を足した・消したときに押します。</li>
+      <li><span class="btnname">設定</span> … 点検表フォルダなどの設定です(<a href="#settings">5. 設定</a>)。ふだんは触りません。</li>
+      <li><span class="btnname">ダーク</span>/<span class="btnname">ライト</span> … 画面の明るさを切り替えます。ボタンには<b>切り替え先</b>が出ます(明るい画面のときは「ダーク」)。</li>
+      <li><span class="btnname">終了</span> … 統合ツールを終わります(<a href="#quit">7. 終わるとき</a>)。</li>
+      <li><b>カテゴリーのタブ</b> … 押すとそのカテゴリーに切り替わります。数字はそのカテゴリーの点検表の数。選んでいると「選んだ数/全部の数」になります。</li>
+      <li><b>サブカテゴリー</b> … 押すと、その中の点検表が右に並びます。</li>
+      <li><b>検索の欄</b> … 名前の一部を入れると、<b>全部のカテゴリー</b>から探します。</li>
+      <li><b>まとめて選ぶボタン</b> … <span class="btnname">表示中を全選択</span><span class="btnname">表示中を全解除</span><span class="btnname">カテゴリ全選択</span><span class="btnname">カテゴリ全解除</span>。</li>
+      <li><b>点検表の一覧</b> … 押すとチェックが付き、右上に<b>選んだ順の番号</b>が出ます。もう一度押すと外れます。</li>
+      <li><b>選択中</b> … 選んだ点検表が<b>印刷する順番</b>に並びます。順番の入れ替えもここでします。</li>
+      <li><b>印刷部数</b> … 1 つの点検表を何部印刷するか(1〜100 部)。</li>
+      <li><span class="btnname">プレビュー</span>と<span class="btnname">印刷</span> … その下に、印刷先のプリンターの名前が出ます。</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="daily">
+    <h2>3. 毎日の操作</h2>
+    <p>流れは「<b>探す → 選ぶ → 部数 → プレビュー → 印刷</b>」です。</p>
+
+    <h3>3-1. カテゴリーから点検表を探す</h3>
+    <ol class="steps">
+      <li><div>
+        <p>統合ツールの大きなタブの<span class="btnname">点検表</span>を押します。</p>
+        <p>はじめは「点検表フォルダを確認しています」と出ることがあります。少し待つと一覧が出ます。</p>
+      </div></li>
+      <li><div>
+        <p>上の<b>カテゴリーのタブ</b>(①)を押します。次に左の<b>サブカテゴリー</b>(②)を押します。</p>
+        <p>右に、その中の点検表が並びます。見出し(③)に「カテゴリー &gt; サブカテゴリー」と件数が出ます。</p>
+        <figure class="shot shot--m">
+          <div class="shot__img"><img src="img/inspection-category.jpg" loading="lazy" width="846" height="380"
+            alt="カテゴリーのタブで梱包を、左のサブカテゴリーで日常点検を選んだところ。右に日常点検の点検表が5件並んでいる">
+            <span class="pin" style="left:47.9%;top:10.5%">1</span>
+            <span class="pin" style="left:29%;top:26.8%">2</span>
+            <span class="pin" style="left:50.8%;top:27.4%">3</span>
+          </div>
+          <figcaption>「梱包」のタブ → 「日常点検」を押したところ</figcaption>
+        </figure>
+      </div></li>
+    </ol>
+
+    <h3>3-2. 点検表を選ぶ(選んだ順に印刷されます)</h3>
+    <ol class="steps">
+      <li><div>
+        <p>印刷したい点検表を、<b>印刷したい順に</b>押します。</p>
+        <p>押した点検表にはチェックが付き、右上に<b>番号(1・2・3…)</b>が出ます(①)。右の<b>選択中</b>(②)にも同じ順で並びます。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/inspection-select.jpg" loading="lazy" width="1100" height="688"
+            alt="フォークリフト始業点検、台車点検、コンベア日常点検の順に3件を選んだ画面。一覧の各点検表の右上に1・2・3の番号が付き、右の選択中に同じ順で並んでいる">
+            <span class="box" style="left:43.6%;top:31.75%;width:20.9%;height:7%"></span>
+            <span class="pin" style="left:66.4%;top:35.25%">1</span>
+            <span class="pin" style="left:68.75%;top:21.5%">2</span>
+            <span class="pin" style="left:23.8%;top:3.5%">3</span>
+            <span class="pin" style="left:32.8%;top:13.75%">4</span>
+          </div>
+          <figcaption>フォークリフト始業点検 → 台車点検 → コンベア日常点検 の順に押したところ</figcaption>
+        </figure>
+        <ol class="pins">
+          <li>選んだ点検表。右上の番号が<b>印刷する順番</b>です。</li>
+          <li>選択中の一覧。上から順に印刷します。</li>
+          <li>上の帯の「選択」にも件数が出ます。</li>
+          <li>タブとサブカテゴリーの数が「3/10」「3/5」のように変わります(10 件のうち 3 件を選んでいる)。</li>
+        </ol>
+        <div class="tip"><b>こつ</b>まちがえて押したときは、もう一度押すと外れます。</div>
+      </div></li>
+      <li><div>
+        <p>ほかのカテゴリーの点検表も、続けて選べます。タブを切り替えても、選んだものは残ります。</p>
+      </div></li>
+    </ol>
+
+    <h3>3-3. 名前で探す(検索)</h3>
+    <ol class="steps">
+      <li><div>
+        <p>右上の<b>検索の欄</b>(①)に、点検表の名前の一部を入れます(例: 「消火器」)。</p>
+        <p><b>全部のカテゴリー</b>から探して、見つかったものが出ます。上に「カテゴリー &gt; サブカテゴリー」(②)が出るので、どこにあるかも分かります。</p>
+      </div></li>
+      <li><div>
+        <p>出てきた点検表(③)を押して選びます。番号は続きの番号(この例では 4)になります。</p>
+        <figure class="shot shot--m">
+          <div class="shot__img"><img src="img/inspection-search.jpg" loading="lazy" width="846" height="300"
+            alt="検索の欄に消火器と入れたところ。検索結果に梱包の月次点検の消火器点検が1件出て、選んで4の番号が付いている">
+            <span class="pin" style="left:66.2%;top:34.3%">1</span>
+            <span class="pin" style="left:44.9%;top:67%">2</span>
+            <span class="pin" style="left:65%;top:82%">3</span>
+          </div>
+          <figcaption>「消火器」で探して、消火器点検を選んだところ</figcaption>
+        </figure>
+      </div></li>
+      <li><div>
+        <p>探し終わったら、検索の欄の文字を消します(<kbd>Esc</kbd> キーでも消えます)。もとの一覧にもどります。</p>
+      </div></li>
+    </ol>
+
+    <h3>3-4. 印刷の順番を直す・選択を外す</h3>
+    <p>右の<b>選択中</b>で、1 件ずつ操作できます。</p>
+    <div class="two">
+      <figure class="shot shot--s">
+        <div class="shot__img"><img src="img/inspection-order.jpg" loading="lazy" width="726" height="548"
+          alt="選択中の4件。各行の右にプレビュー・上へ・下へ・選択を解除の小さなボタンが並び、上にすべて解除のボタンがある">
+          <span class="pin" style="left:68.8%;top:11.3%">1</span>
+          <span class="box" style="left:56.5%;top:22.2%;width:39.1%;height:73.9%"></span>
+          <span class="pin" style="left:52.3%;top:86.9%">2</span>
+        </div>
+        <figcaption>選択中の一覧</figcaption>
+      </figure>
+      <div>
+        <ol class="pins">
+          <li><span class="btnname">すべて解除</span> … 選んだものを全部外します。</li>
+          <li>各行の右の小さなボタン:</li>
+        </ol>
+        <div class="tablewrap"><table>
+          <thead><tr><th>ボタン</th><th>すること</th></tr></thead>
+          <tbody>
+            <tr><td><span class="glyph">◧</span></td><td>その点検表のプレビューを開く</td></tr>
+            <tr><td><span class="glyph">↑</span></td><td>印刷の順番を 1 つ上げる</td></tr>
+            <tr><td><span class="glyph">↓</span></td><td>印刷の順番を 1 つ下げる</td></tr>
+            <tr><td><span class="glyph">×</span></td><td>その点検表の選択を外す</td></tr>
+          </tbody>
+        </table></div>
+        <p>いちばん上の行の ↑ と、いちばん下の行の ↓ は押せません(薄く出ます)。</p>
+      </div>
+    </div>
+
+    <h3>3-5. 部数を決める</h3>
+    <div class="two">
+      <figure class="shot shot--s">
+        <div class="shot__img"><img src="img/inspection-copies.jpg" loading="lazy" width="726" height="318"
+          alt="印刷部数の欄が2になっている。下にプレビューと印刷のボタン、その下にプリンターの名前">
+          <span class="box" style="left:21.2%;top:6.3%;width:47.1%;height:27.7%"></span>
+          <span class="pin" style="left:90.9%;top:20.1%">1</span>
+          <span class="pin" style="left:8.3%;top:57.9%">2</span>
+          <span class="pin" style="left:55.1%;top:57.9%">3</span>
+          <span class="pin" style="left:52.3%;top:88.7%">4</span>
+        </div>
+        <figcaption>部数を 2 にしたところ</figcaption>
+      </figure>
+      <ol class="pins">
+        <li><b>印刷部数</b> … <span class="btnname">＋</span><span class="btnname">−</span>で 1 ずつ変わります。欄に数字を直接入れてもかまいません(1〜100)。<b>選んだ点検表のどれも、この部数ずつ</b>印刷します。</li>
+        <li><span class="btnname">プレビュー</span> … 印刷の前に中身を見ます(次の 3-6)。</li>
+        <li><span class="btnname">印刷</span> … 印刷を始めます(3-7)。</li>
+        <li><b>プリンター</b> … 印刷先です。Windows の既定のプリンターに出ます。</li>
+      </ol>
+    </div>
+    <div class="warn"><b>気をつけること</b>点検表を 1 件も選んでいないときは、<span class="btnname">プレビュー</span>と<span class="btnname">印刷</span>は押せません。</div>
+
+    <h3>3-6. プレビューで確かめる</h3>
+    <ol class="steps">
+      <li><div>
+        <p><span class="btnname">プレビュー</span>を押します。選んだ点検表の 1 件目が出ます。</p>
+        <p>はじめて見る点検表は、Excel で絵を作るので<b>数秒〜十数秒</b>かかります。2 回目からはすぐに出ます。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/inspection-preview.jpg" loading="lazy" width="1100" height="688"
+            alt="プレビューの画面。左に選んだ4件の一覧、真ん中にフォークリフト始業点検の点検表の絵、右上に全体表示・作り直す・閉じるのボタン">
+            <span class="pin" style="left:22.3%;top:15.6%">1</span>
+            <span class="pin" style="left:42.2%;top:17.5%">2</span>
+            <span class="pin" style="left:82.7%;top:12.5%">3</span>
+            <span class="pin" style="left:88.9%;top:12.5%">4</span>
+            <span class="pin" style="left:94.7%;top:12.5%">5</span>
+            <span class="pin" style="left:31.6%;top:93.9%">6</span>
+            <span class="pin" style="left:82%;top:93.9%">7</span>
+          </div>
+          <figcaption>プレビュー(写真は練習用の見本の絵です。本当の画面では点検表の Excel の中身が出ます)</figcaption>
+        </figure>
+        <ol class="pins">
+          <li>選んだ点検表の一覧。押すと、その点検表に切り替わります。</li>
+          <li>点検表の絵。押すと「全体表示」と「実寸表示(大きく)」が切り替わります。</li>
+          <li><span class="btnname">全体表示</span> … 押すと<span class="btnname">実寸表示</span>になり、細かいところを大きく見られます。もう一度押すと戻ります。</li>
+          <li><span class="btnname">作り直す</span> … Excel から絵を作り直します。点検表の Excel を直したのに古い絵が出るときに押します。</li>
+          <li><span class="btnname">閉じる</span> … プレビューを閉じて、もとの画面に戻ります。</li>
+          <li>いま出している点検表の名前と、シート名・範囲。</li>
+          <li><kbd>↑</kbd><kbd>↓</kbd> キーでも、前・次の点検表に切り替えられます。</li>
+        </ol>
+        <div class="tip"><b>こつ</b>プレビューは中身を確かめるためのものです。紙の大きさ・余白は、Excel の点検表に決めてあるとおりに印刷されます。</div>
+      </div></li>
+      <li><div><p>確かめたら<span class="btnname">閉じる</span>を押します。</p></div></li>
+    </ol>
+
+    <h3>3-7. 印刷する</h3>
+    <ol class="steps">
+      <li><div>
+        <p><span class="btnname">印刷</span>を押します。「印刷の確認」が出ます。</p>
+        <p>件数と部数を確かめて、<span class="btnname">印刷する</span>を押します。やめるときは<span class="btnname">キャンセル</span>。</p>
+        <figure class="shot shot--m">
+          <div class="shot__img"><img src="img/inspection-confirm.jpg" loading="lazy" width="600" height="220"
+            alt="印刷の確認。4件の点検表を2部ずつ印刷します。選んだ順番に印刷します。と出ていて、キャンセルと印刷するのボタンがある">
+            <span class="box" style="left:79.3%;top:64.5%;width:14.2%;height:20%"></span>
+          </div>
+          <figcaption>印刷の確認</figcaption>
+        </figure>
+        <div class="warn"><b>気をつけること</b>ふだんの会社のパソコンでは、この確認に<b>プリンターの名前</b>も出ます。ちがうプリンターになっていたら<span class="btnname">キャンセル</span>して、班長に知らせてください。</div>
+      </div></li>
+      <li><div>
+        <p>「印刷中...」の画面が出て、選んだ順に 1 件ずつ印刷します。</p>
+        <div class="two">
+          <figure class="shot">
+            <div class="shot__img"><img src="img/inspection-printing.jpg" loading="lazy" width="660" height="400"
+              alt="印刷中の画面。2 / 4、台車点検を印刷しています、と出ていて、1件目に済みの印、2件目に印刷中の印、右下に中止のボタン">
+              <span class="pin" style="left:22.7%;top:23.3%">1</span>
+              <span class="pin" style="left:3.3%;top:57.8%">2</span>
+              <span class="pin" style="left:89.7%;top:77.5%">3</span>
+            </div>
+            <figcaption>印刷中</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="shot__img"><img src="img/inspection-printed.jpg" loading="lazy" width="660" height="420"
+              alt="印刷完了の画面。4 / 4、印刷完了 4ファイル(2部ずつ)、4件すべてに済みの印、右下に閉じるのボタン"></div>
+            <figcaption>印刷完了</figcaption>
+          </figure>
+        </div>
+        <ol class="pins">
+          <li>何件目を印刷しているか(全部で何件か)。</li>
+          <li>1 件ずつの様子。<b>✓</b> 印刷できた/<b>●</b> 印刷している/<b>–</b> まだ/<b>✕</b> 印刷できなかった。</li>
+          <li><span class="btnname">中止</span> … 印刷を途中でやめます。<b>いま印刷している 1 件が終わってから</b>止まります。</li>
+        </ol>
+        <p>印刷中は、点検表を選び直したり、<span class="btnname">再読込</span>・<span class="btnname">設定</span>を押したりはできません。</p>
+      </div></li>
+      <li><div>
+        <p>「印刷完了」と出たら、プリンターから紙が出ているか確かめて、<span class="btnname">閉じる</span>を押します。</p>
+        <p>「印刷完了(エラーあり)」と出たときは、<a href="#trouble">6. 困ったとき</a>を見てください。</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="more">
+    <h2>4. そのほかの操作</h2>
+    <h3>まとめて選ぶ・外す</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th>ボタン</th><th>すること</th></tr></thead>
+      <tbody>
+        <tr><td><span class="btnname">表示中を全選択</span></td><td>いま一覧に出ている点検表(開いているサブカテゴリー、または検索で出たもの)を全部選ぶ。上から順に番号が付きます。</td></tr>
+        <tr><td><span class="btnname">表示中を全解除</span></td><td>いま一覧に出ている点検表の選択を全部外す。</td></tr>
+        <tr><td><span class="btnname">カテゴリ全選択</span></td><td>いまのカテゴリー(タブ)の中の点検表を、サブカテゴリーもふくめて全部選ぶ。</td></tr>
+        <tr><td><span class="btnname">カテゴリ全解除</span></td><td>いまのカテゴリーの中の選択を全部外す。</td></tr>
+        <tr><td><span class="btnname">すべて解除</span>(右の選択中)</td><td>選んだものを全部外す。</td></tr>
+      </tbody>
+    </table></div>
+    <p>検索しているあいだは、<span class="btnname">カテゴリ全選択</span>と<span class="btnname">カテゴリ全解除</span>は押せません。</p>
+
+    <h3>一覧を読み直す</h3>
+    <p>点検表フォルダに点検表を足した・消した・名前を変えたときは、上の帯の<span class="btnname">再読込</span>を押します。「一覧を読み直しました」と出て、一覧が新しくなります。</p>
+    <p>一覧から無くなった点検表を選んでいたときは、その選択は外れます(知らせが出ます)。</p>
+
+    <h3>画面の明るさを変える</h3>
+    <p>上の帯の<span class="btnname">ダーク</span>(暗くする)/<span class="btnname">ライト</span>(明るくする)を押します。選んだ明るさは、このパソコンで次に開いたときも同じです。</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="settings">
+    <h2>5. 設定(班長・管理者)</h2>
+    <p>上の帯の<span class="btnname">設定</span>を押すと開きます。<b>ライン作業者はふだん触りません。</b>中は 4 つの面に分かれています。終わったら右下の<span class="btnname">閉じる</span>を押します。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>面</th><th>だれが・いつ</th><th>中身</th></tr></thead>
+      <tbody>
+        <tr><td>点検表フォルダ</td><td>班長・管理者。点検表の置き場所が変わったとき</td><td>点検表が入っている親フォルダを決める。パスワードは要りません</td></tr>
+        <tr><td>管理者パスワード</td><td>管理者</td><td>配布設定を操作するときのパスワードを変える</td></tr>
+        <tr><td>配布設定</td><td>管理者。全ラインの設定をそろえるとき</td><td>このパソコンの設定を書き出し、ほかのラインのパソコンが次に開いたときに読み込む。<b>管理者パスワードが要ります</b></td></tr>
+        <tr><td>ログ</td><td>管理者。エラーの原因を調べるとき</td><td>問い合わせ番号で、そのときの記録を出す。ログの保存先を決める</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>点検表フォルダ</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/inspection-settings-folder.jpg" loading="lazy" width="1100" height="688"
+        alt="設定の点検表フォルダの面。点検表ルートフォルダの欄、参照のボタン、フォルダの一覧(NS1・品質・押出・梱包)、保存して読み直すと既定に戻すのボタン">
+        <span class="pin" style="left:20.2%;top:30.4%">1</span>
+        <span class="pin" style="left:79.4%;top:30.4%">2</span>
+        <span class="pin" style="left:20.2%;top:58.75%">3</span>
+        <span class="pin" style="left:20.2%;top:80.5%">4</span>
+        <span class="pin" style="left:41.4%;top:80.5%">5</span>
+      </div>
+      <figcaption>設定 → 点検表フォルダ(フォルダの場所は例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>点検表ルートフォルダ</b> … 点検表の親フォルダの場所。直接入れてもかまいません。</li>
+      <li><span class="btnname">参照…</span> … Windows の「フォルダーの選択」の窓で選べます。</li>
+      <li><b>フォルダの一覧</b> … 押すとそのフォルダに入り、上の欄もその場所になります。<span class="btnname">↑ 上へ</span>で 1 つ上へ、「ドライブ…」でドライブを選べます。</li>
+      <li><span class="btnname">保存して読み直す</span> … 決めたフォルダを保存し、一覧を読み直します。</li>
+      <li><span class="btnname">既定に戻す</span> … このパソコンで決めたフォルダをやめて、最初から決まっている場所に戻します(変えていないときは押せません)。</li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>親フォルダの中は「カテゴリー のフォルダ → サブカテゴリー のフォルダ → Excel の点検表」の形にします。点検表のファイル名は「<b>カテゴリー名_サブカテゴリー名_点検表の名前.xlsx</b>」(例: <code>梱包_日常点検_台車点検.xlsx</code>)にします。この形でないファイルは一覧に出ません。使える Excel は .xlsx・.xlsm・.xls です。</div>
+
+    <h3>管理者パスワード・配布設定</h3>
+    <p>配布設定は、1 台で決めた設定(点検表フォルダ・ログの保存先など)を、全ラインのパソコンにそろえるためのものです。</p>
+    <ol class="steps">
+      <li><div><p>1 台で「点検表フォルダ」などを決めます。</p></div></li>
+      <li><div><p><b>配布設定</b>の面で、入れる項目にチェックを付け、管理者パスワードを入れて<span class="btnname">配布設定を書き出す</span>を押します。</p></div></li>
+      <li><div><p>ほかのラインのパソコンは、<b>次に開いたとき</b>に読み込みます。ただし、そのパソコンで自分で決めてある項目は上書きしません。そろえたいパソコンでは<span class="btnname">配布設定を読み込み直す</span>を押します(管理者パスワードが要ります)。</p></div></li>
+    </ol>
+    <p>やめるときは<span class="btnname">配布設定を消す</span>。パスワードは<b>管理者パスワード</b>の面で、いまのパスワードと新しいパスワードを入れて<span class="btnname">パスワードを変える</span>を押すと変わります(4 文字以上)。</p>
+    <div class="ng"><b>してはいけないこと</b>管理者パスワードを、ライン作業者に教えたり、パソコンにはり付けたりしないでください。配布設定は 1 台の操作で全ラインの設定が変わります。</div>
+
+    <h3>ログ(問い合わせ番号で調べる)</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/inspection-settings-logs.jpg" loading="lazy" width="1100" height="688"
+        alt="設定のログの面。問い合わせ番号の欄に番号を入れて探すを押したところ。下になぜなぜの表が出ている">
+        <span class="pin" style="left:57%;top:15.5%">1</span>
+        <span class="pin" style="left:20.2%;top:33.9%">2</span>
+        <span class="pin" style="left:39.5%;top:33.9%">3</span>
+        <span class="pin" style="left:20.2%;top:56%">4</span>
+        <span class="pin" style="left:69.9%;top:42.75%">5</span>
+      </div>
+      <figcaption>設定 → ログ。問い合わせ番号で探したところ</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>ログ</b>の面を押します。</li>
+      <li>作業者から聞いた<b>問い合わせ番号</b>(例: <code>1006-1611-HQSQ</code>)を入れます。</li>
+      <li><span class="btnname">探す</span>を押します。</li>
+      <li><b>なぜなぜ</b> … 画面に出た文(現象)と、記録から分かったこと。下に「そのときの状況」「同じ番号の記録」「直前に起きていたこと」が続きます。</li>
+      <li><span class="btnname">文にして写す</span> … メールや Teams にはれる文にして写します。</li>
+    </ol>
+    <p>下にスクロールすると、「最近のエラー・断り(この端末・7日)」の一覧と、ログの保存先(共有フォルダにすると全ラインのログが 1 か所に集まります)があります。</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="trouble">
+    <h2>6. 困ったとき</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
+      <tbody>
+        <tr><td>「印刷完了(エラーあり)」と出た</td><td>✕ の付いた点検表は印刷されていません。<b>問い合わせ番号</b>を控えて(写真でもよい)、班長・管理者に伝えます。ほかの点検表は印刷できています(下の写真)。</td></tr>
+        <tr><td>プレビューに「表示できません」と出た</td><td>赤い文の下の<span class="btnname">もう一度</span>を押します。直らないときは、問い合わせ番号を控えて班長に伝えます。</td></tr>
+        <tr><td>「Excelが応答しませんでした」と出た</td><td>パスワード付きの点検表や、開くと確認が出る点検表かもしれません。班長に伝えて、点検表の Excel を見てもらいます。</td></tr>
+        <tr><td>「ほかの画面で印刷中です」と出た</td><td>先に始めた印刷が終わるまで待ちます。印刷は同時に 1 つだけです。</td></tr>
+        <tr><td>「一覧に見つからない点検表が ○ 件あります」と出た</td><td><span class="btnname">再読込</span>を押してから、選び直します。</td></tr>
+        <tr><td>「印刷部数は1～100の数値で入力してください。」と出た</td><td>印刷部数の欄に 1〜100 の数字を入れます。</td></tr>
+        <tr><td>あるはずの点検表が一覧に出ない</td><td>まず<span class="btnname">再読込</span>を押します。それでも出ないときは、一覧のいちばん下の「<b>命名規則に合わないため表示していないファイル</b>」を押して見ます(下の写真)。ファイル名の形がちがうので、班長に直してもらいます(<a href="#settings">5. 設定</a>の「気をつけること」)。</td></tr>
+        <tr><td>「点検表フォルダが見つかりません」と出た</td><td>共有フォルダにつながっていないかもしれません。少し待って<span class="btnname">再読込</span>。直らないときは班長に伝えます(設定 → 点検表フォルダ)。</td></tr>
+        <tr><td>上に赤い帯「バックエンドに接続できません」が出た</td><td>帯の<span class="btnname">再接続</span>を押します。直らないときは、統合ツールを右上の<span class="btnname">終了</span>で閉じて、開き直します。</td></tr>
+        <tr><td>上に「新しい版が置かれました」の帯が出た</td><td>印刷が終わったところで、統合ツールを右上の<span class="btnname">終了</span>で閉じて、開き直します。閉じなくても、いまの版のまま使えます。</td></tr>
+        <tr><td>まちがえて印刷を始めた</td><td>「印刷中...」の画面の<span class="btnname">中止</span>を押します。いま印刷している 1 件が終わると止まります。</td></tr>
+        <tr><td>画面が暗い</td><td>上の帯の<span class="btnname">ライト</span>を押します。</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="two">
+      <figure class="shot">
+        <div class="shot__img"><img src="img/inspection-print-error.jpg" loading="lazy" width="660" height="440"
+          alt="印刷完了(エラーあり)の画面。印刷完了 1ファイル、エラー 1ファイル、問い合わせ番号が出ていて、2件目に✕の印と印刷に失敗しました。の文">
+          <span class="pin" style="left:40.9%;top:47.7%">1</span>
+          <span class="pin" style="left:3.3%;top:66.6%">2</span>
+        </div>
+        <figcaption>印刷完了(エラーあり)。① 問い合わせ番号 ② 印刷できなかった点検表と理由</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot__img"><img src="img/inspection-unmatched.jpg" loading="lazy" width="846" height="430"
+          alt="品質の検査記録の一覧。下に、命名規則に合わないため表示していないファイル 1件 を開いたところ。旧様式_検査記録.xlsx が出ている">
+          <span class="pin" style="left:75.7%;top:76%">1</span>
+        </div>
+        <figcaption>① 押すと、名前の形がちがうので出ていないファイルが分かります</figcaption>
+      </figure>
+    </div>
+    <div class="tip"><b>こつ</b>問い合わせ番号は「月日-時分-4文字」です(例: <code>1006-1611-HQSQ</code>)。管理者は 設定 → <b>ログ</b> で、この番号から原因を調べられます(<a href="#settings">5. 設定</a>)。</div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="quit">
+    <h2>7. 終わるとき</h2>
+    <ol class="steps">
+      <li><div><p>印刷が終わっているか確かめます(「印刷中...」の画面が出ていないこと)。</p></div></li>
+      <li><div><p>統合ツールの右上の<span class="btnname">終了</span>を押します。点検表の画面の上の帯の<span class="btnname">終了</span>を押しても同じで、<b>統合ツール全体</b>が閉じます。</p></div></li>
+      <li><div><p>点検表の画面の<span class="btnname">終了</span>からは「統合ツールを終了しますか?(ほかのツールのタブもまとめて閉じます)」と出ます。<span class="btnname">終了する</span>を押します。やめるときは<span class="btnname">キャンセル</span>。</p></div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>印刷やプレビューの途中で終了を押すと、「印刷の途中です。中断して終了しますか?」のように聞かれます。ふつうは<span class="btnname">キャンセル</span>して、終わるのを待ちます。<span class="btnname">中断して終了</span>を押すと、いまの 1 件が終わったところで止めて閉じます。</div>
+  </section>
+
+  <p class="foot">この説明書は「点検表 選択・印刷」VER2.0.0 に合わせて作りました。統合ツールの右上の「説明書」ボタン(または F1)から開けます。画面写真は練習用の見本の点検表で撮ったもので、点検表の名前・フォルダの場所・問い合わせ番号は例です。</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日報管理ツール 操作説明書</title>
+<link rel="stylesheet" href="manual.css">
+<style>
+  /* 横長の切り抜き写真・窓の写真は、少し小さめに出す */
+  .shot--band .shot__img { max-width: 900px; }
+  .shot--modal .shot__img { max-width: 820px; }
+  ul.plain { margin: 0; padding-left: 1.3em; display: grid; gap: 4px; }
+</style>
+</head>
+<body class="t-nippou">
+<header class="top"><div class="top__in">
+  <span class="top__brand">統合ツール 操作説明書</span>
+  <nav aria-label="説明書">
+    <a href="index.html">一覧</a><a href="portal.html">統合ツール・大設定</a><a href="nippou.html" aria-current="page">日報</a><a href="kanban.html">看板</a><a href="calendar.html">カレンダー</a><a href="inspection.html">点検表</a>
+  </nav></div></header>
+<main class="page">
+  <div class="head">
+    <div class="head__row"><span class="head__mark">日</span><h1>日報管理ツール</h1><span class="ver">VER4.22.0</span></div>
+    <p class="lead">梱包の実績(梱包実績日報表)を、直ごとに画面で打ちます。打ったものはこのパソコンに残り、直の終わりに「共有へ保存」でみんなが見る日報管理へ渡します。紙・表・グラフでも見られます。</p>
+  </div>
+
+  <nav class="toc" aria-label="目次"><h2>目次</h2><ol>
+    <li><a href="#dekiru">このツールでできること</a></li>
+    <li><a href="#hiraku">開きかた</a></li>
+    <li><a href="#mikata">画面の見かた</a></li>
+    <li><a href="#mainichi">毎日の操作(直ひと回り)</a></li>
+    <li><a href="#hoka">そのほかの操作</a></li>
+    <li><a href="#settei">設定</a></li>
+    <li><a href="#komatta">困ったとき</a></li>
+    <li><a href="#owari">終わるとき</a></li>
+  </ol></nav>
+
+  <section id="dekiru">
+    <h2>1. このツールでできること</h2>
+    <ul class="plain">
+      <li><b>日報を打つ</b>: 直ごとに、作業者・ロット・作業時間・梱包数・停止を12行の表に打ちます。ロット番号を打つと、材・調質や寸法は自動で入ります。</li>
+      <li><b>保存する</b>: 打ったものは<b>このパソコン</b>に自動で残ります。直の終わりに<span class="btnname">共有へ保存</span>を押すと、みんなが見る日報管理へ渡ります。</li>
+      <li><b>見る・刷る</b>: 紙(日報表)・表(集計管理)・グラフ(集計・グラフ)で見られます。紙は要るときだけ刷ります。</li>
+      <li><b>計算する</b>: 梱包資材の重量(GW)と、VCフィルムの残り長さを計算できます。</li>
+    </ul>
+    <p class="tip"><b>こつ</b>保存は2つあります。<b>このパソコンへの保存</b>(打つたびに自動+<span class="btnname">保存(確定)</span>)と、<b>共有への保存</b>(直の終わりに1回)です。忘れやすいのは共有のほうです。</p>
+  </section>
+
+  <section id="hiraku">
+    <h2>2. 開きかた</h2>
+    <ol class="steps">
+      <li><div><p>統合ツールの大きなタブの<span class="btnname">日報</span>を押します。</p></div></li>
+      <li><div><p>少し待つと「日報入力」の画面が出ます(「…を起動しています」と出ているあいだは待ちます)。</p></div></li>
+      <li><div><p>画面の上の帯で、<b>ライン</b>がこのパソコンのライン(例: L-1)になっているか見ます。「未設定」なら日報は打てません。<a href="#komatta">困ったとき</a>を見てください。</p></div></li>
+    </ol>
+  </section>
+
+  <section id="mikata">
+    <h2>3. 画面の見かた</h2>
+    <p>写真は「日報入力」の画面です(2直の途中の例)。どの画面でも、上の帯と左の並びは同じです。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-screen.jpg" alt="日報入力の画面。上に報告日・ライン・直・ページの帯、左に8つの画面の並び、中央に直の進み具合の帯と作業者の欄がある" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:21.9%;top:6.6%">1</span>
+        <span class="pin" style="left:79.8%;top:3.4%">2</span>
+        <span class="pin" style="left:96%;top:6.6%">3</span>
+        <span class="pin" style="left:15.5%;top:17%">4</span>
+        <span class="pin" style="left:97.6%;top:16.3%">5</span>
+        <span class="pin" style="left:86%;top:38.4%">6</span>
+        <span class="pin" style="left:73.4%;top:56%">7</span>
+        <span class="pin" style="left:52.3%;top:76.6%">8</span>
+        <span class="pin" style="left:30%;top:86.8%">9</span>
+      </div>
+      <figcaption>日報入力の画面(上のほう)。表は下へ続きます。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>報告日・ライン・直・ページ</b>: いま打っている日報がどれかです。ラインが「未設定」のときは打てません。</li>
+      <li><b>ライト / ダーク</b>: 画面の明るさを変えます(好みで)。</li>
+      <li><span class="btnname">■ 終了</span>: ツールを閉じます(<a href="#owari">終わるとき</a>)。</li>
+      <li><b>左の並び</b>: 画面を切り替えます。上から作業の順です。<span class="btnname">設定・管理者</span>の下に赤い「共有へ未送信 ◯直ぶん」が出たら、共有へ保存していない直があります。</li>
+      <li><b>いまの直の知らせ</b>: 直すところや、直の終わりまでに埋めるもの(最後の時刻まで・休憩60分)が出ます。直の途中で「直の終わりまでに」と出るのは、ふつうのことです。</li>
+      <li><b>直の進み具合</b>: ①作業者 → ②日報を入力 → ③保存 → ④確かめる → ⑤共有へ保存。済んだものに ✓ が付きます。いまやることには<span class="btnname">ここへ</span>が付き、押すとその場所へ動きます。</li>
+      <li><b>作業者・昼稼働</b>: 作業者名と、<span class="btnname">作業者を選ぶ</span>・<span class="btnname">全停入力</span>・<span class="btnname">次ページ発行</span>のボタンです。</li>
+      <li><b>ページの札</b>: その日のページです。「共有済」は共有へ渡したページ、「未送信」はまだのページです。押すと読めます。</li>
+      <li><b>日報を入力</b>: この下に12行の表と、保存のボタンがあります(<a href="#rows">4-2</a>)。</li>
+    </ol>
+    <h3>左の並び(8つの画面)</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th>画面</th><th>何をするか</th><th>だれが・いつ</th></tr></thead>
+      <tbody>
+        <tr><td>1 日報入力</td><td>日報を打って、このパソコンに保存する。直の終わりに共有へ保存する</td><td>作業者・毎直</td></tr>
+        <tr><td>2 梱包資材重量計算</td><td>寸法から梱包資材の重量・GWを出す</td><td>要るとき</td></tr>
+        <tr><td>3 VC長さ計算</td><td>VCフィルムの残り長さ・枚数・早見表</td><td>要るとき</td></tr>
+        <tr><td>4 記録を見る</td><td>保存した日報の紙を見る・刷る。過去の直を呼び出す(管理者)</td><td>だれでも</td></tr>
+        <tr><td>5 集計・グラフ</td><td>重量・枚数・稼働率・停止をグラフで見る。集計CSVを出す</td><td>班長など</td></tr>
+        <tr><td>6 集計管理</td><td>日別・直別・ロット別の数字を表で見る</td><td>班長など</td></tr>
+        <tr><td>7 標準作業時間</td><td>同じ条件の作業時間を見る・比べる</td><td>班長など</td></tr>
+        <tr><td>8 設定・管理者</td><td>共有へ保存・置き場所・マスタ・このパソコンのラインなど</td><td>班長・管理者</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="mainichi">
+    <h2>4. 毎日の操作(直ひと回り)</h2>
+    <p>直の流れは「直の始め → 作業者を選ぶ → 行を打つ → 保存 → 直の終わりに確かめて共有へ保存 → (要るときだけ)印刷」です。画面の進み具合の帯(<a href="#mikata">3.</a> の 6)も同じ順に並んでいます。</p>
+
+    <h3 id="start">4-1. 直の始め ── 作業者を選ぶ</h3>
+    <figure class="shot shot--band">
+      <div class="shot__img"><img src="img/nippou-start.jpg" alt="直の始めの画面。「2026年10月6日 1直 まず作業者を選んでください」と大きな「作業者を選ぶ」ボタンがある" loading="lazy" width="1068" height="286">
+        <span class="pin" style="left:83%;top:43.7%">1</span>
+        <span class="pin" style="left:24.2%;top:80.8%">2</span>
+      </div>
+      <figcaption>直の始め。表はまだ打てません。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><span class="btnname">作業者を選ぶ</span>: 押すと名簿の窓が開きます。</li>
+      <li>進み具合の帯の「① 作業者」に<span class="btnname">ここへ</span>が付いています。</li>
+    </ol>
+    <figure class="shot shot--modal">
+      <div class="shot__img"><img src="img/nippou-staff.jpg" alt="「作業者を選ぶ」の窓。A班・B班・C班ごとに名前のチェックが並び、右下に「担当者欄へ反映」ボタンがある" loading="lazy" width="1100" height="283">
+        <span class="pin" style="left:9%;top:38.8%">1</span>
+        <span class="pin" style="left:13%;top:68.4%">2</span>
+        <span class="pin" style="left:94%;top:81.3%">3</span>
+      </div>
+      <figcaption>作業者を選ぶ窓(名前は例です)。</figcaption>
+    </figure>
+    <ol class="steps">
+      <li><div><p>班の名前(<b>A班</b> など。右の「全員」)を押すと、その班の全員にチェックが付きます(もう一度押すと外れます)。</p></div></li>
+      <li><div><p>または、名前を1人ずつ押してチェックを付けます。</p></div></li>
+      <li><div><p><span class="btnname">担当者欄へ反映</span>を押します。「作業者名(担当者)」の欄に名前が入り、表が打てるようになります。</p></div></li>
+      <li><div><p>昼稼働があるときは<b>昼稼働(有)</b>にチェックを付けます。</p></div></li>
+    </ol>
+    <p class="warn"><b>気をつけること</b>前の直が共有へ保存されていないと、作業者の前に赤い「前の直」の帯が出ます。<span class="btnname">共有へ保存する</span>を押します。前の直に直すところが残っていて押せないときは、<span class="btnname">直せないまま引き継ぐ</span>を押して、班長に知らせます。</p>
+
+    <h3 id="rows">4-2. 行を打つ</h3>
+    <p>上の行から順に、1ロット1行で打ちます。表は横に長いので、右の列(作業停止・実績合計)は表を横に動かして打ちます。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-rows.jpg" alt="12行の表に5行打ったところ。LOTNO・材・調質・製品寸法・検入枚数・作業時間・作業人数・合紙・梱包数量が入り、下に保存(確定)・この直をチェック・共有へ保存・印刷のボタンと直実績合計がある" loading="lazy" width="1068" height="746">
+        <span class="box" style="left:6.1%;top:9.9%;width:6.4%;height:50.6%"></span>
+        <span class="pin" style="left:6.1%;top:9.9%">1</span>
+        <span class="pin" style="left:12.5%;top:9.9%">2</span>
+        <span class="box" style="left:41.7%;top:9.9%;width:16.6%;height:50.6%"></span>
+        <span class="pin" style="left:41.7%;top:9.9%">3</span>
+        <span class="pin" style="left:68.4%;top:9.9%">4</span>
+        <span class="pin" style="left:11.4%;top:82.3%">5</span>
+        <span class="pin" style="left:32.3%;top:82.3%">6</span>
+        <span class="pin" style="left:49.3%;top:82.3%">7</span>
+        <span class="pin" style="left:96.3%;top:73.2%">8</span>
+      </div>
+      <figcaption>1直に5行打ったところ(表の左側と、保存のボタン)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>LOTNO</b>: ロット番号を7桁で打ちます。7桁そろうと、その行が自動で埋まります。</li>
+      <li><b>自動で入る欄</b>: 材・調質・製品寸法・検入枚数、それに合紙・ＶＣ種別・単重。etc の「外注」「EX」も自動で付くことがあります。違っていたら打ち直せます。</li>
+      <li><b>梱包作業時間</b>: 開始と終了の「時」「分」を2桁ずつ打ちます(例: <code>07</code> <code>00</code>)。終了を打つと、次の行の開始に同じ時刻が入ります。</li>
+      <li><b>作業人数・梱包数量</b>: 作業人数、個装単位 枚数、梱包単位 包数を打ちます。実績合計の枚数・重量は自動で出ます。</li>
+      <li><span class="btnname">保存(確定)</span>: このパソコンに保存します(<a href="#save">4-3</a>)。</li>
+      <li><span class="btnname">この直をチェック</span> → <span class="btnname">共有へ保存</span>: 直の終わりに1回押します(<a href="#end">4-4</a>)。</li>
+      <li><span class="btnname">印刷</span>: 紙が要るときだけ押します(<a href="#print">4-5</a>)。</li>
+      <li><b>直実績合計</b>: 枚数・重量は明細から出ます(直せません)。ﾛｯﾄ数・係数Lot数は手で打つラインもあります。</li>
+    </ol>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-stops.jpg" alt="表の右側。作業停止①②③の記号と時間(分)、実績合計の枚数・重量、灰色の作業時間(分)の列" loading="lazy" width="1068" height="200">
+        <span class="pin" style="left:40.1%;top:9%">1</span>
+        <span class="pin" style="left:80.5%;top:9%">2</span>
+        <span class="pin" style="left:96.5%;top:9%">3</span>
+      </div>
+      <figcaption>表の右側(作業停止と実績合計)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>作業停止①②③</b>: 「記号」を一覧から選び、「時間(分)」を打ちます。停止は<b>5分以上</b>のときに書きます。休憩は<b>0 休憩食事</b>で、直の中で合わせて<b>60分</b>要ります。</li>
+      <li><b>実績合計</b>: 枚数(個装単位 枚数 × 包数)と重量。自動で出ます。</li>
+      <li><b>作業時間(分)・単重</b>(灰色): 計算の結果です。紙には載りません。</li>
+    </ol>
+    <h3>打つときのこつ</h3>
+    <ul class="plain">
+      <li><kbd>Enter</kbd> で次の欄へ進みます。</li>
+      <li>開始・終了の「時」か「分」を<b>ダブルクリック</b>すると、いまの時刻が入ります。</li>
+      <li>個装単位 枚数を<b>ダブルクリック</b>すると、上の行と同じ数が入ります。包数は空なら 1 です。</li>
+      <li>「◯行目の重量を ◯◯ に変更しますか？」と聞かれたら、ふつうは <span class="btnname">OK</span> を押します(枚数や包数を直したので、重量を出し直します)。量った重量を残したいときだけ<span class="btnname">キャンセル</span>。</li>
+      <li>停止の記号で<b>ヨ その他(理由を記載)</b>を選ぶと、「理由を書く」の窓が出ます。理由を打って<span class="btnname">理由欄へ入れる</span>を押します。</li>
+      <li>etc の欄は、表の上の<span class="btnname">ｽﾄｱ</span><span class="btnname">耳付</span><span class="btnname">外注</span><span class="btnname">EX</span><span class="btnname">反転</span><span class="btnname">ｽﾎﾟｯﾄ</span>を押して入れます(いま打っている行に付きます。もう一度押すと消えます)。</li>
+      <li>1つのロットに引当が2つ以上あると、「引当を選ぶ」の窓が出ます。正しい引当を選んで<span class="btnname">この引当で埋める</span>を押します。</li>
+      <li>行を空にするときは、行番号の横の <b>✕</b> を押し、<span class="btnname">空にする</span>を押します。</li>
+      <li>12行を使い切ったら<span class="btnname">次ページ発行</span>を押します。いまのページを保存して、2ページ目が出ます。前のページは表の下の「ページ」の欄で選ぶと直せます。</li>
+      <li>直のあいだ設備がずっと止まっていたときは<span class="btnname">全停入力</span>を使います(直に1回だけ)。</li>
+    </ul>
+
+    <h3 id="save">4-3. 保存 ── 自動保存と「保存(確定)」</h3>
+    <ul class="plain">
+      <li><b>自動保存</b>: 欄から離れるたびに、このパソコンへ自動で保存します(前の自動保存から1分たっていないときは見送ります。「前回の自動保存から◯秒しか経っていません」と出るのはこのためです)。</li>
+      <li><span class="btnname">保存(確定)</span>: 打っている途中で何度押してもかまいません。このパソコンに保存し、集計も作り直します。「保存しました」と出れば済みです。</li>
+    </ul>
+    <p class="warn"><b>気をつけること</b><span class="btnname">保存(確定)</span>は、間違いがあると保存しません(梱包数が検入枚数より多い・停止の記号が一覧に無い・開始と終了が同じ、など)。画面に出た行と欄を直して、もう一度押します。</p>
+    <p class="tip"><b>こつ</b>ここまでの保存は<b>このパソコンの中だけ</b>です。みんなが見る日報管理には、まだ渡っていません。</p>
+
+    <h3 id="end">4-4. 直の終わり ── 確かめて「共有へ保存」</h3>
+    <p>直の終わりが近づく(15分前ごろ)と、画面が「◯直 の実績」に切り替わります。この直の数字と、直すところが出ます。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-review.jpg" alt="暗い背景の「1直 の実績」画面。「1直 終了まで15分です」の帯、「直すところが2件あります」の赤い枠、直別の表、右に今月の推移のグラフ、右上に「直しに戻る」ボタン" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:44%;top:12.75%">1</span>
+        <span class="pin" style="left:44%;top:27%">2</span>
+        <span class="pin" style="left:95.2%;top:8%">3</span>
+        <span class="pin" style="left:54.7%;top:13.25%">4</span>
+      </div>
+      <figcaption>直の終わりの確認画面(この例では、まだ最後まで打っていないので直すところが2件出ています)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li>直の終わりまでの残り時間です。</li>
+      <li><b>直すところ</b>: このままでは共有へ保存できないものです。</li>
+      <li><span class="btnname">直しに戻る</span>: 日報入力へ戻ります。</li>
+      <li>今月の重量・枚数・稼働率の推移です(赤い点線は目標)。</li>
+    </ol>
+    <ol class="steps">
+      <li><div>
+        <p><span class="btnname">直しに戻る</span>を押して日報入力へ戻り、直の最後(1直なら 15:00)まで行を打ちます。休憩(0 休憩食事)が合わせて60分あるかも見ます。</p>
+        <figure class="shot shot--band">
+          <div class="shot__img"><img src="img/nippou-endcheck.jpg" alt="日報入力の上の知らせ。「直の終わりまでに」が2件(最終時間まで入力がない・休憩の入力がない)と、進み具合の帯の「4 確かめる 直すところが2件」" loading="lazy" width="1068" height="292">
+            <span class="pin" style="left:97.2%;top:26%">1</span>
+            <span class="pin" style="left:65.8%;top:80.8%">2</span>
+          </div>
+          <figcaption>まだ残っているもの(1)と、次にすること「確かめる」(2)。</figcaption>
+        </figure>
+      </div></li>
+      <li><div><p><span class="btnname">保存(確定)</span>を押します。</p></div></li>
+      <li><div><p><span class="btnname">この直をチェック</span>を押します。表の下に「直すところはありません」と出れば大丈夫です。直すところが出たら、その行を直して 2 からやり直します(このボタンは何も保存しません。直の途中でも押せます)。</p></div></li>
+      <li><div>
+        <p><span class="btnname">共有へ保存</span>を押します。少し待つと、進み具合の帯に「この直はここまで済んでいます。お疲れさまでした」と出て、5つ全部に ✓ が付きます。ページの札は「共有済」になります。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/nippou-done.jpg" alt="共有へ保存したあとの画面。「いまの直に直すところはありません」「この直はここまで済んでいます。お疲れさまでした」と5つの段階すべてに✓、ページの札が「共有済」" loading="lazy" width="1068" height="506">
+            <span class="pin" style="left:30.2%;top:28.9%">1</span>
+            <span class="pin" style="left:22.3%;top:91.1%">2</span>
+          </div>
+          <figcaption>共有へ保存が済んだところ。</figcaption>
+        </figure>
+      </div></li>
+    </ol>
+    <p class="warn"><b>気をつけること</b>直のあいだ画面を開いておくと、残り5分で自動で「確定」(チェックと集計)が走ります。でも<b>共有へは自動で渡りません</b>。<span class="btnname">共有へ保存</span>は必ず押してください。</p>
+    <p class="tip"><b>こつ</b>設備移動などで直の最後まで打てないときは、<span class="btnname">共有へ保存</span>で断られたあとに出る欄へ「設備移動のため保存」と打って<span class="btnname">このまま共有へ保存</span>を押します(最後まで打っていない・休憩が足りない、のときだけ通せます)。</p>
+
+    <h3 id="print">4-5. 印刷(要るときだけ)</h3>
+    <p>紙は刷らなくても日報は残ります。紙が要るときは、日報入力の<span class="btnname">印刷</span>(いまの直)か、<span class="btnname">記録を見る</span>の<span class="btnname">紙を見る</span>(ほかの直)を押します。別の窓に紙が開きます。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-paper.jpg" alt="別の窓に開いた梱包実績日報表。左上に「印刷する」ボタン、12行の表、右下に直実績合計、下にこの直の集計" loading="lazy" width="1100" height="507">
+        <span class="box" style="left:1.6%;top:3.4%;width:7%;height:5%"></span>
+        <span class="pin" style="left:10.2%;top:5.9%">1</span>
+        <span class="pin" style="left:79.6%;top:74.1%">2</span>
+        <span class="pin" style="left:60%;top:77.6%">3</span>
+      </div>
+      <figcaption>紙の窓(梱包実績日報表)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><span class="btnname">印刷する</span>: 押すと印刷の画面が出ます(<kbd>Ctrl</kbd>+<kbd>P</kbd> でも同じ)。A4横1枚です。刷り終わったら窓は閉じてかまいません。</li>
+      <li>直実績合計(紙と同じ場所)。</li>
+      <li>この直の集計(紙には無い、このツールの追加)。</li>
+    </ol>
+    <p class="warn"><b>気をつけること</b>紙に出るのは<b>保存してあるぶん</b>だけです。打ったばかりの行を載せたいときは、先に<span class="btnname">保存(確定)</span>を押します。</p>
+  </section>
+
+  <section id="hoka">
+    <h2>5. そのほかの操作</h2>
+
+    <h3>記録を見る ── 紙を見る・呼び出す</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-records.jpg" alt="記録を見るの「保存した直」の一覧。報告日・ライン・直・ページ・最後の保存・共有へ(済)の列と、行ごとに「紙を見る」「呼び出す」ボタン" loading="lazy" width="1068" height="746">
+        <span class="pin" style="left:60%;top:29.9%">1</span>
+        <span class="pin" style="left:85%;top:29.9%">2</span>
+      </div>
+      <figcaption>「記録を見る」の保存した直の一覧。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>共有へ</b>: 「済」は共有へ渡した直です。共有へ未送信の直は、古くても一覧の上に出ます。</li>
+      <li><span class="btnname">紙を見る</span>: その直の紙を別の窓で開きます。だれでも押せます(読むだけ)。<span class="btnname">呼び出す</span>は、過去の直を日報入力に開いて直すボタンで、<b>管理者モード</b>のときだけ押せます。</li>
+    </ol>
+    <p>一覧に無い古い直は、下の「日付を指定して見る」で報告日・ライン・直を選んで<span class="btnname">中身を見る</span>・<span class="btnname">この直ぜんぶの紙</span>を押します。</p>
+    <p class="warn"><b>気をつけること</b>呼び出しているあいだは、いまの直に打てません。直し終わったら<span class="btnname">最新のページに戻る</span>を押します(上の帯の印の ✕ でも戻れます)。</p>
+
+    <h3>集計・グラフ / 集計管理</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-graph.jpg" alt="集計・グラフの画面。開始日・終了日・見せ方の欄と表示・集計CSV出力のボタン、その下に本日の合計重量・枚数・稼働率・停止時間などの数字のタイル" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:46.9%;top:18.75%">1</span>
+        <span class="pin" style="left:78.7%;top:18.75%">2</span>
+        <span class="pin" style="left:88.8%;top:18.75%">3</span>
+        <span class="pin" style="left:38.3%;top:62.5%">4</span>
+        <span class="pin" style="left:97.7%;top:70%">5</span>
+      </div>
+      <figcaption>集計・グラフ(数字が光って見える「ネオン表示」の例)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>開始日・終了日・見せ方</b>: 「その日(直の終わりに見る)」か「期間(まとめて見る)」を選びます。目標線(45度線)・ネオン表示のチェックもここです。</li>
+      <li><span class="btnname">表示</span>: 選んだ期間で描き直します。</li>
+      <li><span class="btnname">この期間の集計CSVを出力</span>: 期間ぶんの集計をCSVで出します(出し先は画面に書いてあります)。</li>
+      <li>本日の合計重量・枚数・稼働率・停止時間など。下にはグラフが続きます(<span class="btnname">大きく見る</span>で1つを大きく)。</li>
+      <li><b>共有へ未保存</b>: まだ共有へ渡していないページの数です。</li>
+    </ol>
+    <p><b>集計管理</b>では、同じ数字を<b>表</b>で見ます(日別の集計・直別の集計・ロット別など)。開始日・終了日を選んで<span class="btnname">表示</span>、CSVが要るときは<span class="btnname">4本ともCSVに出す</span>を押します。</p>
+
+    <h3>梱包資材重量計算</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-gw.jpg" alt="梱包資材重量計算の画面。1 製品情報(LotNoを入れると材質・調質などが入る)、2 梱包の形(板厚・板幅・板丈・梱包締枚数・バンド本数など)、3 使う資材(チェックとVCフィルムの選択)" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:25%;top:18.9%">1</span>
+        <span class="pin" style="left:31.5%;top:40.9%">2</span>
+        <span class="pin" style="left:72.5%;top:42.25%">3</span>
+      </div>
+      <figcaption>梱包資材重量計算(上のほう)。</figcaption>
+    </figure>
+    <ol class="steps">
+      <li><div><p><b>LotNo</b> を打ちます。オーダーNo から下(材質・調質・単重など)は自動で入ります。</p></div></li>
+      <li><div><p><b>梱包の形</b>を上から順に打ちます(板厚・板幅・板丈、梱包締枚数、縦バンド本数(2本まで)、横バンド本数、梱包高さ、パレット+蓋の重量)。GWを出すときは<b>Aインプット重量</b>も打ちます。</p></div></li>
+      <li><div><p><b>使う資材</b>を確かめます。「自動」が付いたものはオーダーから決まったものです(変えられます)。</p></div></li>
+      <li><div><p>下の<span class="btnname">計算</span>を押すと「4 結果」に資材ごとの重量・梱包資材重量・風袋総重量・GWが出ます。<span class="btnname">梱包図を出す</span>で梱包の外形の図、梱包数を入れて<span class="btnname">印刷</span>で紙が出ます。やり直すときは<span class="btnname">入力値クリア</span>。</p></div></li>
+    </ol>
+
+    <h3>VC長さ計算</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-vc.jpg" alt="VC長さ計算の画面。上に計算・早見表・コイル・平板・設定のタブ、右に品種の一覧と肉厚などの入力欄、左に結果(VC長さ65.2m と定尺ごとの枚数)" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:48%;top:16.1%">1</span>
+        <span class="pin" style="left:77%;top:26.75%">2</span>
+        <span class="pin" style="left:73.5%;top:69.25%">3</span>
+        <span class="pin" style="left:25.5%;top:26.6%">4</span>
+      </div>
+      <figcaption>VC長さ計算(計算のタブ)。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>タブ</b>: 計算 / 早見表 / コイル・平板(重量) / 設定。</li>
+      <li><b>品種</b>を押して選びます。VC厚・内径が入ります。</li>
+      <li><b>肉厚</b>を測って打ち、<span class="btnname">計算</span>を押します(経寸丈は任意)。</li>
+      <li><b>結果</b>: VC長さと、定尺ごとの枚数が出ます。</li>
+    </ol>
+
+    <h3>標準作業時間</h3>
+    <p>共有へ保存した直の実績から、同じ条件(ライン・班・用途コード・包装仕様NO・サイズ)の作業時間の標準を出します。条件を入れて<span class="btnname">表示</span>を押すと表が出ます。おもに班長が見る画面です。</p>
+  </section>
+
+  <section id="settei">
+    <h2>6. 設定</h2>
+    <p>設定は<span class="btnname">設定・管理者</span>の画面にあります。ふだん作業者が触るのは「保存と出力」の<span class="btnname">共有へ保存</span>くらいです(日報入力のボタンと同じ働き)。ほかは<b>据え付けのとき</b>に班長・管理者が触ります。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/nippou-settings.jpg" alt="設定・管理者の「この端末と配布」の面。上に7つのタブ、鍵がかかっています の帯と管理者パスワードの欄、管理者モードの説明、この端末のライン(L-1、アクセス権限の表で決まりました)" loading="lazy" width="1100" height="688">
+        <span class="pin" style="left:79%;top:28.4%">1</span>
+        <span class="pin" style="left:94.1%;top:41.5%">2</span>
+        <span class="pin" style="left:41.5%;top:62.1%">3</span>
+        <span class="pin" style="left:52.5%;top:73.75%">4</span>
+        <span class="pin" style="left:54%;top:81.1%">5</span>
+      </div>
+      <figcaption>設定・管理者の「この端末と配布」の面。</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>面(タブ)</b>: 保存と出力 / マスタ / 音 / 取り込みと直し / 参照設定 / この端末と配布 / ログ。困りごとがある面には赤い数字が付きます。</li>
+      <li><b>鍵</b>: 管理者パスワードを打って<span class="btnname">鍵を開ける</span>。管理者モードになり、上の帯に印が出ます(印の ✕ で終わります)。</li>
+      <li><b>管理者パスワードを変える</b>: 合言葉はこのパソコンで変えられます。</li>
+      <li><b>この端末のライン</b>: いまのラインと、どう決まったか(例: 「アクセス権限の表で決まりました」)。</li>
+      <li><span class="btnname">読み直す</span>: マスタの「アクセス権限」の表を読み直します。</li>
+    </ol>
+    <div class="tablewrap"><table>
+      <thead><tr><th>面</th><th>中身</th><th>パスワード</th></tr></thead>
+      <tbody>
+        <tr><td>保存と出力</td><td>共有の日報管理へ保存(<span class="btnname">共有へ保存</span>)・月替わりの書き出し</td><td>共有の置き場所を変えるときだけ要る</td></tr>
+        <tr><td>マスタ</td><td>マスタの表を見る・直す、ライン毎目標(45度線)、停止内訳、直の境界時刻</td><td>見るのは不要。直すときに要る</td></tr>
+        <tr><td>音</td><td>いつ何の音を鳴らすか・試聴</td><td>置き場所を変えるときに要る</td></tr>
+        <tr><td>取り込みと直し</td><td>過去の日報の取り込み・当直をDBから復旧・集計の作り直し など</td><td>全部に要る(管理者)</td></tr>
+        <tr><td>参照設定</td><td>参照マスタ・共有・書き出し先などのフォルダ(<span class="btnname">フォルダを選ぶ…</span>)</td><td>パスを変えるときに要る</td></tr>
+        <tr><td>この端末と配布</td><td>管理者モード・この端末のライン・ファイルの置き場所・配布設定</td><td>ラインを変える・配布設定を書き出すときに要る</td></tr>
+        <tr><td>ログ</td><td>エラーと操作の記録</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <p class="tip"><b>こつ</b>このパソコンのラインは、ふつうはマスタの「アクセス権限」の表(ログインIDとPC名の行)で自動で決まります。表で決まらないときは、管理者が「この端末と配布」→「この端末のライン」でラインを押して決めます。管理者パスワードは班長・管理者に聞いてください。</p>
+    <p class="ng"><b>してはいけないこと</b>管理者パスワードを紙に書いてパソコンに貼らないでください。ほかのラインのパソコンのラインを変えないでください(別のラインの紙に混ざります)。</p>
+  </section>
+
+  <section id="komatta">
+    <h2>7. 困ったとき</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
+      <tbody>
+        <tr><td>「この端末のラインがまだ決まっていません」と出て、表が打てない(上の帯のラインが「未設定」)</td><td>班長・管理者に知らせます。管理者が、マスタの「アクセス権限」の表にこのパソコンの行を書くか、<span class="btnname">ラインを決める</span>(設定・管理者 →「この端末と配布」→「この端末のライン」)で決めます。</td></tr>
+        <tr><td>LOTNO を打っても材・調質などが入らない。「SIKALOT に ロット ◯◯ がありません。手で入れてください。」</td><td>番号を見直します(7桁)。正しいのに出ないときは、その行は手で打ちます。</td></tr>
+        <tr><td>「引当を選ぶ」の窓が出た</td><td>正しい引当を選んで<span class="btnname">この引当で埋める</span>を押します。</td></tr>
+        <tr><td>「◯行目の重量を ◯◯ に変更しますか？」</td><td>ふつうは <span class="btnname">OK</span>。量った重量を残したいときだけ<span class="btnname">キャンセル</span>。</td></tr>
+        <tr><td><span class="btnname">保存(確定)</span>・<span class="btnname">共有へ保存</span>で断られた</td><td>出た一覧の「◯ページ ◯行目」を直して、もう一度押します。最後まで打てない直(設備移動など)は、出てきた欄に「設備移動のため保存」と打って<span class="btnname">このまま共有へ保存</span>。</td></tr>
+        <tr><td>直の始めに赤い「前の直」の帯が出て、作業者を選べない</td><td><span class="btnname">共有へ保存する</span>を押します。直すところが残っていて通らないときは<span class="btnname">直せないまま引き継ぐ</span>を押し、班長に知らせます。</td></tr>
+        <tr><td>「前の直」に保存が無い、という知らせが出た</td><td>前の直の人に、打ち忘れがないか聞きます。読んだら<span class="btnname">分かりました</span>。入れ直すのは管理者です(記録を見る → 呼び出す)。</td></tr>
+        <tr><td>「直が変わりました。…どちらに入れるか選んでください。」/ 上に「画面を引き直す」の帯</td><td>画面を開いたまま直が変わりました。どちらの直に入れるかを選びます。帯なら<span class="btnname">画面を引き直す</span>を押します。</td></tr>
+        <tr><td>上の帯に「他の直のデータを開いています」「呼出中」が出ていて、いまの直が打てない</td><td><span class="btnname">最新のページに戻る</span>を押します(帯の印の ✕ でも戻れます)。</td></tr>
+        <tr><td>「バックエンドに接続できません」の帯</td><td><span class="btnname">再接続</span>を押します。だめなら<span class="btnname">再読込</span>。それでもだめなら、統合ツールを終了して、もう一度開きます。</td></tr>
+        <tr><td>「この画面の操作を読み込めませんでした ── ボタンは効きません」</td><td>統合ツールを終了して、もう一度開きます。くり返すときは、出ている番号を管理者に伝えます。</td></tr>
+        <tr><td>直の終わりに「◯直 の実績」の暗い画面に切り替わった</td><td>ふつうのことです(<a href="#end">4-4</a>)。<span class="btnname">直しに戻る</span>で日報入力へ戻ります。</td></tr>
+        <tr><td>4ページ目を出そうとしたら確かめられた</td><td>本当に4ページ目が要るなら、そのまま進めます(押し間違いを防ぐための確かめです)。</td></tr>
+      </tbody>
+    </table></div>
+    <p class="tip"><b>こつ</b>統合ツールが開けないときの予備として、日報ツールだけを開く方法(ブラウザ版)もあります。使うときは管理者に聞いてください。</p>
+  </section>
+
+  <section id="owari">
+    <h2>8. 終わるとき</h2>
+    <ol class="steps">
+      <li><div><p>直の終わりなら、<span class="btnname">共有へ保存</span>が済んでいるか見ます(進み具合の帯の ⑤ に ✓)。</p></div></li>
+      <li><div><p>統合ツールの右上の<span class="btnname">終了</span>を押して閉じます。日報の画面の<span class="btnname">■ 終了</span>を押しても、統合ツール全体が閉じます。</p></div></li>
+    </ol>
+    <p class="warn"><b>気をつけること</b>打ったものはこのパソコンに残っているので、閉じても消えません。ただし、共有へ保存していない直は、みんなからは見えません。</p>
+  </section>
+
+  <p class="foot">日報管理ツール VER4.22.0 の操作説明書です。統合ツールの「説明書」ボタンから、いつでも開けます。画面写真の名前(山田(例) など)・ロット番号・フォルダの場所はすべて例です。</p>
+</main>
+</body>
+</html>

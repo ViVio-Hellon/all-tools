@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ライン管理カレンダー 操作説明書</title>
+<link rel="stylesheet" href="manual.css">
+</head>
+<body class="t-calendar">
+<header class="top"><div class="top__in">
+  <span class="top__brand">統合ツール 操作説明書</span>
+  <nav aria-label="説明書">
+    <a href="index.html">一覧</a><a href="portal.html">統合ツール・大設定</a><a href="nippou.html">日報</a><a href="kanban.html">看板</a><a href="calendar.html" aria-current="page">カレンダー</a><a href="inspection.html">点検表</a>
+  </nav></div></header>
+<main class="page">
+  <div class="head">
+    <div class="head__row"><span class="head__mark">暦</span><h1>ライン管理カレンダー</h1><span class="ver">VER4.0.0</span></div>
+    <p class="lead">月のカレンダーに、ラインの休み・コメント・連絡を登録して見るツールです。登録したものは共有フォルダを通して、ほかのラインのパソコンにも届きます。</p>
+  </div>
+
+  <nav class="toc" aria-label="目次"><h2>目次</h2><ol>
+    <li><a href="#about">このツールでできること</a></li>
+    <li><a href="#screen">画面の見かた</a></li>
+    <li><a href="#daily">毎日の操作(日付を押して登録する)</a></li>
+    <li><a href="#print">印刷する</a></li>
+    <li><a href="#sync">同期(ほかのラインとのやりとり)</a></li>
+    <li><a href="#history">履歴(過去の月を見る)</a></li>
+    <li><a href="#settings">設定</a></li>
+    <li><a href="#trouble">困ったとき</a></li>
+    <li><a href="#quit">終わるとき</a></li>
+  </ol></nav>
+
+  <section id="about">
+    <h2>1. このツールでできること</h2>
+    <ul>
+      <li>カレンダーの日付を押して、<b>休み</b>(だれが休むか・直・残業繋ぎ・早出繋ぎ)を登録します。</li>
+      <li>ライン・班あての<b>コメント・連絡</b>を登録します。</li>
+      <li>その日の登録の<b>内容を見る</b>・まちがえた登録を<b>消す</b>ことができます。</li>
+      <li>月のカレンダーを <b>A4 横 1 枚</b>に印刷できます。</li>
+      <li>過去の月を<b>履歴</b>で見られます(見るだけ)。</li>
+    </ul>
+    <p><b>開きかた:</b> 統合ツールの大きなタブの「<b>カレンダー</b>」を押します。少し待つとカレンダーの画面が出ます。</p>
+    <div class="tip"><b>こつ</b>このパソコンの「ライン」によって、カレンダーに出るものが変わります。コイルのパソコンにはコイルの休みと、コイルあての連絡だけが出ます(作業長のパソコンには全ラインが出ます)。</div>
+  </section>
+
+  <section id="screen">
+    <h2>2. 画面の見かた</h2>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/calendar-main.jpg" loading="lazy" width="1100" height="688" alt="ライン管理カレンダーの画面。上の帯にライン・同期・今すぐ同期・終了、左に カレンダー・履歴・設定、中央に2026年10月のカレンダーがあり、日付のマスに休みと連絡が書かれている">
+        <span class="pin" style="left:10.5%;top:6.5%">1</span>
+        <span class="pin" style="left:24.8%;top:6.5%">2</span>
+        <span class="pin" style="left:38.1%;top:6.5%">3</span>
+        <span class="pin" style="left:81.5%;top:6.5%">4</span>
+        <span class="pin" style="left:89.4%;top:6.5%">5</span>
+        <span class="pin" style="left:96.4%;top:6.5%">6</span>
+        <span class="box" style="left:0.6%;top:7.75%;width:13.5%;height:25%"></span>
+        <span class="pin" style="left:7.4%;top:36%">7</span>
+        <span class="pin" style="left:15.3%;top:10.3%">8</span>
+        <span class="pin" style="left:44%;top:10.3%">9</span>
+        <span class="pin" style="left:92%;top:10.3%">10</span>
+        <span class="pin" style="left:45.5%;top:37.5%">11</span>
+        <span class="pin" style="left:85.6%;top:32%">12</span>
+        <span class="pin" style="left:37.5%;top:50%">13</span>
+      </div>
+      <figcaption>カレンダーの画面(コイルのパソコン。名前はすべて例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>ツールの名前と版</b>(VER4.0.0)。問い合わせのときに読み上げます。</li>
+      <li><b>ライン</b> … このパソコンのライン。カレンダーに出るものはこれで決まります。</li>
+      <li><b>同期</b> … ほかのラインとのやりとりの状態。ふだんは緑の「同期済み(日時)」です(<a href="#sync">5. 同期</a>)。</li>
+      <li><span class="btnname">暗くする</span> … 画面を暗い色にします(押すと <span class="btnname">明るくする</span> に変わります)。夜勤でまぶしいときに。</li>
+      <li><span class="btnname">今すぐ同期</span> … ほかのラインの登録をすぐに取り込みます。</li>
+      <li><span class="btnname">終了</span> … 統合ツール全体を閉じます(<a href="#quit">9. 終わるとき</a>)。</li>
+      <li><b>左の並び</b> … <b>カレンダー</b>(休み・連絡の登録と閲覧)/<b>履歴</b>(過去の月を見る)/<b>設定</b>。</li>
+      <li><span class="btnname">← 前月</span> <span class="btnname">当月</span> <span class="btnname">翌月 →</span> … 月を切り替えます。<span class="btnname">当月</span> で今月に戻ります。キーボードの <kbd>PageUp</kbd> / <kbd>PageDown</kbd> でも動きます。</li>
+      <li><b>いま見ている年月</b>。</li>
+      <li><span class="btnname">印刷</span> … この月を A4 横 1 枚で印刷します(<a href="#print">4. 印刷する</a>)。</li>
+      <li><b>今日</b>のマスは<b>オレンジの枠</b>で囲まれます。</li>
+      <li><b>登録のある日</b> … 休みは「コイル:A班:作業者01 休」、連絡は「コイル:B班 コメント有」のように出ます。連絡の文は<a href="#view">内容閲覧</a>で読みます。</li>
+      <li><b>日曜・祝日は赤</b>、<b>土曜は青</b>の色です。祝日には名前(スポーツの日 など)が出ます。</li>
+    </ol>
+    <div class="tip"><b>こつ</b>マウスを休みのある日のマスに乗せてしばらく待つと、<b>残業繋ぎ・早出繋ぎ</b>の担当者が小さな札で出ます。</div>
+  </section>
+
+  <section id="daily">
+    <h2>3. 毎日の操作(日付を押して登録する)</h2>
+    <p>どの操作も、<b>カレンダーの日付のマスを押す</b>ところから始まります。</p>
+
+    <h3 id="daymenu">日付を押す</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/calendar-day-menu.jpg" loading="lazy" width="1100" height="688" alt="10月16日を押したところ。休み・コメント・連絡・内容閲覧・削除 の4つのボタンが並んだ窓が出ている">
+        <span class="pin" style="left:72.7%;top:39.4%">1</span>
+        <span class="pin" style="left:72.7%;top:46%">2</span>
+        <span class="pin" style="left:72.7%;top:52.75%">3</span>
+        <span class="pin" style="left:72.7%;top:59.4%">4</span>
+      </div>
+      <figcaption>日付を押すと「○月○日 の操作を選んでください」が出ます</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><span class="btnname">休み</span> … 作業者の休みを登録します。</li>
+      <li><span class="btnname">コメント・連絡</span> … ライン・班あての連絡を登録します。</li>
+      <li><span class="btnname">内容閲覧</span> … その日の登録を読みます(右に登録の件数が出ます)。</li>
+      <li><span class="btnname">削除</span> … まちがえた登録を消します(消したものは記録に残ります)。</li>
+    </ol>
+    <p>やめるときは <span class="btnname">取り消し</span> を押します。</p>
+
+    <h3 id="rest">休みを登録する</h3>
+    <ol class="steps">
+      <li><div><p>日付を押して <span class="btnname">休み</span> を押します。</p></div></li>
+      <li><div>
+        <p>「休みにする作業者」の一覧が出ます。<b>休む人の名前</b>を押します。班ごとに縦に並んでいます。</p>
+        <figure class="shot" style="max-width:860px">
+          <div class="shot__img"><img src="img/calendar-rest-worker.jpg" loading="lazy" width="860" height="328" alt="10月16日 休みにする作業者 の窓。コイルの A班・B班・C班・D班・日勤班 ごとに作業者の名前のボタンが並んでいる。右上に 1 / 4"></div>
+          <figcaption>右上の「1 / 4」は、4つのうちの1つ目という意味です</figcaption>
+        </figure>
+      </div></li>
+      <li><div><p>A・B・C・D 班の人なら、続けて「<b>○○ さんの直</b>」が出ます。<span class="btnname">1直</span> <span class="btnname">2直</span> <span class="btnname">3直</span> から休む直を押します。</p>
+        <p>日勤班など A〜D 以外の班の人は、直は聞かれず、ここで登録されます(手順 6 へ)。</p></div></li>
+      <li><div><p>「<b>○直の残業で繋ぐ人</b>」が出ます(見出しが<b>オレンジ</b>で、札は「残業繋ぎ」)。休んだ直の<b>前の直</b>で残業して繋ぐ人を押します。</p></div></li>
+      <li><div>
+        <p>「<b>○直の早出で繋ぐ人</b>」が出ます(見出しが<b>青緑</b>で、札は「早出繋ぎ」)。休んだ直の<b>次の直</b>で早出して繋ぐ人を押します。</p>
+        <figure class="shot" style="max-width:860px">
+          <div class="shot__img"><img src="img/calendar-rest-early.jpg" loading="lazy" width="860" height="403" alt="3直の早出で繋ぐ人 の窓。上に 休む人 作業者05(B班)・直 2直・残業繋ぎ 作業者01 の札が並び、下に作業者の一覧、左下に 取り消し、右下に 未登録のまま のボタン">
+            <span class="pin" style="left:7%;top:15%">1</span>
+            <span class="pin" style="left:47%;top:25.3%">2</span>
+            <span class="pin" style="left:13.5%;top:92.5%">3</span>
+            <span class="pin" style="left:83.5%;top:92.5%">4</span>
+          </div>
+          <figcaption>4つ目(早出繋ぎ)の窓。2直を休むので、1直の残業と3直の早出で繋ぎます</figcaption>
+        </figure>
+        <ol class="pins">
+          <li>いまどれを選んでいるか(残業繋ぎ / 早出繋ぎ)。</li>
+          <li><b>ここまでに選んだもの</b>。休む人・直・残業繋ぎ が正しいか確かめます。</li>
+          <li><span class="btnname">取り消し</span> … 登録をやめます(何も登録されません)。</li>
+          <li><span class="btnname">未登録のまま</span> … 繋ぐ人がまだ決まっていないときに押します。「未登録」として登録されます。</li>
+        </ol>
+      </div></li>
+      <li><div>
+        <p>右下に「<b>○○ さんの休みを登録しました</b>」と出て、カレンダーのマスに「コイル:B班:作業者05 休」と出れば終わりです。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/calendar-rest-done.jpg" loading="lazy" width="1100" height="688" alt="登録のあとのカレンダー。16日のマスに コイル:B班:作業者05 休 と出て、右下に 作業者05 さんの休みを登録しました と出ている">
+            <span class="box" style="left:75.2%;top:43.1%;width:11.7%;height:12.8%"></span>
+            <span class="pin" style="left:75.2%;top:50%">1</span>
+            <span class="box" style="left:79.2%;top:92.4%;width:19.6%;height:5.7%"></span>
+            <span class="pin" style="left:79.2%;top:92.4%">2</span>
+          </div>
+          <figcaption>1 登録した日のマス 2 登録できたという知らせ(しばらくすると消えます)</figcaption>
+        </figure>
+      </div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>同じ日に同じ人をもう一度登録しようとすると「<b>登録できません</b> … ○○ さんは既に登録済みです。」と出て、登録されません。直や繋ぎを直したいときは、先に<a href="#delete">削除</a>してから登録し直します。</div>
+
+    <h3 id="comment">コメント・連絡を登録する</h3>
+    <ol class="steps">
+      <li><div><p>日付を押して <span class="btnname">コメント・連絡</span> を押します。</p></div></li>
+      <li><div><p>「連絡の宛先」で<b>ライン</b>と<b>班</b>を選び、<span class="btnname">次へ</span> を押します。ラインを選ぶと、班はそのラインにある班だけになります。</p></div></li>
+      <li><div><p>連絡の文を入力して <span class="btnname">登録する</span> を押します。</p>
+        <figure class="shot" style="max-width:560px">
+          <div class="shot__img"><img src="img/calendar-comment.jpg" loading="lazy" width="560" height="452" alt="上: 10月16日 連絡の宛先 の窓。ライン コイル、班 B を選び、次へ ボタン。下: 10月16日 コイル B班 への連絡 の窓。文 15時から 2号機の段取り替えをします を入力し、登録する ボタン"></div>
+          <figcaption>上: 宛先を選ぶ(1 / 2) 下: 文を入れる(2 / 2)</figcaption>
+        </figure>
+      </div></li>
+      <li><div><p>「<b>コイル B班 への連絡を登録しました</b>」と出て、マスに「コイル:B班 コメント有」と出れば終わりです。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>カレンダーのマスには「コメント有」とだけ出ます。文を読むときは次の「内容閲覧」を使います。</div>
+
+    <h3 id="view">内容を見る(内容閲覧)</h3>
+    <p>日付を押して <span class="btnname">内容閲覧</span> を押すと、その日の登録がすべて出ます。読むだけなので、ここで消えたり変わったりすることはありません。<span class="btnname">閉じる</span> で戻ります。</p>
+    <figure class="shot" style="max-width:860px">
+      <div class="shot__img"><img src="img/calendar-view.jpg" loading="lazy" width="860" height="300" alt="2026年10月16日(金)の登録内容。[休み] コイル B班 作業者05 (2直)、1直残業: 作業者01、3直早出: 作業者14。その下に B班 15時から 2号機の段取り替えをします"></div>
+      <figcaption>休みは直と繋ぎの担当者まで、連絡は文まで出ます</figcaption>
+    </figure>
+
+    <h3 id="delete">まちがえた登録を消す(削除)</h3>
+    <ol class="steps">
+      <li><div><p>日付を押して <span class="btnname">削除</span> を押します。</p></div></li>
+      <li><div><p>その日の登録が並びます。<b>消したいものだけ</b>にチェックを入れて、<span class="btnname">選んだものを削除</span> を押します。</p></div></li>
+      <li><div><p>「削除の確認」が出ます。よければ <span class="btnname">削除する</span>、やめるときは <span class="btnname">やめる</span> を押します。</p>
+        <figure class="shot" style="max-width:860px">
+          <div class="shot__img"><img src="img/calendar-delete.jpg" loading="lazy" width="860" height="462" alt="上: 10月16日 削除するものを選んでください。[休み] 作業者05 (2直) と [連絡] 15時から 2号機の段取り替えをします が並び、連絡にチェック。下: 削除の確認 チェックした 1 件を削除します。(削除内容は履歴に記録されます) やめる・削除する のボタン"></div>
+          <figcaption>上: 消すものにチェック 下: 最後の確認</figcaption>
+        </figure>
+      </div></li>
+      <li><div><p>「<b>1 件を削除しました</b>」と出れば終わりです。</p></div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>消した登録は、カレンダーからは戻せません。消した内容は記録(削除履歴)に残るので、管理者は後から何を消したか調べられます。</div>
+  </section>
+
+  <section id="print">
+    <h2>4. 印刷する</h2>
+    <ol class="steps">
+      <li><div><p>印刷したい月を出して、右上の <span class="btnname">印刷</span> を押します。</p></div></li>
+      <li><div><p>印刷用の窓が開きます。<span class="btnname">印刷する</span> を押すと印刷の画面が出るので、プリンターを選んで印刷します(<kbd>Ctrl</kbd>+<kbd>P</kbd> でも同じです)。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/calendar-print.jpg" loading="lazy" width="1100" height="767" alt="印刷用の窓。上に 印刷する と 閉じる のボタンと案内、下に 2026年10月 ライン管理カレンダー の見出しの付いた月のカレンダー">
+            <span class="pin" style="left:40.6%;top:4.3%">1</span>
+            <span class="pin" style="left:59.6%;top:4.3%">2</span>
+            <span class="pin" style="left:34.4%;top:17.8%">3</span>
+            <span class="pin" style="left:66.4%;top:93.1%">4</span>
+          </div>
+          <figcaption>印刷用の窓(ボタンと案内の文は紙には刷られません)</figcaption>
+        </figure>
+        <ol class="pins">
+          <li><span class="btnname">印刷する</span> … 印刷の画面を出します。</li>
+          <li><span class="btnname">閉じる</span> … 印刷用の窓だけを閉じます。</li>
+          <li>紙に刷られる月とカレンダー。点線の内側だけが刷られます(点線は刷られません)。</li>
+          <li>右下に<b>出力日時・ライン・版</b>が刷られます。</li>
+        </ol>
+      </div></li>
+      <li><div><p>終わったら <span class="btnname">閉じる</span> を押します。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>印刷の画面の<b>余白は「既定」のまま</b>、<b>倍率は変えない</b>で印刷してください。登録が多い月も、自動で縮めて 1 枚に収まります。PDF にしたいときは、プリンターに「PDF に保存」を選びます。</div>
+  </section>
+
+  <section id="sync">
+    <h2>5. 同期(ほかのラインとのやりとり)</h2>
+    <p>登録したものは、まずこのパソコンに保存され、すぐに<b>共有フォルダの取り込み元</b>へ送られます。ほかのラインの登録は、決まった間隔(ふだんは <b>20 秒</b>ごと)で自動で取り込まれ、画面も自動で描き直されます。これを「<b>自動同期</b>」と呼びます。</p>
+    <p>状態は上の帯の「<b>同期</b>」に出ます。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>帯の表示</th><th>意味</th><th>すること</th></tr></thead>
+      <tbody>
+        <tr><td>同期済み (日時)</td><td>送り終わっていて、その時刻の内容を見ています。</td><td>何もしなくてよい。</td></tr>
+        <tr><td>送信待ち ○ 件</td><td>送っている途中です。</td><td>少し待つ。</td></tr>
+        <tr><td>未送信 ○ 件 / (理由)</td><td>共有フォルダに届かず、送れていません。入力はこのパソコンに残っています。</td><td>そのまま使ってよい。届くようになれば自動で送られます。長く続くときは班長・管理者へ(<a href="#trouble">困ったとき</a>)。</td></tr>
+        <tr><td>自動同期オフ</td><td>取り込み元の場所(参照パス)が決まっていません。<b>登録もできません。</b></td><td>管理者に設定を頼む。</td></tr>
+      </tbody>
+    </table></div>
+    <h3>今すぐ同期</h3>
+    <p>ほかのラインが登録したものをすぐ見たいときは、上の帯の <span class="btnname">今すぐ同期</span> を押します。右下に「<b>同期しました</b>」と出て、カレンダーが新しくなります。届かないときは「<b>送れませんでした: …</b>」と出ます。</p>
+    <div class="tip"><b>こつ</b>窓(内容閲覧など)を開いているあいだは描き直しを待ち、閉じたあとで新しくなります。選んでいる途中で中身が入れ替わることはありません。</div>
+  </section>
+
+  <section id="history">
+    <h2>6. 履歴(過去の月を見る)</h2>
+    <p>左の並びの「<b>履歴</b>」を押すと、過去の月を<b>見るだけ</b>の画面になります。ここからは登録も削除もできません(押しまちがいで昔の記録が変わらないようにするためです)。紙のような茶色の地と「<b>履歴・閲覧のみ</b>」の札が目じるしです。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/calendar-history.jpg" loading="lazy" width="1100" height="688" alt="履歴の画面。2026年9月(登録6件)のカレンダーが茶色の地で出ている。上に 前月・年月を選ぶ・翌月・履歴・閲覧のみ の札・印刷">
+        <span class="pin" style="left:16.2%;top:11.6%">1</span>
+        <span class="pin" style="left:28%;top:16.3%">2</span>
+        <span class="pin" style="left:44%;top:16.3%">3</span>
+        <span class="pin" style="left:91.2%;top:11.6%">4</span>
+        <span class="pin" style="left:68.8%;top:43.8%">5</span>
+      </div>
+      <figcaption>履歴の画面(2026年9月)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><span class="btnname">← 前月</span> / <span class="btnname">翌月 →</span> … となりの月へ動きます。</li>
+      <li><span class="btnname">年月を選ぶ</span> … 年ごとに 12 か月のマスが出ます。<span class="btnname">← 前の年</span> <span class="btnname">次の年 →</span> で年を変えて、見たい月を押します。マスにはその月の登録の件数が出ます。</li>
+      <li>「履歴・閲覧のみ」の札。いまは見るだけの画面だという意味です。</li>
+      <li><span class="btnname">印刷</span> … この月を印刷します(やり方は<a href="#print">印刷する</a>と同じ)。</li>
+      <li>日付を押すと、その日の登録内容が出ます(読むだけ)。</li>
+    </ol>
+    <p>選べるのは、<b>登録がある一番古い月から先月まで</b>です(点線のマスは選べません)。今月から先は「カレンダー」で見ます。</p>
+  </section>
+
+  <section id="settings">
+    <h2>7. 設定</h2>
+    <p>左の並びの「<b>設定</b>」で開きます。設定は<b>最初に 1 回、班長・管理者が決めるもの</b>です。毎日さわる必要はありません。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>設定</th><th>中身</th><th>だれが・いつ</th></tr></thead>
+      <tbody>
+        <tr><td>1. この端末のライン</td><td>このパソコンのライン。カレンダーに出るもの(休み・連絡)が変わります。</td><td>管理者が最初に 1 回。<b>管理者パスワードが要ります。</b></td></tr>
+        <tr><td>2. 参照パス</td><td>取り込み元(共有フォルダ)の場所と、自動同期の「する/しない」・取り込み間隔(秒)。</td><td>管理者が最初に 1 回。場所を変えるには<b>管理者パスワードが要ります。</b></td></tr>
+        <tr><td>3. 取り込む</td><td>取り込み元から班員名簿・休みを取り込み直します。</td><td>班員名簿が出ないときなど。</td></tr>
+        <tr><td>4. マスタ確認・管理</td><td>班員名簿の確認と修正、端末一覧、削除履歴など。</td><td>管理者。</td></tr>
+        <tr><td>5. 管理者パスワード</td><td>上の設定を守るパスワードを変えます。</td><td>管理者。</td></tr>
+        <tr><td>6〜9</td><td>配布設定・ファイルの置き場所・いまの状態・ログ(エラーの後追い)。</td><td>管理者・問い合わせのとき。</td></tr>
+        <tr><td>10. 画面の見た目</td><td>「自動(Windows の設定に合わせる)」「ライト(明るい背景)」「ダーク(暗い背景)」から選びます。このパソコンだけの設定です。</td><td>だれでも。</td></tr>
+      </tbody>
+    </table></div>
+    
+      <figure class="shot">
+        <div class="shot__img"><img src="img/calendar-settings-line.jpg" loading="lazy" width="1058" height="292" alt="設定 1. この端末のライン。ラインの選択欄に コイル、右に 保存 ボタン、その下に説明と、アクセス権限についての案内">
+          <span class="pin" style="left:66%;top:32%">1</span>
+          <span class="pin" style="left:91.8%;top:32%">2</span>
+        </div>
+        <figcaption>1. この端末のライン(1 ラインを選ぶ 2 <span class="btnname">保存</span>)</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot__img"><img src="img/calendar-settings-sync.jpg" loading="lazy" width="1058" height="391" alt="設定の 自動同期(する)・取り込み間隔(秒)20・保存 の欄と、3. 取り込む の 参照パスから取り込む・保存用DBだけ・マスタDBだけ のボタン、右上に 班員名簿 39 件">
+          <span class="pin" style="left:31.2%;top:10.2%">1</span>
+          <span class="pin" style="left:41.1%;top:54%">2</span>
+          <span class="pin" style="left:88%;top:40.4%">3</span>
+        </div>
+        <figcaption>1 自動同期と取り込み間隔 2 取り込みのボタン 3 取り込んだ班員名簿の人数</figcaption>
+      </figure>
+    <div class="ng"><b>してはいけないこと</b>ラインをまちがえると、何も起きていないように見えたまま表示だけがずれます(「あの連絡が来ていない」となります)。管理者パスワードを知っていても、ラインは勝手に変えないでください。</div>
+  </section>
+
+  <section id="trouble">
+    <h2>8. 困ったとき</h2>
+    <div class="two">
+      <figure class="shot">
+        <div class="shot__img"><img src="img/calendar-empty.jpg" loading="lazy" width="700" height="150" alt="何も取り込まれていない画面。帯に ライン 未設定・同期 自動同期オフ、カレンダーの上に 班員名簿が取り込まれていません。設定画面から取り込んでください。と出ている">
+          <span class="box" style="left:38%;top:6%;width:14.4%;height:21%"></span>
+          <span class="box" style="left:53%;top:6%;width:18.4%;height:21%"></span>
+          <span class="box" style="left:29.4%;top:70%;width:70%;height:25.5%"></span>
+        </div>
+        <figcaption>まだ何も入っていないとき(赤い枠: ライン 未設定・自動同期オフ・班員名簿の知らせ)</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot__img"><img src="img/calendar-offline.jpg" loading="lazy" width="700" height="260" alt="共有フォルダに届かないときの画面。帯の同期に 未送信 1 件 / ファイルが見つかりません… と出て、左の 設定 に ! の印が付いている">
+          <span class="box" style="left:53.2%;top:3.8%;width:40.4%;height:12%"></span>
+          <span class="pin" style="left:73.4%;top:20%">1</span>
+          <span class="box" style="left:21%;top:82%;width:4.2%;height:8.5%"></span>
+          <span class="pin" style="left:23%;top:74%">2</span>
+        </div>
+        <figcaption>共有フォルダに届かないとき(1 未送信の件数 2 設定に「!」)</figcaption>
+      </figure>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
+      <tbody>
+        <tr><td>「<b>班員名簿が取り込まれていません。設定画面から取り込んでください。</b>」と出る</td><td>設定の「3. 取り込む」で <span class="btnname">参照パスから取り込む</span> を押します。「自動同期オフ」と出ているときは参照パスが決まっていないので、管理者に頼みます。</td></tr>
+        <tr><td>休みを押すと「<b>作業者が居ません</b>」と出る</td><td>班員名簿が入っていないか、このパソコンのラインが合っていません。班長・管理者に、設定の「取り込む」と「この端末のライン」を見てもらいます。</td></tr>
+        <tr><td>「<b>登録できません</b> … 取り込み元(連絡帳)が見つからないため、登録できません。」</td><td>参照パスが決まっていません。管理者に設定を頼みます。</td></tr>
+        <tr><td>「<b>登録できません</b> … ○○ さんは既に登録済みです。」</td><td>その日にその人はもう登録されています。<span class="btnname">内容閲覧</span> で確かめます。直したいときは削除してから登録し直します。</td></tr>
+        <tr><td>帯に「<b>未送信 ○ 件 / …</b>」、設定に「!」が出る</td><td>共有フォルダに届いていません。入力はこのパソコンに残っていて、届けば自動で送られます。少しして <span class="btnname">今すぐ同期</span> を押し、「同期しました」と出れば直っています。長く続くときは班長・管理者へ。</td></tr>
+        <tr><td>「<b>送らなかった登録があります</b>」と出る</td><td>ほかのパソコンが先に同じ人・同じ日を登録していたので、こちらの登録は送られませんでした。カレンダーに出ているのは先に届いた登録です。直や繋ぎが違うときは、その日の登録を確かめて、削除してから登録し直します。</td></tr>
+        <tr><td>ほかのラインの登録が出てこない</td><td><span class="btnname">今すぐ同期</span> を押します。それでも出ないときは、上の帯の「ライン」が正しいか確かめます(コイルのパソコンにはコイル以外の休みは出ません)。</td></tr>
+        <tr><td>「<b>バックエンドに接続できません</b>」の帯が出る</td><td><span class="btnname">再接続</span> を押します。だめなら <span class="btnname">再読込</span>。それでもだめなら、統合ツールを終了して開き直します。</td></tr>
+        <tr><td>「<b>すでに別の画面で開いています</b>」と出る</td><td>同じパソコンで、もう 1 つカレンダーの画面(ブラウザ版など)が開いています。こちらで使うなら <span class="btnname">この画面で使う</span> を押します。</td></tr>
+        <tr><td>「<b>思わぬエラーが起きました(記録番号 E…)</b>」と出る</td><td>もう一度やってみます。だめなときは、<b>記録番号</b>をメモして管理者に伝えます。</td></tr>
+        <tr><td>画面が動かない・おかしい</td><td>統合ツールの右上の「終了」で閉じて、もう一度開きます。</td></tr>
+      </tbody>
+    </table></div>
+    <p>統合ツールが開けないときは、管理者が予備のブラウザ版で同じ画面を開けます(管理者に相談してください)。</p>
+  </section>
+
+  <section id="quit">
+    <h2>9. 終わるとき</h2>
+    <ol class="steps">
+      <li><div><p>統合ツールの右上の「<b>終了</b>」を押して閉じます。</p></div></li>
+      <li><div><p>カレンダーの画面の上の帯にある <span class="btnname">終了</span> でも閉じられます。「終了しますか?」と聞かれるので、<span class="btnname">終了する</span> を押します。このときは<b>統合ツール全体</b>(ほかのツールのタブも)が閉じます。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>まだ送れていない登録があれば、送ってから閉じます。送れないまま閉じても登録は消えず、次に開いたときに送られます。</div>
+  </section>
+
+  <p class="foot">ライン管理カレンダー VER4.0.0 の操作説明書です。統合ツールの「説明書」ボタンから、いつでも開けます。画面写真の名前(作業者01 など)はすべて例です。</p>
+</main>
+</body>
+</html>

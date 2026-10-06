@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>資材発注看板システム 操作説明書</title>
+<link rel="stylesheet" href="manual.css">
+<style>
+  /* 看板の色の見本(表の中の小さな四角) */
+  .chip { display: inline-block; min-width: 4.5em; text-align: center; border-radius: 5px; padding: 0 8px;
+    border: 1px solid #b9c3c9; color: #17252e; font-weight: 700; white-space: nowrap; }
+  .chip--gray { background: #eef0f1; }
+  .chip--red { background: #ff6461; }
+  .chip--green { background: #a6f5a6; }
+  .chip--yellow { background: #ffff66; }
+  .chip--blue { background: #eef0f1; color: #1d4ed8; font-style: italic; }
+  .shot--small .shot__img { max-width: 760px; }
+  .shot--modal .shot__img { max-width: 600px; }
+</style>
+</head>
+<body class="t-kanban">
+<header class="top"><div class="top__in">
+  <span class="top__brand">統合ツール 操作説明書</span>
+  <nav aria-label="説明書">
+    <a href="index.html">一覧</a><a href="portal.html">統合ツール・大設定</a><a href="nippou.html">日報</a><a href="kanban.html" aria-current="page">看板</a><a href="calendar.html">カレンダー</a><a href="inspection.html">点検表</a>
+  </nav></div></header>
+<main class="page">
+  <div class="head">
+    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.1.0</span></div>
+    <p class="lead">資材の看板を画面で見て、ラインは「欲しい」を出し、倉庫は「発送した」を付けます。届いたらラインが確認して、看板を元に戻します。</p>
+  </div>
+
+  <nav class="toc" aria-label="目次"><h2>目次</h2><ol>
+    <li><a href="#dekiru">このツールでできること</a></li>
+    <li><a href="#hiraku">開きかたとモード</a></li>
+    <li><a href="#mikata">画面の見かた</a></li>
+    <li><a href="#iro">看板の色の意味</a></li>
+    <li><a href="#genba">毎日の操作(現場モード)</a></li>
+    <li><a href="#souko">毎日の操作(倉庫モード)</a></li>
+    <li><a href="#hoka">そのほかの操作</a></li>
+    <li><a href="#settei">設定</a></li>
+    <li><a href="#komatta">困ったとき</a></li>
+    <li><a href="#owari">終わるとき</a></li>
+  </ol></nav>
+
+  <section id="dekiru">
+    <h2>1. このツールでできること</h2>
+    <ul>
+      <li><b>ライン(現場)</b>: 足りなくなった資材の看板を押して「欲しい」を出す。届いたら「届いた」を確認する。注文票を印刷する。</li>
+      <li><b>倉庫</b>: 全ラインの「欲しい」を見て、発送したら「発送」を付ける。仕入れ先へ注文したときは「注文中」を付ける。発送明細を印刷する。</li>
+      <li><b>看板ごとのコメント</b>: 「来週入ります」「急ぎです」などを、倉庫とラインでやり取りする。</li>
+    </ul>
+    <p>画面は<b>勝手に新しくなります</b>。ほかのパソコンで押したことも、数秒〜30秒ほどで自分の画面に出ます。</p>
+  </section>
+
+  <section id="hiraku">
+    <h2>2. 開きかたとモード</h2>
+    <ol class="steps">
+      <li><div><p>統合ツールを開きます。</p></div></li>
+      <li><div><p>統合ツールの大きなタブの<span class="btnname">看板</span>を押します。</p>
+        <p>はじめて開くときは「起動しています」と出ます。少し待つと看板の画面になります。</p></div></li>
+    </ol>
+    <p>看板の画面には3つの<b>モード</b>があります。どのモードで開くかは、そのパソコンに決まっています。
+      画面の右上の札(<span class="btnname">現場モード</span> など)で、いまのモードが分かります。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>モード</th><th>だれが使う</th><th>できること</th><th>札の色</th></tr></thead>
+      <tbody>
+        <tr><td><b>現場モード</b></td><td>ラインの作業者・班長</td><td>自分のラインの看板だけを見る。欲しい資材を押す。届いた確認。注文票の印刷。</td><td>赤</td></tr>
+        <tr><td><b>倉庫モード</b></td><td>倉庫の担当</td><td>全ラインの看板をタブで切り替えて見る。発送・注文中を付ける。発送明細・非常設品リストの印刷。</td><td>緑</td></tr>
+        <tr><td><b>倉庫参照モード</b></td><td>見るだけの人</td><td>見るだけ。押しても何も変わりません。</td><td>灰</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tip"><b>こつ</b>現場モードで見るライン(<b>担当ライン</b>)と、使えるモードは、管理者が「アクセス権限」の表に登録して決めます(Windows のログインID と パソコンの名前で決まります)。
+      登録の無いパソコンは現場モードだけです。倉庫モードが使えないときは、管理者に頼んでください(<a href="#settei">8. 設定</a>)。</div>
+  </section>
+
+  <section id="mikata">
+    <h2>3. 画面の見かた</h2>
+    <p>現場モードの画面です(L-1 ラインの例)。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-site-board.jpg" loading="lazy" width="1100" height="588"
+        alt="現場モードの看板の画面。左に「看板」「設定」の並び、上の帯に担当 L-1・未反映 0・開いている端末 倉庫・現場モードの札・終了ボタン。その下に更新・届いた資材を一括確認・注文票のボタン、新しいコメントの帯、段ボール・外装紙・テープなどの資材の枠が並んでいる。">
+        <span class="pin" style="left:7.81%;top:36.55%">1</span>
+        <span class="pin" style="left:24.69%;top:3.22%">2</span>
+        <span class="pin" style="left:36.09%;top:3.22%">3</span>
+        <span class="pin" style="left:82.42%;top:3.22%">4</span>
+        <span class="pin" style="left:89.45%;top:3.22%">5</span>
+        <span class="pin" style="left:96.25%;top:3.22%">6</span>
+        <span class="pin" style="left:15.94%;top:18.42%">7</span>
+        <span class="pin" style="left:38.2%;top:16.08%">8</span>
+        <span class="pin" style="left:89.84%;top:18.42%">9</span>
+        <span class="pin" style="left:78.13%;top:25.44%">10</span>
+        <span class="pin" style="left:42.19%;top:40.79%">11</span>
+        <span class="pin" style="left:28.91%;top:47.22%">12</span>
+        <span class="pin" style="left:44.14%;top:79.53%">13</span>
+      </div>
+      <figcaption>現場モードの画面(写真の名前・ラインは例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><div><b>左の並び</b> … <span class="btnname">看板</span>(この画面)と<span class="btnname">設定</span>を切り替えます。</div></li>
+      <li><div><b>担当・未反映</b> … 担当は、この画面で見ているライン。未反映は、まだ共有フォルダへ送れていない操作の数です(ふつうは数秒で 0 に戻ります)。</div></li>
+      <li><div><b>開いている端末</b> … いま看板を開いているほかのパソコン。現場の画面に「倉庫」と出ていれば、倉庫が見てくれています。</div></li>
+      <li><div><b>モードの札</b> … いまのモード。押すと設定の画面が開きます。</div></li>
+      <li><div><b>画面の明るさ</b> … 押すたびに 自動 → ライト → ダーク と変わります。</div></li>
+      <li><div><span class="btnname">■ 終了</span> … 看板を終わります(統合ツールごと閉じます。<a href="#owari">10. 終わるとき</a>)。</div></li>
+      <li><div><span class="btnname">↻ 更新</span> … 今すぐ新しい内容を読み直します。ふだんは押さなくても新しくなります。</div></li>
+      <li><div><span class="btnname">届いた資材を一括確認</span> … 赤と緑が両方付いている看板を、まとめて元に戻します。数字は対象の枚数です。</div></li>
+      <li><div><span class="btnname">🖨 注文票</span> … まだ発送されていない「欲しい」の一覧を印刷します。</div></li>
+      <li><div><b>新しいコメントの帯</b> … 倉庫からコメントが来たときだけ出ます。<span class="btnname">開く</span>で読めます。</div></li>
+      <li><div><b>資材の枠</b> … 資材(段ボール・外装紙・テープなど)ごとに1つの枠です。中にサイズが並びます。</div></li>
+      <li><div><b>サイズのボタン(看板)</b> … 現場モードで押すのはここです。色で状態が分かります(次の節)。</div></li>
+      <li><div><b>💬(コメント)</b> … その看板のやり取りを読む・書くボタン。赤い点は「まだ読んでいないコメントがある」印です。</div></li>
+    </ol>
+    <p>サイズのボタンの右の<b>「発送」「注文中」</b>は、現場モードでは色を見るだけのところです(押せるのは倉庫です)。
+      ボタンにマウスを乗せると、発注した時刻・発送した時刻などが出ます。</p>
+  </section>
+
+  <section id="iro">
+    <h2>4. 看板の色の意味</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>見え方</th><th>意味</th><th>次にだれが何をする</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip chip--gray">大</span></td><td>何も出ていない</td><td>足りなくなったら、ラインが押す</td></tr>
+        <tr><td><span class="chip chip--red">大</span></td><td><b>欲しい</b>(ラインが発注した)</td><td>倉庫が発送する</td></tr>
+        <tr><td><span class="chip chip--red">大</span> + <span class="chip chip--green">発送</span></td><td><b>倉庫が発送した</b></td><td>物が届いたら、ラインが「届いた」を確認する</td></tr>
+        <tr><td><span class="chip chip--red">🔒 大</span> + <span class="chip chip--yellow">注文中</span></td><td><b>注文中</b>(倉庫に在庫が無く、仕入れ先へ注文した)</td><td>入ってきたら倉庫が発送する。この間、ラインは赤を消せません(🔒)</td></tr>
+        <tr><td><span class="chip chip--blue">シート</span></td><td>文字が青い斜めの字 = <b>非常設品</b>(いつも置いていない資材)</td><td>押し方は同じ</td></tr>
+      </tbody>
+    </table></div>
+    <p>色の意味は、前の Excel の看板と同じです。</p>
+  </section>
+
+  <section id="genba">
+    <h2>5. 毎日の操作(現場モード)</h2>
+    <p>流れは <b>看板を見る → 欲しいものを押す → 倉庫が発送する → 届いたら確認</b> です。</p>
+
+    <h3>5-1. 看板を見る</h3>
+    <p>統合ツールの大きなタブの<span class="btnname">看板</span>を押すと、担当ラインの看板が出ます。開いたままにしておけば、勝手に新しくなります。</p>
+
+    <h3>5-2. 欲しい資材を押す(赤を付ける)</h3>
+    <ol class="steps">
+      <li><div><p>足りなくなった資材の枠で、<b>サイズのボタン</b>(例: 段ボールの<span class="btnname">大</span>)を1回押します。</p></div></li>
+      <li><div><p>ボタンが<b>赤</b>になれば、出せています。倉庫の画面にも数秒で赤が出ます。</p>
+        <figure class="shot shot--small">
+          <div class="shot__img"><img src="img/kanban-order.jpg" loading="lazy" width="758" height="169"
+            alt="段ボールの枠。左は押す前で「大」は灰色。右は押した後で「大」が赤くなっている。">
+            <span class="box" style="left:55.3%;top:24.5%;width:21.9%;height:24%"></span></div>
+          <figcaption>左: 押す前 → 右: 押した後(「大」が赤になった)</figcaption>
+        </figure></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>間違えて押したときは、<b>赤いボタンをもう1回押す</b>と取り消せます(倉庫が発送する前だけ)。
+      <span class="chip chip--yellow">注文中</span> の付いた看板(🔒)は、倉庫が対応中なので取り消せません。倉庫に声をかけてください。</div>
+
+    <h3>5-3. 届いたら確認する(1枚ずつ)</h3>
+    <p>倉庫が発送すると、赤の横の「発送」が<b>緑</b>になります。物が届いたら、看板を元に戻します。</p>
+    <ol class="steps">
+      <li><div><p>物が届いているのを確かめます。</p></div></li>
+      <li><div><p>赤と緑が付いている看板の<b>サイズのボタン(赤)</b>を押します。</p></div></li>
+      <li><div><p>「<b>この資材は届いていますか？</b> [OK]を選択すると、発注状態と発送状態の両方がクリアされます。」と出ます。<span class="btnname">OK</span>を押します。</p></div></li>
+      <li><div><p>赤と緑が消えて、灰色に戻ります。</p>
+        <figure class="shot shot--small">
+          <div class="shot__img"><img src="img/kanban-arrive.jpg" loading="lazy" width="758" height="169"
+            alt="段ボールの枠。左は「大」が赤で発送が緑。右は確認した後で「大」が灰色、発送も灰色に戻っている。">
+            <span class="box" style="left:0.6%;top:24.5%;width:43.8%;height:24%"></span>
+            <span class="box" style="left:55.3%;top:24.5%;width:43.8%;height:24%"></span></div>
+          <figcaption>左: 赤と緑(発送された)→ 右: 届いた確認のあと(元に戻った)</figcaption>
+        </figure></div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>物が届く前に<span class="btnname">OK</span>を押さないでください。押すと「届いた」として記録されます。
+      まだ届いていないときは<span class="btnname">キャンセル</span>を押せば、何も変わりません。</div>
+
+    <h3>5-4. 届いたものをまとめて確認する</h3>
+    <ol class="steps">
+      <li><div><p>赤と緑が付いている物が<b>全部届いている</b>ことを確かめます。</p></div></li>
+      <li><div><p>上の<span class="btnname">届いた資材を一括確認</span>を押します(数字は対象の枚数。0 のときは押せません)。</p></div></li>
+      <li><div><p>「<b>○ 件の資材到着を確認し、表示を元に戻しますか？</b>」と出ます。<span class="btnname">OK</span>を押します。</p></div></li>
+      <li><div><p>右下に「○ 件をリセットしました」と出て、赤と緑が両方付いていた看板が全部、灰色に戻ります。</p></div></li>
+    </ol>
+
+    <h3>5-5. 注文票を印刷する</h3>
+    <p>上の右の<span class="btnname">🖨 注文票</span>を押すと、別の画面に注文票(まだ発送されていない「欲しい」の一覧)が出ます。
+      直し方・印刷のしかたは <a href="#insatsu">7-1. 印刷する</a> を見てください。</p>
+
+    <h3>5-6. 倉庫からのコメントを読む</h3>
+    <p>倉庫がコメントを書くと、画面の上に「💬 新しいコメント 1 件」の帯が出て、その看板の 💬 に赤い点が付きます。
+      帯の<span class="btnname">開く</span>か、看板の 💬 を押すと読めます。読んだら<span class="btnname">閉じる</span>を押します。</p>
+    <figure class="shot shot--modal">
+      <div class="shot__img"><img src="img/kanban-site-comment.jpg" loading="lazy" width="600" height="330"
+        alt="現場モードでテープ 75 のコメントを開いたところ。倉庫からのコメント「在庫を切らしています。10/8(木)の朝に入る予定です。」が出ていて、右下に閉じるボタンがある。"></div>
+      <figcaption>現場で倉庫のコメントを読んだところ(この看板は注文中なので、現場からは書けず、読むだけです)</figcaption>
+    </figure>
+    <ul>
+      <li>現場がコメントを書けるのは、<b>赤を付けたあと、倉庫がまだ黄・緑を付けていない間</b>です(例: 「月曜朝に使うので急ぎでお願いします」)。書いたら<span class="btnname">送る(現場として)</span>を押します(<kbd>Ctrl</kbd>+<kbd>Enter</kbd> でも送れます。1件 200 文字まで)。</li>
+      <li>相手のコメントを読まないまま看板を押すと、先に「💬 相手からのコメントがあります」の小さな画面が出ます。読んで<span class="btnname">確認して進める</span>を押します。押すのをやめるときは<span class="btnname">やめる</span>。</li>
+    </ul>
+  </section>
+
+  <section id="souko">
+    <h2>6. 毎日の操作(倉庫モード)</h2>
+    <p>倉庫モードでは、全ラインの看板をタブで切り替えて見ます。押せるのは<b>「発送」と「注文中」</b>です(サイズのボタンは見るだけ)。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-wh-board.jpg" loading="lazy" width="1100" height="553"
+        alt="倉庫モードの看板の画面。上にラインのタブ LVC・HVC・機側・L-1・AIM・コイル・大板小板があり L-1 を選んでいる。表示中のラインを全て発送済みに・発送明細・非常設品リストのボタン。資材の枠の中に、サイズ・発送・注文中・コメントのボタンが並ぶ。">
+        <span class="pin" style="left:36.09%;top:16.77%">1</span>
+        <span class="pin" style="left:30.55%;top:3.42%">2</span>
+        <span class="pin" style="left:82.42%;top:3.42%">3</span>
+        <span class="pin" style="left:43.75%;top:24.69%">4</span>
+        <span class="pin" style="left:82.81%;top:31.68%">5</span>
+        <span class="pin" style="left:93.13%;top:31.68%">6</span>
+        <span class="pin" style="left:23.44%;top:37.73%">7</span>
+        <span class="pin" style="left:32.34%;top:37.73%">8</span>
+        <span class="pin" style="left:37.27%;top:37.73%">9</span>
+        <span class="pin" style="left:41.33%;top:37.73%">10</span>
+      </div>
+      <figcaption>倉庫モードの画面(L-1 のタブを選んだところ)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><div><b>ラインのタブ</b> … 見るラインを切り替えます。選んでいるタブが白くなります。</div></li>
+      <li><div><b>開いている端末</b> … いま看板を開いているラインのパソコン(例: L-1)。</div></li>
+      <li><div><b>モードの札</b> … 倉庫モードは緑の札です。</div></li>
+      <li><div><span class="btnname">表示中のラインを全て発送済みに</span> … 選んでいるラインの、まだ発送していない「欲しい」をまとめて発送済みにします。</div></li>
+      <li><div><span class="btnname">🖨 発送明細</span> … 発送した物(赤と緑が付いている物)の一覧を印刷します。</div></li>
+      <li><div><span class="btnname">🖨 非常設品リスト</span> … 「欲しい」が出ている非常設品の一覧を印刷します。</div></li>
+      <li><div><b>サイズ</b> … ラインが出した「欲しい」は赤で出ます(倉庫モードでは見るだけ)。</div></li>
+      <li><div><span class="btnname">発送</span> … 発送したら押します。緑になります。</div></li>
+      <li><div><span class="btnname">注文中</span> … 在庫が無く、仕入れ先へ注文したら押します。黄になります。赤が付いている看板だけ押せます。</div></li>
+      <li><div><b>💬</b> … その看板のコメントを読む・書く。</div></li>
+    </ol>
+
+    <h3>6-1. 発送する</h3>
+    <ol class="steps">
+      <li><div><p>統合ツールの大きなタブの<span class="btnname">看板</span>を押します。倉庫モードの画面が出ます。</p></div></li>
+      <li><div><p>上の<b>ラインのタブ</b>(例: <span class="btnname">L-1</span>)を押します。赤いサイズが「欲しい」です。</p></div></li>
+      <li><div><p>資材を用意して出したら、その看板の<span class="btnname">発送</span>を押します。<b>緑</b>になります。ラインの画面にも数秒で緑が出ます。</p>
+        <figure class="shot shot--small">
+          <div class="shot__img"><img src="img/kanban-ship.jpg" loading="lazy" width="758" height="169"
+            alt="倉庫モードの段ボールの枠。左は「大」が赤で発送は灰色。右は発送を押した後で、発送が緑になっている。">
+            <span class="box" style="left:76.8%;top:24.5%;width:8.6%;height:24%"></span></div>
+          <figcaption>左: 押す前 → 右: <span class="btnname">発送</span>を押した後(緑になった)</figcaption>
+        </figure></div></li>
+      <li><div><p>選んだラインの「欲しい」を全部出したときは、1つずつ押す代わりに<span class="btnname">表示中のラインを全て発送済みに</span>を押してもかまいません。
+        「<b>このラインの未発送品 ○ 件を、まとめて発送済みにしますか？</b>」と出るので<span class="btnname">OK</span>を押します。</p></div></li>
+      <li><div><p>必要なら<span class="btnname">🖨 発送明細</span>を押して印刷し、資材と一緒に渡します(<a href="#insatsu">7-1</a>)。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>間違えて<span class="btnname">発送</span>を押したときは、緑の<span class="btnname">発送</span>をもう1回押すと外れます。
+      赤が付いていない看板は発送できません(「注文がありません」と断られます)。</div>
+
+    <h3>6-2. 在庫が無いとき(注文中にする)</h3>
+    <ol class="steps">
+      <li><div><p>仕入れ先へ注文したら、その看板の<span class="btnname">注文中</span>を押します。<b>黄</b>になります。</p>
+        <figure class="shot" style="max-width:360px">
+          <div class="shot__img"><img src="img/kanban-hold.jpg" loading="lazy" width="344" height="169"
+            alt="倉庫モードの外装紙の枠。2200 の行の注文中が黄色になっている。">
+            <span class="box" style="left:67.5%;top:24.5%;width:19.2%;height:24%"></span></div>
+          <figcaption>外装紙 2200 を注文中にしたところ</figcaption>
+        </figure></div></li>
+      <li><div><p>💬 を押して、入る見込みを書いておくとラインに伝わります(例: 「10/8(木)の朝に入る予定です」)。書いたら<span class="btnname">送る(倉庫として)</span>を押します。</p>
+        <figure class="shot shot--modal">
+          <div class="shot__img"><img src="img/kanban-wh-comment.jpg" loading="lazy" width="600" height="400"
+            alt="倉庫モードでテープ 75 のコメント画面。倉庫のコメント「在庫を切らしています。10/8(木)の朝に入る予定です。」の下に「まだ読まれていません」。下に入力欄と、閉じる・送る(倉庫として)のボタン。"></div>
+          <figcaption>倉庫からコメントを書いたところ。ラインが読むと「✓ 既読」に変わります</figcaption>
+        </figure></div></li>
+      <li><div><p>物が入ったら、いつもどおり<span class="btnname">発送</span>を押します。<b>注文中(黄)は自動で外れます</b>。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>注文中をやめるときは、黄の<span class="btnname">注文中</span>をもう1回押すと外れます。</div>
+  </section>
+
+  <section id="hoka">
+    <h2>7. そのほかの操作</h2>
+
+    <h3 id="insatsu">7-1. 印刷する(注文票・発送明細・非常設品リスト)</h3>
+    <p><span class="btnname">🖨 注文票</span>(現場)・<span class="btnname">🖨 発送明細</span>・<span class="btnname">🖨 非常設品リスト</span>(倉庫)を押すと、
+      別の画面に印刷する前の確認が出ます。ここで<b>そのまま書き直せます</b>。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-report.jpg" loading="lazy" width="1100" height="352"
+        alt="注文票の印刷前の画面。上に L-1 と作成日時、印刷する・元に戻すのボタンと「印刷する行: 4」。下に資材・サイズ・状態・更新日時の表があり、各行の左にチェックがある。">
+        <span class="pin" style="left:7.2%;top:37.3%">1</span>
+        <span class="pin" style="left:15.3%;top:37.3%">2</span>
+        <span class="pin" style="left:3.2%;top:54%">3</span>
+        <span class="pin" style="left:37.5%;top:48.3%">4</span>
+      </div>
+      <figcaption>注文票(現場モード)。発送明細・非常設品リストも同じ形です</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><div><span class="btnname">🖨 印刷する</span> … 印刷の画面が出ます。プリンターを選んで印刷します。</div></li>
+      <li><div><span class="btnname">元に戻す</span> … 書き直したところを、はじめの内容に戻します。</div></li>
+      <li><div><b>左のチェック</b> … 外した行は印刷されません。</div></li>
+      <li><div><b>マス</b> … 押すと数や資材名を書き直せます。直したマスは黄色くなります。</div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>ここで直すのは<b>紙だけ</b>です。看板の内容は変わりません。印刷の画面の「余白」は「既定」のままにしてください(「なし」にすると端が切れます)。</div>
+    <p>印刷するものが無いときは「印刷する明細はありません。」と出ます。</p>
+
+    <h3>7-2. 新しくするには</h3>
+    <p><b>何もしなくてかまいません。</b>開いたままでも、自分の操作はすぐ、ほかのパソコンの操作は数秒〜30秒ほどで画面に出ます。
+      すぐ確かめたいときは<span class="btnname">↻ 更新</span>を押します。</p>
+
+    <h3>7-3. 画面の明るさ</h3>
+    <p>右上の明るさのボタンを押すたびに、自動 → ☀ ライト → ☾ ダーク → 自動 と変わります。看板の赤・緑・黄の色は、ダークでも同じです。</p>
+  </section>
+
+  <section id="settei">
+    <h2>8. 設定</h2>
+    <p>左の並びの<span class="btnname">設定</span>で開きます。<b>ふだんの作業では触りません。</b>パソコンを入れたときや、ラインが変わったときに、班長・管理者が使います。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-settings.jpg" loading="lazy" width="1100" height="705"
+        alt="設定の画面の「この端末」のタブ。上に この端末・接続先・マスタ管理・看板集計・取り込みの状態・記録・ファイルの場所・パスワード認証・配布設定 のタブ。その下に「未認証」の帯、モードと担当ラインの選ぶ欄、この端末の権限(ログインID・PC名・使えるモード・担当ライン(表から))。">
+        <span class="pin" style="left:92.2%;top:10%">1</span>
+        <span class="pin" style="left:53.1%;top:15.5%">2</span>
+        <span class="pin" style="left:92.2%;top:36.5%">3</span>
+        <span class="pin" style="left:92.2%;top:47.7%">4</span>
+        <span class="pin" style="left:93.8%;top:75.6%">5</span>
+        <span class="pin" style="left:16.8%;top:84.2%">6</span>
+        <span class="pin" style="left:31.3%;top:97.2%">7</span>
+      </div>
+      <figcaption>設定の「この端末」(ログインID・PC名は例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><div><b>設定のタブ</b> … 用ごとに9つに分かれています(下の表)。</div></li>
+      <li><div><b>認証の状態</b> … 「未認証」のときは、守られた設定を変えるときに管理者パスワードを訊かれます。</div></li>
+      <li><div><b>モード</b> … 現場モード・倉庫モード・倉庫参照モードを選びます。使えないモードには「(権限なし)」と出ます。パスワードは要りません。</div></li>
+      <li><div><b>担当ライン</b> … 現場モードで見るライン。変えるには<b>管理者パスワード</b>が要ります。</div></li>
+      <li><div><b>この端末の権限</b> … このパソコンのログインID と PC名。</div></li>
+      <li><div><b>使えるモード</b> … ✔ は使える、✖ は使えないモード。使えないときは、何を登録すればよいかが出ます。</div></li>
+      <li><div><b>担当ライン(表から)</b> … アクセス権限の表で決まった担当ライン。</div></li>
+    </ol>
+    <div class="tablewrap"><table>
+      <thead><tr><th>タブ</th><th>何をするところか</th><th>パスワード</th></tr></thead>
+      <tbody>
+        <tr><td>この端末</td><td>モードと担当ラインを変える。この端末の権限を見る</td><td>担当ラインを変えるときは要る</td></tr>
+        <tr><td>接続先</td><td>共有フォルダの置き場所・取り込みの間隔などを変える</td><td>要る</td></tr>
+        <tr><td>マスタ管理</td><td>看板を増やす・減らす・資材名やサイズを直す。アクセス権限の行を足す・直す</td><td>直すときは要る(見るだけなら要らない)</td></tr>
+        <tr><td>看板集計</td><td>出した回数・届くまでの日数などを出す。CSV に書き出す</td><td>要らない</td></tr>
+        <tr><td>取り込みの状態</td><td><span class="btnname">↻ いま取り込む</span>・まだ送れていない操作を見る</td><td>片付けるときは要る</td></tr>
+        <tr><td>記録</td><td>エラーの記録を探す・なぜなぜ分析シートを作る</td><td>要らない</td></tr>
+        <tr><td>ファイルの場所</td><td>使っているファイルの置き場所を見る(問い合わせのとき)</td><td>要らない</td></tr>
+        <tr><td>パスワード認証</td><td>管理者パスワードで認証する・決める・変える</td><td>—</td></tr>
+        <tr><td>配布設定</td><td>1台で決めた設定をほかのパソコンへ配る</td><td>要る</td></tr>
+      </tbody>
+    </table></div>
+    <h3>モードを変えるとき</h3>
+    <ol class="steps">
+      <li><div><p><span class="btnname">設定</span> → <span class="btnname">この端末</span> の「モード」で、使うモードを選びます。</p></div></li>
+      <li><div><p>「○○モードに切り替えます。…いま切り替えますか？」と出たら<span class="btnname">OK</span>を押します。書き戻しを済ませてから、看板のタブがそのモードで開き直します。
+        (<span class="btnname">キャンセル</span>なら、次に開いたときから切り替わります。)</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>「パスワード認証」で一度認証すると、しばらく(<span class="btnname">認証を解除する</span>を押す・30分さわらない・閉じる まで)パスワードを訊かれません。
+      離れるときは<span class="btnname">認証を解除する</span>を押してください。</div>
+    <div class="ng"><b>してはいけないこと</b>管理者パスワードを決めないまま置いておかないでください。最初に設定を変えようとした人がパスワードを決められてしまいます。</div>
+  </section>
+
+  <section id="komatta">
+    <h2>9. 困ったとき</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
+      <tbody>
+        <tr><td>サイズのボタンを押しても変わらない(🔒 が付いている)</td><td>倉庫が「注文中」にしている看板です。倉庫が発送するか、注文中を外すまで変えられません。急ぐときは 💬 か口頭で倉庫へ。</td></tr>
+        <tr><td>「注文がありません。…」と出る(倉庫)</td><td>ラインがまだ赤を付けていない看板です。発送・注文中は、赤が付いている看板だけ押せます。</td></tr>
+        <tr><td>「💬 相手からのコメントがあります」と出て押せない</td><td>先にコメントを読みます。読んで<span class="btnname">確認して進める</span>を押すと、押したことになります。</td></tr>
+        <tr><td>赤い帯「発送処理中に注文が取り消されました」が出た</td><td>倉庫が発送したのと同じころに、ラインが赤を消しました。<b>現場</b>: 資材を確かめてから、帯の<span class="btnname">確認した</span>を押します。必要ならそのあとで出し直します。<b>倉庫</b>: 何もしなくてかまいません(現場の確認待ち)。</td></tr>
+        <tr><td>上の帯に「⚠ 取り込めていません ○分前」と出る</td><td>共有フォルダに届いていません。ネットワークにつながっているか確かめて、班長・管理者に知らせてください。押した操作はパソコンに残り、つながれば送られます。</td></tr>
+        <tr><td>「未反映」の数が減らない</td><td><span class="btnname">設定</span> → <span class="btnname">取り込みの状態</span> → <span class="btnname">↻ いま取り込む</span>を押します。それでも減らなければ管理者へ。</td></tr>
+        <tr><td>「共有DBに 看板_○○ がありません」と出る</td><td>そのラインの看板の表が共有フォルダに見つかりません。押しても届かないのでボタンが止まります。管理者に知らせてください。</td></tr>
+        <tr><td>開いている端末に「HVC?」のように <b>?</b> が付いている</td><td>そのパソコンが正しく閉じられなかった印です。そのパソコンで看板を開いて、普通に終了すれば消えます。放っておいても害はありません。</td></tr>
+        <tr><td>倉庫モードで開きたいのに現場モードで開く</td><td>このパソコン(またはログインID)に倉庫モードの権限がありません。<span class="btnname">設定</span> → <span class="btnname">この端末</span>の「この端末の権限」に、足す行が出ます。管理者に登録を頼んでください。</td></tr>
+        <tr><td>エラーが出た</td><td>文の最後の「記録番号 R-…」を控えて、管理者に伝えてください。</td></tr>
+        <tr><td>看板のタブが「理由の画面」になった(止まった)</td><td>画面の<span class="btnname">もう一度開く</span>を押します。看板だけが開き直します(ほかのタブはそのまま)。</td></tr>
+        <tr><td>画面が古いままに見える</td><td><span class="btnname">↻ 更新</span>を押すか、<kbd>F5</kbd> を押します(<kbd>F5</kbd> は看板のタブだけ読み直します)。</td></tr>
+      </tbody>
+    </table></div>
+    <h3>「この画面では操作できません」と出たとき</h3>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/kanban-cover.jpg" loading="lazy" width="1100" height="516"
+        alt="看板の画面が暗くなり、真ん中に「この画面では操作できません」の小さな画面と「こちらの画面を使う」ボタンが出ている。"></div>
+      <figcaption>同じパソコンで看板の画面を2つ開いたときに出ます</figcaption>
+    </figure>
+    <p>同じパソコンで看板の画面を2つ開いています。押せるのは1つだけです。この画面を使うなら<span class="btnname">こちらの画面を使う</span>を押します(もう一方が使えなくなります)。
+      もう一方を使うなら、この画面は閉じてかまいません。放っておいてもデータには何もしません。</p>
+    <div class="tip"><b>こつ</b>統合ツールが開けないときだけ、予備として看板のブラウザ版を使うことがあります。そのときは管理者の指示に従ってください。</div>
+  </section>
+
+  <section id="owari">
+    <h2>10. 終わるとき</h2>
+    <ol class="steps">
+      <li><div><p>統合ツールの右上の<span class="btnname">終了</span>を押します。看板の画面の<span class="btnname">■ 終了</span>を押しても、<b>統合ツール全体</b>が閉じます。</p></div></li>
+      <li><div><p>まだ共有フォルダへ送れていない操作があるときは、送り終えてから閉じます。確認が出たら、内容を読んで答えてください。</p></div></li>
+    </ol>
+    <div class="warn"><b>気をつけること</b>電源を切る前に、必ず<span class="btnname">終了</span>で閉じてください。いきなり電源を切ると、押した操作が送られずに残ったり、ほかのパソコンの「開いている端末」に <b>?</b> 付きで残ったりします。</div>
+  </section>
+
+  <p class="foot">資材発注看板システム VER3.1.0 の操作説明書です。統合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
+    写真の名前・ライン・資材・コメントは説明のための例です。</p>
+</main>
+</body>
+</html>

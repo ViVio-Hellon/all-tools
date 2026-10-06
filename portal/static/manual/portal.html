@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>統合ツール 操作説明書</title>
+<link rel="stylesheet" href="manual.css">
+</head>
+<body class="t-portal">
+<header class="top"><div class="top__in">
+  <span class="top__brand">統合ツール 操作説明書</span>
+  <nav aria-label="説明書">
+    <a href="index.html">一覧</a><a href="portal.html" aria-current="page">統合ツール・大設定</a><a href="nippou.html">日報</a><a href="kanban.html">看板</a><a href="calendar.html">カレンダー</a><a href="inspection.html">点検表</a>
+  </nav></div></header>
+<main class="page">
+  <div class="head">
+    <div class="head__row"><span class="head__mark">統</span><h1>統合ツール・大設定</h1><span class="ver">VER1.0.0</span></div>
+    <p class="lead">日報・看板・カレンダー・点検表を、1つの窓に大きなタブで並べたものです。この説明書では、窓の使い方と、どの端末にどのタブを出すかを決める「大設定」を説明します。各ツールの使い方は、それぞれの説明書を見てください。</p>
+  </div>
+
+  <nav class="toc" aria-label="目次"><h2>目次</h2><ol>
+    <li><a href="#open">開き方</a></li>
+    <li><a href="#screen">画面の見かた</a></li>
+    <li><a href="#tabs">タブの使い方</a></li>
+    <li><a href="#manual">説明書の開き方</a></li>
+    <li><a href="#quit">終わるとき</a></li>
+    <li><a href="#stopped">タブが止まったとき</a></li>
+    <li><a href="#settings">大設定: この端末</a></li>
+    <li><a href="#rights">大設定: タブ表示権限</a></li>
+    <li><a href="#place">大設定: 置き場所・配布設定・パスワード</a></li>
+    <li><a href="#trouble">困ったとき</a></li>
+  </ol></nav>
+
+  <section id="open">
+    <h2>開き方</h2>
+    <ol class="steps">
+      <li><div><p>デスクトップの <b>統合ツール.exe</b>(またはそのショートカット)をダブルクリックします。</p></div></li>
+      <li><div><p>窓が開き、上に大きなタブが並びます。この端末で使うタブだけが出ます(どのタブを出すかは<a href="#rights">大設定</a>で決めます)。</p></div></li>
+      <li><div><p>最初のタブの画面が出たあと、ほかのタブも順に準備されます。タブの右上の<b>黄色い点</b>は「準備中」です。</p></div></li>
+    </ol>
+    <div class="tip"><b>こつ</b>統合ツール.exe をもう一度ダブルクリックしても、2つ目は開きません。開いている窓が前に出てきます。</div>
+    <div class="warn"><b>気をつけること</b>統合ツール.exe と <b>Start.vbs</b>(予備のブラウザ版)は同時に使えません。後から開いたほうが「動いています」と知らせて止まります。ふだんは統合ツール.exe だけを使ってください。</div>
+  </section>
+
+  <section id="screen">
+    <h2>画面の見かた</h2>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-bar.jpg" alt="統合ツールの上の帯。左から 統合ツールの名前と版、日報・看板・カレンダー・点検表・大設定のタブ、説明書と終了のボタン" width="1100" height="49" loading="lazy">
+        <span class="pin" style="left:7%;top:50%">1</span>
+        <span class="pin" style="left:15%;top:50%">2</span>
+        <span class="pin" style="left:24.2%;top:30%">3</span>
+        <span class="pin" style="left:73.5%;top:50%">4</span>
+        <span class="pin" style="left:88.5%;top:50%">5</span>
+        <span class="pin" style="left:96.3%;top:50%">6</span></div>
+      <figcaption>窓のいちばん上の帯</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>統合ツールの名前と版</b>(VER1.0.0)。</li>
+      <li><b>大きなタブ</b>。押すとそのツールの画面に替わります。いま開いているタブは白くなります。</li>
+      <li><b>ツールの版</b>(例: 日報は VER4.22.0)。問い合わせのときは、この版を伝えてください。</li>
+      <li><b>大設定</b>。この端末のこと・どのタブを出すかを見る/決める画面です。</li>
+      <li><span class="btnname">説明書</span>。いま開いているタブの説明書(この画面)が出ます。</li>
+      <li><span class="btnname">終了</span>。統合ツールを終わります(全部のタブがまとめて閉じます)。</li>
+    </ol>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-window.jpg" alt="統合ツールの窓で看板のタブを開いたところ。上の帯の下に、看板のツールの画面が出ている" width="1100" height="703" loading="lazy">
+        <span class="pin" style="left:4%;top:3.6%">1</span>
+        <span class="pin" style="left:4%;top:9.8%">2</span>
+        <span class="pin" style="left:45%;top:24%">3</span></div>
+      <figcaption>看板のタブを開いたところ(写真の中の資材は例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li>統合ツールの帯(上の説明)。</li>
+      <li><b>ツールの帯</b>。ここから下は、そのツールの画面です。ツールの名前・版・ツールの「終了」などがあります。</li>
+      <li>ツールの画面。使い方は、そのツールの説明書を見てください。</li>
+    </ol>
+  </section>
+
+  <section id="tabs">
+    <h2>タブの使い方</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>したいこと</th><th>操作</th></tr></thead>
+      <tbody>
+        <tr><td>ほかのツールに替える</td><td>大きなタブを押す。または <kbd>Alt</kbd>+<kbd>1</kbd>〜<kbd>9</kbd>(左から数えた番号)</td></tr>
+        <tr><td>いまのツールの画面を読み直す</td><td><kbd>F5</kbd>。<b>いま開いているタブだけ</b>が読み直されます(ほかのタブの打ちかけは消えません)</td></tr>
+        <tr><td>説明書を見る</td><td><span class="btnname">説明書</span> か <kbd>F1</kbd></td></tr>
+      </tbody>
+    </table></div>
+    <p>タブを替えても、前のタブの画面はそのまま残っています。打ちかけの日報なども消えません。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>タブの右上の点</th><th>意味</th></tr></thead>
+      <tbody>
+        <tr><td>点なし</td><td>動いています(ふつう)</td></tr>
+        <tr><td>黄色(点滅)</td><td>準備中です。少し待ってください</td></tr>
+        <tr><td>赤</td><td>そのツールが止まっています。タブを開くと理由が出ます(<a href="#stopped">タブが止まったとき</a>)</td></tr>
+        <tr><td>灰色</td><td>そのツールは終了しています</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="manual">
+    <h2>説明書の開き方</h2>
+    <ol class="steps">
+      <li><div><p>右上の <span class="btnname">説明書</span> を押します(<kbd>F1</kbd> でも開きます)。いま開いているタブの説明書が、画面の上に重なって出ます。</p></div></li>
+      <li><div><p>上の帯の <span class="btnname">説明書の一覧</span> や、説明書の中の上の並び(日報・看板…)で、ほかの説明書も読めます。</p></div></li>
+      <li><div><p><span class="btnname">閉じる(Esc)</span> か <kbd>Esc</kbd> で閉じると、元の画面に戻ります(ツールの画面はそのままです)。</p></div></li>
+    </ol>
+  </section>
+
+  <section id="quit">
+    <h2>終わるとき</h2>
+    <ol class="steps">
+      <li><div><p>右上の <span class="btnname">終了</span> を押します。窓の右上の <b>×</b> や、ツールの画面の「終了」でも同じです(<b>どれを押しても、統合ツール全体が閉じます</b>)。</p></div></li>
+      <li><div><p>どのツールも途中の処理が無ければ、そのまま閉じます。</p></div></li>
+      <li><div><p>共有への書き戻し・印刷などの<b>途中の処理</b>があるツールがあると、「次のツールで処理が残っています」と<b>1つの確認</b>にまとめて出ます。待てるときは <span class="btnname">やめる</span> を押し、少し待ってからもう一度終了します。<span class="btnname">終了する</span> を押すと中断して閉じます(送れなかった操作は手元に残り、次に開いたときに送ります)。</p></div></li>
+    </ol>
+  </section>
+
+  <section id="stopped">
+    <h2>タブが止まったとき</h2>
+    <p>あるツールが動かなくなると、<b>そのタブだけ</b>に理由が出ます。ほかのタブはそのまま使えます。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-tab-failed.jpg" alt="看板のタブに「資材発注看板システムを開けませんでした」と理由、ログの場所、もう一度開くボタンが出ている" width="1100" height="596" loading="lazy">
+        <span class="pin" style="left:39.5%;top:4%">1</span>
+        <span class="pin" style="left:21.5%;top:20%">2</span>
+        <span class="pin" style="left:21.5%;top:89%">3</span></div>
+      <figcaption>看板のタブが開けなかったときの例(看板のブラウザ版が先に動いていた)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li>止まったタブには<b>赤い点</b>が付きます。</li>
+      <li>理由と、どうすればよいか。書いてあるとおりにしてください。</li>
+      <li>直したら <span class="btnname">もう一度開く</span> を押します。そのツールだけが起こし直されます。</li>
+    </ol>
+    <div class="tip"><b>こつ</b>理由の画面に出ている「ログの場所」は、係の人に問い合わせるときに伝えてください。</div>
+  </section>
+
+  <section id="settings">
+    <h2>大設定: この端末</h2>
+    <p>大きなタブの <b>大設定</b> を開くと、この端末のログインID・PC名と、いま出しているタブ、そう決まった理由が出ます。見るだけなら、パスワードは要りません。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-settings.jpg" alt="大設定の画面。鍵が掛かっています、この端末のログインIDとPC名、出しているタブ、決め方" width="1100" height="397" loading="lazy">
+        <span class="pin" style="left:28.7%;top:40%">1</span>
+        <span class="pin" style="left:31%;top:61.5%">2</span>
+        <span class="pin" style="left:44%;top:75%">3</span>
+        <span class="pin" style="left:78%;top:81%">4</span></div>
+      <figcaption>大設定(鍵が掛かっているとき)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><b>鍵</b>。書き換えるときだけ、管理者パスワードを入れて <span class="btnname">鍵を開ける</span>。30分さわらなければ、また鍵が掛かります。</li>
+      <li>この端末の <b>ログインID・PC名</b>。<span class="btnname">写す</span> で写せます(登録のとき、係の人に伝える)。</li>
+      <li>この端末に<b>出しているタブ</b>。</li>
+      <li><b>決め方</b>(なぜこのタブになったか)。</li>
+    </ol>
+  </section>
+
+  <section id="rights">
+    <h2>大設定: タブ表示権限(どの端末にどのタブを出すか)</h2>
+    <p>どのタブを出すかは、共有フォルダの DB(梱包資材マスタ.sqlite3。python-web-tools と同じもの)にある表 <b>「タブ表示権限」</b> で決めます。1行に「どのログインID・どのPC名に・どのタブを出すか」を書きます。</p>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-rights.jpg" alt="タブ表示権限の表。LINE1-PC は全部、LINE2-PC は日報とカレンダー、WH-PC は看板、yamada はすべて" width="1000" height="339" loading="lazy">
+        <span class="pin" style="left:79.7%;top:12%">1</span>
+        <span class="pin" style="left:91.5%;top:12%">2</span>
+        <span class="pin" style="left:17%;top:34%">3</span>
+        <span class="pin" style="left:91%;top:52%">4</span></div>
+      <figcaption>タブ表示権限の例(PC名・ID は例です)</figcaption>
+    </figure>
+    <ol class="pins">
+      <li><span class="btnname">共有から読み直す</span>: ほかの端末で直した内容を、すぐ読み込みます(ふだんは自動で読み直します)。</li>
+      <li><span class="btnname">+ 行を足す</span>: 端末を登録します(鍵を開けてから)。</li>
+      <li>表の<b>置き場所</b>。</li>
+      <li>行ごとの <span class="btnname">直す</span>・<span class="btnname">消す</span>。</li>
+    </ol>
+
+    <h3>決まり</h3>
+    <ul>
+      <li><b>空欄は「問わない」</b>。PC名だけ書けば、その PC ならだれがログインしても同じタブになります。</li>
+      <li>ログインIDとPC名の<b>両方を書いた行</b>は、両方が合うときだけ効きます。</li>
+      <li>当てはまる行が2つ以上あれば、表示タブを<b>全部足します</b>。</li>
+      <li><b>ログインIDもPC名も空の行は効きません</b>(全員に効いてしまうため)。</li>
+      <li><b>有効</b>を外した行は効きません(消さずに止めておけます)。</li>
+      <li>表示タブは「日報」「看板」「カレンダー」「点検表」。<b>すべて</b> と書くと全部です。</li>
+      <li>既定タブは、統合ツールを開いたときに最初に出すタブです。</li>
+    </ul>
+
+    <h3>端末を登録する</h3>
+    <ol class="steps">
+      <li><div><p>大設定で、管理者パスワードを入れて <span class="btnname">鍵を開ける</span>。</p></div></li>
+      <li><div><p>表がまだ無いときは「共有の DB にこの表がまだありません」の横の <span class="btnname">表を作る</span> を押します(最初の1回だけ)。</p></div></li>
+      <li><div><p><span class="btnname">+ 行を足す</span> を押し、下の画面で入れて <span class="btnname">保存する</span>。</p>
+        <figure class="shot" style="max-width:640px">
+          <div class="shot__img"><img src="img/portal-row-dialog.jpg" alt="タブ表示権限に行を足す画面。PC名 LINE3-PC、表示タブは日報と点検表、既定タブは日報、備考は3ライン" width="640" height="570" loading="lazy">
+            <span class="pin" style="left:93%;top:33%">1</span>
+            <span class="pin" style="left:4%;top:46.5%">2</span>
+            <span class="pin" style="left:4%;top:61.8%">3</span>
+            <span class="pin" style="left:4%;top:69%">4</span>
+            <span class="pin" style="left:79%;top:90%">5</span></div>
+          <figcaption>行を足す画面</figcaption>
+        </figure>
+        <ol class="pins">
+          <li>PC名(またはログインID)。<span class="btnname">この端末の値</span> で、いま使っている端末の値が入ります。</li>
+          <li>出すタブにチェック。</li>
+          <li>最初に開くタブ(無くてもよい)。</li>
+          <li>有効(ふつうはチェックのまま)。</li>
+          <li><span class="btnname">保存する</span>。共有の DB にすぐ書かれます。</li>
+        </ol></div></li>
+      <li><div><p>登録した端末では、<b>次に統合ツールを開いたとき</b>から、そのタブだけが出ます。増えたタブは開いたままでも1分ほどで足されます。</p>
+        <figure class="shot">
+          <div class="shot__img"><img src="img/portal-line2.jpg" alt="LINE2-PC では 日報・カレンダー・大設定のタブだけが並んでいる" width="1100" height="92" loading="lazy"></div>
+          <figcaption>例: LINE2-PC(日報・カレンダーを登録)では、この2つと大設定だけが出る</figcaption>
+        </figure></div></li>
+    </ol>
+
+    <div class="ng"><b>気をつけること</b><b>最初の1行を足すと、登録していない端末にはツールのタブが出なくなります</b>(大設定だけになります)。足す前に確かめる知らせが出ます。使う端末をまとめて登録してから始めてください。</div>
+    <figure class="shot">
+      <div class="shot__img"><img src="img/portal-unregistered.jpg" alt="登録の無い端末では大設定のタブだけが出て、この端末は登録されていませんと表示される" width="1100" height="382" loading="lazy"></div>
+      <figcaption>登録の無い端末(例: LINE9-PC)。大設定だけが出て、登録のしかたが書いてある</figcaption>
+    </figure>
+    <div class="tip"><b>こつ</b>表がまだ無いとき・1行も無いとき・共有フォルダに届かず前の写しも無いときは、<b>すべてのタブ</b>が出ます(ラインを止めないため)。共有フォルダに届かない日は、前に読めた内容で決めます。</div>
+  </section>
+
+  <section id="place">
+    <h2>大設定: 置き場所・配布設定・パスワード</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>欄</th><th>すること</th><th>だれが</th></tr></thead>
+      <tbody>
+        <tr><td>共有の DB の置き場所</td><td>タブ表示権限の表がある DB の<b>フォルダ</b>と<b>ファイル名</b>。ふつうは変えません(既定: python-web-tools と同じ <code>梱包資材マスタ.sqlite3</code>)。<span class="btnname">既定に戻す</span> で戻せます</td><td>管理者(鍵を開けて)</td></tr>
+        <tr><td>ツール</td><td>各ツールの版・動いているか・手元のデータの場所。止まったツールは <span class="btnname">もう一度開く</span></td><td>だれでも(見るだけ)</td></tr>
+        <tr><td>管理者パスワード</td><td>いまのパスワードと新しいパスワード(4文字以上)を入れて <span class="btnname">変える</span></td><td>管理者</td></tr>
+        <tr><td>配布設定</td><td>この端末の置き場所・管理者パスワードを書き出して、ほかの端末に配る。配った先は、その端末に無い設定だけ読み込みます</td><td>管理者</td></tr>
+        <tr><td>このアプリ</td><td>版・一式の場所・ログの場所</td><td>だれでも(見るだけ)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="trouble">
+    <h2>困ったとき</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
+      <tbody>
+        <tr><td>大設定のタブしか出ない</td><td>この端末がタブ表示権限に登録されていません。大設定の「この端末」のログインID・PC名を係の人に伝えて、登録してもらいます</td></tr>
+        <tr><td>使いたいタブが出ていない</td><td>登録した行の表示タブに入っていません。係の人に直してもらい、統合ツールを開き直します</td></tr>
+        <tr><td>「ブラウザ版が動いています」と出て開かない</td><td>Start.vbs で開いたブラウザの画面が残っています。ブラウザの画面の「終了」で閉じてから、統合ツール.exe を開き直します</td></tr>
+        <tr><td>タブに赤い点・「開けませんでした」</td><td>画面の理由のとおりにして、<span class="btnname">もう一度開く</span>(<a href="#stopped">タブが止まったとき</a>)</td></tr>
+        <tr><td>画面が固まったように見える</td><td>そのタブで <kbd>F5</kbd>。ほかのタブは消えません</td></tr>
+        <tr><td>パスワードを忘れた</td><td>係の人に頼みます(パスワードを既定に戻せます)</td></tr>
+        <tr><td>共有の DB に届きません、と出る</td><td>共有フォルダにつながっているか確かめます。つながっていない間は、前に読めた内容でタブを出しています</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <p class="foot">統合ツール VER1.0.0 の説明書です。統合ツールの右上の「説明書」(F1)から、いつでも開けます。画面の写真は例のデータで撮ったものです。</p>
+</main>
+</body>
+</html>

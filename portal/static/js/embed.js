@@ -13,6 +13,7 @@
   ・F5 / Ctrl+R … **このツールの画面だけ**を読み直す(窓ごと読み直すと全タブが消える)
   ・Ctrl+P      … このツールの画面を印刷する(ツールが自分で受けていればそちら)
   ・Alt+1〜9    … 大きなタブを切り替える
+  ・F1          … このツールの操作説明書を開く
   ・アプリの外へのリンク … 既定のブラウザで開く(窓の中で開かない)
 
   `"__ALLTOOLS_TOOL__"` と `"__ALLTOOLS_SHELL__"` は、外枠が差し込むときに
@@ -124,6 +125,12 @@
       // ツールが自分で受けていない Ctrl+P。窓ごとではなく、この画面を刷る
       event.preventDefault();
       window.print();
+      return;
+    }
+    if (key === "F1") {
+      // 操作説明書(大きなタブの画面が、このツールの説明書を重ねて開く)
+      event.preventDefault();
+      tellShell({ action: "help" });
       return;
     }
     if (event.altKey && !ctrl && /^[1-9]$/.test(key)) {

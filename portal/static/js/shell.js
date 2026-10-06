@@ -66,7 +66,7 @@ function originOf(id) {
 // ------------------------------------------------------------------
 // タブ
 // ------------------------------------------------------------------
-function tabButton(id, title, sub) {
+function tabButton(id, title, sub, version = "") {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "bigtab" + (id === SETTINGS ? " bigtab--settings" : "");
@@ -81,9 +81,20 @@ function tabButton(id, title, sub) {
   mark.className = "bigtab__mark";
   mark.textContent = MARK[id] || title.slice(0, 1);
   mark.setAttribute("aria-hidden", "true");
+  // 1段目: 短い名前と版。2段目: 正式名
   const head = document.createElement("span");
-  head.className = "bigtab__title";
-  head.textContent = title;
+  head.className = "bigtab__head";
+  const name = document.createElement("span");
+  name.className = "bigtab__title";
+  name.textContent = title;
+  head.append(name);
+  if (version) {
+    const ver = document.createElement("span");
+    ver.className = "bigtab__ver";
+    ver.textContent = `VER${version}`;
+    head.append(ver);
+    button.title = `${sub} VER${version}`;
+  }
   const small = document.createElement("span");
   small.className = "bigtab__sub";
   small.textContent = sub;
@@ -100,7 +111,7 @@ function renderTabs(ids) {
   order = [...ids, SETTINGS];
   for (const id of ids) {
     const tool = TOOLS.get(id);
-    tabsBar.append(tabButton(id, tool.title, tool.name));
+    tabsBar.append(tabButton(id, tool.title, tool.name, tool.version));
   }
   tabsBar.append(tabButton(SETTINGS, "大設定", "タブ表示権限"));
 }
@@ -226,6 +237,7 @@ function showPanel(id) {
 function select(id) {
   if (!order.includes(id)) return;
   current = id;
+  if (manualBox && !manualBox.hidden) openManual(id);
   for (const button of tabsBar.querySelectorAll(".bigtab")) {
     const on = button.dataset.tab === id;
     button.setAttribute("aria-selected", on ? "true" : "false");
@@ -385,11 +397,23 @@ function keyFromTool(id, data) {
     select(order[(order.indexOf(current) + 1) % order.length]);
   } else if (data.action === "prev") {
     select(order[(order.indexOf(current) - 1 + order.length) % order.length]);
+  } else if (data.action === "help") {
+    openManual(id);
   }
 }
 
 // この画面(タブの帯)で押されたキー
 document.addEventListener("keydown", (event) => {
+  if (event.key === "F1") {
+    event.preventDefault();
+    if (manualBox.hidden) openManual(); else closeManual();
+    return;
+  }
+  if (event.key === "Escape" && !manualBox.hidden) {
+    event.preventDefault();
+    closeManual();
+    return;
+  }
   // F5 / Ctrl+R は**いま出しているツールの画面だけ**を読み直す(全タブを読み直さない)
   if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && (event.key === "r" || event.key === "R"))) {
     event.preventDefault();
@@ -469,6 +493,47 @@ async function watchBrowserTools() {
              "このツールのブラウザ版は止まっています。ほかのタブはそのまま使えます。");
   }
 }
+
+// ------------------------------------------------------------------
+// 操作説明書(画面写真入り。portal/static/manual/)。いま出しているタブの説明書を、
+// ツールの画面の上に重ねて開く(ツールの画面はそのまま。閉じれば元どおり)
+// ------------------------------------------------------------------
+const MANUALS = new Set(["portal", "nippou", "kanban", "calendar", "inspection"]);
+const manualBox = document.getElementById("manual");
+const manualFrame = document.getElementById("manual-frame");
+
+function manualFor(id) {
+  if (id === SETTINGS) return "portal";
+  return MANUALS.has(id) ? id : "index";
+}
+
+function openManual(id = current) {
+  const page = manualFor(id);
+  const url = `/static/manual/${page}.html?v=${encodeURIComponent(S.version || "")}`;
+  if (manualFrame.dataset.page !== page) {
+    manualFrame.dataset.page = page;
+    manualFrame.src = url;
+  }
+  manualBox.hidden = false;
+  document.getElementById("help").setAttribute("aria-expanded", "true");
+  document.getElementById("manual-close").focus();
+}
+
+function closeManual() {
+  if (manualBox.hidden) return;
+  manualBox.hidden = true;
+  document.getElementById("help").setAttribute("aria-expanded", "false");
+  try { frames.get(current)?.iframe?.contentWindow?.focus(); } catch (err) { /* 別の宛先 */ }
+}
+
+document.getElementById("help").addEventListener("click", () => {
+  if (manualBox.hidden) openManual(); else closeManual();
+});
+document.getElementById("manual-close").addEventListener("click", closeManual);
+document.getElementById("manual-index").addEventListener("click", () => {
+  manualFrame.dataset.page = "index";
+  manualFrame.src = `/static/manual/index.html?v=${encodeURIComponent(S.version || "")}`;
+});
 
 // ------------------------------------------------------------------
 // 終了
