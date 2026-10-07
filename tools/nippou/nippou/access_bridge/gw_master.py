@@ -164,6 +164,48 @@ def _box_final(row: dict, name: str) -> str:
     return str(row.get(f"BOX実績_{name}", "") or "").strip()
 
 
+def _search_wip(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunner],
+                label: str, keep=None) -> list[dict]:
+    """仕掛のファイルを**1つ目 → 2つ目**の順に引く(v4.23.0)。最初に見つかった行を返す。
+
+    次へ進むのは:
+      - ファイルが無い・読めない
+      - ファイルはあるが、探すもの(ロット・引当・受注)が無い
+    2つ目を決めていなければ1つ目だけ(これまでどおり)。`keep` は使える行だけに絞る
+    (引当なら受注番号のある行)。絞って空なら「無い」とみなして次へ。
+    """
+    failure: Optional[Exception] = None
+    answered = False
+    for index, path in enumerate(paths):
+        try:
+            result = import_table(path, SETTINGS.gw_shared_table_name,
+                                  sql_filter=sql_filter, runner=runner)
+        except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
+            _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + 1, path, exc)
+            failure = exc
+            continue
+        answered = True
+        if not result.success:
+            _logger.warning("%sに失敗しました(%dつ目 %s) error=%s",
+                            label, index + 1, path, result.error)
+            continue
+        rows = keep(result.rows) if keep else list(result.rows)
+        if rows:
+            if index > 0:
+                _logger.info("%s: 1つ目に無かったので %dつ目で見つけました(%s)",
+                             label, index + 1, path)
+            return rows
+    if failure is not None and not answered:
+        # どの置き場所でも読めなかった。**「無い」とは言わない**(呼ぶ側が「読めません」と出す)
+        raise failure
+    return []
+
+
+def _paths(master_path: Optional[Path], default: list[Path]) -> list[Path]:
+    """渡されたファイルがあればそれだけ、無ければ設定の順(1つ目 → 2つ目)。"""
+    return [master_path] if master_path else list(default)
+
+
 def search_lot(
     lot_no: str,
     master_path: Optional[Path] = None,
@@ -172,15 +214,13 @@ def search_lot(
     """port of ``寸法表示()`` のロット検索部分。該当なしなら ``None``
     （VBAの ``fL = False`` → "Text.データなし　手入力よろしく" 警告に相当、
     警告表示自体は呼び出し元のUI層が行う）。"""
-    master_path = master_path or SETTINGS.gw_lot_master_path
     sql_filter = f"[ﾛｯﾄ番号]={script_gen.sql_literal(lot_no, 'TEXT')}"
-    result = import_table(master_path, SETTINGS.gw_shared_table_name, sql_filter=sql_filter, runner=runner)
-    if not result.success or not result.rows:
-        if not result.success:
-            _logger.warning("LotNo検索に失敗しました lot_no=%s error=%s", lot_no, result.error)
+    rows = _search_wip(_paths(master_path, SETTINGS.gw_lot_master_paths), sql_filter,
+                       runner, f"LotNo検索 lot_no={lot_no}")
+    if not rows:
         return None
 
-    row = result.rows[0]
+    row = rows[0]
     return LotInfo(
         lot_no=row.get("ﾛｯﾄ番号", ""),
         order_no=row.get("ｵｰﾀﾞｰ番号", ""),
@@ -223,14 +263,12 @@ def search_allocations(
     並びは引当番号の昇順。全件8桁固定なので、文字列のままでも数値順と
     一致します(python-web-tools `lot_service._load_hiki` と同じ理由)。
     """
-    master_path = master_path or SETTINGS.gw_hiki_master_path
     sql_filter = f"[ﾛｯﾄ番号]={script_gen.sql_literal(lot_no, 'TEXT')}"
-    result = import_table(master_path, SETTINGS.gw_shared_table_name,
-                          sql_filter=sql_filter, runner=runner)
-    if not result.success:
-        _logger.warning("引当の検索に失敗しました lot_no=%s error=%s",
-                        lot_no, result.error)
-        return []
+    # 受注番号の無い行は選ばせても意味が無い(そこから先へ進めない)。**そういう行しか
+    # 無ければ「引当が無い」とみなして2つ目を見る**
+    rows = _search_wip(_paths(master_path, SETTINGS.gw_hiki_master_paths), sql_filter,
+                       runner, f"引当の検索 lot_no={lot_no}",
+                       keep=lambda rows: [r for r in rows if (r.get("受注番号", "") or "").strip()])
 
     found = [
         Allocation(
@@ -240,10 +278,8 @@ def search_allocations(
             quantity=(row.get("引当数量", "") or "").strip(),
             adjust_no=(row.get("引当調整NO", "") or "").strip(),
         )
-        for row in result.rows
+        for row in rows
     ]
-    # 受注番号の無い行は選ばせても意味が無い(そこから先へ進めない)
-    found = [a for a in found if a.order_no]
     return sorted(found, key=lambda a: a.hiki_no)
 
 
@@ -253,15 +289,13 @@ def search_order(
     runner: Optional[ScriptRunner] = None,
 ) -> Optional[OrderInfo]:
     """port of ``VC選択``/``合紙選択``/``寸法表示`` のオーダー検索部分。"""
-    master_path = master_path or SETTINGS.gw_order_master_path
     sql_filter = f"[受注番号]={script_gen.sql_literal(order_no, 'TEXT')}"
-    result = import_table(master_path, SETTINGS.gw_shared_table_name, sql_filter=sql_filter, runner=runner)
-    if not result.success or not result.rows:
-        if not result.success:
-            _logger.warning("オーダーNo検索に失敗しました order_no=%s error=%s", order_no, result.error)
+    rows = _search_wip(_paths(master_path, SETTINGS.gw_order_master_paths), sql_filter,
+                       runner, f"オーダーNo検索 order_no={order_no}")
+    if not rows:
         return None
 
-    row = result.rows[0]
+    row = rows[0]
     return OrderInfo(
         order_no=row.get("受注番号", ""),
         vc_front=row.get("VC_表", ""),

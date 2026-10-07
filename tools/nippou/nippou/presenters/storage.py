@@ -193,6 +193,8 @@ def shared_places() -> list[Place]:
          "送った直の実績(標準作業時間の画面が読む)", label_of(config.KEY_ACCESS_DIR)),
         ("仕掛ロット・引当・受注", lambda: SETTINGS.wip_master_dir,
          "SIKALOT / SIKAHIKI / SIKAODR", label_of(config.KEY_WIP_DIR)),
+        ("仕掛ロット・引当・受注(2つ目)", lambda: SETTINGS.wip_master_dir_2,
+         "1つ目で見つからないときに見る", label_of(config.KEY_WIP_DIR2)),
         ("梱包資材マスタ", lambda: SETTINGS.material_master_dir,
          "梱包資材マスタ / コイル割り数(LS4LOT)", label_of(config.KEY_MATERIAL_DIR)),
         ("伝送用ファイル", lambda: SETTINGS.transmission_master_dir,

@@ -127,6 +127,7 @@ ITEM_LINE = "terminal_line"
 ITEMS: tuple[Item, ...] = (
     Item(config.KEY_REFERENCE_DIR, "参照用マスタの参照パス", True),
     Item(config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所", True),
+    Item(config.KEY_WIP_DIR2, "仕掛ロット・引当・受注の置き場所(2つ目)", True),
     Item(config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所", True),
     Item(config.KEY_TRANSMISSION_DIR, "伝送用ファイルの置き場所", True),
     Item(config.KEY_LINE_TARGET_FILE, "ライン毎目標の置き場所", True),

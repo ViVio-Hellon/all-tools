@@ -114,6 +114,9 @@ KEY_VC_MASTER_DIR = "vc_master_dir"
 #     梱包資材マスタ・コイル割り数(LS4LOT)
 #     伝送用ファイル
 KEY_WIP_DIR = "wip_master_dir"                    # SIKALOT / SIKAHIKI / SIKAODR
+# 仕掛の**2つ目の置き場所**(v4.23.0)。**空なら見ない。** 1つ目でファイルが無い・
+# ファイルはあるが探すもの(ロット・引当・受注)が無いとき、こちらを見る
+KEY_WIP_DIR2 = "wip_master_dir_2"
 KEY_MATERIAL_DIR = "material_master_dir"          # 梱包資材マスタ / LS4LOT
 KEY_TRANSMISSION_DIR = "transmission_master_dir"  # 伝送用ファイル
 
@@ -194,7 +197,7 @@ def sound_file_key(sound_key: str) -> str:
     return f"sound_file_{sound_key}"
 
 # 設定画面から変えられる参照パス。**表示名はここが唯一の出どころ**
-PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_MATERIAL_DIR,
+PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_WIP_DIR2, KEY_MATERIAL_DIR,
              KEY_TRANSMISSION_DIR, KEY_SOUND_DIR,
              KEY_MONTHLY_DIR, KEY_REPORT_OUT_DIR, KEY_REPORT_OUT_DIR2,
              KEY_STANDARD_TIME_OUT_DIR,
@@ -525,6 +528,25 @@ class Settings:
         return _configured_dir(KEY_WIP_DIR, self.gw_reference_dir)
 
     @property
+    def wip_master_dir_2(self) -> Optional[Path]:
+        """仕掛の2つ目のフォルダ。**決めていなければ None**(2つ目は見ない)。"""
+        from . import user_settings
+
+        configured = user_settings.get(KEY_WIP_DIR2)
+        text = configured.strip() if isinstance(configured, str) else ""
+        return resolve_dir(text) if text else None
+
+    def _wip_paths(self, filename: str) -> list[Path]:
+        """仕掛のファイルを探す順(1つ目 → 2つ目)。同じフォルダなら1つにまとめる。"""
+        paths = [_pick_source(self.wip_master_dir, filename)]
+        second = self.wip_master_dir_2
+        if second is not None:
+            candidate = _pick_source(second, filename)
+            if candidate != paths[0]:
+                paths.append(candidate)
+        return paths
+
+    @property
     def material_master_dir(self) -> Path:
         """梱包資材マスタ・コイル割り数(LS4LOT)のフォルダ。"""
         return _configured_dir(KEY_MATERIAL_DIR, self.gw_reference_dir)
@@ -578,6 +600,19 @@ class Settings:
     @property
     def gw_hiki_master_path(self) -> Path:
         return _pick_source(self.wip_master_dir, self.gw_hiki_master_filename)
+
+    # 探す順(1つ目 → 2つ目)。**引く側(`access_bridge/gw_master`)はこちらを使う**
+    @property
+    def gw_lot_master_paths(self) -> list[Path]:
+        return self._wip_paths(self.gw_lot_master_filename)
+
+    @property
+    def gw_order_master_paths(self) -> list[Path]:
+        return self._wip_paths(self.gw_order_master_filename)
+
+    @property
+    def gw_hiki_master_paths(self) -> list[Path]:
+        return self._wip_paths(self.gw_hiki_master_filename)
 
     @property
     def gw_material_master_path(self) -> Path:

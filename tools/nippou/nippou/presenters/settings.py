@@ -50,6 +50,9 @@ PATH_FIELDS = (
     (config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所",
      "仕掛ロット(SIKALOT)・仕掛引当(SIKAHIKI)・仕掛受注(SIKAODR)があるフォルダ"
      "(既定: 参照用マスタと同じフォルダ)"),
+    (config.KEY_WIP_DIR2, "仕掛ロット・引当・受注の置き場所(2つ目)",
+     "ロット番号から引くとき、1つ目に仕掛のファイルが無い・ファイルはあるが"
+     "そのロット(引当・受注)が無いときに、ここを見ます。空なら見ません"),
     (config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所",
      "梱包資材マスタ と コイル割り数(LS4LOT)があるフォルダ"
      "(既定: 参照用マスタと同じフォルダ)"),
@@ -204,6 +207,7 @@ PATH_TAB: dict[str, str] = {
     config.KEY_ACCESS_DIR: "paths",
     config.KEY_REFERENCE_DIR: "paths",
     config.KEY_WIP_DIR: "paths",
+    config.KEY_WIP_DIR2: "paths",
     config.KEY_MATERIAL_DIR: "paths",
     config.KEY_TRANSMISSION_DIR: "paths",
     config.KEY_SOUND_DIR: "paths",
@@ -242,6 +246,8 @@ SHOWN_PATH_KEYS: tuple[str, ...] = (
     config.KEY_REFERENCE_DIR,
     # 置き場所ごとに分ける(v4.16.0)。空なら参照用マスタと同じ
     config.KEY_WIP_DIR,
+    # 仕掛の2つ目(v4.23.0)。1つ目で見つからないときに見る。空なら見ない
+    config.KEY_WIP_DIR2,
     config.KEY_MATERIAL_DIR,
     config.KEY_TRANSMISSION_DIR,
     config.KEY_SOUND_DIR,
@@ -283,7 +289,8 @@ FIXED_NAME_KEYS: dict[str, str] = {
 #: 参照設定の面での区切り。**読みに行く先と、書き出す先を分ける。**
 PATH_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("read", "読みに行く先",
-     (config.KEY_REFERENCE_DIR, config.KEY_WIP_DIR, config.KEY_MATERIAL_DIR,
+     (config.KEY_REFERENCE_DIR, config.KEY_WIP_DIR, config.KEY_WIP_DIR2,
+      config.KEY_MATERIAL_DIR,
       config.KEY_TRANSMISSION_DIR, config.KEY_SOUND_DIR,
       config.KEY_LINE_TARGET_FILE, config.KEY_STOP_REASON_FILE,
       config.KEY_VC_MASTER_DIR)),
@@ -303,6 +310,7 @@ PATH_KEY_NAMES: dict[str, str] = {
     "access_db_file": config.KEY_ACCESS_DB_FILE,
     "reference_dir": config.KEY_REFERENCE_DIR,
     "wip_dir": config.KEY_WIP_DIR,
+    "wip_dir_2": config.KEY_WIP_DIR2,
     "material_dir": config.KEY_MATERIAL_DIR,
     "transmission_dir": config.KEY_TRANSMISSION_DIR,
     "sound_dir": config.KEY_SOUND_DIR,
@@ -605,6 +613,7 @@ def _resolved_dir(key: str) -> Path:
         config.KEY_ACCESS_DIR: lambda: SETTINGS.access_dir,
         config.KEY_REFERENCE_DIR: lambda: SETTINGS.gw_reference_dir,
         config.KEY_WIP_DIR: lambda: SETTINGS.wip_master_dir,
+        config.KEY_WIP_DIR2: lambda: SETTINGS.wip_master_dir_2 or Path(""),
         config.KEY_MATERIAL_DIR: lambda: SETTINGS.material_master_dir,
         config.KEY_TRANSMISSION_DIR: lambda: SETTINGS.transmission_master_dir,
         config.KEY_SOUND_DIR: lambda: SETTINGS.sound_dir,
@@ -666,12 +675,13 @@ OPTIONAL_PATH_KEYS = (config.KEY_LINE_TARGET_FILE,
 
 # **空なら使わない欄。** 既定の道が無い(空 = 出さない)ので、空のときは
 # 道も「ありません」も出さず「使っていません」と言う
-OFF_WHEN_EMPTY_KEYS = (config.KEY_REPORT_OUT_DIR2,)
+OFF_WHEN_EMPTY_KEYS = (config.KEY_REPORT_OUT_DIR2, config.KEY_WIP_DIR2)
 
 # 空のときの意味が「既定を使う」ではない欄。**何と同じになるのか**を言う
 EMPTY_TEXT: dict[str, str] = {
     config.KEY_VC_MASTER_DIR: "空なら参照用マスタと同じフォルダ",
     config.KEY_REPORT_OUT_DIR2: "空なら出しません",
+    config.KEY_WIP_DIR2: "空なら2つ目は見ません",
     config.KEY_STANDARD_TIME_OUT_DIR: "空なら集計CSVと同じ先",
     config.KEY_LOG_DIR: "空ならこの端末の logs",
     config.KEY_BACKUP_DIR: "空なら共有の日報管理のパスと同じフォルダ",
