@@ -195,6 +195,14 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .pathform{display:grid;grid-template-columns:2fr 1fr auto;gap:10px;align-items:end}
 .pathform label{display:grid;gap:4px;font-size:var(--fs-md);color:var(--muted)}
 .pathform__act{display:flex;gap:8px}
+/* 入力の字は見出しの薄い色を受け継がない。**反映済みは濃い字、打ちかけ(まだ「変える」を
+   押していない)は茶色の点線**、空のときは既定の場所を薄い見本で出す */
+.pathform input{color:var(--ink);font-weight:700}
+.pathform input::placeholder{color:var(--faint);font-weight:400}
+.pathform input.is-edited{color:var(--state-warn);border:2px dashed var(--state-warn)}
+.locstate{margin:8px 0 0;font-weight:700}
+.locstate[data-state="saved"]{color:var(--state-ok)}
+.locstate[data-state="edited"]{color:var(--state-warn)}
 .pwform{display:flex;gap:8px;flex-wrap:wrap}
 .state{font-weight:700}
 .state[data-phase="started"]{color:var(--state-ok)}

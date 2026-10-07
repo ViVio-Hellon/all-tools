@@ -62,6 +62,7 @@ export function install(options) {
     write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value });
   });
   $("loc-default").addEventListener("click", () => write("/api/settings/location", { folder: "", name: "" }));
+  for (const id of ["loc-folder", "loc-name"]) $(id).addEventListener("input", paintLocState);
   $("dist-export").addEventListener("click", () => write("/api/distribution/export", {}));
   $("dist-reapply").addEventListener("click", () => {
     if (confirm("配布設定を読み込み直します。この端末の置き場所・管理者パスワードは、配布設定の値で上書きされます。よろしいですか?")) {
@@ -231,9 +232,32 @@ function paintSource() {
   }
   $("rights-missing").hidden = s.state !== "missing";
   $("rights-table").textContent = s.table || "タブ表示権限";
-  $("loc-folder").value = s.folder || "";
-  $("loc-name").value = s.name || "";
+  // いま反映している値を覚えておき、打ちかけと見分ける(`paintLocState`)
+  for (const [id, value, fallback] of [["loc-folder", s.folder, s.default_folder],
+                                       ["loc-name", s.name, s.default_name]]) {
+    $(id).value = value || "";
+    $(id).dataset.saved = value || "";
+    $(id).placeholder = fallback ? `空なら既定: ${fallback}` : "";
+  }
   $("loc-note").textContent = `既定: ${s.default_folder}\\${s.default_name}`;
+  paintLocState();
+}
+
+/** 共有の DB の置き場所: **反映しているか、打ちかけか**を色と一言で出す。 */
+function paintLocState() {
+  const s = view?.source || {};
+  let edited = false;
+  for (const id of ["loc-folder", "loc-name"]) {
+    const input = $(id);
+    const changed = input.value.trim() !== (input.dataset.saved || "");
+    input.classList.toggle("is-edited", changed);
+    edited = edited || changed;
+  }
+  const state = $("loc-state");
+  state.dataset.state = edited ? "edited" : "saved";
+  state.textContent = edited
+    ? "まだ反映していません ── 「変える」を押すと、この場所を使います"
+    : `反映しています: ${s.path || "―"}${!s.folder && !s.name ? "(既定の場所)" : ""}`;
 }
 
 function paintRights() {

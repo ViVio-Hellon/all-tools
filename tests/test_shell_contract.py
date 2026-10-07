@@ -171,5 +171,65 @@ class DialogTests(unittest.TestCase):
         self.assertIn("確認ダイアログ", (ROOT / "scripts" / "desktop_smoke.py").read_text(encoding="utf-8"))
 
 
+
+class ConsoleEncodingTests(unittest.TestCase):
+    """Windows のコマンドの日本語の出力(Shift-JIS)で、ツールが起動できなくならない。
+
+    tasklist はそのプロセスが無いとき「情報: 指定された条件に一致するタスクは…」と返す。
+    外枠が Python を UTF-8 モード(`-X utf8`)で起こしていたため、これを UTF-8 で読もうとして
+    落ち、日報が起動できなかった(前の起動の印が残っていたとき)。
+    """
+
+    FILES = ("portal/browser_tools.py", "tools/nippou/launch_guard.py", "tools/kanban/launch_guard.py",
+             "tools/calendar/launch_guard.py", "tools/inspection/launch_guard.py")
+
+    def test_ツールのPythonをUTF8モードで起こさない(self) -> None:
+        bridge = rust("bridge.rs")
+        self.assertNotIn('.arg("utf8")', bridge)
+        self.assertIn('.env_remove("PYTHONUTF8")', bridge)
+
+    def test_tasklistとwmicはコンソールの文字コードで_読めない字は置き換えて読む(self) -> None:
+        for name in self.FILES:
+            source = (ROOT / name).read_text(encoding="utf-8")
+            calls = re.findall(r"subprocess\.run\((?:[^()]|\([^()]*\))*\)", source, re.S)
+            calls = [c for c in calls if "tasklist" in c or "wmic" in c]
+            with self.subTest(file=name):
+                self.assertTrue(calls)
+                for call in calls:
+                    self.assertIn("encoding=CONSOLE_ENCODING", call)
+                    self.assertIn('errors="replace"', call)
+                self.assertIn('CONSOLE_ENCODING = "oem" if os.name == "nt" else None', source)
+                self.assertNotRegex(source, r"\bout\.stdout\b(?! or)")
+
+
+
+class UploadTests(unittest.TestCase):
+    """ファイルを送る(FormData)は、embed.js が中身を読んでから1つのバイト列にして送る。
+
+    WebView2 は外枠の宛先へ送る FormData のファイル(ディスクのファイルを指す部分)を
+    外枠へ渡さず、看板の「Access の最新で表の中身を入れ替える」が「ファイルが小さすぎます」
+    になっていた(ブラウザ版では起きない)。
+    """
+
+    def test_ファイル入りのFormDataを組み立て直して送る(self) -> None:
+        embed = (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8")
+        self.assertIn("window.fetch = function", embed)
+        self.assertIn("arrayBuffer()", embed)
+        self.assertIn("multipart/form-data; boundary=", embed)
+
+
+class LocationViewTests(unittest.TestCase):
+    """大設定の「共有の DB の置き場所」: 反映しているか、打ちかけかを見分けられる。"""
+
+    def test_反映済みと打ちかけで見え方が変わる(self) -> None:
+        js = (ROOT / "portal" / "static" / "js" / "settings.js").read_text(encoding="utf-8")
+        css = (ROOT / "portal" / "static" / "css" / "shell.css").read_text(encoding="utf-8")
+        self.assertIn("function paintLocState", js)
+        self.assertIn("まだ反映していません", js)
+        self.assertIn("反映しています", js)
+        self.assertIn(".pathform input.is-edited", css)
+        self.assertIn('id="loc-state"', (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

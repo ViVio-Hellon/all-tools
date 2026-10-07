@@ -39,6 +39,11 @@ from pathlib import Path
 from kanban import app_config, config
 from kanban.applog import get_logger
 
+#: Windows のコマンド(tasklist・wmic)の出力の文字コード。**コンソールの文字コード(oem)で読む。**
+#: 日本語の Windows では Shift-JIS(「情報: 指定された条件に一致するタスクは…」)。Python の
+#: 既定(UTF-8 モードのとき UTF-8)で読むと、読めずに落ちて起動が止まっていた。読めない字は置き換える
+CONSOLE_ENCODING = "oem" if os.name == "nt" else None
+
 log = get_logger("launch_guard")
 
 #: ``/api/health`` を叩くときの待ち時間(秒)。ローカルなので短くてよい。
@@ -160,14 +165,14 @@ def _is_alive_windows(pid: int) -> bool:
         out = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
             capture_output=True,
-            text=True,
+            text=True, encoding=CONSOLE_ENCODING, errors="replace",
             timeout=5,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("tasklist を実行できませんでした: %s", exc)
         return True  # 分からないときは「生きている」に倒す
-    return f'"{pid}"' in out.stdout
+    return f'"{pid}"' in (out.stdout or "")
 
 
 def process_command_line(pid: int) -> str:
@@ -188,11 +193,11 @@ def process_command_line(pid: int) -> str:
                     "get", "CommandLine", "/format:list",
                 ],
                 capture_output=True,
-                text=True,
+                text=True, encoding=CONSOLE_ENCODING, errors="replace",
                 timeout=5,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            for line in out.stdout.splitlines():
+            for line in (out.stdout or "").splitlines():
                 if line.startswith("CommandLine="):
                     return line.split("=", 1)[1].strip()
         except (OSError, subprocess.SubprocessError) as exc:

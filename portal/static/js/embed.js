@@ -95,6 +95,67 @@
   }
   window.__ALLTOOLS__ = { tool: TOOL, shell: SHELL, embedded: embedded };
 
+  // ---- ファイルを送る(FormData)は、中身を読んでから1つのバイト列にして送る ----
+  // WebView2(Windows)は、外枠の宛先(各ツールの scheme)へ送る FormData のうち、
+  // **ディスクのファイルを指す部分(File)を外枠へ渡さない**。Python には中身の欠けた
+  // ファイルが届き、看板の「Access の最新で表の中身を入れ替える」は「ファイルが
+  // 小さすぎます」、日報の取り込みも読めなかった(ブラウザ版では起きない)。
+  // ここで multipart の本文を自分で組み立てる(中身はメモリの上のバイト列)
+  function hasFile(form) {
+    var found = false;
+    form.forEach(function (value) { if (typeof value !== "string") found = true; });
+    return found;
+  }
+  function quoteName(text) {
+    return String(text).replace(/"/g, "%22").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  }
+  function formToBytes(form) {
+    var boundary = "----AllToolsForm" + Date.now().toString(16) + Math.random().toString(16).slice(2);
+    var enc = new TextEncoder();
+    var parts = [];
+    var reads = [];
+    form.forEach(function (value, name) {
+      if (typeof value === "string") {
+        parts.push(enc.encode("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" +
+          quoteName(name) + "\"\r\n\r\n" + value + "\r\n"));
+        return;
+      }
+      var head = enc.encode("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" +
+        quoteName(name) + "\"; filename=\"" + quoteName(value.name || "blob") + "\"\r\nContent-Type: " +
+        (value.type || "application/octet-stream") + "\r\n\r\n");
+      var at = parts.length;
+      parts.push(head, null, enc.encode("\r\n"));
+      reads.push(value.arrayBuffer().then(function (buf) { parts[at + 1] = new Uint8Array(buf); }));
+    });
+    return Promise.all(reads).then(function () {
+      parts.push(enc.encode("--" + boundary + "--\r\n"));
+      var size = 0;
+      parts.forEach(function (p) { size += p.length; });
+      var bytes = new Uint8Array(size);
+      var offset = 0;
+      parts.forEach(function (p) { bytes.set(p, offset); offset += p.length; });
+      return { bytes: bytes, type: "multipart/form-data; boundary=" + boundary };
+    });
+  }
+  if (typeof window.fetch === "function" && typeof FormData === "function") {
+    var nativeFetch = window.fetch;
+    window.fetch = function (input, init) {
+      var self = this;
+      if (!init || !(init.body instanceof FormData) || !hasFile(init.body)) {
+        return nativeFetch.call(self, input, init);
+      }
+      return formToBytes(init.body).then(function (made) {
+        var headers = new Headers(init.headers || {});
+        headers.set("Content-Type", made.type);
+        var next = {};
+        for (var key in init) next[key] = init[key];
+        next.body = made.bytes;
+        next.headers = headers;
+        return nativeFetch.call(self, input, next);
+      });
+    };
+  }
+
   function tellShell(data, type) {
     if (!embedded || sameOriginParent) return;
     data.type = type || "alltools:key";

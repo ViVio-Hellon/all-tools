@@ -30,6 +30,11 @@ from typing import Optional
 from .catalog import Catalog, Tool
 from .logging_utils import get_logger, log_dir
 
+#: Windows のコマンド(tasklist・wmic)の出力の文字コード。**コンソールの文字コード(oem)で読む。**
+#: 日本語の Windows では Shift-JIS(「情報: 指定された条件に一致するタスクは…」)。Python の
+#: 既定(UTF-8 モードのとき UTF-8)で読むと、読めずに落ちて起動が止まっていた。読めない字は置き換える
+CONSOLE_ENCODING = "oem" if os.name == "nt" else None
+
 log = get_logger("browser_tools")
 
 #: ツールのブラウザ版が待ち受けを始めるまで待つ上限(秒)。日報は取り込みの準備がある
@@ -61,11 +66,11 @@ def is_alive(pid: int) -> bool:
     if os.name == "nt":
         try:
             out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                                 capture_output=True, text=True, timeout=5,
+                                 capture_output=True, text=True, encoding=CONSOLE_ENCODING, errors="replace", timeout=5,
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError):
             return True
-        return f'"{pid}"' in out.stdout
+        return f'"{pid}"' in (out.stdout or "")
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

@@ -350,14 +350,17 @@ impl Bridge {
 
     fn spawn(self: &Arc<Self>, program: &str, args: &[String], script: &Path) -> std::io::Result<()> {
         let mut command = Command::new(program);
+        // **`-X utf8`(UTF-8 モード)にしない。** 各ツールは単体のとき Windows の既定の
+        // 文字コードで動いていた。UTF-8 モードにすると、tasklist などの日本語の出力
+        // (Shift-JIS)を UTF-8 で読もうとして落ち、ツールが起動できなかった。
+        // やりとり(標準入出力)だけを UTF-8 にする(PYTHONIOENCODING)
         command
             .args(args)
-            .arg("-X")
-            .arg("utf8")
             .arg(script)
             .current_dir(&self.spec.dir)
             .env(&self.spec.token_env, &self.token)
             .env("PYTHONIOENCODING", "utf-8")
+            .env_remove("PYTHONUTF8")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
