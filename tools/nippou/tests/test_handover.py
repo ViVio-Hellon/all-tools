@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nippou.db.models import DetailRecord, HeaderRecord
 from nippou.logic import handover
 from nippou.logic.handover import Left
-from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase
+from tests._web import HEADERS, HAS_FLASK, SKIP_REASON, WebTestCase
 
 
 # ======================================================================
@@ -195,6 +195,31 @@ class HandoverGateTests(WebTestCase):
         return {"rows": {"1": {"LOT": lot, "KZ": "08", "KH": "00",
                                "SZ": "09", "SH": "00"}},
                 "header": {"worker": "次の人"}, "checks": {}}
+
+    def test_前の直を呼び出せば作業者が空でも表を伏せない(self):
+        """**直す道が行き止まりにならない。**
+
+        作業者が空の前の直を「記録を見る → 呼び出す」(管理者)で開くと、「まず作業者を
+        選んでください」で12行の表が全部伏せられ、どこも直せなかった。作業者を先に
+        選ばせるのは新しい直を始めるときだけ。
+        """
+        day, line, _ = self.now()
+        shift = self.other_shift()
+        key = dict(report_date=day, line=line, shift=shift, page=1)
+        self.repo().save(HeaderRecord(**key, worker=""),
+                         [DetailRecord(**key, row_no=1, kz="07", kh="00", sz="15", sh="00",
+                                       s="2", th="480")])
+        self.assertTrue(self.post("/api/entry/state", {}).get_json()["needs_worker"])  # いまの直は先に選ぶ
+        self.post("/api/settings/admin", {"enable": True, "password": "nisk"})
+        res = self.post("/api/settings/recall", {"report_date": day, "line": line, "shift": shift, "page": 1})
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        body = self.post("/api/entry/state", {"header": {"worker": ""}}).get_json()
+        self.assertFalse(body["read_only"])
+        self.assertFalse(body["needs_worker"])
+        self.assertFalse(body["handover"]["blocked"])
+        html = self.client.get("/", headers=HEADERS).get_data(as_text=True)
+        start = html.index('id="start-shift"')
+        self.assertIn("hidden", html[start:start + 80])
 
     # ---- 1. 止まること ------------------------------------------------
     def test_前の直が残っていれば保存できない(self):

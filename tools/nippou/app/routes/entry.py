@@ -256,8 +256,13 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
     from nippou.logic import line_names
     body["line_label"] = (work_context.LINE_UNSET if body["needs_line"]
                           else line_names.label(line, ctx.maru_sub if line == ctx.line else ""))
+    # **呼び出して過去の直を開いているあいだは伏せない。** 「作業者を先に選ぶ」は
+    # 新しい直を始めるときの決まりです。前の直を直しに来た画面にまで当てると、
+    # 作業者が空のこと自体が直すところの1つなので、**どこも直せない行き止まり**
+    # になっていました(「記録を見るから呼び出したが、画面がロックされていて
+    # 直せない、触れない」)。作業者が空なことは、直すところとして出し続けます
     body["needs_worker"] = bool(
-        not body["read_only"] and not body["needs_line"]
+        not body["read_only"] and not body["needs_line"] and not ctx.recall.active
         and not str(state.header.get("worker", "")).strip())
     # **直の始めに、前の直の始末をつける。**
     #
