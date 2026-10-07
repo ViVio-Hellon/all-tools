@@ -48,6 +48,19 @@ class LogicTests(unittest.TestCase):
         self.assertGreater(len(made), 150)
         self.assertTrue(rule.new_id(rule.KIND_CLIENT, at).startswith("C1001-"))
 
+    def test_同じ1分に同じ番号を2度出さない(self) -> None:
+        """3文字はくじ。1分に30件出すと2%ほどの割合で重なり、一覧(同じ番号は1件に
+        まとめる)から別のエラーが1件消えていた。**同じくじの目が出ても引き直す。**"""
+        at = datetime(2026, 10, 2, 9, 15)
+        first = rule.new_id(rule.KIND_ERROR, at, random.Random(7))
+        again = rule.new_id(rule.KIND_ERROR, at, random.Random(7))   # 同じ目が出るくじ
+        self.assertNotEqual(first, again)
+        made = [rule.new_id(rule.KIND_CLIENT, at) for _ in range(500)]
+        self.assertEqual(len(set(made)), len(made))
+        # 分が替われば、前の分の番号は覚えておかない
+        later = rule.new_id(rule.KIND_ERROR, datetime(2026, 10, 2, 9, 16), random.Random(7))
+        self.assertTrue(later.startswith("E1002-0916-"))
+
     def test_送った中身は平らにして空と合言葉を落とす(self) -> None:
         got = rule.summarize_input({
             "rows": {"1": {"LOT": "B123456", "CON": ""}, "2": {}},

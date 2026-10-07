@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import random
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional, Sequence
 
@@ -104,10 +105,31 @@ def new_id(kind: str, now: datetime, rng: Optional[random.Random] = None) -> str
     **日付と時刻を入れる**のは、番号だけ聞いても「いつのことか」が
     分かるようにするためです。同じ1分に何件あっても、末尾の3文字で
     見分けます(27 × 27 × 27 ≒ 2万)。
+
+    **同じ1分の中で同じ番号を2度出さない。** 3文字はくじなので、1分に30件出すと
+    およそ2%の割合で重なります。一覧は同じ番号を1件にまとめる(逃げ先と二重に
+    書いたとき)ので、重なると**別のエラーが1件見えなくなる**。出した番号を
+    その1分のあいだ覚えておき、重なったら引き直す。
     """
     pick = (rng or random).choice
-    tail = "".join(pick(_ALPHABET) for _ in range(3))
-    return f"{_PREFIX.get(kind, 'X')}{now:%m%d}-{now:%H%M}-{tail}"
+    head = f"{_PREFIX.get(kind, 'X')}{now:%m%d}-{now:%H%M}-"
+    with _ISSUED_LOCK:
+        minute = f"{now:%m%d%H%M}"
+        if _ISSUED.get("minute") != minute:
+            _ISSUED.clear()
+            _ISSUED["minute"] = minute
+        used = _ISSUED.setdefault("ids", set())
+        for _ in range(64):
+            candidate = head + "".join(pick(_ALPHABET) for _ in range(3))
+            if candidate not in used:
+                break
+        used.add(candidate)
+    return candidate
+
+
+#: この1分に出した番号(``new_id``)。分が替われば捨てる
+_ISSUED: dict = {}
+_ISSUED_LOCK = threading.Lock()
 
 
 def kind_of_status(status: int) -> str:
