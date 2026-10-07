@@ -56,7 +56,7 @@ _FALLBACK: dict[str, Any] = {
     "local_dir_name": "InspectionSheetPrint",
     "server": {
         "host": "127.0.0.1",
-        "port": 8733,
+        "port": 8781,
         "port_retry": 3,
     },
     "monitoring": {

@@ -372,8 +372,12 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         if _browser_tools is not None and not force:
             busy = _browser_tools.busy()
             if busy:
+                # ツールの断りがもう問いかけで終わっていれば重ねて訊かない
+                # (「中断して終了しますか? それでも終了しますか?」になっていた)
+                asked = all(b.rstrip().endswith(("?", "？")) for b in busy)
+                message = "\n".join(busy) + ("" if asked else "\n\nそれでも終了しますか?")
                 return jsonify({"stopped": False, "reason": "busy", "running": busy,
-                                "message": "\n".join(busy) + "\n\nそれでも終了しますか?"}), 409
+                                "message": message}), 409
         if body.get("check"):
             return jsonify({"stopped": False, "can_stop": True})
         if _shutdown_hook is None:

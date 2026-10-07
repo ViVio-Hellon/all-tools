@@ -240,6 +240,27 @@ class ShutdownTests(Base):
             time.sleep(0.05)
         self.assertTrue(called, "応答を返してから止める")
 
+    def test_途中の処理があれば訊く_問いかけを重ねない(self) -> None:
+        """ツールの断りが問いかけで終わっていれば「それでも終了しますか?」を足さない。"""
+        class Busy:
+            def __init__(self, lines):
+                self.lines = lines
+
+            def busy(self):
+                return self.lines
+
+        self.addCleanup(web.set_browser_tools, None)
+        web.set_browser_tools(Busy(["点検表: 印刷の途中です。中断して終了しますか?"]))
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 409)
+        message = res.get_json()["message"]
+        self.assertEqual(message.count("?"), 1, message)
+
+        web.set_browser_tools(Busy(["看板: 書き戻しの途中です"]))
+        message = self.post("/api/shutdown").get_json()["message"]
+        self.assertIn("書き戻しの途中です", message)
+        self.assertTrue(message.endswith("それでも終了しますか?"), message)
+
 
 class ClientLogTests(Base):
     def test_画面で起きたことをログに残す(self) -> None:

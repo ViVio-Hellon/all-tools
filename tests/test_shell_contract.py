@@ -291,3 +291,25 @@ class LocationViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualAndEndTests(unittest.TestCase):
+    """説明書の Esc・F1 と、終了したあとの問い合わせ(通しの点検で見つかったもの)。"""
+
+    def setUp(self) -> None:
+        self.shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
+
+    def test_説明書の中でも_Esc_F1_で閉じる(self) -> None:
+        """説明書をクリックするとキーは説明書のページへ行き、外枠に届かなかった。"""
+        self.assertIn('manualFrame.addEventListener("load"', self.shell)
+        self.assertIn("doc.addEventListener(\"keydown\"", self.shell)
+
+    def test_説明書を開いたままタブを替えてもツールへ入らない(self) -> None:
+        self.assertIn("if (!manualBox.hidden) return;", self.shell)
+
+    def test_終了したら定期の問い合わせを止める(self) -> None:
+        self.assertNotIn("setInterval(followTabs", self.shell)
+        self.assertNotIn("setInterval(pollStatus", self.shell)
+        self.assertNotIn("setInterval(beat", self.shell)
+        ended = self.shell[self.shell.index("function ended()"):]
+        self.assertIn("timers.forEach(clearInterval)", ended[:200])

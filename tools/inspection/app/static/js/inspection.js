@@ -139,18 +139,25 @@ function applyInventory(inv, note) {
     state.items.set(it.id, it);
     state.order.push(it.id);
   }
-  const before = state.selection.length;
-  state.selection = state.selection.filter((id) => state.items.has(id));
-  if (before !== state.selection.length) {
-    toast(`${before - state.selection.length} 件の選択を解除しました(一覧から無くなったため)`, "warn");
+  // **フォルダが見えないあいだは選択を消さない。** 共有の一時的な断で一覧が空に
+  // なっただけなのに、選んでおいた点検表(とカテゴリの位置)まで解除して覚え直して
+  // いた。見えたときに一覧と突き合わせる
+  const reachable = inv.root_exists !== false;
+  if (reachable) {
+    const before = state.selection.length;
+    state.selection = state.selection.filter((id) => state.items.has(id));
+    if (before !== state.selection.length) {
+      toast(`${before - state.selection.length} 件の選択を解除しました(一覧から無くなったため)`, "warn");
+    }
+    const cat = currentCategory();
+    state.activeCat = cat ? cat.name : null;
+    const sub = currentSub(cat);
+    state.activeSub = sub ? sub.name : null;
+    save(SEL_KEY, state.selection);
   }
-  const cat = currentCategory();
-  state.activeCat = cat ? cat.name : null;
-  const sub = currentSub(cat);
-  state.activeSub = sub ? sub.name : null;
-  save(SEL_KEY, state.selection);
   renderAll();
-  if (note) toast(note, "ok");
+  if (note && reachable) toast(note, "ok");
+  else if (note) toast("点検表フォルダが見えません。選んだものはそのまま残しています", "warn");
 }
 
 async function pollScan(overlay = true) {

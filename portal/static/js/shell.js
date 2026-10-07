@@ -261,7 +261,9 @@ function select(id) {
     ensureFrame(id).then(() => {
       if (current !== id) return;
       showPanel(id);
-      // 打てるように、選んだツールの画面へ入る
+      // 打てるように、選んだツールの画面へ入る。説明書を開いているあいだは説明書に
+      // 置いたまま(ツールの画面へ入ると Esc・F1 が外枠に届かず、説明書を閉じられない)
+      if (!manualBox.hidden) return;
       try { frames.get(id)?.iframe?.contentWindow?.focus(); } catch (err) { /* 別の宛先 */ }
     });
     showPanel(id);
@@ -313,7 +315,7 @@ async function start() {
     + ` [確認ダイアログ: ${dialogsKind()}]`);
   select(first);
   if (ids.length) preloadOthers(first === SETTINGS ? ids[0] : first);
-  setInterval(followTabs, 60000);
+  every(followTabs, 60000);
 }
 
 /** 外れたと知らせたタブ(知らせるのは1度だけ) */
@@ -645,6 +647,20 @@ function closeManual() {
   try { frames.get(current)?.iframe?.contentWindow?.focus(); } catch (err) { /* 別の宛先 */ }
 }
 
+// 説明書の中をクリックすると、キーは説明書のページに届く(外枠には来ない)。
+// 説明書は同じ宛先(portal/static/manual)なので、読み込むたびにそこでも Esc・F1 を受ける
+manualFrame.addEventListener("load", () => {
+  let doc;
+  try { doc = manualFrame.contentDocument; } catch (err) { return; }
+  if (!doc) return;
+  doc.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || event.key === "F1") {
+      event.preventDefault();
+      closeManual();
+    }
+  });
+});
+
 document.getElementById("help").addEventListener("click", () => {
   if (manualBox.hidden) openManual(); else closeManual();
 });
@@ -677,7 +693,15 @@ document.getElementById("quit").addEventListener("click", async () => {
   }
 });
 
+/** 定期の問い合わせ。終了したら止める(止めないと、閉じた入口を叩き続けてエラーが並ぶ) */
+const timers = [];
+function every(fn, ms) {
+  timers.push(setInterval(fn, ms));
+}
+
 function ended() {
+  timers.forEach(clearInterval);
+  timers.length = 0;
   const dialog = document.getElementById("ended");
   for (const entry of frames.values()) entry.iframe?.remove();
   dialog.showModal();
@@ -698,7 +722,7 @@ function heartbeat() {
   if (desktop) return;
   const beat = () => api.post("/api/alive", {}).catch(() => {});
   beat();
-  setInterval(beat, 20000);
+  every(beat, 20000);
 }
 
 settingsView.install({ desktop, invoke, tools: TOOLS, reloadTabs: followTabs });
@@ -706,4 +730,4 @@ heartbeat();
 start();
 // デスクトップ版は外枠に訊く(安い)。ブラウザ版は入口がツールの待ち受けを叩くので間を空ける
 pollStatus();
-setInterval(pollStatus, desktop ? (S.statusPollMs || 2000) : 5000);
+every(pollStatus, desktop ? (S.statusPollMs || 2000) : 5000);
