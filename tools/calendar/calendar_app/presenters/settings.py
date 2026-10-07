@@ -139,14 +139,25 @@ def view(conn: sqlite3.Connection) -> SettingsView:
         # 要る日になってから「指定先に何も無い」と分かっても遅い
         problems.append("ログフォルダに書けないので、この端末の既定の場所へ"
                         f"書いています: {log_status['fallback_reason']}")
-    if data_db is None:
+    if data_db is None and service.configured:
+        # 参照パスはあるが、いま見えない(共有の停止・ネットワーク断)。
+        # **登録はできる**(送信待ちに残り、見えたら送る)ので、断るとは言わない
+        problems.append(
+            f"保存用DB(連絡帳)がいま見えません: {config.data_db_dir_text()}。"
+            "休み・連絡の登録はこの端末に預かり、見えた時点で送ります。"
+            "続くときは共有フォルダとネットワークを確かめてください。")
+    elif data_db is None:
         # **登録そのものを断る状態**なので、はっきり言う
         problems.append(
             "保存用DB(連絡帳)が見つかりません。"
             "参照パスを設定するまで、休み・連絡の登録はできません。")
     elif not data_probe.ok:
         problems.append(f"保存用DB を開けません: {data_probe.error}")
-    if master_db is None:
+    if master_db is None and (config.master_db_dir_text() or config.data_db_dir_text()):
+        problems.append(
+            "マスタDB(班員名簿)がいま見えません。見えるまで班員名簿は前回取り込んだもので"
+            "動きます(取り込みと修正は、見えてから)。")
+    elif master_db is None:
         problems.append(
             "マスタDB(班員名簿)が見つかりません。"
             "参照パスを設定するまで、班員名簿の取り込みと修正はできません。")

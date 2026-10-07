@@ -342,18 +342,19 @@ async function post(path, body) {
     sync.refresh();
     return result.payload;
   }
-  if (result.cancelled) return null;
+  // 保存しなかったときは、選びかけた値(ラインの選択など)を本当の設定に戻す。
+  // 戻さないと、保存されていないのに画面だけ変わったように見える
+  if (result.cancelled) { await load(); return null; }
 
   const err = result.error;
   if (result.exhausted) {
     await inform("管理者パスワードが確認できません", err.message);
-    return null;
-  }
-  if (err instanceof ApiError && (err.status === 422 || err.status === 409)) {
+  } else if (err instanceof ApiError && (err.status === 422 || err.status === 409)) {
     await inform("保存できません", err.message);
-    return null;
+  } else {
+    toastError(err);
   }
-  toastError(err);
+  await load();
   return null;
 }
 
@@ -575,6 +576,8 @@ async function changeAdminPassword(reset) {
     render(payload);
     // 打った値は残さない。肩越しに見られる時間を短くする
     ids.forEach((id) => { document.getElementById(id).value = ""; });
+    // 前に断られた理由が残っていたら消す(変えられたのに赤い文が出たままだった)
+    document.getElementById("st-pw-why").hidden = true;
     toast(payload.message, "ok");
   } catch (err) {
     // 断りの理由はサーバが持っている。押した場所のそばに出す

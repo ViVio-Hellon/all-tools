@@ -372,6 +372,91 @@ class StaleDeleteTests(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class SourceUnreachableAtStartTests(unittest.TestCase):
+    """参照パスはあるが、**起動したときに共有が見えなかった**。
+
+    以前は起動時に1回探すだけで、見つからなければそのあいだずっと「参照パス
+    未設定」扱いだった。登録を断り(「参照パスで指定してください」)、共有が
+    戻っても直らず、設定を保存し直すか起動し直すまで続いた。
+    """
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from calendar_app import sync_service
+        from calendar_app.dbkit import outbox_sync
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.share = Path(tmp.name) / "共有"
+        self.share.mkdir()
+        _web.make_source(self.share, config.SOURCE_FILE_DATA, _web.SOURCE_SCHEMA)
+        user_settings.set_value(user_settings.KEY_DATA_DB_DIR, str(self.share))
+        user_settings.set_value(user_settings.KEY_MASTER_DB_DIR, str(self.share))
+        self.addCleanup(user_settings.set_value, user_settings.KEY_DATA_DB_DIR, "")
+        self.addCleanup(user_settings.set_value, user_settings.KEY_MASTER_DB_DIR, "")
+        outbox_sync.reset_op_id_cache()
+        self.addCleanup(outbox_sync.reset_op_id_cache)
+        # 送信待ちは同期側も読むので、手元のDBは本物のファイルにする
+        from unittest import mock
+
+        from calendar_app import db
+
+        local = Path(tmp.name) / "calendar.db"
+        patcher = mock.patch.object(config, "sqlite_path", return_value=local)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # 共有が落ちた状態で起動する
+        self.hidden = Path(tmp.name) / "落ちている"
+        shutil.move(str(self.share), str(self.hidden))
+        sync_service.reset()
+        self.service = sync_service.get_service()
+        self.addCleanup(sync_service.reset)
+        self.conn = _web.bind_db(self, db.connect(local))
+        self.client = _web.make_client()
+        _add_member(self.conn, "10", "山田太郎", "B", "L-1")
+        user_settings.save_my_line("L-1")
+
+    def back(self) -> None:
+        import shutil
+
+        shutil.move(str(self.hidden), str(self.share))
+
+    def test_登録は断らずに預かる(self) -> None:
+        self.assertTrue(self.service.configured)
+        self.assertFalse(self.service.reachable)
+        res = self.client.post("/api/comment",
+                               json={"date": D, "line": "L-1", "group": "B",
+                                     "text": "共有が落ちている間"},
+                               headers=_web.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        status = self.service.status()
+        self.assertEqual(status.state.name, "OFFLINE")
+        self.assertIn("見えません", status.message)
+        self.assertEqual(status.pending, 1)
+
+    def test_共有が戻れば見つけ直して送る(self) -> None:
+        self.client.post("/api/comment",
+                         json={"date": D, "line": "L-1", "group": "B", "text": "戻ったら送る"},
+                         headers=_web.auth())
+        self.assertFalse(self.service.request(receive=False), "見えないのに送り始めた")
+        self.back()
+        res = self.client.post("/api/sync/now", headers=_web.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertTrue(self.service.reachable)
+        self.assertEqual(self.service.status().pending, 0)
+        rows = _web.read_source(self.share / config.SOURCE_FILE_DATA, config.TABLE_DATA)
+        self.assertIn("戻ったら送る", [r["登録内容"] for r in rows])
+
+    def test_設定画面は登録できないとは言わない(self) -> None:
+        body = self.client.get("/api/settings", headers=_web.auth()).get_json()
+        text = "\n".join(body.get("problems", []))
+        self.assertIn("いま見えません", text)
+        self.assertNotIn("登録はできません", text)
+
+
 class NoSourceTests(unittest.TestCase):
     """参照パスが無ければ**登録できない**。
 

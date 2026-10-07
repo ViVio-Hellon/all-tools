@@ -56,6 +56,7 @@ class SyncService:
         self._thread: Optional[threading.Thread] = None
         self._last_error = ""
         self._path = ""
+        self._folder = ""
         self.reload()
 
     # ------------------------------------------------------------------
@@ -68,17 +69,39 @@ class SyncService:
         フォルダの中から探す(``sources.find_data_db``)ので、上流が
         ファイル名を変えても追随する。
         """
+        self._find()
+        self._wake.set()
+
+    def _find(self) -> bool:
+        """参照パスのフォルダから取り込み元を探す。見つかれば ``True``。
+
+        **起動したときに共有が見えなかっただけ**なら、あとで見えた時点で
+        ここが見つけ直す(定期実行と「今すぐ同期」が呼ぶ)。以前は起動時の
+        1回きりで、共有が落ちていた日はそのあいだずっと「参照パス未設定」
+        扱いになり、登録まで断っていた。
+        """
         found = sources.find_data_db()
         path = str(found) if found else ""
         # 班員名簿はマスタDBにある。受信のたびに一緒に入れ直す
         master = sources.find_master_db() if path else None
+        folder = config.data_db_dir_text() or settings.access_data_path()
         with self._lock:
+            changed = path != self._path or folder != self._folder
             self._path = path
+            self._folder = folder
             self._auto = (AutoSync(config.sqlite_path(), path,
                                    master_path=str(master) if master else "")
                           if path else None)
-        log.info("同期の設定を読み直しました: %s", path or "(見つかりません)")
-        self._wake.set()
+        if changed or path:
+            log.info("同期の設定を読み直しました: %s",
+                     path or f"(見つかりません。参照パス: {folder or '未設定'})")
+        return bool(path)
+
+    def _ensure(self) -> bool:
+        """取り込み元が決まっているか。参照パスがあって見失っているなら探し直す。"""
+        if self._auto is not None:
+            return True
+        return bool(self._folder) and self._find()
 
     @property
     def path(self) -> str:
@@ -89,11 +112,23 @@ class SyncService:
     def enabled(self) -> bool:
         """自動同期が使える状態か(共有ファイルが決まっていて、送る手段がある)。"""
         auto = self._auto
-        return bool(auto and auto.enabled and settings.auto_sync_enabled())
+        if auto is None:
+            # 参照パスはあるが、いま共有が見えない。見えれば送る(見つけ直す)
+            return bool(self._folder) and settings.auto_sync_enabled()
+        return bool(auto.enabled and settings.auto_sync_enabled())
 
     @property
     def configured(self) -> bool:
-        """共有ファイルの場所が決まっているか。"""
+        """共有の場所(参照パス)が決まっているか。
+
+        **共有がいま見えなくても、参照パスがあれば決まっている。** 登録は
+        送信待ちに残り、見えた時点で送る。断るのは場所が無いときだけ。
+        """
+        return self._auto is not None or bool(self._folder)
+
+    @property
+    def reachable(self) -> bool:
+        """取り込み元のファイルが見つかっているか(見えているか)。"""
         return self._auto is not None
 
     def is_busy(self) -> bool:
@@ -117,6 +152,9 @@ class SyncService:
         status.pending = self._pending_count()
         if not self.configured:
             status.state = SyncState.DISABLED
+        elif self._auto is None:
+            status.state = SyncState.OFFLINE
+            status.message = f"共有フォルダに取り込み元が見えません: {self._folder}"
         elif status.state is not SyncState.OFFLINE:
             status.state = SyncState.PENDING if status.pending else SyncState.SYNCED
         return status
@@ -144,7 +182,7 @@ class SyncService:
         戻り値は「始めたか」。呼び出し元(画面)は待たない ── 状態は
         ``GET /api/sync`` で見に来る。
         """
-        if self._auto is None:
+        if not self._ensure():
             return False
         with self._lock:
             if self._running:
@@ -161,7 +199,7 @@ class SyncService:
         画面が押した直後に結果を見せたいときだけ使う。定期実行は
         ``request()`` のほうを通す。
         """
-        if self._auto is None:
+        if not self._ensure():
             return self.status()
         with self._lock:
             if self._running:
