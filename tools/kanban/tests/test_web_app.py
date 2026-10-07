@@ -1024,6 +1024,17 @@ class PresenceRouteTest(RouteTestBase):
         self.assertEqual(self.get("/api/status").status_code, 200)
         self.assertIn("presence", self.get("/api/status").json)
 
+    def test_status_says_since_when_it_has_not_reached_the_shared_db(self):
+        """共有へ届いていないあいだは、いつから・なぜを返す(画面の「まだ共有に届いていません」)。"""
+        self.store.set_meta("undelivered_since", "2026/10/07 09:00:00")
+        self.store.set_meta("undelivered_why", "共有DBが見えません")
+        body = self.get("/api/status").json
+        self.assertEqual(body["undelivered_since"], "", "残りが無いのに届いていないと出した")
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        body = self.get("/api/status").json
+        self.assertEqual(body["undelivered_since"], "2026/10/07 09:00:00")
+        self.assertEqual(body["undelivered_why"], "共有DBが見えません")
+
 
 class ImportFreshnessTest(RouteTestBase):
     """**自動更新は、動かなくなったことが見えて初めて信用できる。**

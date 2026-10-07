@@ -495,6 +495,73 @@ class ExporterThreadTest(SyncTestBase):
         self.assertEqual(result.succeeded, 1)
         self.assertEqual(len(received), 1)
 
+    def test_undelivered_is_remembered_until_sent(self):
+        """共有へ届かないあいだは「いつから・なぜ」を手元に覚え、届いたら消す(画面の帯)。"""
+        sync.import_all(self.store, self.gateway)
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        self.gateway.exists = lambda: False
+        self.gateway.fail_with = "共有フォルダが見えない"
+        exporter = sync.Exporter(self.store, self.gateway, interval_sec=0)
+        exporter.run_once()
+        self.assertEqual(self.store.pending_count(), 1)
+        since = self.store.get_meta(sync.Exporter.META_UNDELIVERED_SINCE, "")
+        self.assertTrue(since)
+        self.assertIn("見えません", self.store.get_meta(sync.Exporter.META_UNDELIVERED_WHY, ""))
+
+        # 見えるが書けない(ほかの端末が使っている)。いつからは最初のまま
+        self.gateway.exists = lambda: True
+        exporter.run_once()
+        self.assertEqual(self.store.get_meta(sync.Exporter.META_UNDELIVERED_SINCE, ""), since)
+        self.assertIn("書けません", self.store.get_meta(sync.Exporter.META_UNDELIVERED_WHY, ""))
+
+        self.gateway.fail_with = None
+        exporter.run_once()
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.store.get_meta(sync.Exporter.META_UNDELIVERED_SINCE, ""), "")
+        self.assertEqual(self.store.get_meta(sync.Exporter.META_UNDELIVERED_WHY, ""), "")
+
+    def test_retry_sends_as_soon_as_shared_db_is_back(self):
+        """残りがあるあいだは共有DBが見えたら周期(60秒)を待たずに送る。"""
+        import time
+
+        sync.import_all(self.store, self.gateway)
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        visible = {"now": False}
+        self.gateway.exists = lambda: visible["now"]
+        self.gateway.fail_with = "共有フォルダが見えない"
+        exporter = sync.Exporter(self.store, self.gateway, interval_sec=3600)
+        exporter.RETRY_SEC = 0.05
+        exporter.start()
+        try:
+            exporter.request_now()
+            deadline = time.monotonic() + 5
+            while not self.store.get_meta(sync.Exporter.META_UNDELIVERED_SINCE, "") \
+                    and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.3)
+            self.assertEqual(exporter.retries, 0, "見えないのに送り直した")
+
+            self.gateway.fail_with = None
+            visible["now"] = True
+            deadline = time.monotonic() + 5
+            while self.store.pending_count() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(self.store.pending_count(), 0, "見えたのに周期まで送らなかった")
+            self.assertGreaterEqual(exporter.retries, 1)
+        finally:
+            exporter.stop(final_export=False, timeout=5)
+        self.assertIsNone(exporter._retry_thread)
+
+    def test_unsent_counts_only_local_db(self):
+        exporter = sync.Exporter(self.store, self.gateway, interval_sec=0)
+        self.assertEqual(exporter.unsent(), 0)
+        sync.import_all(self.store, self.gateway)
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        # 看板の状態 1件 + 集計のための出来事(押した記録)
+        self.assertEqual(exporter.unsent(),
+                         self.store.pending_count() + self.store.unsent_event_count())
+        self.assertGreaterEqual(exporter.unsent(), 2)
+
 
 class ImporterThreadTest(SyncTestBase):
     """``Importer``(定期 Access 再取り込み)のテスト。

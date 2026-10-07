@@ -14,6 +14,10 @@ import { bad, ok, warn } from '../toast.js';
 
 let line = '';
 let busy = false;
+// 送っている最中に押された升(行番号と種類)。**捨てずに**、送り終えたら順に押し直す。
+// 以前は黙って捨てていたので、続けて2行を押すと2つ目が発注されないことがあった
+let waiting = [];
+let sending = '';        // いま送っている升(「行番号:種類」)。この升の二度押しは預からない
 let alerts = [];         // 「発送処理中に注文が取り消されました」(サーバが決めて渡す)
 let canComment = false;  // この画面でコメントを書けるか(倉庫参照は読むだけ)
 let commentSide = '';    // 書くときの名乗り(現場 / 倉庫)
@@ -531,9 +535,10 @@ function wireBoard() {
 
   host.addEventListener('click', async (ev) => {
     const cell = ev.target.closest('.cell');
-    if (!cell || cell.disabled || busy) return;
+    if (!cell || cell.disabled) return;
     const rowEl = cell.closest('.row');
     if (!rowEl) return;
+    if (busy) { hold(rowEl.dataset.no, cell.dataset.kind); return; }
 
     const kind = cell.dataset.kind;
     if (kind === 'comment') { openComments(line, rowEl.dataset.no); return; }
@@ -564,8 +569,30 @@ function wireBoard() {
       }
     }
 
-    await send(`/api/board/${kind === 'size' ? 'order' : kind}`, body, ACTION_LABEL[kind]);
+    sending = `${body.mgmt_no}:${kind}`;
+    try {
+      await send(`/api/board/${kind === 'size' ? 'order' : kind}`, body, ACTION_LABEL[kind]);
+    } finally {
+      sending = '';
+    }
   });
+}
+
+/** 送っている最中の押下を預かる。同じ升の二度押しは1回にする(押し直しで取り消さない) */
+function hold(no, kind) {
+  if (kind === 'comment' || sending === `${no}:${kind}`) return;
+  if (waiting.some((w) => w.no === no && w.kind === kind)) return;
+  waiting.push({ line, no, kind });
+}
+
+/** 預かった押下を1つずつ、描き直した盤面の升で押し直す(ラインを変えたら捨てる) */
+function drain() {
+  if (busy || !waiting.length) return;
+  const next = waiting.shift();
+  if (next.line !== line) { waiting = []; return; }
+  const cell = document.querySelector(`#board .row[data-no="${next.no}"] .cell[data-kind="${next.kind}"]`);
+  if (cell && !cell.disabled) cell.click();
+  else drain();
 }
 
 function wireToolbar() {
@@ -639,6 +666,7 @@ async function send(path, body, action = '押す', tries = 0) {
     return null;
   } finally {
     busy = false;
+    if (waiting.length) setTimeout(drain, 0);
   }
 }
 
@@ -723,6 +751,7 @@ function startPolling() {
     try {
       const s = await api.get('/api/status');
       setPending(s.pending, s.failures);
+      setUndelivered(s.pending, s.undelivered_since, s.undelivered_why);
       setOpenTerminals(s.presence);
       setFreshness(s.import_age_sec, s.import_stale, s.last_import_at);
       if (s.token !== lastToken) {
@@ -750,6 +779,19 @@ function startPolling() {
   // PC のスリープ明け・凍結が解けたとき(app.js が気付いて知らせる)。
   // 見えたままスリープしたタブには visibilitychange が来ない
   window.addEventListener('app-resumed', catchUp);
+}
+
+// 共有へ届いていないもの。共有フォルダが見えない間に押した発注・発送・コメントは、この端末に
+// 預かったまま。以前は帯の「未送信 N」だけで、相手(倉庫・現場)に届いていないことが分からなかった。
+// つながると自動で送る(書き戻しが数秒ごとに確かめる)ので、押し直しは要らない
+function setUndelivered(pending, since, why) {
+  const el = document.getElementById('undelivered');
+  if (!el) return;
+  if (!pending || !since) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = `⚠ ${pending} 件がまだ共有に届いていません(${why || '共有DBに届きません'}。${since.slice(5, 16)} から)。`
+    + 'この端末に預かっているので、押し直さなくてかまいません。つながると自動で送ります。'
+    + 'それまで相手(倉庫・現場)の画面には出ません。';
 }
 
 // 取り込みが止まっていないか(帯の「最終取り込み」)

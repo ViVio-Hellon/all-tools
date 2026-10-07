@@ -136,6 +136,10 @@ def status():
         {
             "pending": store.pending_count(),
             "failures": len(store.sync_failures()),
+            # 共有へ届いていないものがあれば、いつから・なぜ(書き戻しが手元に覚えたもの。
+            # ここで共有フォルダは見に行かない)
+            "undelivered_since": store.get_meta("undelivered_since", "") if store.pending_count() else "",
+            "undelivered_why": store.get_meta("undelivered_why", "") if store.pending_count() else "",
             "token": store.change_token(),
             "presence": presence.to_dicts(presence.read(store, exclude=mine)),
             "last_import_at": at,

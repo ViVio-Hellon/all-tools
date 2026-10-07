@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Sequence
@@ -785,6 +786,11 @@ class Exporter:
         self.on_result = on_result
         self._history_checked: SharedDb | None = None
         self._comments_checked: SharedDb | None = None
+        self._last_run = 0.0
+        self._retry_stop = threading.Event()
+        self._retry_thread: threading.Thread | None = None
+        self.retries = 0
+        """共有DBが見えたのを見て、周期を待たずに送り直した回数(調べもの用)。"""
         self._task: PeriodicTask[ExportResult] = PeriodicTask(
             run=self._run,
             interval_sec=self.interval_sec,
@@ -793,7 +799,65 @@ class Exporter:
             on_error=lambda exc: ExportResult(failed=1, errors=[str(exc)]),
         )
 
+    #: 送れていないものがあるあいだ、共有DBが見えるかを確かめる間隔(秒)。
+    #: 見えたら周期(既定 60 秒)を待たずに送る。0 なら確かめない(周期だけで送る)
+    RETRY_SEC = 5.0
+    #: 「届いていない」を画面に出すために、この端末の SQLite に覚えておく鍵
+    META_UNDELIVERED_SINCE = "undelivered_since"
+    META_UNDELIVERED_WHY = "undelivered_why"
+
+    def unsent(self) -> int:
+        """まだ共有へ届いていないもの(看板の状態・コメント・出来事)の数。手元の SQLite だけを見る。"""
+        try:
+            return (self.store.pending_count() + self.store.unsent_comment_count()
+                    + self.store.unsent_event_count())
+        except Exception:  # noqa: BLE001 - 数えられないときは送り直しを急がない
+            return 0
+
     def _run(self) -> ExportResult:
+        self._last_run = time.monotonic()
+        try:
+            return self._run_export()
+        finally:
+            self._note_delivery()
+
+    def _note_delivery(self) -> None:
+        """送れていないものが残っていれば「いつから・なぜ」を覚える(帯に出す。`/api/status`)。
+
+        共有フォルダが見えない間に押したものは、この端末に預かったまま。以前は帯の
+        「未送信 N」だけで、**倉庫に届いていないことが画面からは分からなかった。**
+        """
+        try:
+            if self.store.pending_count() or self.store.unsent_comment_count():
+                if not self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
+                    self.store.set_meta(self.META_UNDELIVERED_SINCE,
+                                        datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
+                why = ("共有DBが見えません" if not self.gateway.exists()
+                       else "共有DBへ書けませんでした(ほかの端末が使っている・ロック)")
+                self.store.set_meta(self.META_UNDELIVERED_WHY, why)
+            elif self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
+                self.store.set_meta(self.META_UNDELIVERED_SINCE, "")
+                self.store.set_meta(self.META_UNDELIVERED_WHY, "")
+        except Exception:  # noqa: BLE001 - 覚えられなくても送るほうは続ける
+            pass
+
+    def _retry_loop(self) -> None:
+        """送れていないものがあるあいだ、共有DBが見えたら周期を待たずに送る。
+
+        共有フォルダが落ちているあいだに押したものは、押した直後の書き戻しが届かず、
+        次の周期(既定 60 秒)まで送り直さなかった(点検: 共有を戻してから倉庫に出るまで 37 秒)。
+        手元の数を数えるだけで、共有フォルダへは**残りがあるときだけ**大きさを見に行く。
+        """
+        while not self._retry_stop.wait(self.RETRY_SEC):
+            if not self.unsent():
+                continue
+            if time.monotonic() - self._last_run < self.RETRY_SEC:
+                continue                      # いま送ったばかり(押した直後など)
+            if self.gateway.exists():
+                self.retries += 1
+                self._task.request_now()
+
+    def _run_export(self) -> ExportResult:
         result = export_pending(self.store, self.gateway)
         # **出来事(集計のための記録)も同じ周期で送る。** 失敗しても書き戻しの
         # 結果には混ぜない ── 看板の状態を送れたかどうかと、記録を送れたか
@@ -848,6 +912,11 @@ class Exporter:
 
     def start(self) -> None:
         self._task.start()
+        if self.interval_sec > 0 and self.RETRY_SEC > 0 and self._retry_thread is None:
+            self._retry_stop.clear()
+            self._retry_thread = threading.Thread(
+                target=self._retry_loop, name="kanban-export-retry", daemon=True)
+            self._retry_thread.start()
 
     def request_now(self) -> None:
         """次の周期を待たずに書き戻しを行う。"""
@@ -855,6 +924,10 @@ class Exporter:
 
     def stop(self, final_export: bool = True, timeout: float = 30.0) -> None:
         """停止する。``final_export`` が True なら最後に 1 回書き戻す。"""
+        self._retry_stop.set()
+        if self._retry_thread is not None:
+            self._retry_thread.join(timeout=5)
+            self._retry_thread = None
         self._task.stop(timeout=timeout)
         if final_export:
             self.run_once()
