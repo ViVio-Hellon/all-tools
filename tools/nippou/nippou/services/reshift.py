@@ -98,11 +98,39 @@ def _load_shift(repo: NippouRepository, day: str, line: str, shift: str):
     return pages
 
 
-def _late(details: list[DetailRecord], starts: dict[str, int]) -> list[DetailRecord]:
-    own, boundary = starts[SECOND], starts[THIRD]
-    if boundary <= own:
-        return []
-    return [d for d in details if (t := _start(d)) is not None and own <= t and t >= boundary]
+def _end(d: DetailRecord) -> Optional[int]:
+    try:
+        return int(float(d.sz)) * 60 + int(float(d.sh or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _late(details: list[DetailRecord], starts: dict[str, int],
+          third: Optional[list[DetailRecord]] = None) -> list[DetailRecord]:
+    """2直の行のうち3直のもの(決め方は取り込みと同じ `nippou_sheet.tail_for_next`)。"""
+    from ..logic.nippou_sheet import tail_for_next
+
+    filled = [d for d in details if _start(d) is not None or str(d.lot or "").strip()]
+    first = next((d for d in (third or []) if _start(d) is not None), None)
+    picked = tail_for_next([(_start(d), _end(d), d.lot) for d in filled],
+                           (_start(first), first.lot) if first else None,
+                           starts[SECOND], starts[THIRD])
+    return [filled[i] for i in picked]
+
+
+def _content(d: DetailRecord) -> tuple:
+    return tuple(getattr(d, k) for k in d.__dataclass_fields__
+                 if k not in ("report_date", "line", "shift", "page", "row_no"))
+
+
+def _copies(details: list[DetailRecord], late: list[DetailRecord]) -> list[DetailRecord]:
+    """2直に残る行のうち、3直へ戻す行と**中身がまったく同じ**もの(重なって入った写し)。
+
+    2026/1/10 は「HX460Y0 22:25〜23:30 1枚」が2直に4行あった(ファイルでは1行)。
+    同じ時刻に同じ行が何本もあることは無いので、戻す行と同じものは写しとして消す。
+    """
+    wanted = {_content(d) for d in late}
+    return [d for d in details if d not in late and _content(d) in wanted]
 
 
 def _describe(d: DetailRecord) -> str:
@@ -124,11 +152,13 @@ def plan(repo: NippouRepository, *, skip_dates: tuple[str, ...] = ()) -> list[Fi
         if day in skip_dates:
             continue
         details = [d for _h, rows in _load_shift(repo, day, line, SECOND) for d in rows]
-        late = _late(details, starts)
+        third = [d for _h, rows in _load_shift(repo, day, line, THIRD) for d in rows]
+        late = _late(details, starts, third)
         if not late:
             continue
-        out.append(Fix(day, line, [_describe(d) for d in late],
-                       third_existed=bool(repo.saved_pages(day, line, THIRD))))
+        rows = [_describe(d) for d in late]
+        rows += [_describe(d) + "(同じ行の重なり。消します)" for d in _copies(details, late)]
+        out.append(Fix(day, line, rows, third_existed=bool(repo.saved_pages(day, line, THIRD))))
     from ..logic.shift import parse_business_date
 
     out.sort(key=lambda f: (str(parse_business_date(f.report_date) or f.report_date), f.line))
@@ -167,10 +197,11 @@ def apply(repo: NippouRepository, *, skip_dates: tuple[str, ...] = (),
             second = _load_shift(repo, day, line, SECOND)
             third = _load_shift(repo, day, line, THIRD)
             rows2 = [d for _h, rows in second for d in rows]
-            late = _late(rows2, starts)
+            late = _late(rows2, starts, [d for _h, rows in third for d in rows])
             if not late:
                 continue
-            keep = [d for d in rows2 if d not in late]
+            copies = _copies(rows2, late)
+            keep = [d for d in rows2 if d not in late and d not in copies]
             rows3 = late + [d for _h, rows in third for d in rows]
             head2 = second[0][0]
             head3 = third[0][0] if third else HeaderRecord(

@@ -1615,9 +1615,10 @@ def import_upload():
     # (`/api/settings/import/progress`)を見に来ます
     try:
         with job_progress.watching(file_count=len(uploads)):
+            # まず全部置く(同じ作業日のファイルを比べるため)
+            placed: list[tuple[str, Path | None, str]] = []
             for no, upload in enumerate(uploads, start=1):
                 name = Path(upload.filename).name or "取り込み"
-                job_progress.step(file_no=no, file_name=name)
                 target = folder / name
                 upload.save(str(target))
                 got = target.stat().st_size
@@ -1626,9 +1627,20 @@ def import_upload():
                     # ファイルが悪いように見える)
                     log.warning("取り込むファイルが欠けて届きました: %s (%d / %d バイト)",
                                 name, got, sizes[no - 1])
+                    placed.append((name, None, f"欠けて届きました({got:,} / {sizes[no - 1]:,} バイト)。"
+                                               "もう一度渡すか、道を打って渡してください"))
+                    continue
+                placed.append((name, target, ""))
+            # 同じ作業日のファイルが何本もあれば、中身の多いほうだけ入れる
+            # (昔の日報は1日に何度も保存されている。途中で保存したほうで上書きしない)
+            losers = import_service.same_day_losers(
+                [t for _n, t, why in placed if t is not None and not why], line)
+            for no, (name, target, why) in enumerate(placed, start=1):
+                job_progress.step(file_no=no, file_name=name)
+                why = why or (losers.get(target, "") if target is not None else "")
+                if why:
                     results.append({"name": name, "ok": False, "preview": None, "result": None,
-                                    "error": (f"欠けて届きました({got:,} / {sizes[no - 1]:,} バイト)。"
-                                              "もう一度渡すか、道を打って渡してください")})
+                                    "error": why})
                     continue
                 results.append(_import_one(
                     import_service, target, name, line,

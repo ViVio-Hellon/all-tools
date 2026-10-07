@@ -309,10 +309,28 @@ class ShiftBoundaryTests(unittest.TestCase):
         self.assertIn("X1", [d.lot for d in self.by_shift(found)["2直"].details])
         self.assertEqual(found.notes, [])
 
+    def test_またいだ最後の行は3直が続きの行から始まるなら3直(self) -> None:
+        """2026/1/10: 2直は全停(15:00〜22:50)、3直の人が 22:25 から始め、3直は 23:30 の続きの行から。"""
+        found = self.parsed(**{"D56": "", "J56": "15", "K56": "0", "L56": "22", "M56": "50",
+                               "AJ56": "2", "AK56": "470", "Y56": "", "Z56": "",
+                               "D98": "HX460Y0", "J98": "22", "K98": "25", "L98": "23", "M98": "30",
+                               "Y98": "1", "Z98": "562.6",
+                               "J104": "23", "K104": "30", "L104": "0", "M104": "0", "Y104": "1",
+                               "Z104": "562.6", "AA3": "12", "AB3": "1562.6"})
+        shifts = self.by_shift(found)
+        self.assertEqual([(d.kz, d.th) for d in shifts["2直"].details], [("15", "470")])
+        self.assertEqual((shifts["3直"].details[0].lot, shifts["3直"].details[0].kz), ("HX460Y0", "22"))
+        self.assertIn("またぎ", " ".join(found.notes))
+
+    def test_またいでも3直がロット入りで始まるなら2直のまま(self) -> None:
+        found = self.parsed(**{"D98": "X9", "J98": "22", "K98": "25", "L98": "23", "M98": "30",
+                               "D104": "Y1", "J104": "23", "K104": "30", "L104": "0", "M104": "0"})
+        self.assertIn("X9", [d.lot for d in self.by_shift(found)["2直"].details])
+
     def test_直の始まりは時間用のとおり(self) -> None:
         """3直が 23:00 始まりの現場なら、22:50 の行は2直のまま。"""
         starts = ns.shift_starts({"1": ("07:00", "15:00"), "2": ("15:00", "23:00"), "3": ("23:00", "07:00")})
-        found = self.parsed(starts, **self.LATE)
+        found = self.parsed(starts, **{**self.LATE, "D104": "Y1"})   # 3直はロット入りで始まる
         self.assertIn(("H9461S0", "22"), [(d.lot, d.kz) for d in self.by_shift(found)["2直"].details])
 
     def test_直の始まりが読めなければ控え(self) -> None:

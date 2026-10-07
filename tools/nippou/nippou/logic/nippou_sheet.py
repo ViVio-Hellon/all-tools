@@ -216,6 +216,42 @@ def _row_start(values: dict[str, str]) -> int | None:
         return None
 
 
+def _row_end(values: dict[str, str]) -> int | None:
+    try:
+        return int(float(values.get("L", ""))) * 60 + int(float(values.get("M", "") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def tail_for_next(rows: list[tuple], next_first: tuple | None, own: int, boundary: int) -> list[int]:
+    """区画の行のうち、**次の直のもの**の番号(0 始まり)。
+
+    `rows` は ``(開始分, 終了分, ロット)`` の並び、`next_first` は次の直の1行目の
+    ``(開始分, ロット)``(無ければ None)。`own` はこの直の始まり、`boundary` は次の直の始まり。
+
+    1. **次の直の始まり以降に始まる行**(22:50〜 の行・22:50〜07:00 の全停)
+    2. **最後の行が次の直の始まりをまたぎ**(22:25〜23:30 など)、次の直の1行目が
+       その終わりから始まる**続きの行(ロット空欄)**のとき、その行も。日報の1行目が
+       続きの行になることは無いので、またいだ行は次の直の日報の1行目です
+       (2026/1/10: 2直は全停、3直の人が 22:25 から始めていた)
+    """
+    if boundary <= own:
+        return []
+    picked = [i for i, (start, _end, _lot) in enumerate(rows)
+              if start is not None and own <= start and start >= boundary]
+    if picked or not rows or next_first is None:
+        return picked
+    start, end, _lot = rows[-1]
+    first_start, first_lot = next_first
+    if start is None or end is None or first_start is None or str(first_lot or "").strip():
+        return picked
+    if end < start:
+        end += 24 * 60
+    if start < boundary < end and end % (24 * 60) == first_start:
+        return [len(rows) - 1]
+    return picked
+
+
 def parse_rows(rows: dict[int, dict[str, str]], line: str,
                sheet_name: str = "", starts: dict[str, int] | None = None) -> Parsed:
     """シートを、入れられる形(ページの並び)にする。**DBには触りません。**
@@ -254,8 +290,11 @@ def parse_rows(rows: dict[int, dict[str, str]], line: str,
         own, boundary = starts.get(here[0]), starts.get(after[0])
         if own is None or boundary is None or boundary <= own:
             continue
-        moved = [e for e in here[2]
-                 if (t := _row_start(e[1])) is not None and own <= t and t >= boundary]
+        nxt = after[2][0][1] if after[2] else None
+        picked = tail_for_next(
+            [(_row_start(v), _row_end(v), v.get("D", "")) for _n, v in here[2]],
+            (_row_start(nxt), nxt.get("D", "")) if nxt else None, own, boundary)
+        moved = [here[2][i] for i in picked]
         if not moved:
             continue
         here[2] = [e for e in here[2] if e not in moved]
@@ -264,9 +303,11 @@ def parse_rows(rows: dict[int, dict[str, str]], line: str,
             after[1] = next((v.get(WORKER_COLUMN, "").strip() for _n, v in moved
                              if v.get(WORKER_COLUMN, "").strip()), "")
         first = moved[0][1]
+        when = f"{boundary // 60:02d}:{boundary % 60:02d}"
+        how = (f"{after[0]}の始まり({when})以降に始まる行" if (_row_start(first) or 0) >= boundary
+               else f"{after[0]}の始まり({when})をまたぎ、{after[0]}が続きの行から始まっている行")
         found.notes.append(
-            f"{after[0]}の始まり({boundary // 60:02d}:{boundary % 60:02d})以降に始まる行 "
-            f"{len(moved)}行を{after[0]}へ移しました(シートでは{here[0]}の区画の"
+            f"{how} {len(moved)}行を{after[0]}へ移しました(シートでは{here[0]}の区画の"
             f"{first.get('J', '')}時台の枠にありました)")
 
     for shift, worker, entries in bands:

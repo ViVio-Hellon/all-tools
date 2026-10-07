@@ -55,6 +55,27 @@ class ReimportTests(unittest.TestCase):
         third = self.repo.load(DAY, "HVC", "3直", 1)[1]
         self.assertEqual((third[0].lot, third[0].kz, third[0].kh), ("H9461S0", "22", "50"))
 
+    def test_ファイル名の日付とシートの作業日が違えば言う(self) -> None:
+        """昔の日報は翌朝に保存して、ファイル名が保存した日になっていることがある。"""
+        named = write_xlsx(self.tmp / "2026.08.27.HVC日報.xlsx", sheet_cells())
+        found = import_service.preview(self.repo, named, "HVC", out_dir=self.out)
+        self.assertIn("ファイル名の日付(2026.08.27)とシートの作業日(2026年8月26日)が違います", found.message)
+        same = write_xlsx(self.tmp / "2026.08.26.HVC日報.xlsx", sheet_cells())
+        self.assertNotIn("ファイル名の日付", import_service.preview(self.repo, same, "HVC", out_dir=self.out).message)
+
+    def test_入れるとその日の枚数が減るなら言う(self) -> None:
+        import_service.apply(self.repo, self.book, line="HVC", out_dir=self.out)
+        smaller = write_xlsx(self.tmp / "途中で保存.xlsx", sheet_cells(Y56="", Z56="", AA3="10", AB3="1000"))
+        found = import_service.preview(self.repo, smaller, "HVC", out_dir=self.out)
+        self.assertIn("の枚数が減ります", found.message)
+
+    def test_同じ作業日のファイルは中身の多いほうだけ(self) -> None:
+        early = write_xlsx(self.tmp / "2026.08.26.HVC日報001.xlsx", sheet_cells(Y56="", Z56="", AA3="10", AB3="1000"))
+        full = write_xlsx(self.tmp / "2026.08.27.HVC日報.xlsx", sheet_cells())
+        losers = import_service.same_day_losers([full, early], "HVC")
+        self.assertEqual(list(losers), [early])
+        self.assertIn("2026.08.27.HVC日報.xlsx", losers[early])
+
     def test_CSVは一部のページだけのこともあるので消さない(self) -> None:
         csv = self.tmp / "明細.csv"
         from nippou.reporting import csv_export

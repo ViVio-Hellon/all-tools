@@ -84,6 +84,34 @@ class ReshiftTests(unittest.TestCase):
         reshift.apply(self.repo, out_dir=self.tmp / "out")
         self.assertEqual(self.rows("3直"), [(1, "H9461S0", "22", "50")])
 
+    def test_またいだ行も3直が続きの行から始まるなら戻す(self) -> None:
+        """2026/1/10: 2直は全停、3直の人が 22:25 から始めていた。"""
+        k2 = dict(report_date=DAY, line="HVC", shift="2直", page=1)
+        self.repo.save(HeaderRecord(**k2, worker=""),
+                       [DetailRecord(**k2, row_no=1, kz="15", kh="0", sz="22", sh="50", s="2", th="470"),
+                        DetailRecord(**k2, row_no=2, lot="HX460Y0", kz="22", kh="25", sz="23", sh="30", con="1")])
+        k3 = dict(report_date=DAY, line="HVC", shift="3直", page=1)
+        self.repo.save(HeaderRecord(**k3, worker="森川貴志 吉田秀治"),
+                       [DetailRecord(**k3, row_no=1, kz="23", kh="30", sz="0", sh="0", con="1")])
+        reshift.apply(self.repo, out_dir=self.tmp / "out")
+        self.assertEqual(self.rows("2直"), [(1, "", "15", "0")])
+        self.assertEqual(self.rows("3直")[0], (1, "HX460Y0", "22", "25"))
+
+    def test_戻す行と同じ写しは消す(self) -> None:
+        """2026/1/10 は同じ行が2直に4行入っていた(ファイルでは1行)。"""
+        k2 = dict(report_date=DAY, line="HVC", shift="2直", page=1)
+        same = dict(lot="HX460Y0", kz="22", kh="25", sz="23", sh="30", con="1")
+        self.repo.save(HeaderRecord(**k2, worker=""),
+                       [DetailRecord(**k2, row_no=1, kz="15", kh="0", sz="22", sh="50", s="2", th="470")]
+                       + [DetailRecord(**k2, row_no=i, **same) for i in (2, 3, 4, 5)])
+        k3 = dict(report_date=DAY, line="HVC", shift="3直", page=1)
+        self.repo.save(HeaderRecord(**k3, worker="3直"),
+                       [DetailRecord(**k3, row_no=1, kz="23", kh="30", sz="0", sh="0", con="1")])
+        self.assertEqual(sum("重なり" in r for r in reshift.plan(self.repo)[0].rows), 3)
+        reshift.apply(self.repo, out_dir=self.tmp / "out")
+        self.assertEqual(self.rows("2直"), [(1, "", "15", "0")])
+        self.assertEqual([r[1] for r in self.rows("3直")], ["HX460Y0", ""])
+
     def test_いまの作業日は触らない(self) -> None:
         seed(self.repo)
         self.assertEqual(reshift.plan(self.repo, skip_dates=(DAY,)), [])
