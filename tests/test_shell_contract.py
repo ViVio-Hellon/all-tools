@@ -146,5 +146,30 @@ class InstanceNameTests(unittest.TestCase):
         self.assertIn('"nlm.all-tools"', source)
 
 
+
+class DialogTests(unittest.TestCase):
+    """画面の confirm は**ブラウザのもの(答えを待つ)**のまま。
+
+    tauri-plugin-dialog は window.confirm を答えを待たない版(Promise を返す)に置き換える。
+    `if (!confirm("消しますか?")) return;` が訊かずに進む(Windows では各ツールの画面にも入る)。
+    外枠の native_dialogs.js が dialog より先に走って、ブラウザのものを固定する。
+    """
+
+    def test_ブラウザの確認ダイアログを_dialogより先に固定する(self) -> None:
+        main = rust("main.rs")
+        guard = main.index('include_str!("native_dialogs.js")')
+        self.assertIn("js_init_script_on_all_frames", main[main.rindex(".plugin(", 0, guard):guard + 40])
+        self.assertLess(guard, main.index("tauri_plugin_dialog::init()"))
+        script = (ROOT / "src-tauri" / "src" / "native_dialogs.js").read_text(encoding="utf-8")
+        for name in ("alert", "confirm", "prompt"):
+            self.assertIn(f'"{name}"', script)
+        self.assertIn("writable: false", script)
+
+    def test_起動確認がどの画面の確認ダイアログも見る(self) -> None:
+        self.assertIn("確認ダイアログ", (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8"))
+        self.assertIn("dialogsKind()", (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8"))
+        self.assertIn("確認ダイアログ", (ROOT / "scripts" / "desktop_smoke.py").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

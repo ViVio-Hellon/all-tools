@@ -526,6 +526,34 @@ def start_bridge(*, token: str = "", server_factory) -> int:
     return 0
 
 
+def _open_local_db(db) -> None:
+    """作業用DBを1度開く。**壊れていたら脇へよけて、空の作業用DBで続ける。**
+
+    よけないと、起動のたびに同じところで止まり、カレンダーを開けないままになる。
+    よけたファイルは消さない(``<名前>.broken-<日時>``)。中身は取り込み元から取り込み直す。
+    """
+    broken = ""
+    try:
+        db.connect().close()
+        return
+    except Exception as exc:                      # noqa: BLE001 - 壊れたときだけ受ける
+        if not db.is_broken_db_error(exc):
+            raise
+        broken = str(exc)
+    from calendar_app import config
+
+    path = config.sqlite_path()
+    try:
+        moved = db.set_aside_broken(path)
+    except OSError as exc:
+        raise RuntimeError(f"作業用DBが壊れています({broken})。脇へよけることもできませんでした: "
+                           f"{path} ── ほかに開いているカレンダーの画面・プログラムを閉じてから、"
+                           f"もう一度開いてください({exc})") from None
+    log().warning("作業用DBが壊れていたので脇へよけ、空の作業用DBで始めます: %s → %s(%s)",
+                  path, moved, broken)
+    db.connect().close()
+
+
 def _initialize(srv, *, watch_idle: bool = True) -> None:
     """重い初期化。サーバが立ってから行う。
 
@@ -549,8 +577,7 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
 
     try:
         srv.mark_stage("アプリを準備中", "prepare")
-        conn = db.connect()
-        conn.close()
+        _open_local_db(db)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log().exception("初期化に失敗しました")
         srv.mark_error(f"初期化に失敗しました: {exc}")

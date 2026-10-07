@@ -433,6 +433,36 @@ def _hard_exit() -> None:
     os._exit(0)
 
 
+def _open_local_db(path, connect) -> None:
+    """作業用DBを1度開く。**壊れていたら脇へよけて、空の作業用DBで続ける。**
+
+    よけないと、起動のたびに同じところで止まり、日報を打てないままになる。
+    よけたファイルは消さない(`<名前>.broken-<日時>`)。この端末の控え(共有へ
+    保存した分)はこのあと `_restore_from_backup` が戻す。
+    """
+    from nippou.db.connection import is_broken_db_error, set_aside_broken
+
+    broken = ""
+    try:
+        connect(path).close()
+        return
+    except Exception as exc:                      # noqa: BLE001 - 壊れたときだけ受ける
+        if not is_broken_db_error(exc):
+            raise
+        broken = str(exc)
+    try:
+        moved = set_aside_broken(path)
+    except OSError as exc:
+        raise RuntimeError(f"作業用DBが壊れています({broken})。脇へよけることもできませんでした: "
+                           f"{path} ── ほかに開いている日報の画面・プログラムを閉じてから、"
+                           f"もう一度開いてください({exc})") from None
+    log().warning("作業用DBが壊れていたので脇へよけ、空の作業用DBで始めます: %s → %s(%s)",
+                  path, moved, broken)
+    _note_event(f"作業用DBが壊れていたので脇へよけました({broken})。空の作業用DBで始めます。"
+                f"よけたファイル: {moved}")
+    connect(path).close()
+
+
 def _initialize(srv, *, watch_idle: bool = True) -> None:
     """重い初期化。サーバが立ってから行う。
 
@@ -452,8 +482,7 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
         _note_event(f"起動しました(版 {_app_config.version()})")
         # スキーマの用意。`connect()` が `ensure_schema()` まで面倒を見る。
         # ここで1度開いておくと、最初の画面表示で待たされない
-        conn = connect(SETTINGS.sqlite_path)
-        conn.close()
+        _open_local_db(SETTINGS.sqlite_path, connect)
         log().info("ローカルDBを確認しました: %s", SETTINGS.sqlite_path)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log().exception("初期化に失敗しました")

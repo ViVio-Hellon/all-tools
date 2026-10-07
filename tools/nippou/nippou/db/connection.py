@@ -24,11 +24,49 @@ from .schema import ensure_schema
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10)
-    conn.row_factory = sqlite3.Row
-    enable_wal(conn)
-    conn.execute("PRAGMA foreign_keys=ON")
-    ensure_schema(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        enable_wal(conn)
+        conn.execute("PRAGMA foreign_keys=ON")
+        ensure_schema(conn)
+    except BaseException:
+        # **開いたまま投げない。** Windows では開いているファイルをよけられない
+        # (壊れた作業用DBを脇へよける `set_aside_broken` が続く)
+        conn.close()
+        raise
     return conn
+
+
+#: 作業用DBの付き添い(よけるときは一緒に)
+SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def is_broken_db_error(exc: BaseException) -> bool:
+    """作業用DBのファイルが壊れている(SQLite のファイルではない・中が傷んでいる)か。
+
+    「使用中(locked)」「開けない」は壊れていない(`OperationalError`)ので数えない。
+    """
+    return isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
+
+
+def set_aside_broken(db_path: Path) -> Path:
+    """壊れた作業用DBを**消さずに**脇へよける(`<名前>.broken-<日時>`)。よけた先を返す。
+
+    よけたあとは空の作業用DBで動き出せる(起動ごと止まらない)。よけたファイルは
+    残すので、送っていなかった分を取り出せるかもしれない。名前を変えられないとき
+    (Windows で、ほかのプログラムが開いている)は OSError のまま投げる。
+    """
+    import gc
+    import time
+
+    gc.collect()  # 失敗した接続が残っていれば閉じる(開いたままでは名前を変えられない)
+    target = db_path.with_name(f"{db_path.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}")
+    os.replace(db_path, target)
+    for suffix in SIDECARS:
+        side = Path(str(db_path) + suffix)
+        if side.exists():
+            os.replace(side, Path(str(target) + suffix))
+    return target
 
 
 def readonly_uri(db_path) -> str:

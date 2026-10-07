@@ -66,6 +66,13 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
+        // **dialog より先に。** 画面の confirm をブラウザのもの(答えを待つ)に固定する
+        // (dialog は答えを待たない版に置き換え、`if (!confirm(..))` が訊かずに進む)
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("native-dialogs")
+                .js_init_script_on_all_frames(include_str!("native_dialogs.js"))
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(shell.clone());

@@ -102,8 +102,23 @@
   }
 
   // ---- 画面が出た(大きなタブの画面が記録に残す。外枠の「起動しています」とは別) ----
+  // 確認ダイアログ(alert / confirm / prompt)がブラウザのもの(答えを待つ)かも添える。
+  // 置き換えられていると `if (!confirm(..))` が訊かずに進む(起動確認が見る)
+  function dialogsKind() {
+    try {
+      var names = ["alert", "confirm", "prompt"];
+      for (var i = 0; i < names.length; i++) {
+        var f = window[names[i]];
+        if (typeof f !== "function" || !/\[native code\]/.test(Function.prototype.toString.call(f))) {
+          return "replaced";
+        }
+      }
+      return "native";
+    } catch (e) { return "unknown"; }
+  }
   function ready() {
-    tellShell({ title: String(document.title || ""), path: location.pathname }, "alltools:ready");
+    tellShell({ title: String(document.title || ""), path: location.pathname, dialogs: dialogsKind() },
+              "alltools:ready");
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", ready);

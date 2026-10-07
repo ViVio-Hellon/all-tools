@@ -194,6 +194,15 @@ class Store:
             timeout=self.busy_timeout_ms / 1000.0,
             isolation_level=None,  # トランザクションは明示的に制御する
         )
+        try:
+            return self._prepare_connection(conn)
+        except BaseException:
+            # **開いたまま投げない。** Windows では開いているファイルをよけられない
+            # (壊れた作業用DBを脇へよける ``set_aside_broken`` が続く)
+            conn.close()
+            raise
+
+    def _prepare_connection(self, conn: sqlite3.Connection) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {int(self.busy_timeout_ms)}")
         conn.execute("PRAGMA foreign_keys = ON")
@@ -1523,3 +1532,36 @@ def _log_dropped(line: str, mgmt_nos: list[str]) -> None:
         "共有DBから消された看板の未反映の操作を捨てました(送り先がありません): %s / 管理番号 %s",
         line, "、".join(mgmt_nos),
     )
+
+
+#: 作業用DBの付き添い(よけるときは一緒に)
+SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def is_broken_db_error(exc: BaseException) -> bool:
+    """作業用DBのファイルが壊れている(SQLite のファイルではない・中が傷んでいる)か。
+
+    「使用中(locked)」「開けない」は壊れていない(``OperationalError``)ので数えない。
+    """
+    return isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
+
+
+def set_aside_broken(path: str | Path) -> Path:
+    """壊れた作業用DBを**消さずに**脇へよける(``<名前>.broken-<日時>``)。よけた先を返す。
+
+    よけたあとは空の作業用DBで動き出せる(起動ごと止まらない。看板は共有DBから取り込み
+    直す)。送っていなかった操作はよけたファイルに残る。名前を変えられないとき(Windows で、
+    ほかのプログラムが開いている)は OSError のまま投げる。
+    """
+    import gc
+    import os
+
+    gc.collect()  # 失敗した接続が残っていれば閉じる(開いたままでは名前を変えられない)
+    source = Path(path)
+    target = source.with_name(f"{source.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}")
+    os.replace(source, target)
+    for suffix in SIDECARS:
+        side = Path(str(source) + suffix)
+        if side.exists():
+            os.replace(side, Path(str(target) + suffix))
+    return target

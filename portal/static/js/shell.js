@@ -36,6 +36,16 @@ function report(level, message, where = "") {
 window.addEventListener("error", (event) => {
   report("error", event.message, `${event.filename || ""}:${event.lineno || 0}`);
 });
+// 確認ダイアログ(alert / confirm / prompt)がブラウザのもの(答えを待つ)か。置き換えられて
+// いると `if (!confirm(..))` が訊かずに進む(外枠の native_dialogs.js が固定する。起動確認が見る)
+function dialogsKind() {
+  try {
+    const native = (f) => typeof f === "function" && /\[native code\]/.test(Function.prototype.toString.call(f));
+    return [window.alert, window.confirm, window.prompt].every(native) ? "native" : "replaced";
+  } catch (err) {
+    return "unknown";
+  }
+}
 window.addEventListener("unhandledrejection", (event) => {
   const reason = event.reason;
   report("error", (reason && reason.message) || String(reason), "promise");
@@ -299,7 +309,8 @@ async function start() {
   // ツールのタブが1つも無い端末は、大設定を開く(登録のしかたと、この端末の ID・PC名が出る)
   const first = ids.length ? firstTab(body) : SETTINGS;
   report("info", `大きなタブの画面がつながりました(${desktop ? "デスクトップ版" : "ブラウザ版"}): `
-    + `${ids.join(",") || "ツールのタブなし"} / ${(decision && decision.source) || ""}`);
+    + `${ids.join(",") || "ツールのタブなし"} / ${(decision && decision.source) || ""}`
+    + ` [確認ダイアログ: ${dialogsKind()}]`);
   select(first);
   if (ids.length) preloadOthers(first === SETTINGS ? ids[0] : first);
   setInterval(followTabs, 60000);
@@ -364,7 +375,8 @@ window.addEventListener("message", async (event) => {
       entry.lastTitle = title;
       entry.reports = (entry.reports || 0) + 1;
       entry.reported = true;
-      report("info", `${TOOLS.get(id).title} の画面が出ました: ${title}`, String(data.path || ""));
+      report("info", `${TOOLS.get(id).title} の画面が出ました: ${title} [確認ダイアログ: ${data.dialogs || "?"}]`,
+             String(data.path || ""));
     }
     return;
   }

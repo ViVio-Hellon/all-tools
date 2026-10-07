@@ -40,6 +40,19 @@ pub fn request_close(shell: Arc<Shell>, app: AppHandle, quitting: Option<String>
     });
 }
 
+/// 答えが無かった・読めなかったときの理由。**「終わってよい」とはみなさない**
+/// (処理の途中で返事ができないのかもしれない。黙って止めると、途中の処理が消える)
+const NO_ANSWER: &str = "返事がありません(処理の途中かもしれません)";
+
+/// 訊いた答え1つを、途中の処理の理由に直す。終わってよいなら None
+fn reason_of(reply: &Result<(u16, serde_json::Value), String>) -> Option<String> {
+    match reply {
+        Ok((status, _)) if (200..300).contains(status) => None,
+        Ok((409, body)) => Some(busy_reason(body)),
+        _ => Some(NO_ANSWER.to_string()),
+    }
+}
+
 /// 訊いた結果: 途中の処理があったツール(タブの名前, 理由)
 fn ask_all(shell: &Arc<Shell>, quitting: Option<&str>) -> Vec<(String, String)> {
     let asks: Vec<_> = shell
@@ -50,14 +63,27 @@ fn ask_all(shell: &Arc<Shell>, quitting: Option<&str>) -> Vec<(String, String)> 
             let title = tool.title.clone();
             thread::spawn(move || {
                 let reply = bridge.call_json("POST", "/api/shutdown", &json!({"check": true}), ASK_LIMIT);
-                match reply {
-                    Ok((409, body)) => Some((title, busy_reason(&body))),
-                    _ => None,
-                }
+                reason_of(&reply).map(|reason| (title, reason))
             })
         })
         .collect();
     asks.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+}
+
+/// 途中の処理があるツールを並べて、まとめて1つ訊く。終えてよければ true
+fn confirm_busy(shell: &Arc<Shell>, app: &AppHandle, head: &str, busy: &[(String, String)]) -> bool {
+    let mut text = head.to_string();
+    text.push_str("次のツールで処理が残っています:\n\n");
+    for (title, reason) in busy {
+        text.push_str(&format!("・{title}: {}\n", reason.replace('\n', " ")));
+    }
+    text.push_str("\nそれでも統合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
+    app.dialog()
+        .message(text)
+        .title(&shell.catalog.name)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()))
+        .blocking_show()
 }
 
 /// 「途中の処理がある」と断った理由。何をしているか(`running` の一覧・`busy`)を先に使う
@@ -80,23 +106,11 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
     let busy = ask_all(shell, quitting);
     let force = !busy.is_empty();
     if force {
-        let mut text = String::new();
-        if let Some(id) = quitting.and_then(|id| shell.catalog.by_id(id)) {
-            text.push_str(&format!("{}は終了しました。\n\n", id.title));
-        }
-        text.push_str("次のツールで処理が残っています:\n\n");
-        for (title, reason) in &busy {
-            text.push_str(&format!("・{title}: {}\n", reason.replace('\n', " ")));
-        }
-        text.push_str("\nそれでも統合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
-        let yes = app
-            .dialog()
-            .message(text)
-            .title(&shell.catalog.name)
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()))
-            .blocking_show();
-        if !yes {
+        let head = quitting
+            .and_then(|id| shell.catalog.by_id(id))
+            .map(|tool| format!("{}は終了しました。\n\n", tool.title))
+            .unwrap_or_default();
+        if !confirm_busy(shell, app, &head, &busy) {
             if let Some(id) = quitting {
                 // そのタブには「終了しました / もう一度開く」を出す
                 shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
@@ -105,16 +119,54 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
         }
     }
 
-    // 全ツールに終わってもらう(並べて頼み、並べて待つ)
-    let waits: Vec<_> = shell
+    // 全ツールに終わってもらう(並べて頼む)
+    let targets: Vec<_> = shell
         .all_bridges()
         .into_iter()
         .filter(|(tool, bridge)| Some(tool.id.as_str()) != quitting && bridge.phase() == Phase::Started)
+        .collect();
+    let asks: Vec<_> = targets
+        .iter()
+        .map(|(_, bridge)| {
+            let bridge = bridge.clone();
+            thread::spawn(move || bridge.call_json("POST", "/api/shutdown", &json!({"force": force}), ASK_LIMIT))
+        })
+        .collect();
+    let replies: Vec<_> = asks.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("panic".into()))).collect();
+
+    // 訊いたあとで処理を始めたツール(訊いたときは「終わってよい」だった)。**黙って止めない**
+    let late: Vec<_> = targets
+        .iter()
+        .zip(&replies)
+        .filter(|(_, reply)| matches!(reply, Ok((409, _))))
+        .map(|((tool, bridge), reply)| (tool.clone(), bridge.clone(), reason_of(reply).unwrap_or_default()))
+        .collect();
+    if !late.is_empty() {
+        let listed: Vec<_> = late.iter().map(|(tool, _, reason)| (tool.title.clone(), reason.clone())).collect();
+        if !confirm_busy(shell, app, "ほかのツールは終了しました。\n\n", &listed) {
+            // 終えたツールのタブには「終了しました / もう一度開く」を出し、処理中のツールは続ける
+            for ((tool, _), reply) in targets.iter().zip(&replies) {
+                if !matches!(reply, Ok((409, _))) {
+                    shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(&tool.id)));
+                }
+            }
+            if let Some(id) = quitting {
+                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
+            }
+            crate::places::shell_log(&shell.root, "終了をやめました(終える途中で処理を始めたツールがあった)");
+            return false;
+        }
+        for (_, bridge, _) in &late {
+            let _ = bridge.call_json("POST", "/api/shutdown", &json!({"force": true}), ASK_LIMIT);
+        }
+    }
+
+    // 「終了してよい」(送り残しを送り終えた)を待つ。来なくても上限で進む
+    let waits: Vec<_> = targets
+        .into_iter()
         .map(|(tool, bridge)| {
             let wait = tool.quit_wait;
             thread::spawn(move || {
-                let _ = bridge.call_json("POST", "/api/shutdown", &json!({"force": force}), ASK_LIMIT);
-                // 「終了してよい」(送り残しを送り終えた)を待つ。来なくても上限で進む
                 bridge.wait_quit(wait);
             })
         })
@@ -122,7 +174,10 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
     for handle in waits {
         let _ = handle.join();
     }
-    crate::places::shell_log(&shell.root, &format!("終了しました(途中の処理: {})", busy.len()));
+    crate::places::shell_log(
+        &shell.root,
+        &format!("終了しました(途中の処理: {} / 終える途中で始めた処理: {})", busy.len(), late.len()),
+    );
     app.exit(0);
     true
 }
@@ -142,5 +197,15 @@ mod tests {
         assert_eq!(busy_reason(&json!({"error": {"message": "x"}})), "x");
         assert_eq!(busy_reason(&json!({"running": [], "message": "y"})), "y");
         assert_eq!(busy_reason(&json!({})), "実行中の処理があります");
+    }
+
+    #[test]
+    fn 返事が無いツールを終わってよいとはみなさない() {
+        assert_eq!(reason_of(&Ok((200, json!({"can_stop": true})))), None);
+        assert_eq!(reason_of(&Ok((409, json!({"running": ["印刷"]})))).as_deref(), Some("印刷"));
+        // 待ちきれなかった・つながらない・おかしな答え ── どれも訊く
+        assert_eq!(reason_of(&Err("timeout".into())).as_deref(), Some(NO_ANSWER));
+        assert_eq!(reason_of(&Ok((500, json!({})))).as_deref(), Some(NO_ANSWER));
+        assert_eq!(reason_of(&Ok((404, json!({})))).as_deref(), Some(NO_ANSWER));
     }
 }

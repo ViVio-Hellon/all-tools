@@ -986,17 +986,49 @@ def _load_config(args) -> config.Config:
 
 
 def _open_store(cfg):
-    from kanban.db.store import Store
+    """作業用DBを開く。**壊れていたら脇へよけて、空の作業用DBで続ける。**
+
+    よけないと、起動のたびに同じところで止まり、看板を開けないままになる(古い版の
+    設定から引き継いだ置き場所の作業用DBでも同じ)。よけたファイルは消さない
+    (``<名前>.broken-<日時>``)。看板は共有DBから取り込み直す。
+    """
+    from kanban.db.store import is_broken_db_error, set_aside_broken
 
     path = cfg.resolved_sqlite_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    broken = ""
+    try:
+        return _store_at(path, cfg)
+    except Exception as exc:                      # noqa: BLE001 - 壊れたときだけ受ける
+        if not is_broken_db_error(exc):
+            raise
+        broken = str(exc)
+    try:
+        moved = set_aside_broken(path)
+    except OSError as exc:
+        raise StartupError(
+            f"作業用DBが壊れています({broken})。脇へよけることもできませんでした: {path}",
+            f"ほかに開いている看板の画面・プログラムを閉じてから、もう一度開いてください({exc})",
+        ) from None
+    log.warning("作業用DBが壊れていたので脇へよけ、空の作業用DBで始めます: %s → %s(%s)"
+                " ── 送っていなかった操作は、よけたファイルに残っています", path, moved, broken)
+    return _store_at(path, cfg)
+
+
+def _store_at(path, cfg):
+    from kanban.db.store import Store
+
     store = Store(
         path,
         host_name=cfg.host_name,
         busy_timeout_ms=cfg.busy_timeout_ms,
         max_retry=cfg.max_retry,
     )
-    store.ensure_schema()
+    try:
+        store.ensure_schema()
+    except BaseException:
+        store.close()   # 開いたまま投げない(Windows ではよけられない)
+        raise
     return store
 
 

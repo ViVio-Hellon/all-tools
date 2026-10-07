@@ -229,6 +229,14 @@ def main() -> int:
     result("shell" in seen, f"大きなタブの画面がつながりました({took:.1f}秒): {seen.get('shell', '')}")
     for tool, title in TABS.items():
         result(tool in seen, f"{title} の画面が出ました: {seen.get(tool, '(出ていません)')}")
+    # 確認ダイアログ(confirm など)がブラウザのもの(答えを待つ)か。置き換えられていると
+    # `if (!confirm(..))` が訊かずに進む(Windows では各ツールの画面にも入る)
+    kinds = re.findall(r"画面: (.+?) の画面が出ました: .*?\[確認ダイアログ: (\w+)\]", text)
+    kinds += [("大きなタブ", k) for k in re.findall(r"つながりました\(デスクトップ版\): .*?\[確認ダイアログ: (\w+)\]", text)]
+    bad = sorted({who for who, kind in kinds if kind != "native"})
+    result(bool(kinds) and not bad,
+           "確認ダイアログはどの画面もブラウザのもの(答えを待つ)" if kinds and not bad
+           else f"確認ダイアログが置き換えられています: {bad or '(記録がありません)'}")
     if len(seen) < len(TABS) + 1:
         print("--- 入口のログの末尾")
         print("\n".join(text.splitlines()[-30:]))

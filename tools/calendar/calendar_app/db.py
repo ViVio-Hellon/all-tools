@@ -126,17 +126,57 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     """
     target = str(path) if path is not None else str(config.sqlite_path())
     conn = sqlite3.connect(target)
-    conn.row_factory = sqlite3.Row
-    # 複数 PC から共有フォルダ上の DB を触る運用に備え、待機時間を設ける
-    # (dbkit.sqlite_toolkit の Python 側リトライは、これでも失敗した場合の
-    #  二段目の備え。詳しくは sqlite_toolkit.execute_with_retry を参照)
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.executescript(_SCHEMA)
-    # dbkit.outbox_sync 自身の管理テーブルも、他のスキーマと同じタイミングで
-    # 用意しておく (queue_delete 等が先に参照しても失敗しないように)。
-    outbox_sync.ensure_sync_table(conn)
-    conn.commit()
+    try:
+        conn.row_factory = sqlite3.Row
+        # 複数 PC から共有フォルダ上の DB を触る運用に備え、待機時間を設ける
+        # (dbkit.sqlite_toolkit の Python 側リトライは、これでも失敗した場合の
+        #  二段目の備え。詳しくは sqlite_toolkit.execute_with_retry を参照)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.executescript(_SCHEMA)
+        # dbkit.outbox_sync 自身の管理テーブルも、他のスキーマと同じタイミングで
+        # 用意しておく (queue_delete 等が先に参照しても失敗しないように)。
+        outbox_sync.ensure_sync_table(conn)
+        conn.commit()
+    except BaseException:
+        # **開いたまま投げない。** Windows では開いているファイルをよけられない
+        # (壊れた作業用DBを脇へよける ``set_aside_broken`` が続く)
+        conn.close()
+        raise
     return conn
+
+
+#: 作業用DBの付き添い(よけるときは一緒に)
+SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def is_broken_db_error(exc: BaseException) -> bool:
+    """作業用DBのファイルが壊れている(SQLite のファイルではない・中が傷んでいる)か。
+
+    「使用中(locked)」「開けない」は壊れていない(``OperationalError``)ので数えない。
+    """
+    return isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
+
+
+def set_aside_broken(path: str | Path | None = None) -> Path:
+    """壊れた作業用DBを**消さずに**脇へよける(``<名前>.broken-<日時>``)。よけた先を返す。
+
+    よけたあとは空の作業用DBで動き出せる(起動ごと止まらない。中身は取り込み元から
+    取り込み直す)。名前を変えられないとき(Windows で、ほかのプログラムが開いている)は
+    OSError のまま投げる。
+    """
+    import gc
+    import os
+    import time
+
+    gc.collect()  # 失敗した接続が残っていれば閉じる(開いたままでは名前を変えられない)
+    source = Path(path) if path is not None else Path(config.sqlite_path())
+    target = source.with_name(f"{source.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}")
+    os.replace(source, target)
+    for suffix in SIDECARS:
+        side = Path(str(source) + suffix)
+        if side.exists():
+            os.replace(side, Path(str(target) + suffix))
+    return target
 
 
 def now_string() -> str:
