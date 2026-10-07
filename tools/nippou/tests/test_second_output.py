@@ -342,7 +342,9 @@ class SecondOutputTests(WebTestCase):
         self.assertIn(str(self.second), html)
         self.assertIn("このボタンでは出ません", html)
         html = self.get("/settings?tab=paths").get_data(as_text=True)
-        self.assertNotIn("使っていません", html)
+        # **この欄の中で**見る(空のままのほかの欄 ── 仕掛の2つ目など ── は「使っていません」と出る)
+        block = html.split('data-path-key="report_output_dir_2"', 1)[1].split('<div class="path" data-path-key=', 1)[0]
+        self.assertNotIn("使っていません", block)
 
     def test_配布設定にも入れられる(self) -> None:
         from nippou import distribution
