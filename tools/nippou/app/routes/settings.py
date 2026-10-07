@@ -1776,6 +1776,37 @@ def import_apply():
     return jsonify({"preview": preview.as_dict(), **result.as_dict()})
 
 
+@bp.post("/api/settings/import/reshift")
+def import_reshift():
+    """取り込み済みの過去日報で、2直に入った3直の行を3直へ戻す(`services/reshift`)。
+
+    `{"apply": false}` は下見(**書かない**)、`{"apply": true}` で戻す。管理者モードだけ。
+    **いまの作業日は触りません**(打っている最中の直を動かさない)。
+    """
+    from nippou.services import reshift
+    from nippou.services.nippou_service import format_business_date
+
+    ctx = work_context.get_context()
+    if not ctx.admin:
+        return jsonify(error_body(
+            "not_admin", "取り込み済みの日報を直すのは管理者モードでのみ可能です")), 403
+    from .entry import build_service, current_calculator
+    service = build_service(ctx, current_calculator())
+    _shift, today = service.current_shift_info(datetime.now(), ctx.force_day_shift())
+    skip = (today if isinstance(today, str) else format_business_date(today),)
+    body = request.get_json(silent=True) or {}
+    repo = get_repo()
+    if not body.get("apply"):
+        fixes = reshift.plan(repo, skip_dates=skip)
+        return jsonify({"fixes": [f.as_dict() for f in fixes],
+                        "days": len(fixes), "rows": sum(len(f.rows) for f in fixes),
+                        "message": (f"{len(fixes)}日ぶん {sum(len(f.rows) for f in fixes)}行を3直へ戻します"
+                                    if fixes else "戻すものはありません(2直に3直の行は入っていません)")})
+    log_button_click("import_reshift")
+    result = reshift.apply(repo, skip_dates=skip)
+    return jsonify(result.as_dict())
+
+
 @bp.post("/api/settings/import/template")
 def import_template():
     """見本(見出しだけのCSV)を書き出す。**これに貼れば読めます。**"""

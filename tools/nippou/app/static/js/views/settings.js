@@ -837,6 +837,66 @@ function paintFiles(body, dryRun) {
   }
 }
 
+/* ================================================================
+   取り込み済みの日報を直す ── 2直に入った3直の行を3直へ(`services/reshift`)
+
+       入ってしまっているのはどうしたらいいんですか？ 取り込みなおしたら上書きしてくれるんですか？
+
+   何百本も入れ直さずに済むよう、手元のDBの中で戻す。下見で日と行を全部出してから押す。
+   ================================================================ */
+function reshiftNote(text, kind = "info") {
+  const box = document.getElementById("reshift-note");
+  if (!box) return;
+  box.hidden = !text;
+  box.textContent = text;
+  box.className = `msg msg--${kind}`;
+}
+
+function wireReshift() {
+  const preview = document.getElementById("reshift-preview");
+  const go = document.getElementById("reshift-go");
+  if (!preview || !go) return;
+  const list = document.getElementById("reshift-list");
+  const rows = document.getElementById("reshift-rows");
+  async function look() {
+    go.disabled = true;
+    try {
+      const body = await api.post("/api/settings/import/reshift", { apply: false });
+      rows.replaceChildren();
+      for (const fix of body.fixes) {
+        const tr = document.createElement("tr");
+        for (const text of [fix.report_date, lineLabel(fix.line),
+          fix.rows.join(" / ") + (fix.third_existed ? "" : "(3直を作ります)")]) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.append(td);
+        }
+        rows.append(tr);
+      }
+      list.hidden = !body.fixes.length;
+      go.disabled = !body.fixes.length;
+      reshiftNote(body.message, body.fixes.length ? "warn" : "ok");
+    } catch (err) { reshiftNote(err.message, "error"); }
+  }
+  preview.addEventListener("click", look);
+  go.addEventListener("click", async () => {
+    if (!confirm("下見に出た日の、2直に入っている3直の行を3直へ戻します。よろしいですか？")) return;
+    go.disabled = true;
+    preview.disabled = true;
+    reshiftNote("戻しています…(集計とCSVも作り直します)");
+    try {
+      const body = await api.post("/api/settings/import/reshift", { apply: true });
+      reshiftNote(body.message, body.failed.length ? "warn" : "ok");
+      list.hidden = true;
+      toast(body.message, body.failed.length ? "warn" : "ok");
+    } catch (err) {
+      reshiftNote(err.message, "error");
+    } finally {
+      preview.disabled = false;
+    }
+  });
+}
+
 function wireImport() {
   const drop = document.getElementById("import-drop");
   const input = document.getElementById("import-files");
@@ -1260,6 +1320,7 @@ export function start() {
   });
 
   wireImport();
+  wireReshift();
 
   /*
     共有への保存。**断られたら、どの直のどこが引っかかったのかを出す。**

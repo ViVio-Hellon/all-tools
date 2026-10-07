@@ -1104,6 +1104,26 @@ LVC,119
       </p>
     </div>
 
+    {# ---- 取り込み済みの過去日報を直す(2直に入った3直の行を3直へ)---- #}
+    <div class="card" id="reshift">
+      <div class="card__head"><h2>取り込み済みの日報を直す(3直の行を3直へ)</h2>
+        <span class="lead">入れ直さずに、手元のDBの中で直します</span></div>
+      <p class="lead">前の版の取り込みは、3直の最初の行(22:50〜)を<b>2直に入れていました</b>
+        (2直が 23:30 まで続く・3直が続きの行から始まる・3直の全停が2直に入る)。
+        ここでそれを3直の頭へ戻します。集計と集計CSVも作り直します。
+        <b>いまの作業日は触りません。</b>「下見」で日と行を全部出してから戻します。</p>
+      <div class="row">
+        <button class="btn" type="button" id="reshift-preview"
+                {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>下見</button>
+        <button class="btn btn--primary" type="button" id="reshift-go" disabled>3直へ戻す</button>
+      </div>
+      <div class="msg" id="reshift-note" hidden style="margin-top:var(--sp-2)"></div>
+      <div class="scroll-x" id="reshift-list" hidden style="max-height:20em;overflow:auto;margin-top:var(--sp-2)">
+        <table class="list list--nowrap"><thead><tr><th>報告日</th><th>ライン</th><th>3直へ戻す行</th></tr></thead>
+          <tbody id="reshift-rows"></tbody></table>
+      </div>
+    </div>
+
     {# ---- 当直をDBから復旧 ---- #}
     <div class="card">
       <div class="card__head"><h2>当直をDBから復旧</h2>
