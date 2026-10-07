@@ -387,6 +387,27 @@ function paintDistribution() {
   }
   $("dist-reapply").hidden = !d.exists;
   $("dist-remove").hidden = !d.exists;
+  // 各ツールの配布設定(そのツールのフォルダの中)。make_dist.bat はこれをまとめて入れる
+  const body = $("dist-tools")?.tBodies[0];
+  if (body) {
+    body.replaceChildren();
+    for (const t of d.tools || []) {
+      const tr = document.createElement("tr");
+      const cells = [
+        t.title,
+        t.exists ? `あり(作成 ${t.created_at || "?"}${t.created_on ? ` / ${t.created_on}` : ""})` : "なし(書き出していません)",
+        t.path,
+      ];
+      cells.forEach((text, i) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (i === 1 && t.exists) td.className = "is-ok";
+        if (i === 2) td.className = "mono";
+        tr.append(td);
+      });
+      body.append(tr);
+    }
+  }
 }
 
 function paintApp() {

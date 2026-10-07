@@ -97,6 +97,24 @@ REFUSE_BAD_INPUT = "bad_input"
 REFUSE_FAILED = "failed"
 
 
+def integrated_where(folder) -> str:
+    """統合ツールの一式の中(`<一式>\\tools\\<ツール>\\配布設定`)なら、置き場所と配り方の一言。違えば空。
+
+    統合ツールでは、各ツールの配布設定は**そのツールのフォルダの中**にできます(一式の直下ではない)。
+    単品のころの「起動用のファイルと同じフォルダ」と書くと、一式の直下を探して見つからない。
+    """
+    from pathlib import Path as _Path
+
+    folder = _Path(folder)
+    tool_dir = folder.parent
+    root = tool_dir.parent.parent
+    if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
+        return ""
+    return (f"統合ツールの一式の中の「tools\\{tool_dir.name}\\{folder.name}」に入っています({folder})。"
+            "配るときは一式の scripts\\make_dist.bat を実行してください"
+            "(大設定と各ツールの配布設定がまとめて入ります。大設定の「配布設定」に一覧があります)。")
+
+
 @dataclass
 class Result:
     ok: bool = True
@@ -248,8 +266,9 @@ class Distribution:
 
         names = [ITEM_LABELS[k] for k in settings]
         message = (f"配布設定を書き出しました({len(names)}項目: {'・'.join(names)})。"
-                   f"アプリのフォルダの直下の「{self.dir.name}」に入っています。"
-                   "各ラインは次に起動したときに読み込みます。")
+                   + (integrated_where(self.dir)
+                      or f"アプリのフォルダの直下の「{self.dir.name}」に入っています({self.dir})。")
+                   + "各ラインは次に起動したときに読み込みます。")
         if defaults:
             message += " 既定のままなので入れていないもの(配った先も既定で動きます): " + "・".join(defaults) + "。"
         self.log.info("配布設定を書き出しました: %s", ", ".join(names))

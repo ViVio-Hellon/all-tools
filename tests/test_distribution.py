@@ -134,6 +134,42 @@ class WebTests(unittest.TestCase):
         self.assertFalse(res.get_json()["distribution"]["exists"])
 
 
+class ToolSettingsTests(unittest.TestCase):
+    """大設定に、各ツールの配布設定(そのツールのフォルダの中)が書き出してあるかを出す。
+
+        少なくとも日報管理ツールでは配布設定してもフォルダは生成されていない
+        配布設定後に make_dist.bat 実行 が正しい手順ですか？
+
+    各ツールの配布設定は `tools\\<ツール>\\配布設定\\` にできる(一式の直下ではない)。
+    どこにあるか・make_dist.bat で入るのかが分からなかった。
+    """
+
+    def test_各ツールの有り無しと置き場所と作成日時(self) -> None:
+        from unittest import mock
+
+        from portal import catalog as catalog_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            made = Path(tmp) / "nippou" / "配布設定"
+            made.mkdir(parents=True)
+            (made / "設定.json").write_text(json.dumps(
+                {"created_at": "2026/10/07 09:00", "created_on": "LINE1-PC", "settings": {}}), encoding="utf-8")
+            real = catalog_mod.load()
+            tools = [type(t)(**{**t.__dict__, "dir": Path(tmp) / t.id}) for t in real.tools]
+            fake = mock.Mock(tools=tools)
+            with mock.patch.object(catalog_mod, "load", return_value=fake):
+                found = {t["id"]: t for t in distribution.summary()["tools"]}
+        self.assertTrue(found["nippou"]["exists"])
+        self.assertEqual(found["nippou"]["created_at"], "2026/10/07 09:00")
+        self.assertTrue(found["nippou"]["path"].endswith(str(Path("nippou") / "配布設定")))
+        self.assertFalse(found["kanban"]["exists"])
+
+    def test_大設定の画面に一覧と手順がある(self) -> None:
+        html = (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8")
+        self.assertIn('id="dist-tools"', html)
+        self.assertIn("scripts\\make_dist.bat", html)
+
+
 class MakeDistTests(unittest.TestCase):
     def test_配布メモには項目の名前だけ_値は出さない(self) -> None:
         spec = importlib.util.spec_from_file_location("alltools_make_dist_t", ROOT / "scripts" / "make_dist.py")

@@ -110,6 +110,33 @@ def read() -> Optional[Bundle]:
                   str(data.get("version", "")))
 
 
+def tool_settings() -> list[dict[str, Any]]:
+    """各ツールの配布設定(`tools\\<ツール>\\配布設定\\`)が書き出してあるか。
+
+        少なくとも日報管理ツールでは配布設定してもフォルダは生成されていない
+
+    各ツールの設定画面で書き出すと、**そのツールのフォルダの中**にできます(一式の直下ではない)。
+    どこにあるのか・`scripts\\make_dist.bat` で入るのかを大設定で一目で見られるようにします。
+    """
+    from . import catalog as catalog_mod
+
+    out: list[dict[str, Any]] = []
+    for tool in catalog_mod.load().tools:
+        folder = Path(tool.dir) / "配布設定"
+        item: dict[str, Any] = {"id": tool.id, "title": tool.title, "path": str(folder),
+                                "exists": (folder / "設定.json").is_file(),
+                                "created_at": "", "created_on": ""}
+        if item["exists"]:
+            try:
+                data = json.loads((folder / "設定.json").read_text(encoding="utf-8-sig"))
+                item["created_at"] = str(data.get("created_at", ""))
+                item["created_on"] = str(data.get("created_on", ""))
+            except (OSError, ValueError):
+                pass
+        out.append(item)
+    return out
+
+
 def summary() -> dict[str, Any]:
     """大設定に出す、配布設定のいま。**パスワードの値は出さない。**"""
     bundle = read()
@@ -118,6 +145,7 @@ def summary() -> dict[str, Any]:
         "exists": bundle is not None, "path": str(directory()),
         "applied_at": applied.get("at", "") if isinstance(applied, dict) else "",
         "contents": [], "created_at": "", "created_on": "", "version": "",
+        "tools": tool_settings(),
     }
     if bundle is not None:
         out.update(contents=[{"label": LABELS[k], "value": _show(k, v)} for k, v in bundle.settings.items()],

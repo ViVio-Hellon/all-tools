@@ -250,3 +250,11 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
   .brand__ver,.brand__ed{display:none}
   .pathform{grid-template-columns:1fr}
 }
+/* 大設定: 各ツールの配布設定(そのツールのフォルダの中)と、まとめて配る手順 */
+.dist-h{margin:14px 0 4px;font-size:var(--fs-lg)}
+.dist-tools{width:100%;border-collapse:collapse;font-size:var(--fs-md);margin:6px 0}
+.dist-tools th,.dist-tools td{border-bottom:1px solid var(--rule);padding:5px 8px;text-align:left;vertical-align:top}
+.dist-tools td.mono{font-family:var(--mono);font-size:var(--fs-sm);word-break:break-all}
+.dist-tools td.is-ok{color:var(--state-ok);font-weight:700}
+.dist-steps{margin:6px 0 12px;padding-left:22px}
+.dist-steps li{margin:2px 0}
