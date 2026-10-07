@@ -1601,6 +1601,7 @@ def import_upload():
     line = str(request.form.get("line", "")).strip()
     dry_run = str(request.form.get("dry_run", "")).strip() in ("1", "true")
     mark_synced = str(request.form.get("mark_synced", "1")).strip() in ("1", "true")
+    sizes = _upload_sizes(request.form.get("sizes", ""), len(uploads))
 
     # **名前は残します。** 拡張子で xlsx か CSV かを見分けるので
     # (`is_workbook`)、名無しの一時ファイルに入れると読めません
@@ -1619,6 +1620,16 @@ def import_upload():
                 job_progress.step(file_no=no, file_name=name)
                 target = folder / name
                 upload.save(str(target))
+                got = target.stat().st_size
+                if sizes[no - 1] is not None and got != sizes[no - 1]:
+                    # **欠けて届いたものは読まない**(読めば「読めませんでした」になり、
+                    # ファイルが悪いように見える)
+                    log.warning("取り込むファイルが欠けて届きました: %s (%d / %d バイト)",
+                                name, got, sizes[no - 1])
+                    results.append({"name": name, "ok": False, "preview": None, "result": None,
+                                    "error": (f"欠けて届きました({got:,} / {sizes[no - 1]:,} バイト)。"
+                                              "もう一度渡すか、道を打って渡してください")})
+                    continue
                 results.append(_import_one(
                     import_service, target, name, line,
                     dry_run=dry_run, mark_synced=mark_synced))
@@ -1633,6 +1644,19 @@ def import_upload():
         "dry_run": dry_run,
         "message": _upload_message(results, dry_run),
     })
+
+
+def _upload_sizes(text: str, count: int) -> list:
+    """画面が添えた、渡したファイルの大きさ(並びはファイルと同じ)。分からなければ None。"""
+    import json
+
+    try:
+        given = json.loads(text) if text else []
+    except ValueError:
+        given = []
+    if not isinstance(given, list) or len(given) != count:
+        return [None] * count
+    return [v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None for v in given]
 
 
 def _import_one(import_service, path: Path, name: str, line: str, *,

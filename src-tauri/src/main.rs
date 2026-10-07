@@ -24,6 +24,7 @@
 mod bridge;
 mod catalog;
 mod closing;
+mod drops;
 mod instance;
 mod pages;
 mod places;
@@ -32,6 +33,7 @@ mod services;
 mod shell;
 mod statics;
 
+use std::sync::Arc;
 use std::thread;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -55,6 +57,7 @@ fn main() {
         }
     };
     let shell = Shell::new(root.clone(), catalog, demo);
+    let dropped = Arc::new(drops::Dropped::default());
 
     let mut builder = tauri::Builder::default()
         // 2つ目を開こうとしたら、開いている窓を前に出すだけ(多重起動の防止)。
@@ -75,7 +78,8 @@ fn main() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(shell.clone());
+        .manage(shell.clone())
+        .manage(dropped.clone());
 
     // 宛先ごとに受ける(入口と各ツール)。要求ごとに別のスレッドで答える
     // (各ツールの画面は見張り・心拍・操作を同時に出す。重い要求が軽い要求を待たせない)
@@ -90,6 +94,7 @@ fn main() {
     }
 
     let for_close = shell.clone();
+    let for_drop = shell.clone();
     let for_setup = shell.clone();
     let for_exit = shell.clone();
     let app = builder
@@ -98,16 +103,20 @@ fn main() {
             services::tool_invoke_raw,
             services::shell_status,
             services::shell_close,
-            services::shell_restart_tool
+            services::shell_restart_tool,
+            drops::shell_dropped_file
         ])
-        .on_window_event(move |window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    // **画面の「終了」と同じ確認を通る**(全ツールに訊いて、まとめて1つの確認)
-                    api.prevent_close();
-                    closing::request_close(for_close.clone(), window.app_handle().clone(), None);
-                }
+        .on_window_event(move |window, event| match event {
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                // **画面の「終了」と同じ確認を通る**(全ツールに訊いて、まとめて1つの確認)
+                api.prevent_close();
+                closing::request_close(for_close.clone(), window.app_handle().clone(), None);
             }
+            // ファイルの落下は OS の仕組みで受け、落ちた場所のツールの画面へ渡す(drops.rs)
+            WindowEvent::DragDrop(drag) if window.label() == "main" => {
+                drops::on_drag(&for_drop, &dropped, drag);
+            }
+            _ => {}
         })
         .setup(move |app| {
             let shell = for_setup;
@@ -168,9 +177,9 @@ fn main() {
                 .inner_size(1440.0, 920.0)
                 .min_inner_size(1024.0, 680.0)
                 .center()
-                // ドラッグ&ドロップ(看板の中身の入れ替え・日報の取り込み)を画面(HTML)で受けるため、
-                // Tauri がファイルの落下を横取りしないようにする
-                .disable_drag_drop_handler()
+                // ドラッグ&ドロップ(看板の中身の入れ替え・日報の取り込み)は **Tauri で受ける**。
+                // WebView2 に任せると、大きなタブの枠(iframe)の中の画面へ落としても届かなかった
+                // (現場の Windows で「効かない」)。受けたものは drops.rs が画面へ渡す
                 .on_navigation(move |url| {
                     if url.as_str().starts_with(&portal_origin) {
                         return true;

@@ -79,7 +79,12 @@
   window.addEventListener("message", function (event) {
     if (event.origin !== SHELL || event.source !== parentWin) return;
     var d = event.data;
-    if (!d || d.type !== "alltools:result" || !pending[d.id]) return;
+    if (!d) return;
+    if (d.type === "alltools:drag") {
+      onDrag(d);
+      return;
+    }
+    if ((d.type !== "alltools:result" && d.type !== "alltools:dropped-file") || !pending[d.id]) return;
     var p = pending[d.id];
     delete pending[d.id];
     if (d.ok) p.resolve(d.value); else p.reject(new Error(String(d.value)));
@@ -160,6 +165,87 @@
     if (!embedded || sameOriginParent) return;
     data.type = type || "alltools:key";
     try { parentWin.postMessage(data, SHELL); } catch (e) { /* 大きなタブが居ない */ }
+  }
+
+  // ---- ファイルのドラッグ&ドロップ(デスクトップ版。外枠が OS から受けて、ここへ渡す) ----
+  // WebView2 に任せると、大きなタブの枠(iframe)の中のこの画面へ落としても届かなかった
+  // (現場の Windows で「効かない」)。窓への落下は外枠が受け、大きなタブの画面から
+  // **位置と名前・大きさだけ**が届く(src-tauri/src/drops.rs → shell.js)。ここでその位置の
+  // 要素に dragenter / dragover / drop を起こす ── ツールの画面は今までどおり `drop` の
+  // `dataTransfer.files` で受ける(ツールは書き換えない)。中身は、dragover を受けた要素
+  // (落とす枠)の上で離したときだけ取り寄せる
+  var dragAt = null;
+
+  function transferOf(files) {
+    var dt = new DataTransfer();
+    for (var i = 0; i < files.length; i++) dt.items.add(files[i]);
+    return dt;
+  }
+  function placeholders(list) {
+    // 上を通るあいだは中身の無い札(名前だけ)。本物のドラッグも、離すまで中身は読めない
+    return (list || []).map(function (f) {
+      return new File([], String(f.name || "file"), { lastModified: Number(f.modified) || Date.now() });
+    });
+  }
+  function fire(type, target, x, y, dt) {
+    var ev = new DragEvent(type, { bubbles: true, cancelable: true, composed: true,
+                                   clientX: x, clientY: y, dataTransfer: dt });
+    target.dispatchEvent(ev);
+    return ev;
+  }
+  function askDropped(dropSeq, index) {
+    return new Promise(function (resolve, reject) {
+      seq += 1;
+      var id = seq;
+      pending[id] = { resolve: resolve, reject: reject };
+      try {
+        parentWin.postMessage({ type: "alltools:dropped-file", id: id, seq: dropSeq, index: index }, SHELL);
+      } catch (e) {
+        delete pending[id];
+        reject(e);
+      }
+    });
+  }
+  function bytesOf(value) {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
+    if (Array.isArray(value)) return new Uint8Array(value);
+    throw new Error("ファイルの中身を受け取れませんでした");
+  }
+  function onDrag(d) {
+    if (d.kind === "leave") {
+      if (dragAt) fire("dragleave", dragAt, 0, 0, transferOf([]));
+      dragAt = null;
+      return;
+    }
+    var x = Number(d.x) || 0;
+    var y = Number(d.y) || 0;
+    var list = d.files || [];
+    var target = document.elementFromPoint(x, y) || document.body || document.documentElement;
+    var dt = transferOf(placeholders(list));
+    if (dragAt && dragAt !== target) fire("dragleave", dragAt, x, y, dt);
+    if (dragAt !== target) fire("dragenter", target, x, y, dt);
+    dragAt = target;
+    var over = fire("dragover", target, x, y, dt);
+    if (d.kind !== "drop") return;
+    dragAt = null;
+    if (!list.length || !over.defaultPrevented) {
+      // 落とす枠の外で離した・フォルダだけ落とした
+      fire("dragleave", target, x, y, dt);
+      tellShell({ reason: list.length ? "target" : "folder", folders: Number(d.folders) || 0 },
+                "alltools:drop-refused");
+      return;
+    }
+    Promise.all(list.map(function (f, i) {
+      return askDropped(d.seq, i).then(function (value) {
+        return new File([bytesOf(value)], String(f.name || "file"),
+                        { lastModified: Number(f.modified) || Date.now() });
+      });
+    })).then(function (files) {
+      fire("drop", target, x, y, transferOf(files));
+    }, function (err) {
+      fire("dragleave", target, x, y, dt);
+      tellShell({ reason: "read", message: String((err && err.message) || err) }, "alltools:drop-refused");
+    });
   }
 
   // ---- 画面が出た(大きなタブの画面が記録に残す。外枠の「起動しています」とは別) ----

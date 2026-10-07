@@ -99,7 +99,7 @@ class ServicesTests(unittest.TestCase):
             text = (ROOT / "portal" / "static" / "js" / js).read_text(encoding="utf-8")
             for name in re.findall(r"invoke\(\s*['\"]([a-z_]+)['\"]", text):
                 with self.subTest(js=js, name=name):
-                    self.assertRegex(main, rf"services::{name}\b")
+                    self.assertRegex(main, rf"(services|drops)::{name}\b")
         # 埋め込みの台本は、ツールの画面の頼みごとを tool_invoke / tool_invoke_raw で取り次ぐ
         embed = (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8")
         handled = set(re.findall(r'^\s*"([a-z_]+)" =>', rust("services.rs"), re.M))
@@ -216,6 +216,34 @@ class UploadTests(unittest.TestCase):
         self.assertIn("window.fetch = function", embed)
         self.assertIn("arrayBuffer()", embed)
         self.assertIn("multipart/form-data; boundary=", embed)
+
+
+class DropTests(unittest.TestCase):
+    """ファイルのドラッグ&ドロップは外枠が OS の仕組みで受け、落ちた場所のツールの画面へ渡す。
+
+    WebView2 に任せると、大きなタブの枠(iframe)の中の画面へ落としても届かなかった
+    (現場の Windows で「ドラッグ&ドロップが効かない」)。
+    """
+
+    def test_大きなタブの窓は落下をTauriで受ける(self) -> None:
+        main = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+        window = main[main.index('WebviewWindowBuilder::new(app, "main"'):]
+        window = window[:window.index(".build()?")]
+        self.assertNotIn(".disable_drag_drop_handler()", window, "大きなタブの窓で落下を受けていない")
+        self.assertIn("WindowEvent::DragDrop", main)
+        self.assertIn("drops::shell_dropped_file", main)
+
+    def test_画面へ渡すのは位置と名前だけで中身は落とされた枠の頼みにだけ(self) -> None:
+        drops = (ROOT / "src-tauri" / "src" / "drops.rs").read_text(encoding="utf-8")
+        self.assertIn("window.__shell.fileDrag", drops)
+        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
+        self.assertIn("fileDrag(info)", shell)
+        self.assertIn("drag.drop.id !== id || drag.drop.seq !== data.seq", shell)
+        self.assertIn("devicePixelRatio", shell)
+        embed = (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8")
+        for needle in ('d.type === "alltools:drag"', 'fire("drop"', "over.defaultPrevented",
+                       "alltools:dropped-file", "alltools:drop-refused"):
+            self.assertIn(needle, embed)
 
 
 class LocationViewTests(unittest.TestCase):

@@ -656,11 +656,15 @@ def _backup(dest: Path, folder: Path) -> Path:
 # ------------------------------------------------------------------
 # 落としたファイルを受け取る
 # ------------------------------------------------------------------
-def save_upload(filename: str, stream: Any, folder: Path) -> tuple[Path | None, str]:
+def save_upload(filename: str, stream: Any, folder: Path,
+                expected: int | None = None) -> tuple[Path | None, str]:
     """ドロップされたファイルを手元の作業フォルダへ置く。``(置いた場所, 断る理由)``。
 
     名前はファイル名の部分だけを使う(フォルダを含む名前で外へ書かせない)。
     同じ名前が来たら置き換える ── 直して落とし直すのがふつうの使い方なので。
+    ``expected``(画面が知っている大きさ)と届いた大きさが違えば置かない ──
+    欠けたファイルを読んで「ファイルが小さすぎます」と言うより、届かなかったと言う
+    (デスクトップ版の窓は、FormData に入れたファイルの中身を渡さないことがあった)。
     """
     name = Path(str(filename).replace("\\", "/")).name
     if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
@@ -681,6 +685,11 @@ def save_upload(filename: str, stream: Any, folder: Path) -> tuple[Path | None, 
     except (OSError, ValueError) as exc:
         target.unlink(missing_ok=True)
         return None, f"ファイルを受け取れませんでした({exc})"
+    if expected is not None and written != expected:
+        target.unlink(missing_ok=True)
+        applog.warning("入れ替えに使うファイルが欠けて届きました: %s (%d / %d バイト)", name, written, expected)
+        return None, (f"{name} が欠けて届きました({written:,} / {expected:,} バイト)。"
+                      "もう一度落とすか、「参照...」でファイルの場所を選んでください。")
     _cache.pop(str(target), None)
     applog.info("入れ替えに使うファイルを受け取りました: %s (%d バイト)", target, written)
     return target, ""

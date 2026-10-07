@@ -334,6 +334,9 @@ function takeFiles(list) {
 function importForm(dryRun) {
   const form = new FormData();
   for (const file of picked) form.append("files", file, file.name);
+  // 大きさも添える。届いた大きさが違えばサーバがその1本を読まずに断る
+  // (デスクトップ版の窓は、ファイルの中身を渡さないことがあった)
+  form.append("sizes", JSON.stringify(picked.map((file) => file.size)));
   form.append("line", importLine());
   form.append("dry_run", dryRun ? "1" : "0");
   form.append("mark_synced", shareChoice() ? "1" : "0");

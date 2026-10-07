@@ -62,7 +62,12 @@ async function request(path, options = {}) {
     headers: { 'X-Tool-Token': TOKEN, 'X-Screen': SCREEN },
     cache: 'no-store',
   };
-  if (options.form !== undefined) {
+  if (options.bytes !== undefined) {
+    // ファイルの中身をそのままのバイト列で(`api.postBytes`)
+    opts.headers['Content-Type'] = 'application/octet-stream';
+    Object.assign(opts.headers, options.headers || {});
+    opts.body = options.bytes;
+  } else if (options.form !== undefined) {
     // ファイルを送る(multipart)。Content-Type はブラウザが境界付きで付ける
     opts.body = options.form;
   } else if (options.body !== undefined) {
@@ -99,6 +104,19 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body: body || {} }),
   /** ファイルを送る(`FormData`)。起動トークンと画面の名札は同じように付く */
   upload: (path, form) => request(path, { method: 'POST', form }),
+  /**
+   * ファイルの中身を**そのままのバイト列**で送る(名前と大きさは `path` の問い合わせに付ける)。
+   * デスクトップ版の窓(WebView2)は、FormData に入れたファイルの中身をアプリの中の通り道へ
+   * 渡さないことがあり、空のファイルが届いていた。メモリに読み込んだバイト列ならそのまま届く。
+   * `creds`(管理者パスワード)は見出しで送る(日本語も通るよう encodeURIComponent する)
+   */
+  postBytes: (path, bytes, creds = {}) => request(path, {
+    method: 'POST', bytes,
+    headers: {
+      'X-Admin-Password': encodeURIComponent(creds.password || ''),
+      'X-Admin-Password-Confirm': encodeURIComponent(creds.password_confirm || ''),
+    },
+  }),
 };
 
 /** 一覧などの URL に line を足す小道具 */

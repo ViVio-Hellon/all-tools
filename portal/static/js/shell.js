@@ -380,6 +380,14 @@ window.addEventListener("message", async (event) => {
     }
     return;
   }
+  if (data.type === "alltools:drop-refused") {
+    refuseDrop(data);
+    return;
+  }
+  if (data.type === "alltools:dropped-file") {
+    sendDropped(event, id, data);
+    return;
+  }
   if (data.type !== "alltools:invoke" || !desktop) return;
   const reply = (ok, value) => {
     try { event.source.postMessage({ type: "alltools:result", id: data.id, ok, value }, event.origin); }
@@ -399,6 +407,103 @@ window.addEventListener("message", async (event) => {
     reply(false, (err && err.message) || String(err));
   }
 });
+
+// ------------------------------------------------------------------
+// ファイルのドラッグ&ドロップ(デスクトップ版)
+// ------------------------------------------------------------------
+// WebView2 に任せると、ツールの枠(iframe)の中の画面へ落としても届かなかった(現場の Windows)。
+// 窓への落下は外枠(Rust)が OS の仕組みで受け、**位置と名前・大きさだけ**をここへ渡す
+// (src-tauri/src/drops.rs)。その位置にあるツールの枠へ渡し、枠の中の台本(embed.js)が
+// 落とす枠の要素に drop を起こす。中身は、**落とされた枠からの頼みにだけ**取り寄せて渡す
+const drag = { over: "", files: [], folders: 0, drop: null, seq: 0 };
+
+function frameAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || el.tagName !== "IFRAME") return null;
+  for (const [id, entry] of frames) {
+    if (entry.iframe === el) return { id, el };
+  }
+  return null;
+}
+
+function postToFrame(id, message) {
+  const entry = frames.get(id);
+  try { entry.iframe.contentWindow.postMessage(message, originOf(id)); } catch (err) { /* 枠が先に消えた */ }
+}
+
+function fileDrag(info) {
+  if (!info || typeof info.kind !== "string") return;
+  if (Array.isArray(info.files)) {
+    drag.files = info.files;
+    drag.folders = Number(info.folders) || 0;
+  }
+  // Windows の位置は物理の画素。CSS の大きさへ割り戻す(表示倍率・拡大縮小)
+  const scale = info.physical ? (window.devicePixelRatio || 1) : 1;
+  const x = Number(info.x) / scale;
+  const y = Number(info.y) / scale;
+  const hit = info.kind === "leave" ? null : frameAt(x, y);
+  if (drag.over && (!hit || hit.id !== drag.over)) postToFrame(drag.over, { type: "alltools:drag", kind: "leave" });
+  if (!hit) {
+    drag.over = "";
+    if (info.kind === "drop") refuseDrop({ reason: drag.files.length ? "target" : "folder" });
+    return;
+  }
+  const rect = hit.el.getBoundingClientRect();
+  const message = {
+    type: "alltools:drag",
+    kind: info.kind === "drop" ? "drop" : (hit.id === drag.over ? "over" : "enter"),
+    x: x - rect.left - hit.el.clientLeft,
+    y: y - rect.top - hit.el.clientTop,
+    files: drag.files,
+    folders: drag.folders,
+  };
+  if (info.kind === "drop") {
+    drag.seq += 1;
+    drag.drop = { id: hit.id, seq: drag.seq };
+    message.seq = drag.seq;
+    drag.over = "";
+    report("info", `ファイルが落とされました: ${TOOLS.get(hit.id)?.title || hit.id} ← `
+      + `${drag.files.map((f) => `${f.name}(${f.size} バイト)`).join("、") || "(ファイル無し)"}`
+      + (drag.folders ? ` フォルダ ${drag.folders} 個` : ""));
+  } else {
+    drag.over = hit.id;
+  }
+  postToFrame(hit.id, message);
+}
+
+function refuseDrop(data) {
+  const reason = data && data.reason;
+  if (reason === "read") {
+    toast(`落としたファイルを読めませんでした: ${String(data.message || "").slice(0, 300)}`, "ng", 9000);
+  } else if (reason === "folder") {
+    toast("フォルダは落とせません。ファイルを落としてください。", "ng", 6000);
+  } else {
+    toast("ここには落とせません。ツールの画面の点線の枠(「ここへ落とす」)の上で離してください。", "ng", 6000);
+  }
+}
+
+/** 落とされた枠(ツールの画面)の頼みで、そのファイルの中身を外枠から取り寄せて渡す */
+async function sendDropped(event, id, data) {
+  const answer = (ok, value, transfer = []) => {
+    try {
+      event.source.postMessage({ type: "alltools:dropped-file", id: data.id, ok, value }, event.origin, transfer);
+    } catch (err) { /* 枠が先に消えた */ }
+  };
+  // **いま落とされた枠からだけ**(ほかのタブの画面からは渡さない)
+  if (!desktop || !drag.drop || drag.drop.id !== id || drag.drop.seq !== data.seq) {
+    answer(false, "落としたファイルが見当たりません。もう一度落としてください");
+    return;
+  }
+  const index = Number(data.index) || 0;
+  const file = drag.files[index];
+  if (file && file.size > 5 * 1024 * 1024) toast(`受け取っています… ${file.name}`);
+  try {
+    const value = await invoke("shell_dropped_file", { index });
+    answer(true, value, value instanceof ArrayBuffer ? [value] : []);
+  } catch (err) {
+    answer(false, (err && err.message) || String(err));
+  }
+}
 
 /** ツールの画面の中で押されたキー(タブの切り替え・読み直し) */
 function keyFromTool(id, data) {
@@ -456,6 +561,8 @@ window.__shell = {
     }
   },
   select(id) { select(id); },
+  /** 窓へのファイルの落下(外枠が OS から受けたもの)。落ちた場所のツールの枠へ渡す */
+  fileDrag(info) { if (desktop) fileDrag(info); },
 };
 
 // ------------------------------------------------------------------

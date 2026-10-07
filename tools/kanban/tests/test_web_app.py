@@ -2078,6 +2078,37 @@ class TableRefreshRouteTest(RouteTestBase):
         self.assertIn(str(self.dir / "local"), res.json["path"], "手元の作業フォルダに置いていない")
         self.assertEqual(res.json["plan"]["tables"][0]["name"], "看板_LVC")
 
+    def test_upload_as_bytes(self):
+        """画面は中身をバイト列のまま送る(デスクトップ版の窓は FormData のファイルの中身を渡さないことがある)。"""
+        from urllib.parse import quote
+
+        payload = self.src.read_bytes()
+        res = self.client.post(f"/api/table-refresh/upload?name={quote('看板マスタ.sqlite3')}&size={len(payload)}",
+                               data=payload, content_type="application/octet-stream",
+                               headers={"X-Tool-Token": "test-token", "X-Admin-Password": quote("秘密")})
+        self.assertEqual(res.status_code, 200, res.json)
+        saved = Path(res.json["path"])
+        self.assertEqual(saved.read_bytes(), payload, "1バイトでも違って置いた")
+        self.assertEqual(res.json["plan"]["tables"][0]["name"], "看板_LVC")
+        self.assertEqual(res.json["plan"]["source_facts"]["size"], len(payload))
+
+    def test_upload_that_arrived_short_is_refused(self):
+        """届いた大きさが画面の言う大きさと違えば置かない(欠けたファイルを読んで「小さすぎます」にしない)。"""
+        from urllib.parse import quote
+
+        payload = self.src.read_bytes()
+        res = self.client.post(f"/api/table-refresh/upload?name={quote('看板マスタ.accdb')}&size={len(payload) + 10}",
+                               data=payload, content_type="application/octet-stream",
+                               headers={"X-Tool-Token": "test-token", "X-Admin-Password": quote("秘密")})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("欠けて届きました", res.json["error"]["message"])
+        self.assertFalse(any((self.dir / "local").rglob("看板マスタ.accdb")), "欠けたファイルを置いた")
+
+    def test_upload_as_bytes_needs_the_password(self):
+        res = self.client.post("/api/table-refresh/upload?name=a.accdb&size=1", data=b"x",
+                               content_type="application/octet-stream", headers={"X-Tool-Token": "test-token"})
+        self.assertEqual(res.status_code, 401)
+
     def test_the_settings_page_has_the_card(self):
         html = self.get("/settings").get_data(as_text=True)
         for needle in ('id="refresh-card"', 'id="rf-drop"', 'id="rf-run"'):

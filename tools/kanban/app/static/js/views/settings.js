@@ -1355,10 +1355,15 @@ async function refreshUpload(f) {
   showRefreshNote('', `受け取って読んでいます… ${f.name}(${sizeText(f.size)})`);
   document.getElementById('rf-compare').hidden = true;
   try {
-    const form = new FormData();
-    form.append('file', f);
-    for (const [k, v] of Object.entries(creds)) form.append(k, v);
-    const r = await api.upload('/api/table-refresh/upload', form);
+    // 中身をここで読んでから**バイト列のまま**送る(`api.postBytes` の説明)。大きさも添え、
+    // 届いた大きさが違えばサーバが断る(欠けたファイルを読んで「小さすぎます」にしない)
+    const bytes = await f.arrayBuffer();
+    if (bytes.byteLength !== f.size) {
+      throw new Error(`${f.name} の中身を読み切れませんでした(${bytes.byteLength} / ${f.size} バイト)。`
+        + '「参照...」でファイルの場所を選んでください。');
+    }
+    const query = new URLSearchParams({ name: f.name, size: String(f.size) });
+    const r = await api.postBytes(`/api/table-refresh/upload?${query}`, bytes, creds);
     document.getElementById('rf-path').value = r.path;
     renderRefreshPlan(r.plan);
   } catch (e) {

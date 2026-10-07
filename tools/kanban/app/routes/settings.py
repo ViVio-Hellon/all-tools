@@ -333,19 +333,41 @@ def _refresh_work_dir():
     return app_config.local_dir("work") / "中身を入れ替える"
 
 
+def _header_text(name: str) -> str:
+    """画面が ``encodeURIComponent`` して付けた見出しの値(日本語のパスワードも通す)。"""
+    from urllib.parse import unquote
+
+    return unquote(request.headers.get(name, ""))
+
+
 @bp.post("/api/table-refresh/upload")
 def table_refresh_upload():
-    """落とされたファイル(.accdb / .sqlite3)を受け取り、そのまま中を見る。"""
+    """落とされたファイル(.accdb / .sqlite3)を受け取り、そのまま中を見る。
+
+    画面は中身を**そのままのバイト列**で送る(名前と大きさは問い合わせ ``?name=…&size=…``、
+    パスワードは見出し)。デスクトップ版の窓(WebView2)は FormData に入れたファイルの中身を
+    渡さないことがあり、空のファイルが届いて「ファイルが小さすぎます」になっていた
+    (python-web-tools の「表を持ってくる」と同じ直し方)。FormData で来たものも今までどおり受ける。
+    **届いた大きさが画面の言う大きさと違えば置かずに断る。**
+    """
     from kanban import table_refresh
 
-    ok, problem = _check_admin({"password": request.form.get("password", ""),
-                                "password_confirm": request.form.get("password_confirm", "")})
+    upload = request.files.get("file")
+    if upload is not None and upload.filename:
+        creds = {"password": request.form.get("password", ""),
+                 "password_confirm": request.form.get("password_confirm", "")}
+        name, stream, size = upload.filename, upload.stream, request.form.get("size", "")
+    else:
+        creds = {"password": _header_text("X-Admin-Password"),
+                 "password_confirm": _header_text("X-Admin-Password-Confirm")}
+        name, stream, size = request.args.get("name", ""), request.stream, request.args.get("size", "")
+    ok, problem = _check_admin(creds)
     if not ok:
         return problem
-    upload = request.files.get("file")
-    if upload is None or not upload.filename:
+    if not name:
         return jsonify(_err("no_file", "ファイルを落としてください")), 400
-    saved, why = table_refresh.save_upload(upload.filename, upload.stream, _refresh_work_dir())
+    saved, why = table_refresh.save_upload(name, stream, _refresh_work_dir(),
+                                           expected=int(size) if str(size).isdigit() else None)
     if saved is None:
         return jsonify(_err("bad_file", why)), 400
     shared, _configured = _shared_db()
