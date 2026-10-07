@@ -105,6 +105,47 @@ class PlanTest(Fixture):
         self.assertIn("このツールが書き込む表", by["Form状態管理"].refresh_why)
         self.assertTrue(by["資材一覧"].can_refresh)
         self.assertEqual(plan.only_in_source, ["Accessだけ"], "Access の内部の表まで出した/扱った")
+        # 読んだファイルと書き込み先の姿(画面に「何を読んで、どこへ書くか」を出す)
+        self.assertEqual(plan.source_facts.path, str(self.src))
+        self.assertEqual((plan.source_facts.tables, plan.source_facts.kanban_tables), (5, ["看板_LVC"]))
+        self.assertEqual((plan.dest_facts.tables, plan.dest_facts.kanban_tables), (5, ["看板_LVC"]))
+        self.assertTrue(plan.source_facts.modified and plan.source_facts.size)
+        self.assertEqual(plan.only_in_dest, ["看板コメント"])
+        self.assertEqual(plan.hint, "", "看板の表を入れ替えられるのに、見立てを出した")
+
+    def test_no_table_in_common_says_what_was_read_and_what_to_pick(self):
+        """現場: 梱包資材マスタの Access を選ぶと「両方にある表 0 個」とだけ出て、動いているのか分からなかった。"""
+        gateway = self.dir / "梱包資材マスタ.sqlite3"
+        c = sqlite3.connect(str(gateway))
+        for name in ("アクセス権限", "資材マスタ", "用途マスタ"):
+            c.execute(f"CREATE TABLE [{name}] ([a] TEXT)")
+        c.commit()
+        c.close()
+        plan = tr.plan(str(gateway), self.shared)
+        self.assertTrue(plan.ok, plan.message)
+        self.assertEqual(plan.candidates, [])
+        self.assertIn("同じ名前の表が 1 つもありません", plan.message)
+        self.assertIn("表 3 個", plan.message)
+        self.assertIn("看板の表(看板_LVC など)が 1 つもありません: 梱包資材マスタ.sqlite3", plan.hint)
+        self.assertIn("梱包資材マスタのようです", plan.hint)
+        self.assertIn("看板マスタ.accdb", plan.hint)
+        self.assertIn("看板_LVC", plan.only_in_dest)
+        body = tr.plan_dict(plan)
+        self.assertEqual(body["source_facts"]["name"], "梱包資材マスタ.sqlite3")
+        self.assertEqual(body["dest_facts"]["kanban_tables"], ["看板_LVC"])
+        self.assertEqual(sorted(body["only_in_source"]), ["アクセス権限", "用途マスタ", "資材マスタ"])
+
+    def test_names_that_differ_only_in_width_or_case_are_pointed_out(self):
+        other = self.dir / "看板マスタ_別.sqlite3"
+        c = sqlite3.connect(str(other))
+        make_kanban(c, "看板_ｌｖｃ ", [(1, "外装紙", "A", "", "〇", "", "", "", "〇", "", "")])
+        c.commit()
+        c.close()
+        plan = tr.plan(str(other), self.shared)
+        self.assertEqual(plan.candidates, [])
+        self.assertEqual(plan.near, [("看板_ｌｖｃ ", "看板_LVC")])
+        self.assertIn("名前が合いません", plan.hint)
+        self.assertIn("「看板_ｌｖｃ 」⇔「看板_LVC」", plan.hint)
 
     def test_refuses_when_the_shared_db_is_not_the_kanban_master(self):
         """接続先が別のツールの sqlite3 を指していたら、入れ替えない(そのファイルを書き換えない)。"""
@@ -232,6 +273,22 @@ class AccessSourceTest(Fixture):
             self.assertTrue(plan.candidates[0].can_refresh, plan.message)
             source = tr.read_source(accdb)
         self.assertEqual(source["看板_LVC"].rows[0]["更新日"], "2026/09/01 08:05:00")
+
+    def test_access_internal_tables_are_not_counted(self):
+        """添付ファイルの表(f_…_Data)は Access が自分のために持つ表。「Access にだけある表」に数えない。"""
+        accdb = self.dir / "看板マスタ.accdb"
+        accdb.write_bytes(b"not really access")
+        table = mock.Mock()
+        table.column_names.return_value = ["管理番号", "資材"]
+        table.rows = [{"管理番号": 3, "資材": "アングル"}]
+        reader = mock.MagicMock()
+        reader.__enter__.return_value.table_names.return_value = [
+            "f_54475901977C489E9CC61748E5CDB271_Data", "看板_LVC"]
+        reader.__enter__.return_value.read_table.return_value = table
+        with mock.patch("kanban.accdb.reader.AccdbReader", return_value=reader):
+            plan = tr.plan(str(accdb), self.shared)
+        self.assertEqual(plan.only_in_source, [])
+        self.assertEqual(plan.source_facts.tables, 1)
 
 
 class UploadTest(Fixture):

@@ -1352,7 +1352,8 @@ async function refreshUpload(f) {
   if (!creds) return;
   const drop = document.getElementById('rf-drop');
   drop.classList.add('is-busy');
-  showRefreshNote('', `読んでいます… ${f.name}`);
+  showRefreshNote('', `受け取って読んでいます… ${f.name}(${sizeText(f.size)})`);
+  document.getElementById('rf-compare').hidden = true;
   try {
     const form = new FormData();
     form.append('file', f);
@@ -1372,7 +1373,8 @@ async function refreshPlan() {
   if (!path) { showRefreshNote('warn', 'Access のファイルを落とすか、場所を入れてください。'); return; }
   const creds = await askPassword('選んだ Access のファイルを読みます。');
   if (!creds) return;
-  showRefreshNote('', '読んでいます…');
+  showRefreshNote('', `読んでいます… ${path}`);
+  document.getElementById('rf-compare').hidden = true;
   try {
     const r = await api.post('/api/table-refresh/plan', { path, ...creds });
     renderRefreshPlan(r.plan);
@@ -1388,11 +1390,62 @@ function showRefreshNote(kind, text) {
   note.hidden = !text;
 }
 
+function sizeText(bytes) {
+  if (!bytes) return '0 バイト';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024)).toLocaleString()} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function factsText(f, kind) {
+  if (!f || !f.path) return '';
+  return `${f.path}\n  (${kind ? kind + '・' : ''}${sizeText(f.size)}・更新 ${f.modified || '不明'}`
+    + `・表 ${f.tables} 個、うち看板の表 ${f.kanban_tables.length} 個)`;
+}
+
+// 両方の表の名前を並べる。「0 個」と出たときに、**何と何を比べたのか**を自分の目で確かめられるように
+function renderRefreshCompare(plan) {
+  const box = document.getElementById('rf-compare');
+  const cols = document.getElementById('rf-compare-cols');
+  cols.innerHTML = '';
+  box.hidden = !plan.ok;
+  if (!plan.ok) return;
+  const kanban = new Set([...(plan.source_facts.kanban_tables || []), ...(plan.dest_facts.kanban_tables || [])]);
+  const lists = [
+    ['両方にある表(入れ替えの候補)', (plan.tables || []).map((t) => t.name)],
+    [`選んだファイルにだけある表(${plan.source_facts.name})`, plan.only_in_source || []],
+    ['共有DBにだけある表', plan.only_in_dest || []],
+  ];
+  for (const [title, names] of lists) {
+    const col = document.createElement('div');
+    const h = document.createElement('h4');
+    h.textContent = `${title}: ${names.length} 個`;
+    const ul = document.createElement('ul');
+    for (const n of names) {
+      const li = document.createElement('li');
+      li.textContent = n;
+      if (kanban.has(n)) li.className = 'is-kanban';
+      ul.append(li);
+    }
+    col.append(h, ul);
+    cols.append(col);
+  }
+  // 候補が無いときは開いておく(閉じていると「何も出ない」に見える)
+  box.open = !(plan.tables || []).length;
+}
+
 function renderRefreshPlan(plan) {
   refreshPlanView = plan;
-  // 入れ替える前から**書き込み先**を出す(どのファイルが変わるのかを押す前に確かめられる)
-  showRefreshNote(plan.ok ? '' : 'bad',
-    plan.message + (plan.ok && plan.dest ? `\n書き込み先の共有DB: ${plan.dest}` : ''));
+  // **読んだファイル**と**書き込み先**を両方出す(どのファイルを見て、どのファイルが変わるのかを
+  // 押す前に確かめられる)。以前は書き込み先だけで、何を読んだのか分からなかった
+  const lines = [];
+  if (plan.ok) {
+    lines.push(`読んだファイル: ${factsText(plan.source_facts, plan.access ? 'Access' : 'sqlite3')}`);
+    lines.push(`書き込み先の共有DB: ${factsText(plan.dest_facts, '')}`);
+  }
+  lines.push(plan.message);
+  if (plan.hint) lines.push(`\n⚠ ${plan.hint}`);
+  showRefreshNote(!plan.ok ? 'bad' : (plan.hint ? 'warn' : ''), lines.join('\n'));
+  renderRefreshCompare(plan);
   const wrap = document.getElementById('rf-list');
   const table = document.getElementById('rf-table');
   table.innerHTML = '';

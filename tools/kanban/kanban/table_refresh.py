@@ -141,6 +141,8 @@ def _read_access(path: Path) -> dict[str, SourceTable]:
         out: dict[str, SourceTable] = {}
         with reader.AccdbReader(str(path)) as db:
             for name in db.table_names():
+                if is_access_internal(name):     # 添付ファイルの表(f_…_Data)など
+                    continue
                 table = db.read_table(name)
                 columns = table.column_names()
                 rows = [{c: reader.to_sqlite_value(r.get(c)) for c in columns} for r in table.rows]
@@ -214,6 +216,16 @@ class Candidate:
 
 
 @dataclass
+class FileFacts:
+    """読んだファイル・書き込み先の姿。**どのファイルを見たのか**を画面に出すため。"""
+    path: str = ""
+    size: int = 0
+    modified: str = ""            # 更新日時
+    tables: int = 0               # 表の数(Access の内部の表は数えない)
+    kanban_tables: list[str] = field(default_factory=list)   # 看板の表(看板_<ライン>)
+
+
+@dataclass
 class Plan:
     source: str = ""
     dest: str = ""
@@ -221,6 +233,14 @@ class Plan:
     message: str = ""
     candidates: list[Candidate] = field(default_factory=list)
     only_in_source: list[str] = field(default_factory=list)
+    only_in_dest: list[str] = field(default_factory=list)
+    #: 両方にある表が無い・少ないときの見立て(どのファイルを選ぶべきか)。無ければ空
+    hint: str = ""
+    #: 名前の書き方(全角/半角・大文字/小文字・空白)だけが違う表 ``(Access, 共有DB)``。
+    #: 別の表として扱う(入れ替えない)が、見比べられるように出す
+    near: list[tuple[str, str]] = field(default_factory=list)
+    source_facts: FileFacts = field(default_factory=FileFacts)
+    dest_facts: FileFacts = field(default_factory=FileFacts)
 
 
 def refresh_why(name: str, src: SourceTable, dest_columns: Sequence[str], suspect: int) -> str:
@@ -299,6 +319,10 @@ def plan(source_path: str, shared: SharedDb | None) -> Plan:
     except (SourceError, SharedDbError) as exc:
         out.message = str(exc)
         return out
+    out.source_facts = _facts(src_path, tables)
+    out.dest_facts = _facts(Path(shared.path), [n for n in dest_names if not is_access_internal(n)])
+    out.only_in_dest = sorted((n for n in dest_names if n not in tables and not is_access_internal(n)),
+                              key=_order)
     for name in sorted(tables, key=_order):
         src = tables[name]
         if name not in dest_names:
@@ -318,12 +342,74 @@ def plan(source_path: str, shared: SharedDb | None) -> Plan:
             cand.preview = _preview_kanban(shared, src, dest_cols)
         out.candidates.append(cand)
     out.ok = True
+    out.near = _near_names(out.only_in_source, out.only_in_dest)
     can = sum(1 for c in out.candidates if c.can_refresh)
-    out.message = (f"共有DBにもある表が {len(out.candidates)} 個あり、"
-                   f"そのうち {can} 個の中身を Access の最新に入れ替えられます。")
-    if out.only_in_source:
-        out.message += f"(Access にだけある表 {len(out.only_in_source)} 個は扱いません)"
+    if out.candidates:
+        out.message = (f"共有DBにもある表が {len(out.candidates)} 個あり、"
+                       f"そのうち {can} 個の中身を Access の最新に入れ替えられます。")
+        if out.only_in_source:
+            out.message += f"(Access にだけある表 {len(out.only_in_source)} 個は扱いません)"
+    else:
+        out.message = (f"選んだファイル(表 {len(tables)} 個)と共有DB(表 {out.dest_facts.tables} 個)に、"
+                       "同じ名前の表が 1 つもありません。何も入れ替えられません。")
+    out.hint = _hint(src_path, out)
     return out
+
+
+def _facts(path: Path, names: Iterable[str]) -> FileFacts:
+    names = list(names)
+    facts = FileFacts(path=str(path), tables=len(names),
+                      kanban_tables=sorted((n for n in names if is_kanban_table(n)), key=_order))
+    try:
+        stat = path.stat()
+        facts.size = stat.st_size
+        facts.modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y/%m/%d %H:%M:%S")
+    except OSError:
+        pass
+    return facts
+
+
+def _loose(name: str) -> str:
+    """名前の書き方の違い(全角/半角・大文字/小文字・空白)を無くした形。見比べるためだけに使う。"""
+    import unicodedata
+
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name)).casefold()
+
+
+def _near_names(only_src: Sequence[str], only_dest: Sequence[str]) -> list[tuple[str, str]]:
+    dest = {}
+    for name in only_dest:
+        dest.setdefault(_loose(name), name)
+    return [(name, dest[_loose(name)]) for name in only_src if _loose(name) in dest]
+
+
+#: 梱包資材マスタ(python-web-tools のファイル)に入っている表。選んだのがこれかを見分ける
+_GATEWAY_MARKS = ("アクセス権限",)
+
+
+def _hint(src_path: Path, p: Plan) -> str:
+    """両方にある表が無い・看板の表が入れ替えられないときに、**何が起きているか**を一言で。"""
+    if p.candidates and any(is_kanban_table(c.name) for c in p.candidates):
+        return ""
+    src_kanban = p.source_facts.kanban_tables
+    lines = []
+    if not src_kanban:
+        lines.append(f"選んだファイルには看板の表(看板_LVC など)が 1 つもありません: {src_path.name}")
+        if "梱包資材" in src_path.stem or any(m in p.only_in_source for m in _GATEWAY_MARKS):
+            lines.append("選んだのは梱包資材マスタのようです。このツールが入れ替えるのは"
+                         f"看板マスタ(共有DB {Path(p.dest).name})の表だけです。")
+        lines.append(f"看板マスタの Access({config.TARGET_DB_NAME})を選んでください。")
+    elif p.dest_facts.kanban_tables:
+        lines.append("看板の表はありますが、共有DBの看板の表と名前が合いません。"
+                     f"選んだファイル: {'、'.join(src_kanban[:8])}"
+                     + (" …" if len(src_kanban) > 8 else "")
+                     + f" / 共有DB: {'、'.join(p.dest_facts.kanban_tables[:8])}"
+                     + (" …" if len(p.dest_facts.kanban_tables) > 8 else ""))
+    if p.near:
+        lines.append("名前の書き方(全角/半角・大文字/小文字・空白)だけが違う表があります。"
+                     "別の表として扱い、入れ替えません: "
+                     + "、".join(f"「{a}」⇔「{b}」" for a, b in p.near[:8]))
+    return "\n".join(lines)
 
 
 def _preview_kanban(shared: SharedDb, src: SourceTable, dest_cols: list[str]) -> str:
@@ -600,11 +686,18 @@ def save_upload(filename: str, stream: Any, folder: Path) -> tuple[Path | None, 
     return target, ""
 
 
+def _facts_dict(f: FileFacts) -> dict[str, Any]:
+    return {"path": f.path, "name": Path(f.path).name if f.path else "", "size": f.size,
+            "modified": f.modified, "tables": f.tables, "kanban_tables": f.kanban_tables}
+
+
 def plan_dict(p: Plan) -> dict[str, Any]:
     return {
         "source": p.source, "dest": p.dest, "ok": p.ok, "message": p.message,
         "access": is_access(Path(p.source)) if p.source else False,
-        "only_in_source": p.only_in_source,
+        "only_in_source": p.only_in_source, "only_in_dest": p.only_in_dest,
+        "hint": p.hint, "near": [list(n) for n in p.near],
+        "source_facts": _facts_dict(p.source_facts), "dest_facts": _facts_dict(p.dest_facts),
         "tables": [{"name": c.name, "rows": c.rows, "current_rows": c.current_rows,
                     "columns": c.columns, "not_copied": c.not_copied, "suspect": c.suspect,
                     "refresh_why": c.refresh_why, "can_refresh": c.can_refresh,

@@ -581,6 +581,12 @@ table.places code { word-break: break-all; }
 #rf-table td.why { font-size: var(--fs-sm); color: var(--muted); white-space: normal; min-width: 18rem; }
 #rf-table td.why b { color: var(--bad); font-weight: 700; }
 #rf-table tr.is-off td { color: var(--muted); }
+.rf-compare { margin-top: .5rem; font-size: var(--fs-sm); }
+.rf-compare summary { cursor: pointer; color: var(--accent); }
+.rf-compare__cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .6rem; margin-top: .4rem; }
+.rf-compare__cols h4 { margin: 0 0 .2rem; font-size: var(--fs-sm); }
+.rf-compare__cols ul { margin: 0; padding-left: 1.1rem; max-height: 14rem; overflow: auto; word-break: break-all; }
+.rf-compare__cols li.is-kanban { font-weight: 700; }
 
 /* マスタ管理: 読み書きする共有DB と、最後に書いた結果(書き込み先つき) */
 .master-dest code { word-break: break-all; font-weight: 700; color: var(--fg); }
