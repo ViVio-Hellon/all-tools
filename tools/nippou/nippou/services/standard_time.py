@@ -246,10 +246,10 @@ class Outcome:
     def message(self) -> str:
         if self.error:
             return (f"標準作業時間に写せませんでした({self.error})── "
-                    f"{self.pending}直ぶんは次の「共有へ保存」で写します")
+                    f"直{self.pending}つぶんは次の「共有へ保存」で写します")
         if not self.shifts:
             return ""
-        return (f"標準作業時間: {self.shifts}直ぶん({self.rows}行)を蓄積し、"
+        return (f"標準作業時間: 直{self.shifts}つぶん({self.rows}行)を蓄積し、"
                 f"{'・'.join(self.lines)} の標準 {self.standards}件を出し直しました")
 
 

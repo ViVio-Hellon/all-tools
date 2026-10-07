@@ -74,7 +74,7 @@ def index():
         push_presets=push_log.period_presets(end),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)
         out_dir=settings_view.output_dir_view(),
-        **shell.shell_context("agg", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("agg", ribbon=_ribbon(ctx, calc)))
 
 
 @bp.post("/api/agg/tables")
@@ -165,3 +165,9 @@ def push_log_csv():
     return jsonify({"file": str(out),
                     "message": f"{view.table.title} {count}行\n{out}"})
 
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

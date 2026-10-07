@@ -483,12 +483,16 @@ def shift_tiles(rows: list[ShiftAggregate], scope: str = "本日") -> list[Tile]
              note=scope, unit="t", labels=labels, tone=TONE_QTY,
              values=[round(r.weight_ton, 3) for r in rows],
              point_classes=marks,
-             empty=f"{scope}の保存データはまだありません"),
+             # 直はあるが重量が0(単重が無い・重量を打っていない)のときに
+             # 「保存データはまだありません」と言わない
+             empty=(f"{scope}の直({'・'.join(labels)})は重量が0です(単重・重量が未入力)"
+                    if rows else f"{scope}の保存データはまだありません")),
         Tile(key="shift_stop", title="直別の停止時間", kind=KIND_BAR,
              note=scope, unit="分", labels=labels, tone=TONE_STOP,
              values=[round(r.total_stop_minutes, 1) for r in rows],
              point_classes=marks,
-             empty=f"{scope}の保存データはまだありません"),
+             empty=(f"{scope}の直({'・'.join(labels)})は停止が0分です"
+                    if rows else f"{scope}の保存データはまだありません")),
     ]
 
 

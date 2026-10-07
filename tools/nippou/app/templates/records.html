@@ -175,6 +175,8 @@
           <td data-value="{{ -(r.problems | length) }}">{% if r.problems %}
             <details class="records-bad"><summary><b>直すところ {{ r.problems | length }}件</b></summary>
               <ul>{% for p in r.problems %}<li>{{ p }}</li>{% endfor %}</ul></details>
+            {% elif r.later %}<details><summary><span class="muted">直の終わりまでに {{ r.later | length }}件</span></summary>
+              <ul>{% for p in r.later %}<li>{{ p }}</li>{% endfor %}</ul></details>
             {% else %}<span class="muted">なし</span>{% endif %}</td>
           <td>
             <button class="btn btn--sm" type="button" data-open-all

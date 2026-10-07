@@ -222,6 +222,19 @@ export const api = {
    */
   send: (path, form) =>
     request(path, { method: "POST", body: form, headers: { "X-Form": "1" } }),
+  /**
+   * 閉じる・読み直す間際に送る(`keepalive`)。返事は待たない ── 画面はもう無い
+   */
+  beacon: (path, data) => {
+    try {
+      fetch(path, {
+        method: "POST", keepalive: true, cache: "no-store",
+        headers: { "X-Tool-Token": TOKEN, "X-Tab": TAB, "X-Screen": location.pathname,
+                   "Content-Type": "application/json" },
+        body: JSON.stringify(data ?? {}),
+      }).catch(() => {});
+    } catch (err) { /* 送れなくても閉じるのは止めない */ }
+  },
 };
 
 /**

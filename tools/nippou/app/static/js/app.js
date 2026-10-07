@@ -183,6 +183,8 @@ function once(node) {
 function wireQuit(button) {
   if (!once(button)) return;
   button.addEventListener("click", async () => {
+    // 日報入力の打ちかけを先に置く(置けずに「やめる」を選ばれたら終わらない)
+    if (!(await nav.leaving())) return;
     try {
       const body = await api.post("/api/shutdown", {});
       toast(body.message || "終了します", "ok");

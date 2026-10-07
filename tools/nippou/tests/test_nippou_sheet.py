@@ -149,6 +149,22 @@ class ReadTests(unittest.TestCase):
             xlsx_sheet.read_cells(path)
 
 
+class ShortNumberTests(unittest.TestCase):
+    """xlsx の 17 桁の小数(2進のずれ)を、同じ値の短い書き方へ。"""
+
+    def test_ずれを落とす(self) -> None:
+        self.assertEqual(xlsx_sheet._short_number("250.04313999999999"), "250.04314")
+        self.assertEqual(xlsx_sheet._short_number("1188.9000000000001"), "1188.9")
+
+    def test_値は変わらない(self) -> None:
+        for text in ("0.94791666666666663", "250.04313999999999", "0.1"):
+            self.assertEqual(float(xlsx_sheet._short_number(text)), float(text))
+
+    def test_整数や文字はそのまま(self) -> None:
+        for text in ("7", "1E-3", "abc", "12.5"):
+            self.assertEqual(xlsx_sheet._short_number(text), text)
+
+
 class MappingTests(unittest.TestCase):
     """シート → 日報。**位置に意味がある。**"""
 

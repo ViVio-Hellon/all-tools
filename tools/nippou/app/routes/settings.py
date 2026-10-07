@@ -121,7 +121,7 @@ def index():
             "config_error": app_config.load_error(),
             "version_problem": app_config.version_problem(),
         },
-        **shell.shell_context("settings", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("settings", ribbon=_ribbon(ctx, calc)))
 
 
 def _tab_badges(state: dict, pending: int) -> dict:
@@ -1560,7 +1560,7 @@ def _import_request():
     body = request.get_json(silent=True) or {}
     text = str(body.get("path", "")).strip()
     if not text:
-        return jsonify(error_body("no_path", "読み込むCSVを指定してください")), 400
+        return jsonify(error_body("no_path", "読み込むファイル(CSV・xlsx)かフォルダを指定してください")), 400
     path = Path(text).expanduser()
     if not path.is_file():
         return jsonify(error_body(
@@ -1927,3 +1927,10 @@ def fs_list():
     名前**だけ。中身は返さない ── 読み取り口をここに作らない。
     """
     return jsonify(fs_browse.to_dict(fs_browse.browse(request.args.get("path", ""))))
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

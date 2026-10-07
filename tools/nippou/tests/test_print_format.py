@@ -165,6 +165,27 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertIn("<td>9</td>", totals)
         self.assertNotIn("<td>3</td>", totals)
 
+    def test_枚数と重量も直の合計(self) -> None:
+        """**2ページの直の2枚目が「ﾛｯﾄ数 13 / 枚数 10」だった。**
+
+        ﾛｯﾄ数は直の集計から入るのに、枚数・重量はそのページの行の合計で、
+        同じ「直実績合計」の行に直とページが混ざっていた。
+        """
+        from nippou.db.models import PackingReport
+
+        report = PackingReport(work_date="2026年8月3日", line_name="L-1",
+                               shift="1直", pages=2, total_lot_count=13,
+                               total_quantity=630.0, total_weight=4379.4)
+        out = build_print_html(make_header(lot_count="", count="10", weight_kg="70.0"),
+                               [], summary=report)
+        totals = out[out.index('class="totals"'):out.index("</table>",
+                                                           out.index('class="totals"'))]
+        self.assertIn("<td>13</td>", totals)
+        self.assertIn("<td>630</td>", totals)
+        self.assertIn("4379.4 Kg", totals)
+        self.assertIn("4.38 T", totals)
+        self.assertNotIn("<td>10</td>", totals)
+
     def test_集計が無ければ空のまま(self) -> None:
         """集計を渡さない紙(VBAと同じ姿)では、これまでどおり。"""
         out = build_print_html(make_header(lot_count=""), [])

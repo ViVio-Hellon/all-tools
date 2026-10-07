@@ -52,7 +52,7 @@ def index():
         out_dir=settings_view.standard_time_output_view(),
         power_groups=view.power_groups(), power_lead=view.POWER_LEAD,
         power_definition=view.POWER_DEFINITION, guide=view.guide(),
-        **shell.shell_context("standard", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("standard", ribbon=_ribbon(ctx, calc)))
 
 
 def _line(payload: dict):
@@ -196,3 +196,10 @@ def backfill():
     if not result.error and not result.shifts:
         body["message"] = "この期間に集計のある直はありませんでした"
     return jsonify(body)
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

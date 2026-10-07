@@ -169,7 +169,7 @@ def index():
         dashboard=_dashboard(start, end, report_date, ctx.line).as_dict(),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)
         out_dir=settings_view.output_dir_view(),
-        **shell.shell_context("graph", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("graph", ribbon=_ribbon(ctx, calc)))
 
 
 @bp.post("/api/graph/dashboard")
@@ -515,7 +515,7 @@ def review_page():
         report_date=report_date,
         line=ctx.line,
         closing=_closing(ctx, target_date, target_shift),
-        **shell.shell_context("graph", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("graph", ribbon=_ribbon(ctx, calc)))
 
 
 def _daily_result_cue(report_date: str, shift: str) -> str:
@@ -650,3 +650,10 @@ def review_ack():
                      extra=f"{report_date}/{shift}/{stage}")
     return jsonify({"acknowledged": True, "stage": stage,
                     "message": f"{shift} の実績を確認しました", "next": "/"})
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

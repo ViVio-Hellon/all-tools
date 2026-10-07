@@ -14,7 +14,7 @@ import { api, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
-import { pageSignal, refresh } from "../nav.js";
+import { beforeLeave, pageSignal, refresh } from "../nav.js";
 import { paintRibbon, showShiftMoved } from "../ribbon.js";
 import { playKey } from "../sound.js";
 // 開閉と焦点の戻しは1か所に置く(作業者選択・全停入力と同じ作り)
@@ -55,6 +55,18 @@ const carried = new Set();
 // 番号なので、ページを切り替えたあとも持っていると、**別の紙の2行目**を
 // ツールが入れた値だと思い込みます
 let carriedSheet = "";
+
+/*
+  **打った順番。** 欄に打つたびに1つ進め、その欄に覚えます(`data-edit-at`)。
+  サーバへ頼んだときの番号と比べて、**頼んだあとに打った欄は、返ってきた値で
+  書き換えません。** 時の欄に「18」と打ち終えて分へ移った直後に、「1」の
+  ときに頼んだ答えが返って「1」へ戻っていた(打った値が黙って消える)。
+*/
+let editSeq = 0;
+function touched(el) { el.dataset.editAt = String(++editSeq); }
+// どこまで書けたか(書けたときの `editSeq`)。これより後に打ったものが打ちかけ
+let savedSeq = 0;
+const unsaved = () => editSeq > savedSeq;
 
 /** 写した印を落とす(人が触った / 行を空にした)。 */
 function forgetCarried(row) {
@@ -175,6 +187,7 @@ function wireLimits(el) {
     // しても打ち直しになる。「予測変換がおかしい」と言われていたのは
     // ここでした。確定を待ってから(`compositionend`)まとめて直します。
     if (event.isComposing) return;
+    touched(el);
     // **その欄は人が打った。** 写した印を落とす ── 以後、ツールは
     // この行の開始時刻を消しません
     if (el.dataset.family === "KZ" || el.dataset.family === "KH") {
@@ -188,6 +201,7 @@ function wireLimits(el) {
   // 変換が確定した。ここで初めて直す ── かな・漢字は
   // `allowed()` を通らないので、確定した瞬間に落ちます
   el.addEventListener("compositionend", () => {
+    touched(el);
     tidy();
     advance(el);
     maybeLookup(el);
@@ -456,7 +470,7 @@ function openedKey() {
  * 移っていて、そこを守ると**埋めたはずの値が1つだけ入らない。**
  * 打った値ではなくサーバが引いてきた値なので、上書きしてよい。
  */
-function paint(view, { forceRow = 0 } = {}) {
+function paint(view, { forceRow = 0, since = null } = {}) {
   if (!view) return;
   // **別の紙になったら、写した印は捨てる。** 行番号は紙ごとの番号です
   const sheet = `${view.report_date || ""}|${view.line || ""}|`
@@ -474,6 +488,8 @@ function paint(view, { forceRow = 0 } = {}) {
   for (const el of inputs()) {
     const next = view.rows?.[el.dataset.row]?.[el.dataset.family];
     if (next === undefined || next === el.value) continue;
+    // 頼んだあとに打った欄は書き換えない(返ってきたのは打つ前の値の答え)
+    if (since !== null && Number(el.dataset.editAt || 0) > since) continue;
     // 入力中の欄は書き換えない(カーソルが飛ぶ)
     const typing = el === document.activeElement;
     if (typing && Number(el.dataset.row) !== forceRow) continue;
@@ -1309,11 +1325,13 @@ function askAllocation(lot) {
 /** ロット番号でサーバに引かせる。`hiki_no` を添えるとその引当で埋める。 */
 async function lookupLot(row, hikiNo = "") {
   try {
+    const since = editSeq;
     const body = await api.post("/api/entry/lot",
                                 { ...collect(), row, hiki_no: hikiNo });
     // **その行は焦点があっても書き換える。** LOT を離れた指は次の欄に
-    // 移っているので、守ると材・調質だけが入らない
-    paint(body, { forceRow: row });
+    // 移っているので、守ると材・調質だけが入らない(引いているあいだに
+    // 打った欄だけは、打った値のまま)
+    paint(body, { forceRow: row, since });
   } catch (err) {
     toastError(err);
   }
@@ -1322,9 +1340,10 @@ async function lookupLot(row, hikiNo = "") {
 /** 欄から離れたときに、決まる値を決めてもらう。 */
 async function settle(row, changed = "") {
   try {
+    const since = editSeq;
     const body = await api.post("/api/entry/state",
                                 { ...collect(), row, changed });
-    paint(body);
+    paint(body, { since });
     // **重量を計算し直してよいか聞く。**
     //
     // VBA は重量が入っている行を触りませんでした(現物を量った値のほうが
@@ -1483,8 +1502,10 @@ async function maybeAutosave() {
   try {
     // `mute`: 断られても「断られた」の音にしない(押していない場面で驚かせない ──
     // 下のトーストと同じ理由)
+    const since = editSeq;
     const body = await api.post("/api/entry/save", { ...collect(), silent: true },
                                 { mute: true });
+    if (body.saved) savedSeq = Math.max(savedSeq, since);
     // **見送られた理由が「直が変わった」なら、帯にも出す。** 1分ごとの
     // 見張りが拾うより先に分かるので、待たせない
     const moved = body.shift_changed;
@@ -1710,7 +1731,9 @@ async function saveNow(shiftChoice = "") {
   try {
     // 確定保存には `silent` を付けない。**間引きの対象外**で、
     // 押したときは必ず書く(サーバが判断するのは自動保存だけ)
+    const since = editSeq;
     const body = await api.post("/api/entry/save", payload);
+    if (body.saved) savedSeq = Math.max(savedSeq, since);
     paint(body);
     // 書けたのだから、帯の知らせはもう役目を終えている
     if (body.saved) showShiftMoved("");
@@ -1755,8 +1778,10 @@ async function saveNow(shiftChoice = "") {
  */
 async function saveDraft() {
   try {
+    const since = editSeq;
     const body = await api.post("/api/entry/save",
                                 { ...collect(), draft: true });
+    if (body.saved || body.skipped) savedSeq = Math.max(savedSeq, since);
     paint({ ...body, message: "" });
     // **打っていない紙は「書けなかった」ではありません。**
     // サーバは1行も打っていない紙を作りません(空の紙を残さないため)。
@@ -1772,7 +1797,7 @@ async function saveDraft() {
     // その保存が「まだ1行も打っていません」で断られると、開くほうまで
     // 黙って止まっていました ── 開いたばかりの画面は空なので、
     // **直しに行こうとするときほど**止まります
-    if (err.code === "empty_sheet") return true;
+    if (err.code === "empty_sheet") { savedSeq = Math.max(savedSeq, editSeq); return true; }
     toastError(err);
     return false;
   }
@@ -1824,7 +1849,27 @@ async function backToCurrent() {
   } catch (err) { toastError(err); }
 }
 
+/**
+ * 画面を出る前(ほかの画面へ・「終了」)。**打ちかけを置いてから出る。**
+ *
+ * 自動保存は1分に1回なので、そのあいだに打った行は画面にしか無い。
+ * 置けなければ、移ってよいかを訊く(黙って捨てない)。
+ */
+async function keepTyped() {
+  if (!unsaved() || !tabLock.mayEdit()) return true;
+  if (await saveDraft()) return true;
+  return confirm("打ちかけの行を保存できませんでした。\n"
+                 + "このまま移ると、保存していない行は消えます。移りますか?");
+}
+
 export function start() {
+  beforeLeave(keepTyped);
+  // 閉じる・読み直す(F5)。返事は待てないので、置くだけ送る
+  window.addEventListener("pagehide", () => {
+    if (unsaved() && tabLock.mayEdit()) {
+      api.beacon("/api/entry/save", { ...collect(), draft: true });
+    }
+  }, { signal: pageSignal() });
   // **打つ画面はここだけなので、取り合うのもここだけ。** グラフや集計を
   // 2枚目で開くのはふつうの使い方なので、そこまで止めると邪魔になる
   tabLock.start();

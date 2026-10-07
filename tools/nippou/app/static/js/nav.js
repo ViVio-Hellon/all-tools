@@ -54,6 +54,26 @@ export function onLeave(fn) {
   page.signal.addEventListener("abort", fn, { once: true });
 }
 
+/*
+  **画面を出る前の確かめ。** 日報入力は、打ちかけ(まだ自動保存されていない行)を
+  置いてから出る。置かずに移ると、自動保存は1分に1回なので、最後に打った行が
+  黙って消えていた(「記録を見る」へ行って戻る・「終了」)。
+  返す値が false なら移らない。登録はその画面のあいだだけ有効。
+*/
+let guard = null;
+let here = location.href;           // いま出している画面(戻るを断ったときに戻す先)
+export function beforeLeave(fn) {
+  guard = fn;
+  page.signal.addEventListener("abort", () => { if (guard === fn) guard = null; },
+                               { once: true });
+}
+
+/** 出てよいか(確かめが無ければ常に true)。「終了」もここを通る */
+export async function leaving() {
+  if (!guard) return true;
+  try { return Boolean(await guard()); } catch (err) { return true; }
+}
+
 /** この場所を差し替えで開けるか。開けないものは普通の遷移に任せる。 */
 function internal(url) {
   return url.origin === location.origin
@@ -107,6 +127,12 @@ function markRail(pathname) {
  * @param {boolean} push   履歴に積むか(戻る/進むのときは積まない)
  */
 export async function go(href, push = true) {
+  // 打ちかけを置いてから出る。置けずに「移らない」を選ばれたら、ここに留まる
+  if (!(await leaving())) {
+    markRail(location.pathname);
+    if (!push) history.pushState({ nav: 1 }, "", here);
+    return;
+  }
   const mine = ++seq;
   const main = document.querySelector("main#main");
   if (main) main.setAttribute("aria-busy", "true");
@@ -135,6 +161,7 @@ export async function go(href, push = true) {
   page = new AbortController();
 
   if (push) history.pushState({ nav: 1 }, "", landed);
+  here = push ? landed : location.href;
   document.title = next.title;
   swapStyles(next);
   for (const sel of SWAP) swap(sel, next);

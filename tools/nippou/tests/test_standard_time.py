@@ -211,7 +211,7 @@ class ServiceTests(ServiceTestCase):
         self.share.mkdir()
         out = self.pushed(key)
         self.assertEqual((out.shifts, out.rows, out.pending, out.error), (1, 2, 0, ""))
-        self.assertIn("1直ぶん(2行)", out.message)
+        self.assertIn("直1つぶん(2行)", out.message)
         self.assertTrue(self.db.exists())
         rows = self.query('SELECT 班, 作業者, サイズ, 梱包あたり人分, 枚あたり人分, 標準に数える'
                           f' FROM "{svc.SAMPLE_TABLE}" ORDER BY 行番号')
@@ -649,7 +649,7 @@ class WebTests(WebTestCase):
         key = self.save_shift()
         body = self.push(key).get_json()
         self.assertEqual(body["standard_time"]["shifts"], 1, body)
-        self.assertIn("標準作業時間: 1直ぶん(1行)を蓄積し", body["message"])
+        self.assertIn("標準作業時間: 直1つぶん(1行)を蓄積し", body["message"])
         self.assertTrue(self.db().exists())
         got = self.post("/api/standard-time/standards", {"scope": "line"}).get_json()
         self.assertEqual([r[1] for r in got["table"]["rows"]], [logic.TEAM_ALL, "A"])

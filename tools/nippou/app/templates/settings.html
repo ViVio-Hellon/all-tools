@@ -1607,7 +1607,7 @@ LVC,119
         {% elif dist.where %}まだありません。下で書き出すと、統合ツールの一式の中の「tools\nippou\配布設定」にできます。
         {% else %}まだありません。下で書き出すと、起動用の Start.vbs と同じフォルダに「配布設定」フォルダができます。{% endif %}
       </p>
-      {% if dist.where %}<p class="lead" id="dist-where">{{ dist.where }}</p>{% endif %}
+      {% if dist.where and dist.exists %}<p class="lead" id="dist-where">{{ dist.where }}</p>{% endif %}
       {% if dist.error %}
       <div class="msg msg--error">{{ dist.error }} ── このままでは配布設定は効きません。下で書き出し直すと直ります。</div>
       {% endif %}
@@ -1620,7 +1620,9 @@ LVC,119
       </table>
       {% endif %}
       <p class="lead">置き場所: <code id="dist-path">{{ dist.path }}</code>
-        ── 起動用の {{ dist.launchers | join(" / ") }} と同じフォルダです。
+        {% if dist.where %}── 統合ツールの一式の中(日報のフォルダ)です。配るときは一式の
+        <code>scripts\make_dist.bat</code> がまとめます。
+        {% else %}── 起動用の {{ dist.launchers | join(" / ") }} と同じフォルダです。{% endif %}
         <strong>配布先に関わるものはすべてこのフォルダ</strong>に入ります
         (設定.json・音・はじめに読む.txt)。音声ファイルはファイルを置き換えれば差し替えられます。</p>
 

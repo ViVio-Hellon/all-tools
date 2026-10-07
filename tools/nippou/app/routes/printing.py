@@ -181,9 +181,15 @@ def _mark_problems(rows: list[dict], *, admin: bool) -> None:
             log.exception("一覧の確認に失敗しました: %s %s %s",
                           row["report_date"], row["line"], row["shift"])
             found = []
-        row["problems"] = [
-            (f"{f.page}ページ {f.row}行目 " if f.page and f.row else "") + f.message
-            for f in found]
+        # **いま打っている直は、直が終わってから決まるもの(最終の時刻・休憩)を
+        # 赤にしない。** 入力画面は「直の終わりまでに」と灰色で出すのに、一覧だけ
+        # 1行目を打った時点で赤くなっていた
+        later = [f for f in found if f.at_shift_end] if row.get("own") else []
+        found = [f for f in found if f not in later]
+        text = lambda f: ((f"{f.page}ページ {f.row}行目 " if f.page and f.row else "")
+                          + f.message)
+        row["problems"] = [text(f) for f in found]
+        row["later"] = [text(f) for f in later]
 
 
 def _when(saved_at: object) -> str:
@@ -317,7 +323,7 @@ def index():
         # 直近に保存されたものを選びやすくする(「どれを見るか」を
         # 思い出す作業を無くす)。**直の単位で**、ページは添え物
         recent=recent,
-        **shell.shell_context("records", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("records", ribbon=_ribbon(ctx, calc)))
 
 
 @bp.post("/api/print/load")
@@ -571,3 +577,10 @@ def backup_open():
                      extra=f"{report_date}/{shift} 入れた{result.pulled}ページ")
     # 呼び出しそのものは「呼び出す」と同じ道(関門を2つ書かない)
     return recall()
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

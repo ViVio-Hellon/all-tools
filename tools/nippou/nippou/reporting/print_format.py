@@ -190,14 +190,23 @@ def _totals_html(header: HeaderRecord,
 
     lot_count = str(header.lot_count or "")
     coefficient = str(header.coefficient_lot_count or "")
+    count = str(header.count or "")
+    weight_kg = str(header.weight_kg or "")
     if summary is not None:
         if not lot_count.strip():
             lot_count = str(summary.total_lot_count)
         if not coefficient.strip():
             coefficient = format_fixed(summary.coefficient_lot_count, 2)
+        # **枚数・重量も直の合計にそろえる。** 紙の見出しは「直実績合計」で、
+        # ﾛｯﾄ数は直の集計から入るのに、枚数・重量はそのページの行だけの合計
+        # だった(2ページの直の2枚目が「ﾛｯﾄ数 13 / 枚数 10」)。集計と同じ出どころ
+        if summary.total_quantity:
+            count = format_fixed(summary.total_quantity, 0)
+        if summary.total_weight:
+            weight_kg = format_fixed(summary.total_weight, 1)
 
-    ton = tons(str(header.weight_kg or ""))
-    weight = f'<span class="kg">{_esc(header.weight_kg)} Kg</span>'
+    ton = tons(weight_kg)
+    weight = f'<span class="kg">{_esc(weight_kg)} Kg</span>'
     if ton:
         weight += f'<span class="ton">{_esc(ton)} T</span>'
     return f'''<div class="totals">
@@ -210,7 +219,7 @@ def _totals_html(header: HeaderRecord,
 <tr>
 <td>{_esc(coefficient)}</td>
 <td>{_esc(lot_count)}</td>
-<td>{_esc(header.count)}</td>
+<td>{_esc(count)}</td>
 <td>{weight}</td>
 </tr>
 </tbody>

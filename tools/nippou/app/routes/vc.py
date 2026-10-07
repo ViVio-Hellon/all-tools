@@ -68,7 +68,7 @@ def index():
         "vc.html",
         tabs=view.tabs(), default_tab="quick" if bare else view.DEFAULT_TAB,
         place=view.place_view(), tones=grid.tones(), bare=bare,
-        **shell.shell_context("vc", ribbon=ctx.ribbon(current_calculator())))
+        **shell.shell_context("vc", ribbon=_ribbon(ctx, current_calculator())))
 
 
 # ------------------------------------------------------------------
@@ -296,3 +296,10 @@ def product_delete():
     body = request.get_json(silent=True) or {}
     return _grid_write(body, "VC品種を消す", "vc_product_delete",
                        lambda path: grid.delete_product(path, str(body.get("product", ""))))
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

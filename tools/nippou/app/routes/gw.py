@@ -184,7 +184,7 @@ def index():
         # 積んでいたのと同じ一覧)。打たせると、マスタに無い綴りが通って
         # しまい「登録されていないVCです」で計算が止まります
         vc_names=_vc_names(),
-        **shell.shell_context("gw", ribbon=ctx.ribbon(calc)))
+        **shell.shell_context("gw", ribbon=_ribbon(ctx, calc)))
 
 
 def _vc_names() -> list[str]:
@@ -739,3 +739,10 @@ def print_gw():
         gw_print.build_html(_print_data(computed, packs), generated_at=now,
                             auto_print=auto_print),
         mimetype="text/html")
+
+
+def _ribbon(ctx, calc):
+    """帯(いま書いているページで。`entry.ribbon_now`)。"""
+    from .entry import ribbon_now
+
+    return ribbon_now(ctx, calc)

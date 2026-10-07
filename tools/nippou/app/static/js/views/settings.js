@@ -941,6 +941,9 @@ function wireImport() {
   document.getElementById("import-preview")?.addEventListener(
     "click", async () => {
       importNote("");
+      // 選んだ・落としたファイルがあれば、それを見る(道を打った欄は空のまま)。
+      // 以前は道だけを送って「指定してください」と断られ、出ていた下見まで消えた
+      if (picked.length) { sendFiles(true); return; }
       try {
         const body = await api.post("/api/settings/import/preview",
                                     { path: importPath(), line: importLine() });

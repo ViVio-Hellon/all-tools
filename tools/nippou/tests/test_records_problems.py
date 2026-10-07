@@ -70,3 +70,41 @@ class RecordsProblemTests(WebTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class RunningShiftTests(WebTestCase):
+    """**打っている最中の直は、直が終わってから決まるもので赤くしない。**
+
+    3直の1行目を打っただけで、一覧が「直すところ 2件」(最終の時刻・休憩0分)と
+    赤くなっていた。入力画面は同じものを「直の終わりまでに」と灰色で出す。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.post("/api/entry/line", {"line": "L-1"})
+        key = dict(report_date="2026年9月17日", line="L-1", shift="1直", page=1)
+        # 7:00〜9:00 の1行だけ(最終の時刻に届かない・休憩なし)
+        self.repo().save(HeaderRecord(**key, worker="いまの人"),
+                         [DetailRecord(**key, row_no=1, lot="A1", ken="10", mai="5", tut="1",
+                                       kz="07", kh="00", sz="09", sh="00")])
+
+    def row(self, own: bool) -> str:
+        from unittest import mock
+
+        from nippou.services.nippou_service import NippouService
+
+        with mock.patch.object(NippouService, "is_current_key",
+                               lambda self, d, *a, **k: own and d == "2026年9月17日"):
+            html = self.get("/records").get_data(as_text=True)
+        start = html.index(">2026年9月17日</td>")
+        return html[html.rindex("<tr", 0, start):html.index("</tr>", start)]
+
+    def test_いまの直は灰色で直の終わりまでに(self) -> None:
+        row = self.row(own=True)
+        self.assertNotIn("row-bad", row)
+        self.assertIn("直の終わりまでに", row)
+
+    def test_終わった直なら赤い(self) -> None:
+        row = self.row(own=False)
+        self.assertIn("row-bad", row)

@@ -136,6 +136,15 @@ def _target(ctx: work_context.WorkContext, calc: ShiftCalculator):
     return report_date, line, shift, page
 
 
+def ribbon_now(ctx: work_context.WorkContext, calc: ShiftCalculator) -> dict:
+    """日報入力以外の画面の帯。**ページもいま書いているページで出す。**
+
+    以前は `ctx.ribbon(calc)` で既定の1ページを出していて、2ページ目を打って
+    いても、ほかの画面を開くと帯が「ページ 1」に戻っていた(1分後の見張りで直る)。
+    """
+    return ctx.ribbon(calc, _target(ctx, calc)[3])
+
+
 def _load_state(report_date: str, line: str, shift: str, page: int):
     """保存済みがあれば読み、無ければ空。"""
     loaded = get_repo().load(report_date, line, shift, page)

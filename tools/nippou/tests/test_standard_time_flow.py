@@ -171,7 +171,7 @@ class FlowTests(WebTestCase):
         body = self.push()
         self.assertEqual(body["succeeded"], 1)
         self.assertEqual(body["standard_time"]["shifts"], 1, body)
-        self.assertIn("標準作業時間: 1直ぶん(3行)を蓄積し", body["message"])
+        self.assertIn("標準作業時間: 直1つぶん(3行)を蓄積し", body["message"])
         self.assertTrue(self.db.exists())
         got = self.q('SELECT 行番号, 班, 作業者, 用途コード, 包装仕様NO, サイズ, 梱包数, 枚数,'
                      ' 作業人数, "作業時間(分)", 梱包あたり人分, 枚あたり人分 FROM "T_作業実績"'
@@ -265,7 +265,7 @@ class FlowTests(WebTestCase):
         self.push()
         self.save(**{"1": {"HIT": "3"}})
         body = self.push()
-        self.assertIn("標準作業時間: 1直ぶん(3行)", body["message"])
+        self.assertIn("標準作業時間: 直1つぶん(3行)", body["message"])
         self.assertEqual(self.q('SELECT COUNT(*) FROM "T_作業実績"'), [(3,)])
         self.assertEqual(self.q('SELECT 作業人数, 梱包あたり人分 FROM "T_作業実績" WHERE 行番号=1'),
                          [(3.0, 180 * 3 / 4)])
@@ -289,7 +289,7 @@ class FlowTests(WebTestCase):
         self.db.rmdir()
         body = self.push()                            # 送る日報は無くても、待ちは写す
         self.assertIn("送るものはありませんでした", body["message"])
-        self.assertIn("標準作業時間: 1直ぶん(3行)", body["message"])
+        self.assertIn("標準作業時間: 直1つぶん(3行)", body["message"])
         self.assertEqual(self.repo().standard_time_pending(), [])
         self.assertEqual(self.q('SELECT COUNT(*) FROM "T_作業実績"'), [(3,)])
 

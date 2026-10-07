@@ -135,7 +135,28 @@ def _value_of(cell, strings: list[str]) -> str:
             return ""
     if kind == "e":                               # #REF! などのエラー値
         return ""
+    if kind in (None, "", "n"):
+        return _short_number(value.text)
     return value.text
+
+
+def _short_number(text: str) -> str:
+    """数のセルを、Excel が見せる形に近い短い書き方へ。
+
+    xlsx には 2進の小数がそのまま 17 桁で入っている(``250.04313999999999``・
+    ``1188.9000000000001``)。そのまま取り込むと画面にその桁で出た。
+    ``repr(float)`` は**同じ値に戻る一番短い書き方**なので、値は変わらない。
+    """
+    if "." not in text or "e" in text.lower():
+        return text
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    if number != number or number in (float("inf"), float("-inf")):
+        return text
+    short = repr(number)
+    return short if len(short) < len(text) else text
 
 
 def rows_of(cells: dict[str, str]) -> dict[int, dict[str, str]]:
