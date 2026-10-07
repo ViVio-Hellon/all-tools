@@ -80,6 +80,9 @@ class Preview:
     sheet: Optional[object] = None
     #: CSVの出し先(`<ここ>/<ライン>/集計/yyyy.mm/dd` へ日ごとに出ます)
     csv_dir: str = ""
+    #: 入れると**消える**古いページ ``(作業日, ライン, 直, ページ)``。その直は今度のファイルの
+    #: ページ数で足りるのに、前の取り込みで余分に増えていたもの(直したあとの入れ直し)
+    stale: list[tuple[str, str, str, int]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -113,6 +116,12 @@ class Preview:
         text = f"{len(self.targets)}ページ {self.parsed.row_count}行 を入れます"
         if self.replacing:
             text += f"。うち {len(self.replacing)}ページ は今あるものを置き換えます"
+        if self.stale:
+            text += (f"。前の取り込みで増えていた {len(self.stale)}ページ("
+                     + "・".join(f"{d} {s} {p}ページ" for d, _l, s, p in self.stale[:5])
+                     + (" …" if len(self.stale) > 5 else "") + ")は消します")
+        if self.parsed.notes:
+            text += "。" + " / ".join(self.parsed.notes)
         if self.parsed.problems:
             text += f"(読めなかった行が {len(self.parsed.problems)}行)"
         # **押す前に、書くものを全部言う。** 集計CSVも一緒に出ます
@@ -130,6 +139,8 @@ class Preview:
                 "sheet": self.sheet.as_dict() if self.sheet else None,
                 "targets": [t.as_dict() for t in self.targets],
                 "replacing": len(self.replacing),
+                "stale": [{"report_date": d, "line": l, "shift": s, "page": p}
+                          for d, l, s, p in self.stale],
                 "csv_dir": self.csv_dir,
                 "csv_days": [{"report_date": d, "line": l} for d, l in self.days],
                 **self.parsed.as_dict()}
@@ -142,6 +153,8 @@ class Result:
     pages: int = 0
     rows: int = 0
     replaced: int = 0
+    #: 消した古いページ(前の取り込みで増えていたもの)
+    removed: int = 0
     summaries: int = 0
     marked_synced: bool = True
     failed: list[tuple[str, str]] = field(default_factory=list)
@@ -159,6 +172,8 @@ class Result:
         text = f"{self.pages}ページ {self.rows}行 を取り込みました"
         if self.replaced:
             text += f"(うち {self.replaced}ページ は置き換え)"
+        if self.removed:
+            text += f"。前の取り込みで増えていた {self.removed}ページ は消しました"
         text += "。共有へは" + ("送りません" if self.marked_synced else "送ります")
         if self.csv_days:
             text += (f"。集計CSVは {self.csv_days}日ぶん {self.csv_files}本を "
@@ -194,13 +209,30 @@ def _targets(repo: NippouRepository, pages: list[Page]) -> list[Target]:
     return out
 
 
+def _stale(repo: NippouRepository, pages: list[Page]) -> list[tuple[str, str, str, int]]:
+    """入れたあとに残ってしまう古いページ。**今度のファイルのページ数を超えるぶん。**
+
+    ページごとの上書きなので、前の取り込みのほうがページが多いと、余りが残ります
+    (過去日報の3直の行を2直へ入れていたころの取り込みを、直したあと入れ直すとき)。
+    """
+    most: dict[tuple[str, str, str], int] = {}
+    for page in pages:
+        key = page.key[:3]
+        most[key] = max(most.get(key, 0), int(page.key[3]))
+    out = []
+    for key, top in sorted(most.items()):
+        out.extend((*key, p) for p in repo.saved_pages(*key) if p > top)
+    return out
+
+
 def is_workbook(path: Path) -> bool:
     """VBAの日付シート(xlsx)か。**中身ではなく拡張子で決めます** ──
     開いてみるまで分からない、では下見の前にラインを聞けません。"""
     return path.suffix.lower() in (".xlsx", ".xlsm")
 
 
-def _parse(path: Path, line: str) -> tuple[Parsed, Optional[object], str]:
+def _parse(path: Path, line: str,
+           starts: Optional[dict[str, int]] = None) -> tuple[Parsed, Optional[object], str]:
     """読む。**xlsx は選ばれたラインで、CSVは書いてあるライン**で。
 
     CSVでもラインを選べば、そちらを入れる先にします(書いてある名前が
@@ -213,7 +245,7 @@ def _parse(path: Path, line: str) -> tuple[Parsed, Optional[object], str]:
 
         head = nippou_sheet.read_file_head(path)
         target = line.strip() or nippou_sheet.guess_line(head.line_text)
-        return nippou_sheet.parse_file(path, target), head, target
+        return nippou_sheet.parse_file(path, target, starts), head, target
 
     parsed = csv_import.parse_file(path)
     if line.strip() and parsed.ok:
@@ -246,10 +278,22 @@ def preview(repo: NippouRepository, path: Path, line: str = "", *,
 
     # 読むところも進み具合に出します(何本もあると、ここでも待ちます)
     job_progress.step(phase=progress_logic.PHASE_READ, label=Path(path).name)
-    parsed, head, target = _parse(path, line)
+    parsed, head, target = _parse(path, line, _starts(repo))
     return Preview(parsed=parsed, source=str(path), line=target, sheet=head,
                    csv_dir=str(_out_dir(out_dir)),
-                   targets=_targets(repo, parsed.pages) if parsed.ok else [])
+                   targets=_targets(repo, parsed.pages) if parsed.ok else [],
+                   # 1日ぶん3直そろったシート(xlsx)のときだけ。CSVは一部のページだけのこともある
+                   stale=_stale(repo, parsed.pages) if parsed.ok and is_workbook(Path(path)) else [])
+
+
+def _starts(repo: NippouRepository) -> dict[str, int]:
+    """直の始まり。手元に写した「時間用」(`shift_config`)、読めなければ控え。"""
+    from ..logic import nippou_sheet
+
+    try:
+        return nippou_sheet.shift_starts(repo.get_shift_times())
+    except Exception:                             # noqa: BLE001 - 控えで読む
+        return nippou_sheet.shift_starts()
 
 
 def apply(repo: NippouRepository, path: Path, *, line: str = "",
@@ -298,6 +342,16 @@ def apply(repo: NippouRepository, path: Path, *, line: str = "",
         result.replaced += 1 if target.replaces else 0
         touched.add(page.key[:3])
         job_progress.step(done=result.pages + len(result.failed))
+
+    # 前の取り込みで増えていたページを消す(その直は今度のページで足りる)
+    for key in found.stale:
+        try:
+            if repo.delete_page(*key):
+                result.removed += 1
+                touched.add(key[:3])
+        except Exception as exc:                  # noqa: BLE001 - 1ページで止めない
+            log.exception("古いページを消せませんでした: %s", key)
+            result.failed.append((f"{key[0]} {key[2]} {key[3]}ページ(消す)", str(exc)))
 
     # **紙もグラフも集計から出ます。** 明細だけ入れて集計を作らないと、
     # 「記録を見る」には出るのにグラフには出ない、が起きます

@@ -3027,3 +3027,16 @@ dl.kv dd{ margin:0; overflow-wrap:anywhere; }
   dl.kv{ grid-template-columns:1fr; }
   .log-table .log-message{ max-width:220px; }
 }
+
+/* 記録を見る「保存した直」: 直すところがある直は赤く(入力画面と同じ確認)・見出しで並べ替え */
+#records-table tr.row-bad td{ background:var(--state-error-bg); }
+#records-table tr.row-bad td:first-child{ box-shadow:inset 4px 0 0 var(--state-error); }
+.records-bad summary{ cursor:pointer; color:var(--state-error); }
+.records-bad ul{ margin:var(--sp-1) 0 0; padding-left:1.2em; white-space:normal; min-width:24em; font-size:var(--fs-xs); }
+.list--sortable th[data-sort] button{
+  all:unset; cursor:pointer; font:inherit; font-weight:inherit; display:inline-flex; gap:4px; align-items:center;
+}
+.list--sortable th[data-sort] button::after{ content:"↕"; opacity:.35; font-size:.85em; }
+.list--sortable th[aria-sort="ascending"] button::after{ content:"▲"; opacity:1; }
+.list--sortable th[aria-sort="descending"] button::after{ content:"▼"; opacity:1; }
+.list--sortable th[data-sort] button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }

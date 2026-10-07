@@ -13,6 +13,17 @@
        56〜102  2直 (15:00〜)
       104〜150  3直 (23:00〜)
 
+【直は区画ではなく、行の開始時刻で決めます】
+行は**開始時刻の時間帯の枠**に置かれます。3直は 22:50 に始まるので、3直の
+最初の行(22:50〜)は「22時台」の枠 ── **2直の区画**に入っていることがあります。
+区画だけで分けていたころは、その行を2直として取り込んでいました(2直は
+23:30 まで続き、3直は続きの行から始まる。3直が全停の日は 22:50〜07:00 の
+全停が2直に入る)。そのせいで「最終時間まで入力がないのでは？」「休憩が
+0分」が大量に出ていました。
+
+いまは、区画の終わりにある**次の直の始まり以降に始まる行**を次の直へ移します
+(次の直の始まりは「時間用」の直の時刻。読めなければ 07:00 / 15:00 / 22:50)。
+
 【ラインはシートから採りません】
 シートの呼び名(`機側` など)は書き方が揃っていないので(半角・書き間違い)、
 入れる先のラインは**人が選びます**(`logic/line_names` の定義の表で当たりを
@@ -37,7 +48,7 @@ from dataclasses import dataclass, field
 from .. import constants
 from ..db.models import DetailRecord, HeaderRecord
 from .csv_import import Page, Parsed, Problem
-from .shift import parse_business_date
+from .shift import DEFAULT_SHIFT_TIMES, parse_business_date
 
 #: 見出しの下、中身が並ぶ範囲
 FIRST_ROW, LAST_ROW = 8, 151
@@ -173,13 +184,46 @@ def _has_content(values: dict[str, str]) -> bool:
     return any((values.get(c, "") or "").strip() for c in _CONTENT_COLUMNS)
 
 
+def _minutes(text: str) -> int | None:
+    """「22:50」→ 1370。読めなければ None。"""
+    try:
+        hour, minute = str(text).strip().split(":")[:2]
+        return int(hour) * 60 + int(minute)
+    except (ValueError, AttributeError):
+        return None
+
+
+def shift_starts(times: dict | None = None) -> dict[str, int]:
+    """直の始まり(分)。`times` は `shift_config` の形 ``{"2": ("15:00", "22:50"), …}``。
+
+    読めない直は控え(07:00 / 15:00 / 22:50)にします。
+    """
+    fallback = {"1直": DEFAULT_SHIFT_TIMES.start1, "2直": DEFAULT_SHIFT_TIMES.start2,
+                "3直": DEFAULT_SHIFT_TIMES.start3}
+    out: dict[str, int] = {}
+    for shift, default in fallback.items():
+        given = (times or {}).get(shift[0])
+        value = _minutes(given[0]) if given else None
+        out[shift] = value if value is not None else _minutes(default)
+    return out
+
+
+def _row_start(values: dict[str, str]) -> int | None:
+    """その行の開始時刻(分)。時・分が数でなければ None。"""
+    try:
+        return int(float(values.get("J", ""))) * 60 + int(float(values.get("K", "") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_rows(rows: dict[int, dict[str, str]], line: str,
-               sheet_name: str = "") -> Parsed:
+               sheet_name: str = "", starts: dict[str, int] | None = None) -> Parsed:
     """シートを、入れられる形(ページの並び)にする。**DBには触りません。**
 
     `line` は**入れる先のライン**です。シートに書いてある呼び名ではなく、
-    人が選んだものを使います。
+    人が選んだものを使います。`starts` は直の始まり(分。:func:`shift_starts`)。
     """
+    starts = starts or shift_starts()
     found = Parsed()
     head = read_head(rows, sheet_name)
 
@@ -191,6 +235,7 @@ def parse_rows(rows: dict[int, dict[str, str]], line: str,
         found.problems.append(Problem(2, "入れる先のラインが選ばれていません"))
         return found
 
+    bands = []
     for shift, start, end, _total in SHIFT_BANDS:
         worker = rows.get(start, {}).get(WORKER_COLUMN, "").strip()
         entries = []
@@ -201,9 +246,46 @@ def parse_rows(rows: dict[int, dict[str, str]], line: str,
             found.rows_read += 1
             if _has_content(values):
                 entries.append((number, values))
+        bands.append([shift, worker, entries])
+
+    # 区画の終わりにある「次の直の始まり以降に始まる行」は次の直のもの
+    # (3直の 22:50〜 は2直の区画の「22時台」の枠に置かれている。冒頭の説明)
+    for here, after in zip(bands, bands[1:]):
+        own, boundary = starts.get(here[0]), starts.get(after[0])
+        if own is None or boundary is None or boundary <= own:
+            continue
+        moved = [e for e in here[2]
+                 if (t := _row_start(e[1])) is not None and own <= t and t >= boundary]
+        if not moved:
+            continue
+        here[2] = [e for e in here[2] if e not in moved]
+        after[2] = moved + after[2]
+        if not after[1]:
+            after[1] = next((v.get(WORKER_COLUMN, "").strip() for _n, v in moved
+                             if v.get(WORKER_COLUMN, "").strip()), "")
+        first = moved[0][1]
+        found.notes.append(
+            f"{after[0]}の始まり({boundary // 60:02d}:{boundary % 60:02d})以降に始まる行 "
+            f"{len(moved)}行を{after[0]}へ移しました(シートでは{here[0]}の区画の"
+            f"{first.get('J', '')}時台の枠にありました)")
+
+    for shift, worker, entries in bands:
         for index, chunk in enumerate(_chunks(entries), start=1):
             found.pages.append(_page(head.report_date, line, shift, index,
                                      chunk, worker))
+
+    # **検算**: 取り込む行の枚数・重量の合計が、シート自身の日合計(AA3 / AB3)と
+    # 合うか。直の間で行を移しても日合計は変わらないので、ここが合わなければ
+    # 読み落とし・読み違いがあります
+    totals = read_totals(rows)
+    if totals.day_count or totals.day_weight:
+        count = sum(_num(v.get("Y", "")) for _s, _w, es in bands for _n, v in es)
+        weight = sum(_num(v.get("Z", "")) for _s, _w, es in bands for _n, v in es)
+        if abs(count - totals.day_count) > 1e-6 or abs(weight - totals.day_weight) > 0.05:
+            found.notes.append(
+                f"⚠ シートの日合計と合いません: 取り込む行の合計 {count:g}枚 {weight:.1f}kg / "
+                f"シートの日合計(AA3・AB3) {totals.day_count:g}枚 {totals.day_weight:.1f}kg。"
+                "シートと見比べてください")
     return found
 
 
@@ -229,8 +311,8 @@ def _page(report_date: str, line: str, shift: str, page: int,
     return made
 
 
-def parse_file(path, line: str) -> Parsed:
-    """xlsx を読んで、入れられる形にする。"""
+def parse_file(path, line: str, starts: dict[str, int] | None = None) -> Parsed:
+    """xlsx を読んで、入れられる形にする。`starts` は直の始まり(:func:`shift_starts`)。"""
     from . import xlsx_sheet
 
     try:
@@ -240,7 +322,7 @@ def parse_file(path, line: str) -> Parsed:
         found = Parsed()
         found.problems.append(Problem(0, str(exc)))
         return found
-    return parse_rows(xlsx_sheet.rows_of(cells), line, name)
+    return parse_rows(xlsx_sheet.rows_of(cells), line, name, starts)
 
 
 def read_file_head(path) -> SheetHead:

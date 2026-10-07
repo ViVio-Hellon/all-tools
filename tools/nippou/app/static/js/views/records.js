@@ -83,10 +83,52 @@ function pagesNote(pages) {
   return ` / この直にあるページ: ${pages.join("・")}`;
 }
 
+/**
+ * 「保存した直」の表を見出しで並べ替える。もう一度押すと逆順。
+ *
+ *     保存した直 で表示されているリストはヘッダークリックでソートするようにしてください
+ *
+ * 並べる値は各セルの `data-value`(報告日は 2025-12-01 の形、確認は −件数)。
+ * 同じ値どうしは元の並び(未送信が先・新しい順)のまま ── 安定な並べ替え。
+ */
+export function wireSort(table) {
+  if (!table || table.dataset.sortWired) return;
+  table.dataset.sortWired = "1";
+  const body = table.tBodies[0];
+  const original = [...body.rows];
+  original.forEach((row, i) => { row.dataset.order = String(i); });
+  const heads = [...table.tHead.rows[0].cells];
+  heads.forEach((th, column) => {
+    const kind = th.dataset.sort;
+    const button = th.querySelector("button");
+    if (!kind || !button) return;
+    button.addEventListener("click", () => {
+      const next = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+      heads.forEach((h) => { if (h.dataset.sort) h.setAttribute("aria-sort", "none"); });
+      th.setAttribute("aria-sort", next);
+      const sign = next === "ascending" ? 1 : -1;
+      const valueOf = (row) => {
+        const cell = row.cells[column];
+        const raw = cell ? (cell.dataset.value ?? cell.textContent.trim()) : "";
+        return kind === "num" ? Number(raw) || 0 : raw;
+      };
+      const rows = [...body.rows].filter((r) => r.cells.length > 1);
+      rows.sort((a, b) => {
+        const x = valueOf(a);
+        const y = valueOf(b);
+        const diff = kind === "num" ? x - y : String(x).localeCompare(String(y), "ja");
+        return diff * sign || Number(a.dataset.order) - Number(b.dataset.order);
+      });
+      rows.forEach((r) => body.append(r));
+    });
+  });
+}
+
 export function start() {
   // **画面へ来るたびに白紙から。** 前に開いていたときの「読込済み」を
   // 引きずると、別の鍵の下見を出したまま紙を開いてしまう
   loaded = null;
+  wireSort(document.getElementById("records-table"));
 
   document.getElementById("load")?.addEventListener("click", async () => {
     try {

@@ -255,6 +255,77 @@ class MappingTests(unittest.TestCase):
         self.assertIn("ライン", found.problems[0].reason)
 
 
+class ShiftBoundaryTests(unittest.TestCase):
+    """直は区画ではなく、行の開始時刻で決める(現場の取り込みで見つけた件)。
+
+    行は**開始時刻の時間帯の枠**に置かれます。3直は 22:50 に始まるので、3直の
+    最初の行は「22時台」の枠 ── 2直の区画(98〜102行)に入っていることがあります。
+    区画だけで分けていたころは2直として取り込み、2直が 23:30 まで続いて
+    「最終時間まで入力がないのでは？」、3直は続きの行(ロット空欄)から始まって
+    いました。3直が全停の日は 22:50〜07:00 の全停が2直に入っていました。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def parsed(self, starts=None, **extra):
+        path = write_xlsx(self.tmp / "日付.xlsx", sheet_cells(**extra))
+        return ns.parse_file(path, "HVC", starts)
+
+    def by_shift(self, found):
+        return {p.header.shift: p for p in found.pages}
+
+    # 2直の最後(21:45〜22:50 でロットを渡す)と、3直の最初の行(22:50〜23:30)が22時台の枠に
+    LATE = {"D93": "H9461S0", "J93": "21", "K93": "45", "L93": "22", "M93": "50",
+            "D98": "H9461S0", "J98": "22", "K98": "50", "L98": "23", "M98": "30",
+            "Y98": "1", "Z98": "750.9", "AA98": "3直の人",
+            "J104": "23", "K104": "30", "L104": "0", "M104": "10", "Y104": "1", "Z104": "750.9",
+            "AA104": ""}
+
+    def test_3直の始まり以降に始まる行は3直の頭へ(self) -> None:
+        found = self.parsed(**self.LATE)
+        shifts = self.by_shift(found)
+        self.assertEqual([(d.lot, d.kz, d.kh) for d in shifts["2直"].details],
+                         [("L4336H0", "", ""), ("H9461S0", "21", "45")])
+        third = shifts["3直"].details
+        self.assertEqual((third[0].lot, third[0].kz, third[0].kh, third[0].con), ("H9461S0", "22", "50", "1"))
+        self.assertEqual((third[1].lot, third[1].kz), ("", "23"), "3直の続きの行が頭に来た")
+        self.assertIn("3直へ移しました", " ".join(found.notes))
+
+    def test_3直の作業者が区画の頭に無ければ移した行から(self) -> None:
+        self.assertEqual(self.by_shift(self.parsed(**self.LATE))["3直"].header.worker, "3直の人")
+
+    def test_3直の全停が22時台の枠にあっても3直(self) -> None:
+        found = self.parsed(**{"J98": "22", "K98": "50", "L98": "7", "M98": "0",
+                               "AJ98": "2", "AK98": "490", "AJ104": "", "AK104": "", "AC104": ""})
+        shifts = self.by_shift(found)
+        self.assertNotIn("490", [d.th for d in shifts["2直"].details])
+        self.assertEqual((shifts["3直"].details[0].kz, shifts["3直"].details[0].th), ("22", "490"))
+
+    def test_22時台でも3直の始まりより前は2直のまま(self) -> None:
+        found = self.parsed(**{"D98": "X1", "J98": "22", "K98": "0", "L98": "22", "M98": "50"})
+        self.assertIn("X1", [d.lot for d in self.by_shift(found)["2直"].details])
+        self.assertEqual(found.notes, [])
+
+    def test_直の始まりは時間用のとおり(self) -> None:
+        """3直が 23:00 始まりの現場なら、22:50 の行は2直のまま。"""
+        starts = ns.shift_starts({"1": ("07:00", "15:00"), "2": ("15:00", "23:00"), "3": ("23:00", "07:00")})
+        found = self.parsed(starts, **self.LATE)
+        self.assertIn(("H9461S0", "22"), [(d.lot, d.kz) for d in self.by_shift(found)["2直"].details])
+
+    def test_直の始まりが読めなければ控え(self) -> None:
+        self.assertEqual(ns.shift_starts({}), {"1直": 420, "2直": 900, "3直": 1370})
+        self.assertEqual(ns.shift_starts({"3": ("", "")})["3直"], 1370)
+
+    def test_シートの日合計と合わなければ言う(self) -> None:
+        """直の間で行を移しても日合計は変わらない。合わなければ読み落としがある。"""
+        self.assertEqual(self.parsed().notes, [])
+        found = self.parsed(AA3="21")
+        self.assertIn("シートの日合計と合いません", " ".join(found.notes))
+
+
 class LineTests(unittest.TestCase):
     """入れる先のライン ── **シートは書き換えず、人が選ぶ。**"""
 

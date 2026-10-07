@@ -168,6 +168,8 @@ class Parsed:
     problems: list[Problem] = field(default_factory=list)
     missing_columns: list[str] = field(default_factory=list)
     rows_read: int = 0
+    #: 読むときに整えたこと(過去日報の3直の行を2直の区画から移した、など)。断りではない
+    notes: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -183,7 +185,8 @@ class Parsed:
                 "pages": [p.label for p in self.pages],
                 "row_count": self.row_count,
                 "missing_columns": list(self.missing_columns),
-                "problems": [p.as_dict() for p in self.problems]}
+                "problems": [p.as_dict() for p in self.problems],
+                "notes": list(self.notes)}
 
 
 def template_header() -> str:

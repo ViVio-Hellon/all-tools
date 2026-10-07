@@ -146,18 +146,36 @@
   </p>
   {% endif %}
   <div class="scroll-x">
-    <table class="list list--nowrap">
-      <thead><tr><th>報告日</th><th>ライン</th><th>直</th><th>ページ</th>
-        <th>最後の保存</th><th>共有へ</th><th></th></tr></thead>
+    {# **見出しを押すと並べ替え**(もう一度押すと逆順。views/records.js)。
+       入力画面の確認で直すところがある直は**赤く**、件数と中身を「確認」に出す #}
+    {% set bad = recent | selectattr("problems") | list %}
+    {% if bad %}
+    <p class="msg msg--error" id="records-bad">直すところがある直が {{ bad | length }}直 あります(赤い行)。
+      「確認」の見出しを押すと、上に集まります。</p>
+    {% endif %}
+    <table class="list list--nowrap list--sortable" id="records-table">
+      <thead><tr>
+        <th data-sort="date" aria-sort="none"><button type="button">報告日</button></th>
+        <th data-sort="text"><button type="button">ライン</button></th>
+        <th data-sort="text"><button type="button">直</button></th>
+        <th data-sort="num"><button type="button">ページ</button></th>
+        <th data-sort="text"><button type="button">最後の保存</button></th>
+        <th data-sort="text"><button type="button">共有へ</button></th>
+        <th data-sort="num"><button type="button">確認</button></th>
+        <th></th></tr></thead>
       <tbody>
         {% for r in recent %}
-        <tr>
-          <td>{{ r.report_date }}</td><td>{{ r.line | line_label }}</td>
-          <td>{{ r.shift }}{% if r.backfill %}
+        <tr{% if r.problems %} class="row-bad"{% endif %}>
+          <td data-value="{{ r.date_key }}">{{ r.report_date }}</td><td>{{ r.line | line_label }}</td>
+          <td data-value="{{ r.shift }}">{{ r.shift }}{% if r.backfill %}
             <span class="badge badge--todo" title="{{ r.backfill }}">後日作成</span>{% endif %}</td>
-          <td>{{ r.pages | join("・") }}ページ</td>
-          <td>{{ r.saved_at or "―" }}</td>
-          <td>{% if r.synced %}済{% else %}<b>未</b>{% endif %}</td>
+          <td data-value="{{ r.pages | length }}">{{ r.pages | join("・") }}ページ</td>
+          <td data-value="{{ r.saved_at_raw }}">{{ r.saved_at or "―" }}</td>
+          <td data-value="{{ 1 if r.synced else 0 }}">{% if r.synced %}済{% else %}<b>未</b>{% endif %}</td>
+          <td data-value="{{ -(r.problems | length) }}">{% if r.problems %}
+            <details class="records-bad"><summary><b>直すところ {{ r.problems | length }}件</b></summary>
+              <ul>{% for p in r.problems %}<li>{{ p }}</li>{% endfor %}</ul></details>
+            {% else %}<span class="muted">なし</span>{% endif %}</td>
           <td>
             <button class="btn btn--sm" type="button" data-open-all
                     data-date="{{ r.report_date }}" data-line="{{ r.line }}"
@@ -184,7 +202,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="empty">まだ保存データがありません。</td></tr>
+        <tr><td colspan="8" class="empty">まだ保存データがありません。</td></tr>
         {% endfor %}
       </tbody>
     </table>

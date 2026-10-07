@@ -157,6 +157,35 @@ def _recent_shifts(limit: int = 20) -> list[dict]:
     return rows
 
 
+def _mark_problems(rows: list[dict], *, admin: bool) -> None:
+    """一覧の各直に、**入力画面と同じ確認**の結果を添える(赤くする・並べ替えるため)。
+
+        入力画面にあるエラーのあるデータは 保存した直 でも赤くしてくれないと探すのが大変です
+
+    確かめ方は日報入力の「この直をチェック」と同じ(`services/shift_check.run`)。
+    停止の記号の一覧は1回だけ読みます(直ごとに読むと、共有のマスタを何十回も開く)。
+    """
+    from nippou.logic.shift import parse_business_date
+    from nippou.services import shift_check
+
+    repo = get_repo()
+    codes = shift_check.known_stop_codes()
+    for row in rows:
+        day = parse_business_date(row["report_date"])
+        row["date_key"] = day.isoformat() if day else str(row["report_date"])
+        try:
+            report = shift_check.run(repo, row["report_date"], row["line"], row["shift"],
+                                     admin=admin, codes=codes)
+            found = list(report.findings)
+        except Exception:                         # noqa: BLE001 - 一覧は出す
+            log.exception("一覧の確認に失敗しました: %s %s %s",
+                          row["report_date"], row["line"], row["shift"])
+            found = []
+        row["problems"] = [
+            (f"{f.page}ページ {f.row}行目 " if f.page and f.row else "") + f.message
+            for f in found]
+
+
 def _when(saved_at: object) -> str:
     """保存日時を、目で追える形に。
 
@@ -265,6 +294,7 @@ def index():
                   for key, info in sorted(made_later.items())
                   if key[:3] == (row["report_date"], row["line"], row["shift"])]
         row["backfill"] = " / ".join(stamps)
+    _mark_problems(recent, admin=ctx.admin)
 
     return render_template(
         "records.html",
