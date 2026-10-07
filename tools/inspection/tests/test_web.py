@@ -111,7 +111,7 @@ class PageTests(WebTestBase):
                        'id="settings-dialog"', 'id="offline"', 'id="quit"', "模擬モード"):
             self.assertIn(marker, body)
         self.assertIn(TOKEN, body)
-        self.assertIn('data-theme="dark"', body, "VBA版と同じく既定はダーク")
+        self.assertIn('data-theme="light"', body, "既定はライト(統合ツールの4ツールでそろえる)")
         self.assertIn("css/inspection.css?v=", body, "静的ファイルに版が付いていない")
 
     def test_版がどこでも読める(self) -> None:
@@ -279,7 +279,10 @@ class PrintTests(WebTestBase):
 
 class SettingsTests(WebTestBase):
     def test_テーマを保存する(self) -> None:
+        self.assertFalse(self.get("/api/settings").get_json()["settings"]["dark_mode"], "既定はライト")
+        self.post("/api/settings", {"dark_mode": True})
         self.assertTrue(self.get("/api/settings").get_json()["settings"]["dark_mode"])
+        self.assertIn('data-theme="dark"', self.client.get("/").get_data(as_text=True))
         self.post("/api/settings", {"dark_mode": False})
         self.assertFalse(self.get("/api/settings").get_json()["settings"]["dark_mode"])
         self.assertIn('data-theme="light"', self.client.get("/").get_data(as_text=True))

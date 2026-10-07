@@ -2,7 +2,7 @@
   coil-theme.js — 背景をライト / ダークから選ぶ
 
   - 選んだ方はこの PC のブラウザに覚えておく(覚えられなくても動く)。
-    まだ選んでいなければ Windows の設定(ダークモードかどうか)に従う。
+    まだ選んでいなければライト(日報・統合ツールの4ツールとそろえる)。
   - <head> で読む: 本文を描く前に data-theme を決めて、白く光ってから暗くなるのを防ぐ。
   - 色そのものは CSS(coil-theme.css)。ここは「どちらか」を決めて、CSS の届かない
     ところ(3D の背景・グラフの文字と罫線)を塗り直すだけ。
@@ -28,13 +28,8 @@
         }
     }
 
-    function system() {
-        try {
-            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        } catch (err) {
-            return 'light';
-        }
-    }
+    // 選んでいなければライト(日報・統合ツールの4ツールとそろえる)
+    const DEFAULT = 'light';
 
     function current() {
         return root.dataset.theme === 'dark' ? 'dark' : 'light';
@@ -89,7 +84,7 @@
     }
 
     // 本文より先に決める(ちらつかせない)
-    root.dataset.theme = saved() || system();
+    root.dataset.theme = saved() || DEFAULT;
 
     document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.theme-btn').forEach((btn) => {
@@ -103,10 +98,4 @@
     // 作られる処理より先に呼ばれる ── 作り終わってから塗る
     document.addEventListener('shape-shown', () => setTimeout(() => paint3d(current()), 0));
 
-    // 選んでいないあいだは Windows の設定が変わったら付いていく
-    try {
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            if (!saved()) apply(system(), false);
-        });
-    } catch (err) { /* 古いブラウザは付いていかないだけ */ }
 })();

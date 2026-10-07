@@ -154,7 +154,8 @@ class SettingsService:
     def dark_mode(self) -> bool:
         with self._lock:
             value = self._data.get("dark_mode")
-        return True if value is None else bool(value)   # VBA版の既定はダーク
+        # 既定はライト(統合ツールの4ツールでそろえる。VBA版の既定はダークだった)
+        return False if value is None else bool(value)
 
     def to_dict(self) -> Dict[str, Any]:
         if self.forced_root_folder:

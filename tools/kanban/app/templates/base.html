@@ -22,8 +22,8 @@
 #}
 <script>
   (function () {
-    var c = 'auto';
-    try { c = localStorage.getItem('kanban.theme') || 'auto'; } catch (e) { /* 自動のまま */ }
+    var c = 'light';
+    try { c = localStorage.getItem('kanban.theme') || 'light'; } catch (e) { /* 既定のライト */ }
     var dark = c === 'dark' || (c === 'auto' && window.matchMedia
       && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');

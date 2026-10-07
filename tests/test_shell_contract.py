@@ -246,6 +246,36 @@ class DropTests(unittest.TestCase):
             self.assertIn(needle, embed)
 
 
+class ThemeDefaultTests(unittest.TestCase):
+    """選んでいなければ、どのツールもライト(以前はツールごとに 自動 / ダーク とバラバラだった)。"""
+
+    def text(self, *parts: str) -> str:
+        return ROOT.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_入口と説明書はライト(self) -> None:
+        self.assertIn('data-theme="light"', self.text("portal", "templates", "shell.html").split("<head>")[0])
+        for page in (ROOT / "portal" / "static" / "manual").glob("*.html"):
+            with self.subTest(page=page.name):
+                self.assertIn('<html lang="ja" data-theme="light">', page.read_text(encoding="utf-8"))
+
+    def test_日報はライト(self) -> None:
+        base = self.text("tools", "nippou", "app", "templates", "base.html")
+        self.assertIn('<html lang="ja" data-skin="neon" data-theme="light">', base)
+        self.assertIn('return saved() || DEFAULT;', self.text("tools", "nippou", "app", "static", "js", "theme.js"))
+        self.assertIn("const DEFAULT = 'light'", self.text("tools", "nippou", "app", "static", "vc", "coil", "coil-theme.js"))
+
+    def test_看板はライト(self) -> None:
+        self.assertIn("localStorage.getItem('kanban.theme') || 'light'",
+                      self.text("tools", "kanban", "app", "templates", "base.html"))
+        self.assertIn("const DEFAULT = 'light';", self.text("tools", "kanban", "app", "static", "js", "theme.js"))
+
+    def test_カレンダーと点検表はライト(self) -> None:
+        self.assertIn("value = get(KEY_THEME, THEME_LIGHT)",
+                      self.text("tools", "calendar", "calendar_app", "settings.py"))
+        self.assertIn("return False if value is None else bool(value)",
+                      self.text("tools", "inspection", "app", "services", "settings_service.py"))
+
+
 class LocationViewTests(unittest.TestCase):
     """大設定の「共有の DB の置き場所」: 反映しているか、打ちかけかを見分けられる。"""
 

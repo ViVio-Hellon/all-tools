@@ -1,13 +1,13 @@
 <!doctype html>
 {#
-  `data-theme` ── 背景のライト / ダーク(v4.19.0)。選んでいなければ付けない
-  (OS の設定に従う ── `tokens.css` の @media)。
+  `data-theme` ── 背景のライト / ダーク(v4.19.0)。**選んでいなければライト**
+  (統合ツールの4ツールでそろえる。OS のダークには付いていかない)。
   `data-skin` ── グラフと集計の見た目(ネオン / 元のまま)。
   **描く前に決めます。** あとから JS で付けると、一瞬だけ前の見た目が
   出てから切り替わります(ちらつき)。下の小さな script は
   `<head>` の中で、CSSより先に走らせるためにここに置いてあります。
 #}
-<html lang="ja" data-skin="neon">
+<html lang="ja" data-skin="neon" data-theme="light">
 <head>
 <script>
   /* 覚えている選択を、描く前に当てる。読めない場面(プライベート窓・
@@ -17,13 +17,13 @@
       document.documentElement.dataset.skin = "plain";
     }
   } catch (e) { /* 既定のまま */ }
-  /* 背景(ライト / ダーク)。選んでいれば描く前に当てる(`static/js/theme.js`) */
+  /* 背景(ライト / ダーク)。選んでいれば描く前に当てる。選んでいなければライトのまま(`static/js/theme.js`) */
   try {
     var theme = localStorage.getItem("nippou.theme");
     if (theme === "light" || theme === "dark") {
       document.documentElement.dataset.theme = theme;
     }
-  } catch (e) { /* OS の設定のまま */ }
+  } catch (e) { /* 既定のライトのまま */ }
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

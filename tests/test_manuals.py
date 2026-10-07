@@ -60,7 +60,7 @@ class ManualTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn(f"VER{version}", text, "説明書の版がツールの版と違います")
                 self.assertIn('href="manual.css"', text)
-                self.assertRegex(text, r'<html lang="ja">')
+                self.assertRegex(text, r'<html lang="ja" data-theme="light">')
 
     def test_一覧と上の並びから全部の説明書へ行ける(self) -> None:
         for name, (path, _) in pages().items():

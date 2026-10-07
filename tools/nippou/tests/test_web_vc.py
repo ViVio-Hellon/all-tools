@@ -412,7 +412,9 @@ class CoilTests(VcCase):
             self.assertIn(f'data-theme-choice="{choice}"', html)
         js = (coil / "coil-theme.js").read_text(encoding="utf-8")
         self.assertIn("localStorage.setItem(KEY, theme)", js)
-        self.assertIn("prefers-color-scheme: dark", js)
+        # 選んでいなければライト(日報・統合ツールの4ツールとそろえる。OS には付いていかない)
+        self.assertIn("root.dataset.theme = saved() || DEFAULT", js)
+        self.assertIn("const DEFAULT = 'light'", js)
         self.assertIn("Chart.register(", js)
         css = (coil / "coil-theme.css").read_text(encoding="utf-8")
         # **印刷はいつも白い紙**: ダークは画面だけ

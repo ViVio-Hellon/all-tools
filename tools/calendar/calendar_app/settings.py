@@ -146,7 +146,7 @@ def log_dir_setting() -> str:
 # 画面の見た目(ライト / ダーク)
 # ---------------------------------------------------------------------------
 #: 画面の明暗。**この端末だけ**の好み(夜勤で暗い背景にしたい、など)。
-#: 決めていなければ OS(Windows)の設定に合わせる
+#: 決めていなければ**ライト**(統合ツールの4ツールでそろえる。「自動」は選べば効く)
 KEY_THEME = "画面の見た目"
 THEME_AUTO = "auto"
 THEME_LIGHT = "light"
@@ -162,9 +162,9 @@ THEME_LABELS = dict(THEME_CHOICES)
 
 
 def get_theme() -> str:
-    """この端末の画面の見た目。知らない値・未設定は「自動」。"""
-    value = get(KEY_THEME, THEME_AUTO)
-    return value if value in THEME_LABELS else THEME_AUTO
+    """この端末の画面の見た目。知らない値・未設定は「ライト」。"""
+    value = get(KEY_THEME, THEME_LIGHT)
+    return value if value in THEME_LABELS else THEME_LIGHT
 
 
 def set_theme(theme: str) -> None:

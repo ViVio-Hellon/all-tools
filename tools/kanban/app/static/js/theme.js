@@ -1,6 +1,7 @@
 // 画面の明るさ(ライト / ダーク)
 //
-// 帯の右の「◐ 自動」ボタンで 自動 → ☀ ライト → ☾ ダーク → 自動 … と切り替える。
+// 帯の右のボタンで ☀ ライト → ☾ ダーク → ◐ 自動 → ライト … と切り替える。
+// **選んでいなければライト**(統合ツールの4ツールでそろえる)。
 // 「自動」は Windows の設定(アプリのモード: ライト / ダーク)に合わせる。
 //
 // **選んだものはこの端末(この画面)に覚えさせる**(localStorage)。PC ごとの見やすさの
@@ -12,23 +13,24 @@
 
 export const THEME_KEY = 'kanban.theme';
 
-const ORDER = ['auto', 'light', 'dark'];
+const ORDER = ['light', 'dark', 'auto'];
+const DEFAULT = 'light';
 const LABEL = { auto: '◐ 自動', light: '☀ ライト', dark: '☾ ダーク' };
 const TITLE = {
-  auto: '画面の明るさ: 自動(Windows の設定に合わせる)。押すとライトにします',
   light: '画面の明るさ: ライト。押すとダークにします',
   dark: '画面の明るさ: ダーク。押すと自動(Windows の設定に合わせる)にします',
+  auto: '画面の明るさ: 自動(Windows の設定に合わせる)。押すとライトにします',
 };
 
 const media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
-/** 覚えている選び方(auto / light / dark)。読めなければ auto。 */
+/** 覚えている選び方(auto / light / dark)。選んでいない・読めなければライト。 */
 export function choice() {
   try {
     const v = localStorage.getItem(THEME_KEY);
-    return ORDER.includes(v) ? v : 'auto';
+    return ORDER.includes(v) ? v : DEFAULT;
   } catch (e) {
-    return 'auto';
+    return DEFAULT;
   }
 }
 
@@ -53,10 +55,8 @@ export function apply(c = choice()) {
 
 /** 選び方を変えて覚える。 */
 export function set(c) {
-  try {
-    if (c === 'auto') localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, c);
-  } catch (e) { /* 覚えられなくても、この画面のあいだは効く */ }
+  // 「自動」も覚える(消すと既定のライトに戻ってしまう)
+  try { localStorage.setItem(THEME_KEY, c); } catch (e) { /* 覚えられなくても、この画面のあいだは効く */ }
   apply(c);
 }
 

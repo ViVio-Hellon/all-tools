@@ -106,12 +106,17 @@ class SettingTests(unittest.TestCase):
         self.addCleanup(user_settings.set_value, user_settings.KEY_THEME,
                         user_settings.THEME_AUTO)
 
-    def test_既定は自動(self) -> None:
+    def test_既定はライト(self) -> None:
+        """統合ツールの4ツールで既定をそろえる(以前は自動 = Windows の設定に合わせていた)。"""
         user_settings.set_value(user_settings.KEY_THEME, "")
-        self.assertEqual(user_settings.get_theme(), "auto")
+        self.assertEqual(user_settings.get_theme(), "light")
 
-    def test_知らない値は自動として読む(self) -> None:
+    def test_知らない値はライトとして読む(self) -> None:
         user_settings.set_value(user_settings.KEY_THEME, "ピンク")
+        self.assertEqual(user_settings.get_theme(), "light")
+
+    def test_自動を選べば自動のまま(self) -> None:
+        user_settings.set_theme("auto")
         self.assertEqual(user_settings.get_theme(), "auto")
 
     def test_一覧に無い値は覚えない(self) -> None:

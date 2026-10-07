@@ -8,9 +8,10 @@
   `<html data-theme="dark|light">`(選んだとき)。ここは**どちらを選んだか**を
   `<html>` に付けるだけで、色の値には触りません。
 
-  【選ぶまでは Windows の設定のまま】
-  まだ一度も選んでいなければ、これまでどおり OS(Windows のダークモード)に
-  従います。帯のボタンは、いま効いているほうを押された見た目にします。
+  【選ぶまではライト】
+  まだ一度も選んでいなければ**ライト**です(統合ツールの4ツールでそろえる。
+  以前は OS(Windows のダークモード)に従っていて、ツールごとに既定がバラバラだった)。
+  帯のボタンは、いま効いているほうを押された見た目にします。
 
   【覚えるのは端末ごと】
   見た目の好みは共有DBに書くものではないので `localStorage` に置きます
@@ -39,17 +40,12 @@ export function saved() {
   }
 }
 
-function system() {
-  try {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  } catch (err) {
-    return "light";
-  }
-}
+/** 選んでいないときの見た目 */
+const DEFAULT = "light";
 
 /** いま効いているほう。 */
 export function current() {
-  return saved() || system();
+  return saved() || DEFAULT;
 }
 
 /** 帯のボタンの押された見た目を、いま効いているほうに合わせる。 */
@@ -102,10 +98,3 @@ export function wire(box) {
   paintButtons();
 }
 
-// 選んでいないあいだは、Windows の設定が変わったらボタンの見た目も付いていく
-// (色は CSS の @media が先に付いていく)
-try {
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (!saved()) paintButtons();
-  });
-} catch (err) { /* 古いブラウザは付いていかないだけ */ }
