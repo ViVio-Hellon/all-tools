@@ -432,11 +432,23 @@ def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     """``file:...?mode=ro`` で開く。ふだんはこれで通る。"""
     uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
-    return _prepare(conn, read_only=read_only)
+    conn = _prepare(conn, read_only=read_only)
+    if read_only and _is_wal(conn):
+        # **WAL の DB を読むだけで開くと、閉じても -wal / -shm が共有に残る**
+        # (読むだけの接続は片付けられない)。古い付き添いの隣でマスタを差し替えると、
+        # 新しいマスタに古い -wal が当たって壊れる。次の手(素のパスで、書かない約束で
+        # 開く。閉じるときに片付ける)へ回す
+        conn.close()
+        raise sqlite3.OperationalError("WAL の DB は読むだけでは開かない(付き添いが残る)")
+    return conn
+
+
+def _is_wal(conn: sqlite3.Connection) -> bool:
+    return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
 
 
 def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
-    """素のパスで開く。URI が通らない環境向け(読み取り専用にはできない)。"""
+    """素のパスで開く。URI が通らない環境・WAL の DB 向け(読むときは ``query_only``)。"""
     conn = sqlite3.connect(str(resolved), timeout=BUSY_TIMEOUT_MS / 1000)
     return _prepare(conn, read_only=read_only)
 
@@ -467,7 +479,10 @@ def _prepare(conn: sqlite3.Connection, *, read_only: bool) -> sqlite3.Connection
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         # ここで初めてファイルに触る
         conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        if not read_only:
+        if read_only:
+            # 素のパスで開いたときも書かない(読むだけの約束)
+            conn.execute("PRAGMA query_only = ON")
+        else:
             # **WAL にしない。** WAL は共有メモリを使うので、SMB 上に
             # 置いた瞬間そのファイルは誰からも開けなくなる
             mode = str(conn.execute(

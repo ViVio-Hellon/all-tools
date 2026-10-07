@@ -108,5 +108,34 @@ class BackupMessageTests(WebTestCase):
         self.assertIn("(詳しく: invalid uri authority: nlmfangyshrd)", message)
 
 
+class WalSidecarTests(unittest.TestCase):
+    """**読み終えたら、共有に -wal / -shm を残さない。**
+
+    WAL の DB を読むだけ(`?mode=ro`)で開くと、閉じても付き添いを片付けられない。
+    古い付き添いの隣でマスタを差し替えると、新しいマスタに古い -wal が当たって壊れる。
+    """
+
+    def test_WALのマスタを読んでも付き添いが残らず_書けない(self) -> None:
+        import tempfile
+
+        for wal in (True, False):
+            with self.subTest(wal=wal), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "m.sqlite3"
+                conn = sqlite3.connect(path)
+                if wal:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("CREATE TABLE t (x)")
+                conn.execute("INSERT INTO t VALUES (1)")
+                conn.commit()
+                conn.close()
+                reader = connect_readonly(path)
+                self.assertEqual(reader.execute("SELECT count(*) FROM t").fetchone()[0], 1)
+                with self.assertRaises(sqlite3.Error):
+                    reader.execute("INSERT INTO t VALUES (2)")
+                reader.close()
+                left = sorted(p.name for p in Path(tmp).iterdir() if p.name != path.name)
+                self.assertEqual(left, [], "付き添いが残った")
+
+
 if __name__ == "__main__":
     unittest.main()

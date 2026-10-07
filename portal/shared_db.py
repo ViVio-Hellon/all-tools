@@ -95,16 +95,44 @@ def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
     # URI で開く(読むときは読み取り専用)→ 開けなければ素のパス
     ways = ((to_uri(path, read_only=read_only), True), (str(path), False))
     for target, as_uri in ways:
+        conn = None
         try:
             conn = sqlite3.connect(target, uri=as_uri, timeout=BUSY_TIMEOUT_SEC,
                                    isolation_level=None, check_same_thread=False)
             conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SEC * 1000}")
             conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+            if read_only and as_uri and _is_wal(conn):
+                # **WAL の DB を読むだけで開くと、閉じても -wal / -shm が共有に残る**
+                # (読むだけの接続は片付けられない)。古い付き添いの隣でマスタを差し替えると、
+                # 新しいマスタに古い -wal が当たって壊れる。書かない約束で普通に開き直す
+                # (普通の接続は、閉じるときに片付ける)
+                conn.close()
+                conn = _query_only(path)
             return conn
         except sqlite3.Error as exc:
             last = exc
+            if conn is not None:
+                conn.close()        # 開いたまま次の手へ行かない
             log.info("共有の DB を開けませんでした(%s): %s", "URI" if as_uri else "パス", exc)
     raise SourceError("open_failed", f"共有の DB を開けません: {path}({last})")
+
+
+def _is_wal(conn: sqlite3.Connection) -> bool:
+    return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+
+
+def _query_only(path: Path) -> sqlite3.Connection:
+    """書かない約束(`query_only`)で普通に開く。閉じるときに -wal / -shm を片付ける。"""
+    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT_SEC,
+                           isolation_level=None, check_same_thread=False)
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SEC * 1000}")
+        conn.execute("PRAGMA query_only = ON")
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+    except BaseException:
+        conn.close()
+        raise
+    return conn
 
 
 def reachable(path: Path) -> bool:

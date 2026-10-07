@@ -92,8 +92,21 @@ def readonly_uri(db_path) -> str:
 
 
 def connect_readonly(db_path, *, timeout: float = 10) -> sqlite3.Connection:
-    """読むだけで開く(書けない・無ければ作らない)。共有の上のファイルでも開ける。"""
+    """読むだけで開く(書けない・無ければ作らない)。共有の上のファイルでも開ける。
+
+    **WAL の DB は、書かない約束(`query_only`)で普通に開き直す。** 読むだけの接続は
+    閉じても -wal / -shm を片付けられず、共有に残る。古い付き添いの隣でファイルを
+    差し替えると、新しいファイルに古い -wal が当たって壊れる。
+    """
     conn = sqlite3.connect(readonly_uri(db_path), uri=True, timeout=timeout)
+    try:
+        wal = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    except sqlite3.Error:
+        wal = False         # 読めないなら、呼んだ側の最初の問い合わせで分かる
+    if wal:
+        conn.close()
+        conn = sqlite3.connect(os.fspath(db_path), timeout=timeout)
+        conn.execute("PRAGMA query_only = ON")
     conn.row_factory = sqlite3.Row
     return conn
 

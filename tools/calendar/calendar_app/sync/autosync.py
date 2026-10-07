@@ -213,6 +213,9 @@ class AutoSync:
         self.master_path = str(master_path or "")
         #: マスタDBにアクセス権限の表があると分かったか(作るのは1度だけ)
         self._access_ready = False
+        # 最後に名簿・アクセス権限を入れ直したときのマスタDBの (大きさ, 更新時刻)。
+        # 変わっていなければ開かない(下の ``_receive_members``)
+        self._master_seen: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     @property
@@ -279,15 +282,29 @@ class AutoSync:
         from .. import access_control
         from ..importer import import_master_table
 
+        # **マスタDBが変わっていなければ開かない。** 共有フォルダのマスタは、ほかの人が
+        # 新しいものに差し替える。開いているあいだ(Windows)は差し替えられないので、
+        # 受信のたび(既定20秒)に開き直さない。見るのは大きさと更新時刻だけ(開かない)
+        try:
+            info = Path(self.master_path).stat()
+            seen = (info.st_size, info.st_mtime_ns)
+        except OSError:
+            seen = None
+        if seen is not None and seen == self._master_seen:
+            return
+        done = True
+
         try:
             import_master_table(conn, self.master_path, config.TABLE_MEMBER)
         except (source_db.SourceError, OSError, ValueError,
                 sqlite3.Error) as exc:
+            done = False
             debug_log(f"AutoSync.receive: 班員名簿を入れ直せませんでした {exc}")
 
         # **アクセス権限も同じく入れ直す**(この端末が使えるライン)。
         # 表がまだ無ければ作る ── マスタ管理から行を足せるようにするため。
         # 作るのは1度だけ(あると分かったら、次からは見に行かない)
+        wrote = not self._access_ready
         try:
             if not self._access_ready:
                 with source_db.connect(Path(self.master_path),
@@ -299,7 +316,18 @@ class AutoSync:
             access_control.enforce(conn)
         except (source_db.SourceError, OSError, ValueError,
                 sqlite3.Error) as exc:
+            done = False
             debug_log(f"AutoSync.receive: アクセス権限を入れ直せませんでした {exc}")
+        if done:
+            if wrote:
+                # アクセス権限の表を作った(自分で書いた)ので、その分だけ更新時刻が
+                # 変わった。書いたあとを覚える(次の受信で開き直さない)
+                try:
+                    info = Path(self.master_path).stat()
+                    seen = (info.st_size, info.st_mtime_ns)
+                except OSError:
+                    seen = None
+            self._master_seen = seen
 
     # ------------------------------------------------------------------
     def sync_once(self, *, receive: bool = True) -> SyncStatus:

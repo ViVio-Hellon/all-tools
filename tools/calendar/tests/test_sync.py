@@ -10,6 +10,8 @@ cscript が要り、Linux では1行も動かせなかったので、送信は�
 from __future__ import annotations
 
 import sqlite3
+import time
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -372,6 +374,45 @@ class AutoSyncTests(_Base):
         self.assertTrue(sync.receive(self.conn))
         self.assertEqual(self.repo.member_count(), 1)
 
+    def test_マスタDBが変わっていなければ受信のたびに開かない(self) -> None:
+        """**共有のマスタを開きっぱなしにしない・開き直しすぎない。**
+
+        開いているあいだ(Windows)は、ほかの人がマスタを差し替えられない。受信は
+        既定20秒ごとなので、変わっていないマスタを毎回開き直さない(大きさと
+        更新時刻だけ見る)。変わったら入れ直す。
+        """
+        from unittest import mock
+
+        from calendar_app.dbkit import source_db
+
+        self._put_master_member()
+        sync = AutoSync(":memory:", str(self.data_db), master_path=str(self.master_db))
+        opened = []
+        real = source_db.connect
+
+        def spy(path, *args, **kwargs):
+            if Path(path) == Path(self.master_db):
+                opened.append(kwargs.get("read_only"))
+            return real(path, *args, **kwargs)
+        with mock.patch.object(source_db, "connect", spy):
+            self.assertTrue(sync.receive(self.conn))
+            first = len(opened)
+            self.assertGreater(first, 0)
+            self.assertTrue(sync.receive(self.conn))
+            self.assertEqual(len(opened), first, "変わっていないマスタを開き直した")
+            # マスタが変わった(名簿に1人足した)→ 次の受信で入れ直す
+            conn = sqlite3.connect(self.master_db)
+            conn.execute(
+                f'INSERT INTO "{config.TABLE_MEMBER}" '
+                '("管理番号","苗字","班","名前","読み","担当ライン") VALUES (?,?,?,?,?,?)',
+                ("11", "佐藤", "B", "佐藤花子", "サトウ", "L-1"))
+            conn.commit()
+            conn.close()
+            os.utime(self.master_db, ns=(time.time_ns(), time.time_ns() + 10_000_000))
+            self.assertTrue(sync.receive(self.conn))
+        self.assertGreater(len(opened), first)
+        self.assertEqual(self.repo.member_count(), 2)
+
     def test_マスタDBが見えなくても受信は通る(self) -> None:
         """休み・連絡が届くことのほうが大事。見えないことは設定画面が言う。"""
         sync = AutoSync(":memory:", str(self.data_db),
@@ -571,6 +612,34 @@ class WriteBackSpecTests(unittest.TestCase):
         for spec in sync_specs.WRITE_BACK_SPECS:
             self.assertTrue(spec.sqlite_table.endswith("_送信用"))
             self.assertFalse(spec.source_table.endswith("_送信用"))
+
+
+class WalSidecarTests(unittest.TestCase):
+    """**読み終えたら、共有に -wal / -shm を残さない。**
+
+    WAL の DB を読むだけ(`?mode=ro`)で開くと、閉じても付き添いを片付けられない。
+    古い付き添いの隣でマスタを差し替えると、新しいマスタに古い -wal が当たって壊れる。
+    """
+
+    def test_WALのマスタを読んでも付き添いが残らず_書けない(self) -> None:
+        import tempfile
+
+        for wal in (True, False):
+            with self.subTest(wal=wal), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "m.sqlite3"
+                conn = sqlite3.connect(path)
+                if wal:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("CREATE TABLE t (x)")
+                conn.execute("INSERT INTO t VALUES (1)")
+                conn.commit()
+                conn.close()
+                from calendar_app.dbkit import source_db
+
+                with source_db.connect(path, read_only=True) as source:
+                    self.assertTrue(source.has_table("t"))
+                left = sorted(p.name for p in Path(tmp).iterdir() if p.name != path.name)
+                self.assertEqual(left, [], "付き添いが残った")
 
 
 if __name__ == "__main__":
