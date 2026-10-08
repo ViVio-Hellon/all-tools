@@ -927,7 +927,8 @@ document.getElementById("quit").addEventListener("click", async () => {
   // ブラウザ版: 止める前に各ツールの画面の打ちかけを置く(デスクトップ版は外枠が頼む)
   if (!(await prepareFrames())) return;
   try {
-    await api.post("/api/shutdown", {});
+    // 打ちかけはいま置いた。入口に「画面へ頼む」をもう一度させない
+    await api.post("/api/shutdown", { screens_ready: true });
     ended();
   } catch (err) {
     if (err.status === 409) {
@@ -966,13 +967,60 @@ document.getElementById("who").addEventListener("click", async () => {
 
 // ブラウザ版: 心拍(このタブを閉じたら、入口と各ツールのブラウザ版が自分で終わる)。
 // 裏に回ったタブはタイマーが間引かれる・スリープ明けは遅れるので、表に戻ったときにもすぐ送る
+const PAGE_ID = (crypto.randomUUID && crypto.randomUUID()) || `p${Date.now()}${Math.random().toString(36).slice(2)}`;
 function heartbeat() {
   if (desktop) return;
-  const beat = () => api.post("/api/alive", {}).catch(() => {});
+  const beat = () => api.post("/api/alive", { page: PAGE_ID }).catch(() => {});
   beat();
   every(beat, 20000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
   window.addEventListener("pageshow", beat);
+  // 閉じた(ランチャーが画面を閉じた・タブを閉じた)。入口が居ない画面に頼んで待たないように
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted || !navigator.sendBeacon) return;
+    navigator.sendBeacon("/api/alive", new Blob([JSON.stringify({ page: PAGE_ID, leaving: true })],
+                                                { type: "application/json" }));
+  });
+}
+
+/**
+ * ブラウザ版: 外から(ランチャー・stop.bat)「閉じて」と頼まれたら、「終了」ボタンと同じく
+ * 先に各ツールの画面へ打ちかけを置いてもらう。以前は画面を通らずに止められ、開いたままの
+ * 画面の打ちかけが消えた。
+ *
+ * まず「置いています」(`working`)を返す ── この先の確認(大設定の打ちかけ・ツールの
+ * 「続けますか?」)は画面の動きを止めるので、答えるまで返事ができない。置けたら `ok`、
+ * 本人が「閉じない」を選んだら `refused`。止めるかは入口が決める(途中の処理があれば止めない)。
+ */
+let closeAsked = 0;
+let closeAnswered = 0;
+async function watchCloseAsk() {
+  if (desktop || closeAsked) return;
+  let body;
+  try { body = await api.get(`/api/close-ask?page=${encodeURIComponent(PAGE_ID)}`); }
+  catch (err) { return; }
+  const seq = Number(body.seq || 0);
+  if (!seq || seq === closeAnswered) return;
+  closeAsked = seq;
+  try {
+    report("info", `外から閉じるよう頼まれました(${seq})。打ちかけを置いてもらいます`);
+    await api.post("/api/close-answer", { page: PAGE_ID, seq, state: "working" }).catch(() => {});
+    let ok = true;
+    try { ok = await prepareFrames(); } catch (err) { ok = true; }
+    let res = {};
+    try {
+      res = await api.post("/api/close-answer", { page: PAGE_ID, seq, state: ok ? "ok" : "refused" });
+    } catch (err) {
+      if (err.status === 409) {
+        toast(`終了しませんでした: ${err.body.message || "実行中の処理があります"}`, "ng", 9000);
+      }
+    }
+    closeAnswered = seq;
+    if (res.stopping) ended();
+    else if (!ok) toast("閉じるのをやめました(保存していない入力があります)。終えるときは「終了」から", "ng", 9000);
+  } finally {
+    closeAsked = 0;
+  }
 }
 
 settingsView.install({ desktop, invoke, tools: TOOLS, reloadTabs: followTabs });
@@ -981,3 +1029,7 @@ start();
 // デスクトップ版は外枠に訊く(安い)。ブラウザ版は入口がツールの待ち受けを叩くので間を空ける
 pollStatus();
 every(pollStatus, desktop ? (S.statusPollMs || 2000) : 5000);
+if (!desktop) {
+  watchCloseAsk();
+  every(watchCloseAsk, 1000);
+}

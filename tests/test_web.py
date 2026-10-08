@@ -322,6 +322,152 @@ class ShutdownTests(Base):
         self.assertTrue(message.endswith("それでも終了しますか?"), message)
 
 
+class CloseAskTests(Base):
+    """外から(ランチャー・stop.bat)の停止は、開いている画面に打ちかけを置いてもらってから。"""
+
+    class Idle:
+        def busy(self):
+            return []
+
+        def stop_all(self, force=False):
+            pass
+
+    def setUp(self) -> None:
+        super().setUp()
+        web.close_ask.__init__()
+        self.called = []
+        web.set_shutdown_hook(lambda: self.called.append(True))
+        web.set_browser_tools(self.Idle())
+        self.addCleanup(web.set_browser_tools, None)
+        self.addCleanup(web.set_shutdown_hook, None)
+        self.addCleanup(web.close_ask.__init__)
+        self._wait = web.CloseAsk.WAIT_SEC
+        web.CloseAsk.WAIT_SEC = 0.3
+        self.addCleanup(setattr, web.CloseAsk, "WAIT_SEC", self._wait)
+
+    def stopped(self) -> bool:
+        deadline = time.monotonic() + 3
+        while not self.called and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return bool(self.called)
+
+    def test_画面が無ければすぐ止める(self) -> None:
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(self.stopped())
+
+    def test_画面が居れば頼む_置けたら入口が自分で止まる(self) -> None:
+        self.post("/api/alive", {"page": "A"}, token=False)
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 409, "返事を待ちきれなければ「頼んでいます」")
+        self.assertEqual(res.get_json()["reason"], "asking")
+        self.assertFalse(self.called, "画面が置き終える前に止めない")
+        seq = self.get("/api/close-ask?page=A").get_json()["seq"]
+        self.assertGreater(seq, 0)
+        self.assertTrue(self.post("/api/close-answer", {"page": "A", "seq": seq, "state": "working"}).get_json()["ok"])
+        self.assertFalse(self.called)
+        # 続けて頼まれても、同じ頼み(番号)を使い回す
+        self.assertEqual(self.post("/api/shutdown").get_json()["reason"], "asking")
+        self.assertEqual(self.get("/api/close-ask?page=A").get_json()["seq"], seq)
+        body = self.post("/api/close-answer", {"page": "A", "seq": seq, "state": "ok"}).get_json()
+        self.assertTrue(body["stopping"])
+        self.assertTrue(self.stopped())
+        self.assertEqual(self.get("/api/close-ask?page=A").get_json()["seq"], 0, "もう頼まない")
+
+    def test_待っているあいだに置けたらその場で止める(self) -> None:
+        web.CloseAsk.WAIT_SEC = 3.0
+        self.post("/api/alive", {"page": "A"}, token=False)
+
+        def answer():
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                seq = web.close_ask.pending("A")
+                if seq:
+                    web.close_ask.answer("A", seq, "ok")
+                    return
+                time.sleep(0.02)
+
+        import threading
+        threading.Thread(target=answer).start()
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertTrue(self.stopped())
+
+    def test_閉じないを選んだら止めない(self) -> None:
+        self.post("/api/alive", {"page": "A"}, token=False)
+        self.post("/api/shutdown")
+        seq = self.get("/api/close-ask?page=A").get_json()["seq"]
+        body = self.post("/api/close-answer", {"page": "A", "seq": seq, "state": "refused"}).get_json()
+        self.assertFalse(body["stopping"])
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["reason"], "asking",
+                         "片付けてからもう一度止めにきたら、前の「閉じない」で断らずに訊き直す")
+        again = self.get("/api/close-ask?page=A").get_json()["seq"]
+        self.assertGreater(again, seq)
+        time.sleep(0.6)
+        self.assertFalse(self.called)
+        self.assertTrue(self.post("/api/close-answer", {"page": "A", "seq": again, "state": "ok"}).get_json()["stopping"])
+        self.assertTrue(self.stopped())
+
+    def test_返事を待つあいだに閉じないを選んだら_その場で断る(self) -> None:
+        web.CloseAsk.WAIT_SEC = 3.0
+        self.post("/api/alive", {"page": "A"}, token=False)
+
+        def answer():
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                seq = web.close_ask.pending("A")
+                if seq:
+                    web.close_ask.answer("A", seq, "refused")
+                    return
+                time.sleep(0.02)
+
+        import threading
+        threading.Thread(target=answer).start()
+        res = self.post("/api/shutdown")
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["reason"], "refused")
+        self.assertFalse(self.called)
+
+    def test_閉じた画面には頼まない_終了ボタンと強制は頼まない(self) -> None:
+        self.post("/api/alive", {"page": "A"}, token=False)
+        self.post("/api/alive", {"page": "A", "leaving": True}, token=False)
+        self.get("/api/close-ask?page=A")      # 閉じる間際に出た問い合わせが後から着いても
+        self.assertEqual(self.post("/api/shutdown").status_code, 200, "閉じた画面を待たない")
+        self.assertTrue(self.stopped())
+        self.called.clear()
+        web.close_ask.__init__()
+        self.post("/api/alive", {"page": "B"}, token=False)
+        self.assertEqual(self.post("/api/shutdown", {"screens_ready": True}).status_code, 200,
+                         "画面の「終了」ボタンは自分で置いてから頼む")
+        self.assertTrue(self.stopped())
+        self.called.clear()
+        self.assertEqual(self.post("/api/shutdown", {"force": True}).status_code, 200)
+        self.assertTrue(self.stopped())
+
+    def test_置けたあとでも途中の処理があれば止めない(self) -> None:
+        class Busy(self.Idle):
+            def busy(self):
+                return ["看板: 書き戻しの途中です"]
+
+        self.post("/api/alive", {"page": "A"}, token=False)
+        self.post("/api/shutdown")
+        seq = self.get("/api/close-ask?page=A").get_json()["seq"]
+        web.set_browser_tools(Busy())
+        res = self.post("/api/close-answer", {"page": "A", "seq": seq, "state": "ok"})
+        self.assertEqual(res.status_code, 409)
+        time.sleep(0.6)
+        self.assertFalse(self.called)
+
+    def test_起動確認はランチャーが照合に使うものを返す(self) -> None:
+        body = self.get("/api/health", token=False).get_json()
+        self.assertEqual(body["app_id"], "nlm.all-tools")
+        self.assertTrue(body["ready"])
+        self.assertEqual(Path(body["app_root"]), Path(web.PORTAL_DIR).parent)
+        self.assertEqual(body["display_name"], "統合ツール")
+
+
 class ClientLogTests(Base):
     def test_画面で起きたことをログに残す(self) -> None:
         self.post("/api/log/client", {"level": "error", "message": "x is not defined\n次の行",

@@ -335,6 +335,21 @@ class PrepareCloseTests(unittest.TestCase):
         # ブラウザ版の「終了」も同じ頼みを通る
         quit_ = shell[shell.index('getElementById("quit")'):]
         self.assertLess(quit_.index("prepareFrames()"), quit_.index('"/api/shutdown"'))
+        self.assertIn('"/api/shutdown", { screens_ready: true }', quit_, "置いたあとは入口に頼み直させない")
+
+    def test_外からの停止もブラウザ版の画面に頼む(self) -> None:
+        """ランチャー・stop.bat の停止でも、開いている画面に打ちかけを置いてもらう(docs/ランチャー連携.md)。"""
+        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
+        watch = shell[shell.index("async function watchCloseAsk()"):]
+        watch = watch[:watch.index("\n}\n")]
+        self.assertIn("/api/close-ask?page=", watch)
+        # 確認の窓は画面を止めるので、先に「置いています」を返してから置く
+        self.assertLess(watch.index('state: "working"'), watch.index("prepareFrames()"))
+        self.assertIn('state: ok ? "ok" : "refused"', watch)
+        self.assertIn("every(watchCloseAsk, 1000)", shell)
+        # 閉じた画面には頼まない(閉じ際の合図)
+        self.assertIn("leaving: true", shell)
+        self.assertIn('window.addEventListener("pagehide"', shell)
 
 
 def js(name: str) -> str:

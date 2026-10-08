@@ -22,6 +22,9 @@ APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+# 画面に打ちかけを置いてもらうのを待つ上限(秒)。ランチャーは stop.bat を 20 秒で見切る
+ASKING_WAIT_SEC = 15.0
+
 DESKTOP_MESSAGE = ("デスクトップ版(統合ツール.exe の窓)が動いています。"
                    "窓の × か「終了」で閉じてください(stop.bat では止めません)。")
 
@@ -68,9 +71,22 @@ def stop(*, force: bool = False) -> int:
         except (urllib.error.URLError, OSError, ValueError) as exc:
             print(f"入口に届きませんでした: {exc}")
             status, body = 0, {}
-        if status == 409:
-            print("処理の途中のツールがあります:\n" + str(body.get("message") or ""))
-            print("それでも止めるときは stop.bat --force")
+        pid = int(lock.get("pid") or 0)
+        if status == 409 and body.get("reason") == "asking":
+            # 開いている画面に、打ちかけを置いてから閉じるよう頼んだ。置けたら入口が自分で
+            # 終わる。少しだけ待つ(ランチャーは stop.bat を 20 秒で見切る)
+            print(str(body.get("message") or ""))
+            deadline = time.monotonic() + ASKING_WAIT_SEC
+            while time.monotonic() < deadline and is_alive(pid):
+                time.sleep(0.3)
+            if is_alive(pid):
+                print("まだ画面で確認中です。画面を見てください(済めば自分で終わります)")
+                return 2
+            status = 200
+        elif status == 409:
+            print("止めませんでした:\n" + str(body.get("message") or ""))
+            if body.get("reason") != "refused":
+                print("それでも止めるときは stop.bat --force")
             return 2
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and is_alive(int(lock.get("pid") or 0)):
