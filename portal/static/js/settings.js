@@ -16,6 +16,13 @@ let ctx = { desktop: false, invoke: null, tools: new Map(), reloadTabs: () => {}
 let view = null;
 let editing = null;      // 直している行(新しい行なら null)
 let phases = new Map();
+let rowBusy = false;     // 行を書いている途中(「保存する」の2度押しで同じ行を2つ足さない)
+let rowBase = "";        // 行の窓を開いたときの値(打ったかどうかを見分ける)
+
+// 問い合わせの順番。**あとから頼んだ答えを、先に頼んだ古い答えで描き直さない**
+// (読み直しと書き込みが行き違うと、古い表・古い置き場所に戻って見えていた)
+let asked = 0;
+let shown = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,14 +37,21 @@ export function install(options) {
       await refresh();
     } catch (err) { toastError(err); }
   });
+  // 行の窓を開いたまま鍵が掛かった(30分)。窓を閉じずに、その場で開けられる
+  // (以前は窓の裏の欄へ案内するだけで、「やめる」で閉じるしかなく、打った行が消えていた)
+  $("row-unlock-go").addEventListener("click", unlockInRow);
+  $("row-unlock-pass").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); unlockInRow(); }
+  });
   $("lock-close").addEventListener("click", async () => {
     try { await api.post("/api/settings/auth", { lock: true }); await refresh(); }
     catch (err) { toastError(err); }
   });
   $("rights-sync").addEventListener("click", async () => {
     try {
+      const seq = ++asked;
       const body = await api.post("/api/rights/sync", {});
-      paint(body);
+      paintIfFresh(seq, body);
       const s = body.sync || {};
       toast(s.error ? s.error : (s.message || "読み直しました"), s.error ? "ng" : "ok");
       ctx.reloadTabs();
@@ -45,7 +59,12 @@ export function install(options) {
   });
   $("rights-create").addEventListener("click", () => write("/api/rights/create-table", {}));
   $("rights-add").addEventListener("click", () => openRow(null));
-  $("row-cancel").addEventListener("click", () => $("row-dialog").close());
+  // 「やめる」・Esc: 打った値があれば訊いてから閉じる
+  $("row-cancel").addEventListener("click", () => closeRow());
+  $("row-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeRow();
+  });
   $("row-form").addEventListener("submit", saveRow);
   for (const button of document.querySelectorAll("[data-fill]")) {
     button.addEventListener("click", () => {
@@ -59,11 +78,23 @@ export function install(options) {
   }
   $("loc-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value });
+    write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value },
+          { location: true });
   });
-  $("loc-default").addEventListener("click", () => write("/api/settings/location", { folder: "", name: "" }));
+  $("loc-default").addEventListener("click", () => write("/api/settings/location", { folder: "", name: "" },
+                                                          { location: true }));
   for (const id of ["loc-folder", "loc-name"]) $(id).addEventListener("input", paintLocState);
-  $("dist-export").addEventListener("click", () => write("/api/distribution/export", {}));
+  $("dist-export").addEventListener("click", () => {
+    // 書き出すのは**反映している**置き場所。打ちかけ(まだ「変える」を押していない値)が
+    // あるのに書き出すと、打った値は配られず、本人は配ったつもりになる
+    if (locEdited()) {
+      toast("共有の DB の置き場所に、まだ反映していない値があります。先に「変える」で反映するか、"
+        + "元に戻してから書き出してください。", "ng", 9000);
+      $("loc-folder").focus();
+      return;
+    }
+    write("/api/distribution/export", {});
+  });
   $("dist-reapply").addEventListener("click", () => {
     if (confirm("配布設定を読み込み直します。この端末の置き場所・管理者パスワードは、配布設定の値で上書きされます。よろしいですか?")) {
       write("/api/distribution/reapply", {});
@@ -103,24 +134,100 @@ export function statusChanged(list) {
   if (view) paintTools();
 }
 
-async function refresh() {
-  paint(await api.get("/api/settings"));
+/**
+ * 閉じる前(窓の × ・「終了」・ブラウザ版の「終了」)に見る、大設定の打ちかけ。
+ * 大きなタブの画面(shell.js)が、各ツールに訊く前にこれを訊く。
+ */
+export function unsaved() {
+  const found = [];
+  if (locEdited()) found.push("共有の DB の置き場所(打った値をまだ「変える」で反映していません)");
+  if (rowEdited()) found.push("タブ表示権限の行(打った値をまだ保存していません)");
+  if (["pw-current", "pw-new", "pw-confirm"].some((id) => $(id) && $(id).value)) {
+    found.push("管理者パスワードの変更(まだ「変える」を押していません)");
+  }
+  return found;
 }
 
-async function write(path, payload) {
+/** 打ちかけの中身(閉じる確認で「閉じる」を選んだあと、同じ中身なら2度訊かないため) */
+export function unsavedStamp() {
+  return JSON.stringify([$("loc-folder")?.value, $("loc-name")?.value, rowEdited() ? rowValues() : "",
+                         ["pw-current", "pw-new", "pw-confirm"].map((id) => ($(id) ? $(id).value.length : 0))]);
+}
+
+/** 入口の処理(Python)が止まった・起こし直した(外枠が知らせる)。大設定の上に出す */
+export function portalState(kind, text = "") {
+  const box = $("portal-state");
+  if (!box) return;
+  if (kind === "lost") {
+    box.hidden = false;
+    box.className = "msg msg--warn portal-state";
+    box.textContent = "統合ツールの入口の処理(Python)が止まったので、起こし直しています。"
+      + "各タブの画面はそのままです(読み直していません)。この画面の打ちかけも残っています。";
+  } else if (kind === "back") {
+    box.hidden = false;
+    box.className = "msg msg--info portal-state";
+    box.textContent = "統合ツールの入口の処理(Python)を起こし直しました。管理者の鍵は掛かり直しています。"
+      + "打ちかけの値はそのまま残してあります。";
+    refresh().catch(() => {});
+  } else if (kind === "down") {
+    box.hidden = false;
+    box.className = "msg msg--warn portal-state";
+    box.textContent = "統合ツールの入口の処理(Python)を起こし直せませんでした。"
+      + (text ? `(${text})` : "") + "各タブの画面はそのまま使えますが、大設定は使えません。"
+      + "「もう一度開く」で起こし直すか、打ちかけを保存してから統合ツールを開き直してください。";
+    if (ctx.desktop && ctx.invoke) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "btn btn--small";
+      again.textContent = "もう一度開く";
+      again.addEventListener("click", () => ctx.invoke("shell_restart_tool", { tool: "portal" })
+        .then(() => portalState("lost")).catch(toastError));
+      box.append(" ", again);
+    }
+  } else {
+    box.hidden = true;
+  }
+}
+
+/** 頼んだ順番が古くなければ描く。古い答え(あとから頼んだ答えが先に描かれた)は捨てる */
+function paintIfFresh(seq, body, options = {}) {
+  if (seq < shown) {
+    // 描かないが、置き場所を「変える」で反映したことだけは欄に返す(打ちかけの印を消す)
+    if (options.location && body && body.source) resetLocation(body.source);
+    return false;
+  }
+  shown = seq;
+  paint(body, options);
+  return true;
+}
+
+async function refresh() {
+  const seq = ++asked;
+  const body = await api.get("/api/settings");
+  paintIfFresh(seq, body);
+}
+
+/**
+ * 書き込み。`options.location`: 置き場所を反映した(成功したら欄を反映した値に戻す)。
+ * `options.onError(err)`: 断られたときに自分で手当てする(true を返せば、ここでは出さない)。
+ */
+async function write(path, payload, options = {}) {
   try {
+    const seq = ++asked;
     const body = await api.post(path, payload);
-    paint(body);
+    paintIfFresh(seq, body, options);
     toast(body.message || "反映しました");
     ctx.reloadTabs();
     return true;
   } catch (err) {
+    if (options.onError && options.onError(err)) return false;
     if (err.status === 403 && err.code === "locked") {
-      toast("管理者パスワードで鍵を開けてください", "ng");
+      toast("管理者パスワードで鍵を開けてください(打った値はそのまま残っています)", "ng");
       $("lock-pass").focus();
     } else if (err.status === 409) {
       toastError(err);
-      await refresh().catch(() => {});
+      if (err.body && err.body.rules) paintIfFresh(++asked, err.body);
+      else await refresh().catch(() => {});
     } else {
       toastError(err);
     }
@@ -136,7 +243,7 @@ async function copy(text) {
 // ------------------------------------------------------------------
 // 描く
 // ------------------------------------------------------------------
-function paint(body) {
+function paint(body, options = {}) {
   view = body;
   const box = $("lockbox");
   box.dataset.open = body.admin ? "1" : "0";
@@ -149,7 +256,7 @@ function paint(body) {
   }
   paintMe();
   paintRights();
-  paintSource();
+  paintSource(Boolean(options.location));
   paintTools();
   paintDistribution();
   paintApp();
@@ -205,7 +312,7 @@ function time(sec) {
   return d.toLocaleString("ja-JP", { hour12: false });
 }
 
-function paintSource() {
+function paintSource(reset = false) {
   const s = view.source || {};
   const line = $("rights-source");
   line.replaceChildren();
@@ -232,15 +339,45 @@ function paintSource() {
   }
   $("rights-missing").hidden = s.state !== "missing";
   $("rights-table").textContent = s.table || "タブ表示権限";
-  // いま反映している値を覚えておき、打ちかけと見分ける(`paintLocState`)
-  for (const [id, value, fallback] of [["loc-folder", s.folder, s.default_folder],
-                                       ["loc-name", s.name, s.default_name]]) {
-    $(id).value = value || "";
-    $(id).dataset.saved = value || "";
-    $(id).placeholder = fallback ? `空なら既定: ${fallback}` : "";
+  // いま反映している値を覚えておき、打ちかけと見分ける(`paintLocState`)。
+  //
+  //     打った値が勝手に戻ることがありました
+  //
+  // 以前は描くたびに欄を反映済みの値で上書きしていた ── 鍵を開けた・共有から読み直した・
+  // タブを行き来した・1分ごとのタブの見直し…のたびに、打ちかけの置き場所が消えていた。
+  // とんでもない話である。**打ちかけの欄には触らない。** 欄を反映した値に戻すのは、
+  // 「変える」「既定に戻す」が通ったときだけ(`reset`)。
+  //
+  // 欄に入れるのは**大設定で決めた値**(`set_*`)。効いている既定(環境変数・既定)を
+  // 入れると、ほかを直して「変える」を押したときに既定が大設定の値として書き込まれていた
+  for (const [id, value, fallback] of [["loc-folder", s.set_folder ?? s.folder, s.default_folder],
+                                       ["loc-name", s.set_name ?? s.name, s.default_name]]) {
+    const input = $(id);
+    const saved = value || "";
+    const typed = input.dataset.saved !== undefined && input.value.trim() !== input.dataset.saved;
+    if (reset || !typed) input.value = saved;
+    input.dataset.saved = saved;
+    input.placeholder = fallback ? `空なら既定: ${fallback}` : "";
   }
   $("loc-note").textContent = `既定: ${s.default_folder}\\${s.default_name}`;
   paintLocState();
+}
+
+/** 置き場所を反映した(「変える」「既定に戻す」が通った)。欄を反映した値に戻す */
+function resetLocation(s) {
+  for (const [id, value] of [["loc-folder", s.set_folder ?? s.folder], ["loc-name", s.set_name ?? s.name]]) {
+    $(id).value = value || "";
+    $(id).dataset.saved = value || "";
+  }
+  paintLocState();
+}
+
+/** 置き場所の欄に、まだ反映していない値があるか */
+function locEdited() {
+  return ["loc-folder", "loc-name"].some((id) => {
+    const input = $(id);
+    return input && input.dataset.saved !== undefined && input.value.trim() !== input.dataset.saved;
+  });
 }
 
 /** 共有の DB の置き場所: **反映しているか、打ちかけか**を色と一言で出す。 */
@@ -257,7 +394,8 @@ function paintLocState() {
   state.dataset.state = edited ? "edited" : "saved";
   state.textContent = edited
     ? "まだ反映していません ── 「変える」を押すと、この場所を使います"
-    : `反映しています: ${s.path || "―"}${!s.folder && !s.name ? "(既定の場所)" : ""}`;
+    : `反映しています: ${s.path || "―"}${!(s.set_folder ?? s.folder) && !(s.set_name ?? s.name)
+      ? (s.origin === "環境変数" ? "(環境変数の場所)" : "(既定の場所)") : ""}`;
 }
 
 function paintRights() {
@@ -448,6 +586,7 @@ function openRow(rule) {
   $("row-enabled").checked = rule ? rule.enabled : true;
   $("row-note").value = rule ? rule.note : "";
   $("row-error").hidden = true;
+  $("row-unlock").hidden = true;
   const checks = $("row-tabs");
   checks.replaceChildren();
   const chosen = new Set(rule ? rule.tab_ids || [] : []);
@@ -460,24 +599,120 @@ function openRow(rule) {
     label.append(box, document.createTextNode(tool.title));
     checks.append(label);
   }
+  // この版が知らない語(新しいツール・打ち間違い)は、チェックにできないので見せるだけ。
+  // 保存しても消さない(サーバが表の文字のまま残す)
+  if (rule && rule.unknown && rule.unknown.length) {
+    const note = document.createElement("small");
+    note.className = "sub";
+    note.textContent = `分からない語(そのまま残します): ${rule.unknown.join("、")}`;
+    checks.append(note);
+  }
   const select = $("row-default");
   select.replaceChildren(new Option("(指定しない)", ""));
   for (const tool of view.catalog || []) select.append(new Option(tool.title, tool.id));
   const current = (view.catalog || []).find((t) => rule && (t.title === rule.default_tab || t.id === rule.default_tab));
-  select.value = current ? current.id : "";
+  if (current) {
+    select.value = current.id;
+  } else if (rule && rule.default_tab) {
+    // 知らない既定タブ。選べるようにしておき、そのまま残す(以前は保存で空になっていた)
+    select.append(new Option(`${rule.default_tab}(分からない名前・そのまま残します)`, rule.default_tab));
+    select.value = rule.default_tab;
+  } else {
+    select.value = "";
+  }
+  rowBase = rowValues();
   $("row-dialog").showModal();
+}
+
+/** 行の窓の値(打ったかどうかを見分ける) */
+function rowValues() {
+  return JSON.stringify([
+    $("row-login").value, $("row-pc").value,
+    [...$("row-tabs").querySelectorAll("input:checked")].map((b) => b.value),
+    $("row-default").value, $("row-enabled").checked, $("row-note").value,
+  ]);
+}
+
+/** 行の窓を開いていて、開いたときから値を変えたか */
+function rowEdited() {
+  return Boolean($("row-dialog")?.open) && rowValues() !== rowBase;
+}
+
+/** 「やめる」・Esc。打った値があれば訊く(以前は訊かずに捨てていた) */
+function closeRow() {
+  if (rowBusy) return;
+  if (rowEdited() && !confirm("打った値はまだ保存していません。保存せずに閉じますか?")) return;
+  $("row-dialog").close();
+}
+
+function rowMessage(text) {
+  $("row-error").hidden = false;
+  $("row-error").textContent = text;
+}
+
+/** 行の窓の中で鍵を開ける(窓を閉じずに。打った値はそのまま) */
+async function unlockInRow() {
+  try {
+    await api.post("/api/settings/auth", { password: $("row-unlock-pass").value });
+    $("row-unlock-pass").value = "";
+    $("row-unlock").hidden = true;
+    rowMessage("鍵を開けました。もう一度「保存する」を押してください。");
+    await refresh();
+  } catch (err) {
+    toastError(err);
+    $("row-unlock-pass").focus();
+  }
+}
+
+/** 行を書いて断られたとき。**打った値は消さない**(窓を開いたまま、手当ての道を出す) */
+function rowRefused(err) {
+  if (err.status === 403 && err.code === "locked") {
+    $("row-unlock").hidden = false;
+    rowMessage("鍵が掛かりました(30分さわらなかったため)。打った値はそのまま残っています。"
+      + "下で鍵を開けてから、もう一度「保存する」を押してください。");
+    $("row-unlock-pass").focus();
+    return true;
+  }
+  if (err.status !== 409) {
+    rowMessage((err && err.message) || String(err));
+    return false;
+  }
+  // 読み直した表が一緒に届く。描き直し、直している行の「いま」(was)だけ差し替える
+  if (err.body && err.body.rules) paintIfFresh(++asked, err.body);
+  if (err.code === "no_table") {
+    rowMessage(err.message);
+    return true;
+  }
+  if (editing) {
+    const fresh = (view?.rules || []).find((r) => r.key === editing.key);
+    if (fresh) {
+      editing = fresh;
+      rowMessage(`ほかの人が先にこの行を直していました(いまの表: 表示タブ「${fresh.tabs || "―"}」`
+        + `・既定タブ「${fresh.default_tab || "―"}」・${fresh.enabled ? "有効" : "無効"}・備考「${fresh.note || "―"}」)。`
+        + "打った値はそのまま残しています。この値で上書きするなら、もう一度「保存する」を押してください。");
+    } else {
+      editing = null;
+      $("row-title").textContent = "タブ表示権限に行を足す(もとの行は消されていました)";
+      rowMessage("その行はほかの人が消していました。打った値はそのまま残しています。"
+        + "もう一度「保存する」を押すと、新しい行として足します。");
+    }
+    return true;
+  }
+  rowMessage(err.message);
+  return true;
 }
 
 async function saveRow(event) {
   event.preventDefault();
+  // **書いている途中は受けない**(「保存する」の2度押しで、同じ行が2つ足されていた)
+  if (rowBusy) return;
   const tabIds = [...$("row-tabs").querySelectorAll("input:checked")].map((b) => b.value);
   const payload = {
     login_id: $("row-login").value, pc_name: $("row-pc").value, tab_ids: tabIds,
     default_tab: $("row-default").value, enabled: $("row-enabled").checked, note: $("row-note").value,
   };
   if (!payload.login_id.trim() && !payload.pc_name.trim()) {
-    $("row-error").hidden = false;
-    $("row-error").textContent = "ログインID か PC名 の少なくとも一方を入れてください。";
+    rowMessage("ログインID か PC名 の少なくとも一方を入れてください。");
     return;
   }
   // 最初の1行は、登録の無い端末からツールのタブを消す(運用の始まり)。確かめてから
@@ -487,11 +722,21 @@ async function saveRow(event) {
         + "次に開いたときからツールのタブが出なくなります(大設定だけになります)。\n\n続けますか?")) {
     return;
   }
-  let ok;
-  if (editing) {
-    ok = await write("/api/rights/save", { ...payload, key: editing.key, was: wasOf(editing) });
-  } else {
-    ok = await write("/api/rights/add", payload);
+  rowBusy = true;
+  $("row-save").disabled = true;
+  $("row-cancel").disabled = true;
+  let ok = false;
+  try {
+    if (editing) {
+      ok = await write("/api/rights/save", { ...payload, key: editing.key, was: wasOf(editing) },
+                       { onError: rowRefused });
+    } else {
+      ok = await write("/api/rights/add", payload, { onError: rowRefused });
+    }
+  } finally {
+    rowBusy = false;
+    $("row-save").disabled = false;
+    $("row-cancel").disabled = false;
   }
   if (ok) $("row-dialog").close();
 }

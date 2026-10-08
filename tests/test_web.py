@@ -180,15 +180,75 @@ class SettingsTests(Base):
         first = self.post("/api/rights/save", {**was, "key": rule["key"], "was": was,
                                                "tab_ids": ["nippou", "kanban", "calendar", "inspection"]})
         self.assertEqual(first.status_code, 200, first.get_json())
-        self.assertEqual(first.get_json()["rules"][0]["tabs"], "すべて")
+        # 全部にチェックしても、名前で並べていた行は名前のまま(「すべて」は後で足すツールにも効く)
+        self.assertEqual(first.get_json()["rules"][0]["tabs"], "日報, 看板, カレンダー, 点検表")
         second = self.post("/api/rights/save", {**was, "key": rule["key"], "was": was, "tab_ids": ["nippou"]})
         self.assertEqual(second.status_code, 409)
         self.assertEqual(second.get_json()["error"]["code"], "stale_row")
+        # 断るときは読み直した表も返す(画面は打った値を残して、行の「いま」だけ差し替える)
+        self.assertEqual(second.get_json()["rules"][0]["tabs"], "日報, 看板, カレンダー, 点検表")
         now = first.get_json()["rules"][0]
         now_was = {k: now[k] for k in ("login_id", "pc_name", "tabs", "default_tab", "enabled", "note")}
         gone = self.post("/api/rights/delete", {"key": now["key"], "was": now_was})
         self.assertEqual(gone.status_code, 200, gone.get_json())
         self.assertEqual(gone.get_json()["rules"], [])
+
+    def test_知らない語と既定タブは備考だけ直しても残る(self) -> None:
+        self.unlock()
+        self.post("/api/rights/create-table")
+        db = sqlite3.connect(self.db)
+        db.execute('INSERT INTO "タブ表示権限" ("ログインID", "表示タブ", "既定タブ", "有効", "備考") '
+                   "VALUES ('future', '日報, 在庫', '在庫', 1, 'もと')")
+        db.commit()
+        db.close()
+        rule = self.post("/api/rights/sync").get_json()["rules"][0]
+        self.assertEqual(rule["unknown"], ["在庫"])
+        was = {k: rule[k] for k in ("login_id", "pc_name", "tabs", "default_tab", "enabled", "note")}
+        # 画面は知っているツールのチェック(日報)と、知らない既定タブをそのまま送る
+        res = self.post("/api/rights/save", {"key": rule["key"], "was": was, "login_id": "future", "pc_name": "",
+                                             "tab_ids": rule["tab_ids"], "default_tab": "在庫",
+                                             "enabled": True, "note": "備考だけ直した"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        now = res.get_json()["rules"][0]
+        self.assertEqual((now["tabs"], now["default_tab"], now["note"]), ("日報, 在庫", "在庫", "備考だけ直した"))
+
+    def test_断られたら写しも読み直す_もう一度で通る(self) -> None:
+        """409 の前に写しを読み直していなかったので、読み直しても古い was のまま何度でも 409 だった。"""
+        self.unlock()
+        self.post("/api/rights/create-table")
+        rule = self.post("/api/rights/add", {"pc_name": "P1", "tab_ids": ["nippou"], "note": "もと"}).get_json()["rules"][0]
+        was = {k: rule[k] for k in ("login_id", "pc_name", "tabs", "default_tab", "enabled", "note")}
+        db = sqlite3.connect(self.db)
+        db.execute('UPDATE "タブ表示権限" SET "備考" = \'ほかの端末\'')
+        db.commit()
+        db.close()
+        mine = {"key": rule["key"], "login_id": "", "pc_name": "P1", "tab_ids": ["nippou"], "note": "わたしの"}
+        res = self.post("/api/rights/save", {**mine, "was": was})
+        self.assertEqual(res.status_code, 409)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], "stale_row")
+        fresh = body["rules"][0]
+        self.assertEqual(fresh["note"], "ほかの端末", "断るときに読み直した表を返す")
+        self.assertEqual(self.get("/api/settings").get_json()["rules"][0]["note"], "ほかの端末")
+        fresh_was = {k: fresh[k] for k in ("login_id", "pc_name", "tabs", "default_tab", "enabled", "note")}
+        again = self.post("/api/rights/save", {**mine, "was": fresh_was})
+        self.assertEqual(again.status_code, 200, again.get_json())
+        self.assertEqual(again.get_json()["rules"][0]["note"], "わたしの")
+
+    def test_置き場所の欄には大設定で決めた値だけを渡す(self) -> None:
+        """効いている既定(環境変数・既定)を欄に入れると、「変える」で大設定の値として書かれていた。"""
+        source = self.get("/api/settings").get_json()["source"]
+        self.assertEqual((source["set_folder"], source["set_name"]), ("", ""))
+        self.assertEqual(source["folder"], str(SHARE), "効いている場所は別に渡す")
+        self.assertEqual(source["default_folder"], str(SHARE), "空ならこれ(環境変数)")
+        self.unlock()
+        try:
+            res = self.post("/api/settings/location", {"folder": "", "name": "別.sqlite3"})
+            source = res.get_json()["source"]
+            self.assertEqual((source["set_folder"], source["set_name"]), ("", "別.sqlite3"))
+            self.assertIsNone(user_settings.get(user_settings.KEY_SHARED_DIR))
+        finally:
+            self.post("/api/settings/location", {"folder": "", "name": ""})
 
     def test_IDもPC名も空の行は作れない(self) -> None:
         self.unlock()

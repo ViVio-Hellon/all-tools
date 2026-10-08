@@ -30,7 +30,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::catalog::Tool;
-use crate::shell::Shell;
+use crate::shell::{Prepared, Shell};
 
 /// 頼んできたツール。大きなタブの窓(`main`)からなら `tool` の名前(大きなタブの画面が
 /// 送り元を確かめてある)、別窓からなら窓の宛先で決める(名乗りは信じない)。
@@ -166,18 +166,26 @@ pub fn shell_close(app: AppHandle, shell: State<'_, Arc<Shell>>) {
     crate::closing::request_close(shell.inner().clone(), app, None);
 }
 
-/// 終える前の「打ちかけを置いて」の返事(大きなタブの画面の `prepareClose` から)
+/// 終える前の「打ちかけを置いて」の返事(大きなタブの画面の `prepareClose` から)。
+/// `waiting: true` は「待っています」(本人に訊いている・ツールの画面の返事を待っている)。
+/// これを受けたら、外枠は短い上限で見切らない([`crate::shell::wait_prepared`])
 #[tauri::command]
-pub fn shell_prepared(shell: State<'_, Arc<Shell>>, ok: bool) {
-    shell.screens_prepared(ok);
+pub fn shell_prepared(shell: State<'_, Arc<Shell>>, ok: bool, waiting: Option<bool>) {
+    let answer = if waiting.unwrap_or(false) { Prepared::Waiting } else { Prepared::Done(ok) };
+    shell.screens_prepared(answer);
 }
 
-/// そのツールの Python を起こし直す(大設定の「もう一度開く」)
+/// そのツールの Python を起こし直す(大設定・止まった知らせの「もう一度開く」)。
+/// 入口(`portal`)は画面を読み直さずに Python だけ起こし直す
 #[tauri::command]
 pub fn shell_restart_tool(shell: State<'_, Arc<Shell>>, tool: String) -> Result<(), String> {
     let shell = shell.inner().clone();
     match shell.catalog.by_id(&tool) {
-        Some(t) if !t.is_portal() => shell.restart_tool(&tool, true),
+        Some(t) if t.is_portal() => {
+            shell.restart_portal();
+            Ok(())
+        }
+        Some(_) => shell.restart_tool(&tool, true),
         _ => Err("そのツールはありません".into()),
     }
 }

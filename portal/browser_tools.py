@@ -129,6 +129,32 @@ def find_running(tool: Tool, *, check_pid: bool = True) -> Optional[Running]:
     return None
 
 
+def has_live_lock(tool: Tool) -> bool:
+    """そのツールのブラウザ版の印(`runtime/*.lock`)が残っていて、その PID が生きているか。
+
+    待ち受けが答えない(重い処理の途中・一時停止)だけでは「終わった」と言えない。
+    終わったと言えるのは、**印が消えたか、印の PID が居ない**ときだけ。
+    """
+    runtime = tool.local_root() / "runtime"
+    try:
+        locks = list(runtime.glob("*.lock"))
+    except OSError:
+        return False
+    app_id = tool.app_id()
+    for path in locks:
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(info, dict) or not info.get("token") or not int(info.get("port") or 0):
+            continue
+        if app_id and info.get("app_id") and info.get("app_id") != app_id:
+            continue
+        if is_alive(int(info.get("pid") or 0)):
+            return True
+    return False
+
+
 class BrowserTools:
     """ブラウザ版の各ツール(起こした子と、つないだ相手)。"""
 
@@ -221,6 +247,22 @@ class BrowserTools:
                 log.warning("%s のブラウザ版を止められませんでした: %s", running.tool.name, exc)
 
     def status(self, ids: Optional[list[str]] = None) -> list[dict]:
-        """各ツールのブラウザ版が動いているか(`ids` だけ。画面の見張り用に軽く見る)。"""
+        """各ツールのブラウザ版が動いているか(`ids` だけ。画面の見張り用に軽く見る)。
+
+        `running`: 待ち受けが答えた。`ended`: **印が消えた・印の PID が居ない**(本当に終わった)。
+        どちらでもない(答えないが、PID は生きている)は重い処理の途中かもしれない ──
+        以前は待ち受けが2回答えないだけで「終了しました」にして枠を消し、打ちかけが消えていた。
+        PID を確かめる(Windows は tasklist)のは、待ち受けが答えなかったときだけ。
+        """
         tools = [t for t in self.catalog.tools if ids is None or t.id in ids]
-        return [{"id": t.id, "running": find_running(t, check_pid=False) is not None} for t in tools]
+        # 自分で起こした子が終わっていれば片付ける(片付けないと、終わった子の PID が
+        # ゾンビとして「生きている」ように見え、いつまでも終わったと分からない)
+        with self._lock:
+            for child in self._children.values():
+                child.poll()
+        out = []
+        for t in tools:
+            running = find_running(t, check_pid=False) is not None
+            ended = False if running else not has_live_lock(t)
+            out.append({"id": t.id, "running": running, "ended": ended})
+        return out

@@ -10,7 +10,10 @@
   別窓(帳票・印刷・VC 早見表)は大きなタブの外の窓なので、外枠へ直に頼む。
 
   あわせて、1つの窓に並べたための手当て:
-  ・F5 / Ctrl+R … **このツールの画面だけ**を読み直す(窓ごと読み直すと全タブが消える)
+  ・F5 / Ctrl+R … **このツールの画面だけ**を読み直す(窓ごと読み直すと全タブが消える)。
+                  読み直すのは大きなタブの画面に頼む(先に打ちかけを置いてもらうため)
+  ・閉じる前の受け皿 … 自分で「閉じる前」(`alltools:before-close`)を受けないツールの画面で、
+                  打ちかけ(打った欄・開いている入力の窓)があれば閉じてよいかを訊く
   ・Ctrl+P      … このツールの画面を印刷する(ツールが自分で受けていればそちら)
   ・Alt+1〜9    … 大きなタブを切り替える
   ・F1          … このツールの操作説明書を開く
@@ -84,6 +87,16 @@
       onDrag(d);
       return;
     }
+    if (d.type === "alltools:before-close") {
+      beforeClose(d);
+      return;
+    }
+    if (d.type === "alltools:python-lost") {
+      // このツールの Python が止まった(大きなタブの画面が知らせを重ねている)。
+      // 画面は読み直さない ── ツールが自分で受けたければ `alltools:python-lost` を見る
+      window.__ALLTOOLS__.pythonLost = true;
+      return;
+    }
     if ((d.type !== "alltools:result" && d.type !== "alltools:dropped-file") || !pending[d.id]) return;
     var p = pending[d.id];
     delete pending[d.id];
@@ -98,7 +111,92 @@
       window.__TAURI__ = api;
     }
   }
-  window.__ALLTOOLS__ = { tool: TOOL, shell: SHELL, embedded: embedded };
+  window.__ALLTOOLS__ = { tool: TOOL, shell: SHELL, embedded: embedded, pythonLost: false,
+                         reload: function () { askReload(); } };
+
+  // ---- 閉じる前の受け皿(自分で受けないツールの画面) ----
+  //
+  //     打った行が消えることがありました
+  //
+  // 窓の × ・「終了」・F5 の前に、大きなタブの画面が「打ちかけを置いて」と頼んでくる
+  // (`alltools:before-close`)。受けて置くのは各ツールの仕事(日報・看板・カレンダーは
+  // 自分で受け、`window.__alltoolsHandlesClose = true` を立てる)。**受けないツールの画面は、
+  // 返事が無いまま閉じられ、打ちかけが黙って消えていた。** ここで受け皿になる:
+  // 打った欄(本人が打って、ページを開いたときの値と違う)や、入力の窓が開いていれば、
+  // この画面の中で「閉じますか?」と訊いて答えを返す。何も無ければ訊かずに「済んだ」。
+  //
+  // 「本人が打った」を見るのは、ツールが自分で値を入れた欄(保存してある値を出した欄)まで
+  // 打ちかけに数えて、閉じるたびに訊かないため。保存したかどうかはツールにしか分からない
+  // ので、打って保存した欄でも訊くことがある(訊きすぎるほうに倒す)。
+  // ブラウザ版はこの台本が入らないので受け皿は無い(自分で受けるツールだけが置く)。
+  var touched = [];
+  var discardedAt = 0;      // 「閉じてよい」と答えた時刻。そのあと打っていなければ、続けて2度訊かない
+  function remember(event) {
+    var el = event.target;
+    if (!event.isTrusted || !el || !el.tagName) return;
+    if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !el.isContentEditable) return;
+    discardedAt = 0;
+    if (touched.indexOf(el) < 0) touched.push(el);
+  }
+  window.addEventListener("input", remember, true);
+  window.addEventListener("change", remember, true);
+
+  var SKIP_TYPES = /^(hidden|button|submit|reset|image|file|search|range|color)$/i;
+  function visible(el) {
+    if (!el.isConnected) return false;
+    if (el.getClientRects && !el.getClientRects().length) return false;
+    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    return !style || style.visibility !== "hidden";
+  }
+  function changed(el) {
+    if (el.disabled || el.readOnly) return false;
+    if (el.isContentEditable && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return true;
+    if (el.tagName === "SELECT") {
+      for (var i = 0; i < el.options.length; i++) {
+        if (el.options[i].selected !== el.options[i].defaultSelected) return true;
+      }
+      return false;
+    }
+    if (el.tagName === "INPUT" && SKIP_TYPES.test(el.type || "")) return false;
+    if (el.tagName === "INPUT" && /^(checkbox|radio)$/i.test(el.type || "")) return el.checked !== el.defaultChecked;
+    return String(el.value || "") !== String(el.defaultValue || "");
+  }
+  function openForm() {
+    // 開いている入力の窓(`<dialog open>`・aria-modal・よくある .modal の開いた形)で、欄があるもの
+    var list = document.querySelectorAll('dialog[open], [aria-modal="true"], .modal.show, .modal.is-open, .modal.open, .modal[open]');
+    for (var i = 0; i < list.length; i++) {
+      if (visible(list[i]) && list[i].querySelector("input:not([type=hidden]), textarea, select")) return true;
+    }
+    return false;
+  }
+  function dirtyHere() {
+    touched = touched.filter(function (el) { return el.isConnected; });
+    for (var i = 0; i < touched.length; i++) {
+      if (visible(touched[i]) && changed(touched[i])) return true;
+    }
+    return openForm();
+  }
+  function beforeClose(d) {
+    // 自分で受けるツール(`__alltoolsHandlesClose`)には任せる。2重に訊かない
+    if (window.__alltoolsHandlesClose) return;
+    var reply = function (type, extra) {
+      var msg = { type: type, seq: d.seq };
+      if (extra) for (var k in extra) msg[k] = extra[k];
+      try { parentWin.postMessage(msg, SHELL); } catch (e) { /* 大きなタブが居ない */ }
+    };
+    reply("alltools:before-close-ack");
+    var ok = true;
+    try {
+      // 外枠は途中の処理の確認のあとにもう一度頼んでくる。答えたあと打っていなければ2度訊かない
+      var answered = discardedAt && Date.now() - discardedAt < 120000;
+      if (!answered && dirtyHere()) {
+        ok = window.confirm("保存していない入力があります。閉じますか?\n\n"
+          + "(閉じると、この画面で打った値は消えます。残すときは「キャンセル」を押して保存してください)");
+        if (ok) discardedAt = Date.now();
+      }
+    } catch (e) { ok = true; }
+    reply("alltools:before-close-done", { ok: ok });
+  }
 
   // ---- ファイルを送る(FormData)は、中身を読んでから1つのバイト列にして送る ----
   // WebView2(Windows)は、外枠の宛先(各ツールの scheme)へ送る FormData のうち、
@@ -273,6 +371,24 @@
     ready();
   }
 
+  // ---- 読み直し(F5 / Ctrl+R) ----
+  // 大きなタブの中では、**大きなタブの画面に頼む**(先に打ちかけを置いてもらってから、
+  // この画面だけ読み直す)。以前はここで黙って読み直し、打ちかけが消えていた。
+  // ツールの画面の中の枠(同じ宛先)からは、外側の画面の口に頼む。単体(大きなタブの外)なら今までどおり
+  function askReload() {
+    if (embedded && sameOriginParent) {
+      try { if (parentWin.__ALLTOOLS__ && parentWin.__ALLTOOLS__.reload) { parentWin.__ALLTOOLS__.reload(); return; } }
+      catch (e) { /* 外側の画面に届かない */ }
+      location.reload();
+      return;
+    }
+    if (embedded) {
+      tellShell({ action: "reload" });
+      return;
+    }
+    location.reload();
+  }
+
   // ---- キー(このツールの画面にいるとき) ----
   window.addEventListener("keydown", function (event) {
     if (event.defaultPrevented) return;
@@ -280,7 +396,7 @@
     var ctrl = event.ctrlKey || event.metaKey;
     if (key === "F5" || (ctrl && (key === "r" || key === "R"))) {
       event.preventDefault();
-      location.reload();
+      askReload();
       return;
     }
     if (ctrl && !event.shiftKey && !event.altKey && (key === "p" || key === "P")) {

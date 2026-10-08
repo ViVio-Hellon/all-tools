@@ -128,5 +128,21 @@ class ProblemsTests(unittest.TestCase):
         self.assertEqual(tab_rights.canonical_tabs([], CATALOG), "")
 
 
+    def test_直した行の表示タブは_チェックを変えていなければそのまま(self) -> None:
+        """知らない語(「在庫」)・名前の並び・すべて を、備考だけ直したときに書き換えない。"""
+        edited = tab_rights.edited_tabs
+        self.assertEqual(edited("日報, 在庫", ["nippou"], CATALOG), "日報, 在庫")
+        self.assertEqual(edited("日報・看板・カレンダー・点検表", ALL, CATALOG), "日報・看板・カレンダー・点検表")
+        self.assertEqual(edited("すべて", ALL, CATALOG), "すべて")
+        # チェックを変えたら書き直す。知らない語は後ろに残す
+        self.assertEqual(edited("日報, 在庫", ["nippou", "kanban"], CATALOG), "日報, 看板, 在庫")
+        self.assertEqual(edited("日報, 在庫", [], CATALOG), "在庫")
+        # 全部にしても、名前で並べていた行は名前のまま(「すべて」は後で足すツールにも効く)
+        self.assertEqual(edited("日報", ALL, CATALOG), "日報, 看板, カレンダー, 点検表")
+        # もとが「すべて」なら、外したときは名前で、全部に戻したら「すべて」
+        self.assertEqual(edited("すべて", ["nippou"], CATALOG), "日報")
+        self.assertEqual(edited("すべて, 在庫", ["nippou"], CATALOG), "日報, 在庫")
+
+
 if __name__ == "__main__":
     unittest.main()

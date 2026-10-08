@@ -246,9 +246,33 @@ def problems(rules: Iterable[Rule], catalog: Catalog) -> list[str]:
     return found
 
 
-def canonical_tabs(ids: Iterable[str], catalog: Catalog) -> str:
-    """表に書く表示タブの文字(大設定の画面で選んだもの)。全部なら `すべて`。"""
+def canonical_tabs(ids: Iterable[str], catalog: Catalog, *, all_word: bool = True) -> str:
+    """表に書く表示タブの文字(大設定の画面で選んだもの)。全部なら `すべて`
+    (`all_word=False` なら全部でも名前を並べる)。"""
     chosen = [t for t in catalog.ids() if t in set(ids)]
-    if chosen and len(chosen) == len(catalog.ids()):
+    if all_word and chosen and len(chosen) == len(catalog.ids()):
         return "すべて"
     return ", ".join(catalog.by_id(t).title for t in chosen)
+
+
+def edited_tabs(previous: str, ids: Iterable[str], catalog: Catalog) -> str:
+    """直した行の表示タブ。**画面のチェックを変えていなければ、表の文字をそのまま返す。**
+
+    大設定の画面は、知っているツールのチェックしか出せない。以前は備考だけ直しても
+    表示タブを画面のチェックから書き直していたので、
+
+    - この版がまだ知らない語(新しいツール・打ち間違い。「日報, 在庫」の「在庫」)が消え、
+    - 「日報, 看板, カレンダー, 点検表」と名前で並べた行が「すべて」に変わっていた
+      (「すべて」は、あとで足すツールにも効く。書いた人の意図と違う)
+
+    チェックを変えたときも、読めなかった語はそのまま後ろに残し、`すべて` と書くのは
+    もとの行が `すべて` を使っていたときだけにする。
+    """
+    before = Rule(tabs=_clean(previous))
+    before_ids, unknown = before.tab_ids(catalog)
+    chosen = [t for t in catalog.ids() if t in set(ids)]
+    if set(chosen) == set(before_ids):
+        return before.tabs
+    uses_all = any(fold(w) in ALL_WORDS for w in before.words())
+    text = canonical_tabs(chosen, catalog, all_word=uses_all)
+    return ", ".join([p for p in (text, *unknown) if p])

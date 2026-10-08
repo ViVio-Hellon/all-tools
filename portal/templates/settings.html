@@ -14,6 +14,8 @@
         <button type="button" class="btn" id="lock-close" hidden>鍵を掛ける</button>
       </div>
     </header>
+    <!-- 入口の処理(Python)が止まった・起こし直した(外枠が知らせる) -->
+    <div class="msg msg--warn portal-state" id="portal-state" role="status" hidden></div>
 
     <!-- この端末 -->
     <article class="card">
@@ -154,6 +156,10 @@
         <label>備考<input type="text" id="row-note"></label>
       </div>
       <p class="msg msg--warn" id="row-error" hidden></p>
+      <div class="row-unlock" id="row-unlock" hidden>
+        <input type="password" id="row-unlock-pass" autocomplete="current-password" placeholder="管理者パスワード" aria-label="管理者パスワード(鍵を開け直す)">
+        <button type="button" class="btn" id="row-unlock-go">鍵を開ける</button>
+      </div>
       <div class="dialog__act">
         <button type="button" class="btn" id="row-cancel">やめる</button>
         <button type="submit" class="btn btn--primary" id="row-save">保存する</button>

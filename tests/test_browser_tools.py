@@ -113,6 +113,19 @@ class BrowserToolsTests(unittest.TestCase):
         status = {s["id"]: s["running"] for s in tools.status(["kanban", "nippou"])}
         self.assertEqual(status, {"kanban": True, "nippou": False})
 
+    def test_答えないだけでは終わったとしない_印かPIDが消えたら終わった(self) -> None:
+        """重い処理の途中で待ち受けが答えない ≠ 終わった。以前は2回答えないだけで枠を消していた。"""
+        tools = browser_tools.BrowserTools(CATALOG)
+        self.write_lock()
+        self.assertEqual(tools.status(["kanban"]), [{"id": "kanban", "running": True, "ended": False}])
+        self.server.shutdown()                     # 答えない(が、印の PID = この試験は生きている)
+        self.assertEqual(tools.status(["kanban"]), [{"id": "kanban", "running": False, "ended": False}])
+        dead = 2 ** 22 + 12345                     # 居ない PID
+        self.write_lock(pid=dead)
+        self.assertEqual(tools.status(["kanban"]), [{"id": "kanban", "running": False, "ended": True}])
+        (self.local / "runtime" / "site.lock").unlink()
+        self.assertEqual(tools.status(["kanban"]), [{"id": "kanban", "running": False, "ended": True}])
+
     def test_終了の前に訊き_途中の処理があれば理由を集める(self) -> None:
         tools = browser_tools.BrowserTools(CATALOG)
         self.write_lock()

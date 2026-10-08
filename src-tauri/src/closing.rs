@@ -21,7 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::bridge::Phase;
@@ -79,12 +79,28 @@ fn confirm_busy(shell: &Arc<Shell>, app: &AppHandle, head: &str, busy: &[(String
         text.push_str(&format!("・{title}: {}\n", reason.replace('\n', " ")));
     }
     text.push_str("\nそれでも統合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
-    app.dialog()
+    let mut dialog = app
+        .dialog()
         .message(text)
         .title(&shell.catalog.name)
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()))
-        .blocking_show()
+        .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()));
+    // 窓に付けて出す(確認を読んでいるあいだに、裏の画面で打てないように)
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.parent(&window);
+    }
+    dialog.blocking_show()
+}
+
+/// 終えずにやめたとき、そのタブを読み直してよいツール。**止まったと確かめられたものだけ**
+/// (`/api/shutdown` が 2xx を返した)。答えが無かった(待ちきれなかった)ツールは、まだ
+/// 動いているかもしれない ── 読み直すと画面の打ちかけが消える
+fn stopped_ids<'a>(targets: impl IntoIterator<Item = (&'a str, &'a Result<(u16, serde_json::Value), String>)>) -> Vec<String> {
+    targets
+        .into_iter()
+        .filter(|(_, reply)| matches!(reply, Ok((status, _)) if (200..300).contains(status)))
+        .map(|(id, _)| id.to_string())
+        .collect()
 }
 
 /// 「途中の処理がある」と断った理由。何をしているか(`running` の一覧・`busy`)を先に使う
@@ -130,6 +146,15 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
             }
             return false;
         }
+        // 確認を読んでいるあいだに打った分がある(確認は窓の外に出ることがある)。
+        // **止める直前に、もう一度画面の打ちかけを置いてもらう**
+        if !shell.prepare_screens(PREPARE_LIMIT) {
+            crate::places::shell_log(&shell.root, "終了をやめました(確認のあとの打ちかけを置けなかった)");
+            if let Some(id) = quitting {
+                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
+            }
+            return false;
+        }
     }
 
     // 全ツールに終わってもらう(並べて頼む)
@@ -157,11 +182,12 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
     if !late.is_empty() {
         let listed: Vec<_> = late.iter().map(|(tool, _, reason)| (tool.title.clone(), reason.clone())).collect();
         if !confirm_busy(shell, app, "ほかのツールは終了しました。\n\n", &listed) {
-            // 終えたツールのタブには「終了しました / もう一度開く」を出し、処理中のツールは続ける
-            for ((tool, _), reply) in targets.iter().zip(&replies) {
-                if !matches!(reply, Ok((409, _))) {
-                    shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(&tool.id)));
-                }
+            // 終えたツールのタブには「終了しました / もう一度開く」を出し、処理中のツールは続ける。
+            // 読み直すのは**止まったと確かめられたツールだけ**(答えが無かったツールは動いて
+            // いるかもしれない。読み直すと打ちかけが消える)
+            let stopped = stopped_ids(targets.iter().zip(&replies).map(|((tool, _), reply)| (tool.id.as_str(), reply)));
+            for id in &stopped {
+                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
             }
             if let Some(id) = quitting {
                 shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
@@ -210,6 +236,16 @@ mod tests {
         assert_eq!(busy_reason(&json!({"error": {"message": "x"}})), "x");
         assert_eq!(busy_reason(&json!({"running": [], "message": "y"})), "y");
         assert_eq!(busy_reason(&json!({})), "実行中の処理があります");
+    }
+
+    #[test]
+    fn やめたときに読み直すのは止まったと確かめたツールだけ() {
+        let ok = Ok((200, json!({"stopped": true})));
+        let busy = Ok((409, json!({"busy": "x"})));
+        let timeout: Result<(u16, serde_json::Value), String> = Err("timeout".into());
+        let broken = Ok((500, json!({})));
+        let ids = stopped_ids(vec![("kanban", &ok), ("nippou", &busy), ("calendar", &timeout), ("inspection", &broken)]);
+        assert_eq!(ids, vec!["kanban".to_string()]);
     }
 
     #[test]

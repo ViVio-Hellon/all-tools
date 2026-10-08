@@ -54,7 +54,7 @@ window.addEventListener("unhandledrejection", (event) => {
 const tabsBar = document.getElementById("bigtabs");
 const stage = document.getElementById("stage");
 
-/** id → { panel, iframe, button, url, loaded } */
+/** id → { panel, iframe, button, url, origin, loaded, lost, ended } */
 const frames = new Map();
 let order = [];           // いま出しているタブの並び(大設定を含む)
 let current = "";
@@ -68,9 +68,25 @@ function invoke(cmd, args, options) {
   return internals.invoke(cmd, args, options);
 }
 
+/**
+ * その枠のツールの宛先(送り元・宛先を確かめるのに使う)。
+ *
+ * ブラウザ版は、入口の Python がツールに宛先を渡さない(`origin: ""`。番号はツールを
+ * 起こすまで分からない)。以前はここが空を返し、「終了」で各ツールに打ちかけを置く頼み
+ * (`alltools:before-close`)を**1つも送っていなかった**(返事も捨てていた)。枠を作るときに
+ * 枠の宛先(`http://127.0.0.1:<番号>`)を覚えておき、どこでもそれを使う。
+ */
 function originOf(id) {
+  const entry = frames.get(id);
+  if (entry && entry.origin) return entry.origin;
   const tool = TOOLS.get(id);
   return tool ? tool.origin : "";
+}
+
+/** 枠の宛先を覚える。デスクトップ版は独自の宛先(`kanban://localhost` は URL では "null" になる)のまま */
+function frameOrigin(id, url) {
+  if (desktop) return TOOLS.get(id)?.origin || "";
+  try { return new URL(url, location.href).origin; } catch (err) { return ""; }
 }
 
 // ------------------------------------------------------------------
@@ -161,7 +177,7 @@ function panelFor(id) {
   panel.setAttribute("aria-labelledby", `tab-${id}`);
   panel.inert = true;
   stage.append(panel);
-  entry = { panel, iframe: null, url: "", loaded: false, starting: null };
+  entry = { panel, iframe: null, url: "", origin: "", loaded: false, starting: null, lost: false, ended: false };
   frames.set(id, entry);
   return entry;
 }
@@ -173,6 +189,7 @@ function ensureFrame(id) {
   entry.starting = (async () => {
     try {
       entry.url = await toolUrl(id);
+      entry.origin = frameOrigin(id, entry.url);
     } catch (err) {
       showProblem(entry, TOOLS.get(id), err);
       return entry;
@@ -194,6 +211,8 @@ function ensureFrame(id) {
       }
     });
     entry.iframe = iframe;
+    entry.lost = false;
+    entry.ended = false;
     entry.panel.replaceChildren(iframe);
     return entry;
   })();
@@ -209,6 +228,8 @@ function showNote(entry, title, text) {
   entry.reports = 0;
   entry.lastTitle = "";
   entry.missing = 0;
+  entry.lost = false;
+  entry.ended = false;
   const box = document.createElement("div");
   box.className = "panel--note";
   box.style.cssText = "position:absolute;inset:0";
@@ -233,6 +254,55 @@ function showNote(entry, title, text) {
 
 function showProblem(entry, tool, err) {
   showNote(entry, `${tool ? tool.name : ""}を開けませんでした`, (err && err.message) || String(err));
+}
+
+/**
+ * ツールの処理が止まった・終わった知らせを、**枠の上に重ねて**出す(枠は消さない・読み直さない)。
+ *
+ *     打った行が消えることがありました
+ *
+ * 以前は、ツールの Python が落ちるとそのタブを黙って読み直し(デスクトップ版)、ブラウザ版は
+ * 見張りが2回答えを得られないだけで枠を消していた ── 画面にしか無い打ちかけが、
+ * 本人の知らないうちに消えていた。とんでもない話である。枠は残して写し取れるようにし、
+ * 読み直すのは本人が「もう一度開く」を押したときだけにする。
+ */
+function showLost(entry, id, title, text, retry) {
+  entry.panel.querySelector(".lostbar")?.remove();
+  const bar = document.createElement("div");
+  bar.className = "lostbar";
+  bar.setAttribute("role", "alert");
+  const b = document.createElement("b");
+  b.textContent = title;
+  const p = document.createElement("p");
+  p.textContent = text;
+  const again = document.createElement("button");
+  again.type = "button";
+  again.className = "btn btn--primary btn--small";
+  again.textContent = "もう一度開く";
+  again.addEventListener("click", retry);
+  const small = document.createElement("button");
+  small.type = "button";
+  small.className = "btn btn--small";
+  small.textContent = "小さくする";
+  small.addEventListener("click", () => {
+    bar.classList.toggle("is-small");
+    small.textContent = bar.classList.contains("is-small") ? "説明を出す" : "小さくする";
+  });
+  bar.append(b, p, again, small);
+  entry.panel.append(bar);
+}
+
+function clearLost(entry) {
+  entry.lost = false;
+  entry.ended = false;
+  entry.panel.querySelector(".lostbar")?.remove();
+}
+
+/** 読み直すと画面の打ちかけが消える。本人に確かめてから */
+function confirmDiscard(id) {
+  const title = TOOLS.get(id)?.title || id;
+  return confirm(`${title}の画面を読み直します。\n\nこの画面でまだ保存していない入力は消えます`
+    + "(必要なら、先に写し取ってください)。読み直しますか?");
 }
 
 function showPanel(id) {
@@ -523,6 +593,9 @@ function keyFromTool(id, data) {
     select(order[(order.indexOf(current) - 1 + order.length) % order.length]);
   } else if (data.action === "help") {
     openManual(id);
+  } else if (data.action === "reload") {
+    // ツールの画面の中の F5 / Ctrl+R(embed.js)。打ちかけを置いてから読み直す
+    userReload(id);
   }
 }
 
@@ -538,10 +611,11 @@ document.addEventListener("keydown", (event) => {
     closeManual();
     return;
   }
-  // F5 / Ctrl+R は**いま出しているツールの画面だけ**を読み直す(全タブを読み直さない)
+  // F5 / Ctrl+R は**いま出しているツールの画面だけ**を読み直す(全タブを読み直さない)。
+  // 読み直す前に、その画面へ打ちかけを置いてもらう(`userReload`)
   if (event.key === "F5" || ((event.ctrlKey || event.metaKey) && (event.key === "r" || event.key === "R"))) {
     event.preventDefault();
-    reloadTool(current);
+    userReload(current);
     return;
   }
   if (event.altKey && /^[1-9]$/.test(event.key)) {
@@ -550,11 +624,39 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+/** そのツールの画面を読み直す(外枠が Python を立て直したあと・本人が確かめたあと)。 */
 function reloadTool(id) {
   const entry = frames.get(id);
   if (!entry || !entry.iframe) return;
+  clearLost(entry);
   entry.loaded = false;
   entry.iframe.src = entry.url;
+}
+
+/**
+ * 本人の F5 / Ctrl+R(大きなタブの帯でも、ツールの画面の中でも)。
+ *
+ * 以前は打ちかけを置かずに、そのまま読み直していた(日報の入力中の行は画面の中にしか無い)。
+ * 「終了」と同じ頼み(`alltools:before-close`)で打ちかけを置いてもらい、置けたとき・
+ * 本人が「それでも」を選んだときだけ読み直す。
+ */
+const reloading = new Set();
+async function userReload(id) {
+  const entry = frames.get(id);
+  if (!entry || !entry.iframe || reloading.has(id)) return;
+  if (entry.lost || entry.ended) {
+    // 処理が止まっている(打ちかけを置けない)。知らせの「もう一度開く」と同じ
+    entry.panel.querySelector(".lostbar button")?.click();
+    return;
+  }
+  reloading.add(id);
+  try {
+    const win = entry.iframe.contentWindow;
+    const ok = win ? await askFrameToSave(id, win) : true;
+    if (ok && frames.get(id) === entry && entry.iframe) reloadTool(id);
+  } finally {
+    reloading.delete(id);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -565,14 +667,20 @@ function reloadTool(id) {
 //
 // 日報の入力中の行は**画面の中にしか無い**(自動保存は1分に1回)。窓の × ・
 // 大きなタブの「終了」で、Python に「終わってよいか」を訊く前に、各ツールの
-// 画面へ頼んで置いてもらう。受ける画面(日報)はすぐ「受けた」と返し、置き
-// 終えたら「済んだ」を返す。受けない画面(看板など、置くものが無い)は返事を
-// しないので、少し待ってから次へ進む。置けずに「閉じない」を選ばれたら false。
+// 画面へ頼んで置いてもらう。受ける画面(日報・看板・カレンダー、それ以外は
+// embed.js の受け皿)はすぐ「受けた」と返し、置き終えたら「済んだ」を返す。
+// 受けない画面は返事をしないので、少し待ってから次へ進む。置けずに「閉じない」を
+// 選ばれたら false。
+//
+// **「受けた」が来たら、「済んだ」を短い上限では見切らない。** 日報は置けなかったとき
+// 「続けますか?」と訊く ── 本人が読んでいるあいだに 12 秒で見切って閉じていた
+// (外枠も 15 秒で見切って閉じていた)。打った行が消えることがありました。
+// 受けたあとに上限が来たら(画面が固まった)、**閉じない**ほうに倒す。
 // ------------------------------------------------------------------
 const closeWaits = new Map();
 let closeSeq = 0;
-const ACK_MS = 1200;        // 「受けた」を待つ(受けない画面はここで見切る)
-const DONE_MS = 12000;      // 「済んだ」を待つ(手元の SQLite へ置くだけ)
+const ACK_MS = 1200;            // 「受けた」を待つ(受けない画面はここで見切る)
+const ACKED_MS = 10 * 60000;    // 受けたあと「済んだ」を待つ上限。来なければ閉じない
 
 function askFrameToSave(id, win) {
   const seq = ++closeSeq;
@@ -585,7 +693,11 @@ function askFrameToSave(id, win) {
       if (type === "alltools:before-close-ack" && !acked) {
         acked = true;
         clearTimeout(timer);
-        timer = setTimeout(() => finish(true), DONE_MS);
+        timer = setTimeout(() => {
+          report("error", `${TOOLS.get(id)?.title || id} が「受けた」のあと「済んだ」を返しません。閉じずに残します`);
+          toast(`${TOOLS.get(id)?.title || id} の返事が無いので、閉じるのをやめました`, "ng", 9000);
+          finish(false);
+        }, ACKED_MS);
       } else if (type === "alltools:before-close-done") {
         finish(ok);
       }
@@ -594,7 +706,26 @@ function askFrameToSave(id, win) {
   });
 }
 
+/**
+ * 閉じる前に、打ちかけを置いてもらう(大設定と、各ツールの画面)。
+ *
+ * 大設定(この画面そのもの)の打ちかけ ── 反映していない共有の DB の置き場所・保存して
+ * いない行 ── も見る。以前は誰にも訊かれずに窓ごと消えていた。
+ */
+let discarded = null;     // 大設定の打ちかけを「閉じてよい」と答えた中身と時刻(続けて2度訊かない)
 async function prepareFrames() {
+  const dirty = settingsView.unsaved();
+  const stamp = settingsView.unsavedStamp();
+  const answered = discarded && discarded.stamp === stamp && Date.now() - discarded.at < 120000;
+  if (dirty.length && !answered) {
+    if (!confirm(`大設定に、まだ反映していない入力があります:\n\n${dirty.map((d) => `・${d}`).join("\n")}`
+        + "\n\n閉じると、この入力は消えます。閉じますか?")) {
+      select(SETTINGS);
+      return false;
+    }
+    // 外枠は途中の処理の確認のあとにもう一度頼んでくる。同じ中身なら2度は訊かない
+    discarded = { stamp, at: Date.now() };
+  }
   const asks = [];
   for (const [id, entry] of frames) {
     const win = entry.iframe && entry.iframe.contentWindow;
@@ -606,19 +737,57 @@ async function prepareFrames() {
 
 // 外枠(Rust)から呼ばれる口
 window.__shell = {
-  /** 終える前(窓の × ・「終了」)。各ツールの画面に打ちかけを置いてもらい、外枠へ返事 */
+  /**
+   * 終える前(窓の × ・「終了」)。各ツールの画面に打ちかけを置いてもらい、外枠へ返事。
+   *
+   * まず「待っています」(`waiting`)を外枠へ返す。外枠はこれを受けたら短い上限で
+   * 見切らない ── この先、大設定の確認や、ツールの画面の「続けますか?」を本人が
+   * 読んでいるあいだ(確認の窓はこの画面の動きを止めるので、途中で知らせられない)に、
+   * 外枠が 15 秒で「閉じてよい」とみなして閉じていた。
+   */
   async prepareClose() {
+    await Promise.race([invoke("shell_prepared", { ok: true, waiting: true }).catch(() => {}),
+                        new Promise((r) => setTimeout(r, 500))]);
     let ok = true;
     try { ok = await prepareFrames(); } catch (err) { ok = true; }
     invoke("shell_prepared", { ok }).catch(() => {});
   },
-  /** そのツールの Python を立て直した・落ちた → そのタブだけ読み直す */
+  /** そのツールの Python を立て直した → そのタブだけ読み直す(外枠が頼む) */
   reloadTool(id) { reloadTool(id); },
+  /** そのツールの Python が落ちた。**枠は読み直さない**(打ちかけを残す)。知らせを重ねる */
   toolLost(id) {
-    reloadTool(id);
-    if (id !== current) {
-      toast(`${TOOLS.get(id)?.title || id} の処理が止まりました。タブを開くと理由が出ます。`, "ng", 9000);
+    const tool = TOOLS.get(id);
+    const title = tool?.title || id;
+    const entry = frames.get(id);
+    report("error", `${title} の処理(Python)が止まりました。画面は読み直さずに残します`);
+    if (entry && entry.iframe) {
+      entry.lost = true;
+      postToFrame(id, { type: "alltools:python-lost" });
+      showLost(entry, id, `${tool?.name || title}の処理が止まりました`,
+        "画面はそのまま残しています(打ちかけの値は写し取れます。保存はできません)。"
+        + "「もう一度開く」で処理を起こし直し、この画面を読み直します。", () => {
+          if (!confirmDiscard(id)) return;
+          invoke("shell_restart_tool", { tool: id })
+            .then(() => toast(`${title} を起こし直しています`)).catch(toastError);
+        });
     }
+    if (id !== current) {
+      toast(`${title} の処理が止まりました。画面はそのまま残しています(タブを開くと知らせが出ます)。`, "ng", 9000);
+    }
+  },
+  /** 入口の Python が落ちた → **窓ごと読み直さない**(全タブの打ちかけが消える)。入口だけ起こし直す */
+  portalLost() {
+    report("error", "入口の処理(Python)が止まりました。起こし直します(画面は読み直しません)");
+    settingsView.portalState("lost");
+    toast("統合ツールの入口の処理が止まりました。起こし直しています(各タブの画面はそのままです)。", "ng", 9000);
+  },
+  portalBack() {
+    settingsView.portalState("back");
+    report("info", "入口の処理(Python)を起こし直しました");
+    toast("統合ツールの入口の処理を起こし直しました。");
+  },
+  portalDown(text) {
+    settingsView.portalState("down", String(text || ""));
   },
   select(id) { select(id); },
   /** 窓へのファイルの落下(外枠が OS から受けたもの)。落ちた場所のツールの枠へ渡す */
@@ -645,31 +814,49 @@ async function pollStatus() {
 
 /**
  * ブラウザ版: 開いたツールのブラウザ版が動いているか(数秒ごと)。
- * そのツールの画面の「終了」で止まったら、タブに「終了しました / もう一度開く」を出す
- * (枠の中に「接続できません」を出したままにしない)。2回続けて居なければ、とする。
+ *
+ * **終わったとするのは、ツールの印が消えた・印の PID が居ないときだけ**(入口が確かめる。
+ * `ended`)。待ち受けが答えないだけ(重い処理の途中)では終わったとしない ── 以前は
+ * 2回答えないだけで枠を消し、打ちかけが消えていた。終わっても**枠は消さない**
+ * (写し取れるように)。知らせを重ね、「もう一度開く」で開き直す。
  */
 async function watchBrowserTools() {
-  const ids = [...frames.entries()].filter(([, e]) => e.iframe && e.loaded).map(([id]) => id);
+  const ids = [...frames.entries()].filter(([, e]) => e.iframe && e.loaded && !e.ended).map(([id]) => id);
   if (!ids.length) return;
   let body;
   try { body = await api.get(`/api/tools/status?ids=${encodeURIComponent(ids.join(","))}`); }
   catch (err) { return; }
   for (const item of body.tools || []) {
     const entry = frames.get(item.id);
-    if (!entry || !entry.iframe) continue;
+    if (!entry || !entry.iframe || entry.ended) continue;
     const dot = document.querySelector(`#tab-${item.id} .bigtab__dot`);
     if (item.running) {
       entry.missing = 0;
       if (dot) dot.dataset.phase = "started";
       continue;
     }
+    if (item.ended === false) {
+      // 答えないが、まだ居る(重い処理の途中・一時停止)。終わったとはしない
+      entry.missing = 0;
+      if (dot) dot.dataset.phase = "starting";
+      continue;
+    }
     entry.missing = (entry.missing || 0) + 1;
     if (entry.missing < 2) continue;
     if (dot) dot.dataset.phase = "quit";
     const tool = TOOLS.get(item.id);
-    report("info", `${tool.title} のブラウザ版が終わりました`);
-    showNote(entry, `${tool.name}は終了しました`,
-             "このツールのブラウザ版は止まっています。ほかのタブはそのまま使えます。");
+    report("info", `${tool.title} のブラウザ版が終わりました(枠は残します)`);
+    entry.ended = true;
+    showLost(entry, item.id, `${tool.name}は終了しました`,
+      "このツールのブラウザ版は止まっています。画面はそのまま残しています(打ちかけの値は写し取れます)。"
+      + "ほかのタブはそのまま使えます。", () => {
+        if (!confirmDiscard(item.id)) return;
+        entry.panel.replaceChildren();
+        entry.iframe = null;
+        entry.ended = false;
+        entry.missing = 0;
+        ensureFrame(item.id).then(() => { if (current === item.id) showPanel(item.id); });
+      });
   }
 }
 
@@ -777,12 +964,15 @@ document.getElementById("who").addEventListener("click", async () => {
   }
 });
 
-// ブラウザ版: 心拍(このタブを閉じたら、入口と各ツールのブラウザ版が自分で終わる)
+// ブラウザ版: 心拍(このタブを閉じたら、入口と各ツールのブラウザ版が自分で終わる)。
+// 裏に回ったタブはタイマーが間引かれる・スリープ明けは遅れるので、表に戻ったときにもすぐ送る
 function heartbeat() {
   if (desktop) return;
   const beat = () => api.post("/api/alive", {}).catch(() => {});
   beat();
   every(beat, 20000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
+  window.addEventListener("pageshow", beat);
 }
 
 settingsView.install({ desktop, invoke, tools: TOOLS, reloadTabs: followTabs });

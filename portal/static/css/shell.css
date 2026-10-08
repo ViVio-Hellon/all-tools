@@ -258,3 +258,15 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .dist-tools td.is-ok{color:var(--state-ok);font-weight:700}
 .dist-steps{margin:6px 0 12px;padding-left:22px}
 .dist-steps li{margin:2px 0}
+
+/* ツールの処理が止まった・終わった知らせ(枠の上に重ねる。**枠は消さない** ── 打ちかけを写し取れるように) */
+.lostbar{position:absolute;left:0;right:0;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;
+  padding:10px 16px;background:var(--warn-bg);color:var(--warn-fg);border-top:3px solid var(--state-error);
+  box-shadow:0 -2px 8px #0003;font-size:var(--fs-md)}
+.lostbar b{font-size:var(--fs-lg, 1.05em)}
+.lostbar p{margin:0;flex:1 1 360px}
+.lostbar.is-small p{display:none}
+.lostbar.is-small{left:auto;border-top-left-radius:var(--radius-sm)}
+/* 大設定の上の知らせ(入口の処理が止まった・起こし直した) */
+.portal-state{margin:0 0 12px}
+.row-unlock{display:flex;gap:8px;align-items:center;margin:8px 0}

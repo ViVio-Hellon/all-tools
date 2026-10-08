@@ -45,6 +45,10 @@ IDLE_SEC = 90
 #: 最初の心拍を待つ上限(秒)。ブラウザが開かなかったときに残り続けない
 FIRST_CONTACT_SEC = 300
 
+#: 見張りの1回(1秒のはず)がこれより長く空いたら、そのあいだ PC ごと眠っていた
+#: (スリープ・休止)とみなし、数え直す(秒)。各ツールの見張りと同じ考え
+WAKE_GAP_SEC = 30
+
 LOCK_NAME = "portal.lock"
 
 DESKTOP_RUNNING = "統合ツールはデスクトップ版(統合ツール.exe の窓)で動いています"
@@ -138,6 +142,46 @@ def port_free(port: int, host: str) -> bool:
 
 
 # ------------------------------------------------------------------
+# 心拍の見張り(画面が居なくなったら終わる)
+# ------------------------------------------------------------------
+class IdleWatch:
+    """画面(大きなタブのページ)の心拍が途絶えたかを数える。**眠っていたあいだは数えない。**
+
+    PC がスリープすると、ブラウザも一緒に眠るので心拍は来ない。Windows の
+    `time.monotonic()` は眠っているあいだも進むので、フタを開けた瞬間に「90秒 心拍が
+    ありません」と判定し、ブラウザが心拍を送るより先に**入口が全ツールを止めていた**
+    (各ツールは自分の見張りで眠りを差し引いていたのに、入口が先に止めてしまう)。
+    誰も閉じていない。
+
+    見張りの1回(1秒のはず)が `WAKE_GAP_SEC` より空いたら眠っていたとみなし、
+    そこから数え直す(起きたブラウザが心拍を送る間を与える)。
+    """
+
+    def __init__(self, started: float, *, idle_sec: float = IDLE_SEC,
+                 first_contact_sec: float = FIRST_CONTACT_SEC, wake_gap_sec: float = WAKE_GAP_SEC) -> None:
+        self.started = started
+        self.idle_sec = idle_sec
+        self.first_contact_sec = first_contact_sec
+        self.wake_gap_sec = wake_gap_sec
+        self.last_tick = started
+        self.resumed = started          # 数え始め(起動・眠りから戻ったとき)
+        self.slept = 0                  # 眠りから戻った回数(記録用)
+
+    def tick(self, now: float, beat: float) -> Optional[float]:
+        """見張りの1回。終わるべきなら、心拍の無かった秒数を返す。"""
+        if now - self.last_tick > self.wake_gap_sec:
+            self.resumed = now
+            self.slept += 1
+        self.last_tick = now
+        contacted = beat > self.started
+        since = max(beat if contacted else self.started, self.resumed)
+        idle = now - since
+        if (contacted and idle > self.idle_sec) or (not contacted and idle > self.first_contact_sec):
+            return idle
+        return None
+
+
+# ------------------------------------------------------------------
 # 起動
 # ------------------------------------------------------------------
 def start(*, open_browser: bool = True) -> int:
@@ -220,14 +264,15 @@ def start(*, open_browser: bool = True) -> int:
         print(f"起動しました: {url}")
 
     # --- 画面が居なくなったら終わる(心拍)---
-    started = time.monotonic()
+    watch = IdleWatch(time.monotonic())
     try:
         while thread.is_alive() and not stopped.is_set():
             time.sleep(1)
-            beat = web.last_beat()
-            contacted = beat > started
-            idle = time.monotonic() - (beat if contacted else started)
-            if (contacted and idle > IDLE_SEC) or (not contacted and idle > FIRST_CONTACT_SEC):
+            slept = watch.slept
+            idle = watch.tick(time.monotonic(), web.last_beat())
+            if watch.slept != slept:
+                log.info("見張りが止まっていました(スリープ・休止から戻った)。心拍は数え直します")
+            if idle is not None:
                 log.info("画面が居なくなったので終わります(%.0f秒 心拍がありません)", idle)
                 tools.stop_all(force=False)
                 stop()

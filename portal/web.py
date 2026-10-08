@@ -269,7 +269,15 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             action(path)
         except shared_db.SourceError as exc:
             status = {"stale_row": 409, "no_row": 409, "no_table": 409}.get(exc.code, 422)
-            return _error(exc.code, str(exc), status)
+            if status != 409:
+                return _error(exc.code, str(exc), status)
+            # **断ったら、手元の写しも読み直してから返す。** 写しが古いままだと、画面は
+            # 読み直しても古い行(古い was)を出し、何度「保存する」を押しても 409 になっていた。
+            # 読み直した表を一緒に返す(画面は打った値を残したまま、行の「いま」だけ差し替える)
+            store.sync(force=True)
+            body = {**_settings_view(catalog), "ok": False,
+                    "error": {"code": exc.code, "message": str(exc)}}
+            return jsonify(body), status
         store.sync(force=True)
         log.info("%s(%s)", done, identity_mod.current().label())
         return jsonify({"ok": True, "message": done, **_settings_view(catalog)})
@@ -278,15 +286,24 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
     def rights_create():                          # noqa: ANN202
         return write(lambda path: shared_db.create_table(path), "タブ表示権限の表を作りました")
 
-    def values_from(body: dict) -> dict:
+    def values_from(body: dict, previous: Optional[str] = None) -> dict:
+        """画面の値 → 表の値。`previous` は直す行の、読んだときの表示タブ(足すときは None)。"""
         tab_ids = [t for t in body.get("tab_ids", []) if catalog.by_id(str(t))]
-        tabs = tab_rights.canonical_tabs(tab_ids, catalog) if "tab_ids" in body else str(body.get("tabs", ""))
-        default = str(body.get("default_tab", "") or "")
+        if "tab_ids" not in body:
+            tabs = str(body.get("tabs", ""))
+        elif previous is None:
+            tabs = tab_rights.canonical_tabs(tab_ids, catalog)
+        else:
+            # チェックを変えていなければ表の文字のまま(知らない語・名前の並びを消さない)
+            tabs = tab_rights.edited_tabs(previous, tab_ids, catalog)
+        default = str(body.get("default_tab", "") or "").strip()
         default_tool = catalog.by_id(default) or catalog.find(default)
         return {"ログインID": str(body.get("login_id", "")).strip(),
                 "PC名": str(body.get("pc_name", "")).strip(),
                 "表示タブ": tabs,
-                "既定タブ": default_tool.title if default_tool else "",
+                # この版が知らない既定タブ(新しいツール)は、書かれていたまま残す。
+                # 以前は備考を直しただけで空になっていた
+                "既定タブ": default_tool.title if default_tool else default,
                 "有効": bool(body.get("enabled", True)),
                 "備考": str(body.get("note", "")).strip()}
 
@@ -307,7 +324,8 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
     @app.post("/api/rights/save")
     def rights_save():                            # noqa: ANN202
         body = request.get_json(silent=True) or {}
-        values = values_from(body)
+        raw_was = body.get("was") if isinstance(body.get("was"), dict) else {}
+        values = values_from(body, previous=str(raw_was.get("tabs", "") or ""))
         bad = check_values(values)
         if bad:
             return bad
@@ -414,6 +432,8 @@ def _settings_view(catalog) -> dict:
     rules = [tab_rights.Rule.from_row(r) for r in snap.rows]
     decision = store.decide(me, catalog)
     loc = shared_db.location()
+    set_folder, set_name = shared_db.configured()
+    fallback_folder, fallback_name = shared_db.fallback()
     tools = []
     for tool in catalog.tools:
         tools.append({**tool.to_dict(), "version": tool.version(), "dir": str(tool.dir),
@@ -424,8 +444,12 @@ def _settings_view(catalog) -> dict:
         "decision": decision.to_dict(catalog),
         "admin": admin_password.session.peek(),
         "password_custom": admin_password.is_custom(),
-        "source": {**loc.to_dict(), "default_folder": shared_db.DEFAULT_DIR,
-                   "default_name": shared_db.DEFAULT_NAME, "table": tab_rights.TABLE,
+        # `folder` / `name` は効いている場所。欄に入れるのは**大設定で決めた値**(`set_*`)だけ
+        # ── 効いている既定(環境変数・既定)を欄に入れると、「変える」を押したときに
+        # 既定が大設定の値として書き込まれ、配布設定にも乗っていた
+        "source": {**loc.to_dict(), "default_folder": fallback_folder,
+                   "default_name": fallback_name, "set_folder": set_folder, "set_name": set_name,
+                   "table": tab_rights.TABLE,
                    "state": snap.state, "imported_at": snap.imported_at,
                    "checked_at": snap.checked_at, "error": snap.last_error,
                    "cached_from": snap.source},

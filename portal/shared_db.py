@@ -29,7 +29,7 @@ from urllib.parse import quote
 
 from . import user_settings
 from .logging_utils import get_logger
-from .tab_rights import COLUMNS, EDITABLE, TABLE
+from .tab_rights import COLUMNS, EDITABLE, TABLE, _flag
 
 log = get_logger("shared_db")
 
@@ -66,16 +66,27 @@ class Location:
         return {"folder": self.folder, "name": self.name, "path": str(self.path), "origin": self.origin}
 
 
-def location() -> Location:
+def configured() -> tuple[str, str]:
+    """大設定で決めた置き場所(フォルダ, ファイル名)。決めていなければ空。"""
     folder = str(user_settings.get(user_settings.KEY_SHARED_DIR) or "").strip()
     name = str(user_settings.get(user_settings.KEY_SHARED_NAME) or "").strip()
+    return folder, name
+
+
+def fallback() -> tuple[str, str]:
+    """大設定で決めていないときに使う置き場所(環境変数 → 既定)。"""
+    folder = os.environ.get("ALLTOOLS_SHARED_DB_DIR", "").strip() or DEFAULT_DIR
+    name = os.environ.get("ALLTOOLS_SHARED_DB_NAME", "").strip() or DEFAULT_NAME
+    return folder, name
+
+
+def location() -> Location:
+    folder, name = configured()
     origin = "大設定"
     if not folder:
-        folder = os.environ.get("ALLTOOLS_SHARED_DB_DIR", "").strip()
-        origin = "環境変数" if folder else "既定"
-    if not name:
-        name = os.environ.get("ALLTOOLS_SHARED_DB_NAME", "").strip() or DEFAULT_NAME
-    return Location(folder or DEFAULT_DIR, name, origin)
+        origin = "環境変数" if os.environ.get("ALLTOOLS_SHARED_DB_DIR", "").strip() else "既定"
+    fallback_folder, fallback_name = fallback()
+    return Location(folder or fallback_folder, name or fallback_name, origin)
 
 
 def to_uri(path: Path, *, read_only: bool = False) -> str:
@@ -219,7 +230,12 @@ def _same(row: dict[str, Any], was: dict[str, Any]) -> bool:
             continue
         got = row.get(key)
         if key == "有効":
-            if int(got or 0) != int(expected or 0):
+            # 表の有効は**画面と同じ読み方**で比べる(`tab_rights._flag`)。Access の -1・NULL・
+            # 「無効」などの文字の行は、画面では有効/無効に読めるのに、ここで `int()` で
+            # 比べて「ほかの人が先に直しています」(409)になり、何度押しても直せなかった
+            # (文字なら `int()` で落ちて 500)
+            want = _flag(expected) if isinstance(expected, str) else bool(expected)
+            if _flag(got) != want:
                 return False
         elif str(got or "").strip() != str(expected or "").strip():
             return False

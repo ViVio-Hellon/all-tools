@@ -145,7 +145,9 @@ fn main() {
             shell.set_app(app.handle().clone());
 
             // 各ツールの「終了してよい」→ アプリを閉じる道(ほかのツールにも訊く)。
-            // 落ちた → そのタブだけ読み直す(理由の画面が出る)
+            // 落ちた → **画面は読み直さない**(画面の打ちかけを消さない)。そのタブに知らせを
+            // 重ね、読み直すのは本人が「もう一度開く」を押したときだけ。入口が落ちたら、
+            // 大きなタブの画面ごと読み直さずに(全タブが消える)、入口の Python だけ起こし直す
             for (tool, bridge) in shell.all_bridges() {
                 let id = tool.id.clone();
                 let quit_shell = shell.clone();
@@ -158,7 +160,7 @@ fn main() {
                 let portal = tool.is_portal();
                 bridge.set_on_lost(move || {
                     if portal {
-                        lost_shell.tell_shell("location.reload()");
+                        lost_shell.portal_lost();
                     } else {
                         lost_shell.tell_shell(&format!("window.__shell && window.__shell.toolLost({})", js_string(&id)));
                     }

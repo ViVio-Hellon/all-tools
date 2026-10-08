@@ -103,6 +103,34 @@ class TableTests(unittest.TestCase):
             shared_db.update(self.path, key, now, now)
         self.assertEqual(caught.exception.code, "no_row")
 
+    def test_有効がNULL_マイナス1_文字の行も直せる(self) -> None:
+        """画面は有効を `_flag` で読む(NULL・-1 は有効、「無効」は無効)。書く前の確かめも同じ読み方で。
+
+        以前は `int(got or 0)` で比べ、NULL・-1 の行は「ほかの人が先に直しています」(409)、
+        文字の行は落ちて(500)、何度押しても直せなかった。
+        """
+        shared_db.create_table(self.path)
+        db = sqlite3.connect(self.path)
+        for login, flag in (("nullflag", None), ("access", -1), ("textoff", "無効"), ("texton", "有効")):
+            db.execute('INSERT INTO "タブ表示権限" ("ログインID", "表示タブ", "有効", "備考") VALUES (?, ?, ?, ?)',
+                       (login, "日報", flag, ""))
+        db.commit()
+        db.close()
+        from portal import tab_rights
+        for row in shared_db.read_rows(self.path):
+            rule = tab_rights.Rule.from_row(row)
+            was = {"ログインID": rule.login_id, "表示タブ": rule.tabs, "有効": 1 if rule.enabled else 0, "備考": rule.note}
+            with self.subTest(login=rule.login_id):
+                shared_db.update(self.path, rule.key, {**rule.values(), "備考": "直した"}, was)
+        notes = {r["ログインID"]: (r["備考"], r["有効"]) for r in shared_db.read_rows(self.path)}
+        self.assertEqual(notes, {"nullflag": ("直した", 1), "access": ("直した", 1),
+                                 "textoff": ("直した", 0), "texton": ("直した", 1)})
+        # 読み方が違う(画面は無効で読んだのに表は有効)なら、やはり断る
+        row = next(r for r in shared_db.read_rows(self.path) if r["ログインID"] == "texton")
+        with self.assertRaises(shared_db.SourceError) as caught:
+            shared_db.update(self.path, row[shared_db.ROW_KEY], {"備考": "x"}, {"有効": 0})
+        self.assertEqual(caught.exception.code, "stale_row")
+
     def test_表が無いのに足そうとした(self) -> None:
         with self.assertRaises(shared_db.SourceError) as caught:
             shared_db.insert(self.path, {"PC名": "X"})
