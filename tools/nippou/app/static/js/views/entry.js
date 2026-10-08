@@ -22,7 +22,7 @@ import { open as openModal, close as closeModal } from "./modals.js";
 // **打てるタブは1枚だけ。** 2枚に打つと、後から保存したほうで上書きされ、
 // 先に打ったぶんが黙って消える(`tab_lock.js` に理由を書いてあります)
 import * as tabLock from "../tab_lock.js";
-import { watch as watchJob } from "../progress.js";
+import { confirmPush, watch as watchJob } from "../progress.js";
 
 // 欄から離れてから送るまでの間合い(ms)。連続入力の途中で送らない
 const SETTLE_MS = 120;
@@ -67,6 +67,21 @@ function touched(el) { el.dataset.editAt = String(++editSeq); }
 // どこまで書けたか(書けたときの `editSeq`)。これより後に打ったものが打ちかけ
 let savedSeq = 0;
 const unsaved = () => editSeq > savedSeq;
+
+/*
+  **保存は1本ずつ、送る瞬間の中身で。**
+
+  自動保存は欄を離れた答えのあとに走り、そのときの中身(打ちかけの「A110」)を
+  持って出ます。続けて閉じる前の保存(「A1100-O」)が出ると、2本が同時に
+  サーバへ着き、**古いほうがあとに書かれて**新しい中身を上書きすることが
+  ありました。保存はここで1列に並べ、中身は順番が来たときに集めます。
+*/
+let saveChain = Promise.resolve();
+function inOrder(send) {
+  const run = saveChain.then(send, send);
+  saveChain = run.catch(() => {});
+  return run;
+}
 
 /** 写した印を落とす(人が触った / 行を空にした)。 */
 function forgetCarried(row) {
@@ -1502,9 +1517,11 @@ async function maybeAutosave() {
   try {
     // `mute`: 断られても「断られた」の音にしない(押していない場面で驚かせない ──
     // 下のトーストと同じ理由)
-    const since = editSeq;
-    const body = await api.post("/api/entry/save", { ...collect(), silent: true },
-                                { mute: true });
+    let since = 0;
+    const body = await inOrder(() => {
+      since = editSeq;
+      return api.post("/api/entry/save", { ...collect(), silent: true }, { mute: true });
+    });
     if (body.saved) savedSeq = Math.max(savedSeq, since);
     // **見送られた理由が「直が変わった」なら、帯にも出す。** 1分ごとの
     // 見張りが拾うより先に分かるので、待たせない
@@ -1726,13 +1743,16 @@ function paintShiftFindings(standing) {
   書けていないのに移ると打ちかけが消えます。
 */
 async function saveNow(shiftChoice = "") {
-  const payload = collect();
-  if (shiftChoice) payload.shift_choice = shiftChoice;
   try {
     // 確定保存には `silent` を付けない。**間引きの対象外**で、
     // 押したときは必ず書く(サーバが判断するのは自動保存だけ)
-    const since = editSeq;
-    const body = await api.post("/api/entry/save", payload);
+    let since = 0;
+    const body = await inOrder(() => {
+      since = editSeq;
+      const payload = collect();
+      if (shiftChoice) payload.shift_choice = shiftChoice;
+      return api.post("/api/entry/save", payload);
+    });
     if (body.saved) savedSeq = Math.max(savedSeq, since);
     paint(body);
     // 書けたのだから、帯の知らせはもう役目を終えている
@@ -1778,9 +1798,11 @@ async function saveNow(shiftChoice = "") {
  */
 async function saveDraft() {
   try {
-    const since = editSeq;
-    const body = await api.post("/api/entry/save",
-                                { ...collect(), draft: true });
+    let since = 0;
+    const body = await inOrder(() => {
+      since = editSeq;
+      return api.post("/api/entry/save", { ...collect(), draft: true });
+    });
     if (body.saved || body.skipped) savedSeq = Math.max(savedSeq, since);
     paint({ ...body, message: "" });
     // **打っていない紙は「書けなかった」ではありません。**
@@ -1859,11 +1881,21 @@ async function keepTyped() {
   if (!unsaved() || !tabLock.mayEdit()) return true;
   if (await saveDraft()) return true;
   return confirm("打ちかけの行を保存できませんでした。\n"
-                 + "このまま移ると、保存していない行は消えます。移りますか?");
+                 + "このまま続けると、保存していない行は消えます。続けますか?");
 }
 
 export function start() {
   beforeLeave(keepTyped);
+  // **どの欄でも、打ったら数える。** 打てる字に決まりのある欄(LOT・時刻)だけ
+  // 数えていて、材・寸法のような自由な欄は「打っていない」扱いだった
+  // (閉じる前に置かず、途中まで打った「A110」が残った)
+  for (const name of ["input", "change"]) {
+    document.addEventListener(name, (ev) => {
+      const el = ev.target;
+      if (el && el.matches
+          && el.matches("[data-row][data-family], [data-header], [data-check]")) touched(el);
+    }, { capture: true, signal: pageSignal() });
+  }
   // 閉じる・読み直す(F5)。返事は待てないので、置くだけ送る
   window.addEventListener("pagehide", () => {
     if (unsaved() && tabLock.mayEdit()) {
@@ -2348,6 +2380,7 @@ export function start() {
    * もう1度読ませる**ことになります。打つ欄はこの下にあります。
    */
   async function pushShared(skip = "") {
+    if (!(await confirmPush())) return;
     const note = document.getElementById("save-note");
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");

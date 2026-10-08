@@ -368,6 +368,11 @@ window.addEventListener("message", async (event) => {
     keyFromTool(id, data);
     return;
   }
+  if (data.type === "alltools:before-close-ack" || data.type === "alltools:before-close-done") {
+    const wait = closeWaits.get(`${id}:${data.seq}`);
+    if (wait) wait(data.type, data.ok !== false);
+    return;
+  }
   if (data.type === "alltools:ready") {
     // ツールの画面そのものが出た(外枠の「起動しています」・理由の画面ではない)。
     // ツールの待機画面 → 本体の画面と移るので、題名が変わったときに残す(1つの枠で5回まで)
@@ -552,8 +557,61 @@ function reloadTool(id) {
   entry.iframe.src = entry.url;
 }
 
+// ------------------------------------------------------------------
+// 終える前に、各ツールの画面へ「打ちかけを置いて」と頼む
+//
+//     デスクトップ版の窓の×・終了では、日報の打ちかけはまだ保存されません:
+//     保存するようにしてください
+//
+// 日報の入力中の行は**画面の中にしか無い**(自動保存は1分に1回)。窓の × ・
+// 大きなタブの「終了」で、Python に「終わってよいか」を訊く前に、各ツールの
+// 画面へ頼んで置いてもらう。受ける画面(日報)はすぐ「受けた」と返し、置き
+// 終えたら「済んだ」を返す。受けない画面(看板など、置くものが無い)は返事を
+// しないので、少し待ってから次へ進む。置けずに「閉じない」を選ばれたら false。
+// ------------------------------------------------------------------
+const closeWaits = new Map();
+let closeSeq = 0;
+const ACK_MS = 1200;        // 「受けた」を待つ(受けない画面はここで見切る)
+const DONE_MS = 12000;      // 「済んだ」を待つ(手元の SQLite へ置くだけ)
+
+function askFrameToSave(id, win) {
+  const seq = ++closeSeq;
+  const key = `${id}:${seq}`;
+  return new Promise((resolve) => {
+    let acked = false;
+    const finish = (ok) => { closeWaits.delete(key); clearTimeout(timer); resolve(ok); };
+    let timer = setTimeout(() => finish(true), ACK_MS);
+    closeWaits.set(key, (type, ok) => {
+      if (type === "alltools:before-close-ack" && !acked) {
+        acked = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => finish(true), DONE_MS);
+      } else if (type === "alltools:before-close-done") {
+        finish(ok);
+      }
+    });
+    try { win.postMessage({ type: "alltools:before-close", seq }, originOf(id)); } catch (err) { finish(true); }
+  });
+}
+
+async function prepareFrames() {
+  const asks = [];
+  for (const [id, entry] of frames) {
+    const win = entry.iframe && entry.iframe.contentWindow;
+    if (win && originOf(id)) asks.push(askFrameToSave(id, win));
+  }
+  const answers = await Promise.all(asks);
+  return answers.every(Boolean);
+}
+
 // 外枠(Rust)から呼ばれる口
 window.__shell = {
+  /** 終える前(窓の × ・「終了」)。各ツールの画面に打ちかけを置いてもらい、外枠へ返事 */
+  async prepareClose() {
+    let ok = true;
+    try { ok = await prepareFrames(); } catch (err) { ok = true; }
+    invoke("shell_prepared", { ok }).catch(() => {});
+  },
   /** そのツールの Python を立て直した・落ちた → そのタブだけ読み直す */
   reloadTool(id) { reloadTool(id); },
   toolLost(id) {
@@ -679,6 +737,8 @@ document.getElementById("quit").addEventListener("click", async () => {
     invoke("shell_close").catch(toastError);
     return;
   }
+  // ブラウザ版: 止める前に各ツールの画面の打ちかけを置く(デスクトップ版は外枠が頼む)
+  if (!(await prepareFrames())) return;
   try {
     await api.post("/api/shutdown", {});
     ended();

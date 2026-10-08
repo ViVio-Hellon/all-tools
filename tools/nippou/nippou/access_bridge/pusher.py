@@ -149,6 +149,8 @@ class PushSummary:
     concurrency_warning: str = ""
     #: 一緒に送った直ごとの集計の数(書き先が sqlite3 のときだけ)
     summaries: int = 0
+    #: 「中止」で送らずに残したページの数(次に押せば続きから)
+    stopped: int = 0
 
 
 def push_pending(
@@ -177,30 +179,98 @@ def push_pending(
 
     headers = list(repo.pending_sync_headers())
     job_progress.step(phase=progress.PHASE_SEND, total=len(headers), done=0)
-    for no, header in enumerate(headers, start=1):
-        job_progress.step(label=(f"{header.report_date} {header.line} "
-                                 f"{header.shift} {header.page}ページ"))
-        # 1キー分の反映処理を個別にtry/exceptで保護する。
-        # 「他ライン(=他キー)を巻き込んで処理全体を止めない」ことが目的で、
-        # SQL文組み立て時の想定外のデータ型エラーなど、run_with_retry の
-        # リトライ対象にならない異常もここで確実に食い止める。
-        try:
-            _push_one(repo, accdb_path, header, runner, summary)
-        except Exception as exc:  # noqa: BLE001 - 他キーの処理を止めないための意図的な広い捕捉
-            _logger.exception("反映処理中に予期しないエラーが発生しました key=%s", header.key())
-            repo.log_sync("push", header_table_name(header.line), "error", f"予期しないエラー: {exc}")
-            summary.failed.append(
-                PushOutcome(
-                    key=header.key(),
-                    success=False,
-                    error=AccessBridgeError(kind=ErrorKind.UNKNOWN, err_number=None, message=str(exc)),
-                )
-            )
-        job_progress.step(done=no)
+    sqlite_target = is_sqlite_target(accdb_path)
+    size = BATCH_PAGES if sqlite_target else 1
+    done = 0
+    for start in range(0, len(headers), size):
+        # **「中止」は束の切れ目で受ける。** 送った分は共有に入っていて、
+        # 残りは未送信のまま(次に押せば続きから)
+        if job_progress.stop_requested():
+            summary.stopped = len(headers) - done
+            break
+        chunk = headers[start:start + size]
+        job_progress.step(label=_chunk_label(chunk))
+        if sqlite_target:
+            _push_batch(repo, Path(accdb_path), chunk, summary)
+        else:
+            _push_guarded(repo, accdb_path, chunk[0], runner, summary)
+        done += len(chunk)
+        job_progress.step(done=done)
 
-    job_progress.step(label="直ごとの集計")
-    summary.summaries = _push_summaries(repo, accdb_path)
+    if not summary.stopped:
+        summary.summaries = _push_summaries(repo, accdb_path)
     return summary
+
+
+#: 1回開いて1回で確定するページ数(共有が sqlite3 のとき)。
+#: 多すぎると1つの確定が長くなり、そのあいだ他の端末が書けない。
+#: 25ページ(=300行)なら共有フォルダの上でも数秒で終わる
+BATCH_PAGES = 25
+#: 集計の束(直の数)。1直で3つの表を入れ替えるので、ページより小さく
+BATCH_SHIFTS = 10
+
+
+def _chunk_label(chunk: list[HeaderRecord]) -> str:
+    first, last = chunk[0], chunk[-1]
+    head = f"{first.report_date} {first.line} {first.shift} {first.page}ページ"
+    if len(chunk) == 1:
+        return head
+    return f"{head} 〜 {last.report_date} {last.shift} {last.page}ページ"
+
+
+def _push_guarded(repo: NippouRepository, accdb_path: Path, header: HeaderRecord,
+                  runner: Optional[ScriptRunner], summary: "PushSummary") -> None:
+    """1ページを送る。**想定外の例外でも、ほかのページは止めない。**"""
+    # 1キー分の反映処理を個別にtry/exceptで保護する。
+    # 「他ライン(=他キー)を巻き込んで処理全体を止めない」ことが目的で、
+    # SQL文組み立て時の想定外のデータ型エラーなど、run_with_retry の
+    # リトライ対象にならない異常もここで確実に食い止める。
+    try:
+        _push_one(repo, accdb_path, header, runner, summary)
+    except Exception as exc:  # noqa: BLE001 - 他キーの処理を止めないための意図的な広い捕捉
+        _logger.exception("反映処理中に予期しないエラーが発生しました key=%s", header.key())
+        repo.log_sync("push", header_table_name(header.line), "error", f"予期しないエラー: {exc}")
+        summary.failed.append(
+            PushOutcome(
+                key=header.key(),
+                success=False,
+                error=AccessBridgeError(kind=ErrorKind.UNKNOWN, err_number=None, message=str(exc)),
+            )
+        )
+
+
+def _push_batch(repo: NippouRepository, accdb_path: Path,
+                chunk: list[HeaderRecord], summary: "PushSummary") -> None:
+    """何ページかを1回で送る。**駄目なら1ページずつ送り直して、悪いページだけ残す。**"""
+    from .sqlite_backend import push_records_batch
+
+    items = []
+    for header in chunk:
+        loaded = repo.load(header.report_date, header.line, header.shift, header.page)
+        if loaded is None:
+            continue
+        _stored, details = loaded
+        items.append((header, details, header_table_name(header.line),
+                      detail_table_name(header.line)))
+    if not items:
+        return
+    try:
+        result = push_records_batch(accdb_path, items)
+    except Exception:  # noqa: BLE001 - 1ページずつに切り替えて切り分ける
+        _logger.exception("束で送れませんでした(1ページずつ送り直します)")
+        result = None
+    if result is not None and result.success:
+        for header, *_ in items:
+            repo.mark_synced(header.key())
+            summary.succeeded.append(header.key())
+        for line in sorted({h.line for h, *_ in items}):
+            repo.log_sync("push", header_table_name(line), "success",
+                          f"{sum(1 for h, *_ in items if h.line == line)}ページ")
+        return
+    # 束のどれかが悪い(または共有がロック中)。**1ページずつ**送り直して、
+    # 送れるものは送り、送れないものだけを失敗として返す
+    for header, *_ in items:
+        _push_guarded(repo, accdb_path, header, None, summary)
 
 
 def _push_summaries(repo: NippouRepository, accdb_path: Path) -> int:
@@ -217,18 +287,50 @@ def _push_summaries(repo: NippouRepository, accdb_path: Path) -> int:
     """
     if not is_sqlite_target(accdb_path):
         return 0
+    from .. import job_progress
+    from ..logic import progress
+    from . import sqlite_backend
+
+    reports = list(repo.pending_packing_reports())
+    job_progress.step(phase=progress.PHASE_SEND_SUMMARY, total=len(reports), done=0)
+    sent = 0
+    for start in range(0, len(reports), BATCH_SHIFTS):
+        if job_progress.stop_requested():
+            break
+        chunk = reports[start:start + BATCH_SHIFTS]
+        first = chunk[0]
+        job_progress.step(label=f"{first.work_date} {first.line_name} {first.shift}"
+                                + (f" ほか{len(chunk) - 1}直" if len(chunk) > 1 else ""))
+        items = [(r, repo.packing_details(r.id), summary_table_name(r.line_name),
+                  agg_detail_table_name(r.line_name), stop_detail_table_name(r.line_name))
+                 for r in chunk]
+        try:
+            result = sqlite_backend.push_summary_batch(Path(accdb_path), items)
+        except Exception:                         # noqa: BLE001 - 1直ずつへ
+            _logger.exception("集計を束で送れませんでした(1直ずつ送り直します)")
+            result = None
+        if result is not None and result.success:
+            for record in chunk:
+                repo.mark_packing_report_synced(record.key())
+            sent += len(chunk)
+        else:
+            sent += _push_summaries_one_by_one(repo, Path(accdb_path), items)
+        job_progress.step(done=min(len(reports), start + len(chunk)))
+    return sent
+
+
+def _push_summaries_one_by_one(repo: NippouRepository, accdb_path: Path,
+                               items: list) -> int:
+    """束で送れなかった集計を1直ずつ。送れた数を返す(悪い直だけ残る)。"""
     from . import sqlite_backend
 
     sent = 0
-    for record in repo.pending_packing_reports():
+    for item in items:
+        record = item[0]
         key = record.key()
-        table = summary_table_name(record.line_name)
+        table = item[2]
         try:
-            result = sqlite_backend.push_summary(
-                accdb_path, record, repo.packing_details(record.id),
-                table,
-                agg_detail_table_name(record.line_name),
-                stop_detail_table_name(record.line_name))
+            result = sqlite_backend.push_summary_batch(accdb_path, [item])
         except Exception as exc:                  # noqa: BLE001 - 日報の反映は返す
             _logger.exception("集計の反映で予期しないエラー key=%s", key)
             repo.log_sync("push", table, "error", str(exc))

@@ -2696,6 +2696,8 @@ body.is-viewer #main > *:not(#tab-lock){ display:none; }
 .job__bar::-moz-progress-bar{ background:var(--accent); border-radius:999px; }
 /* いま触っているものの名前。**長い道でも折り返す** */
 .job__note{ overflow-wrap:anywhere; color:var(--ink); }
+.job__acts{ display:flex; justify-content:flex-end; margin-top:var(--sp-2, 8px); }
+.job__acts .job__stop[hidden]{ display:none; }
 /* **浮かせる枠**(共有へ保存・マスタを直す)。画面ごとに置き場所を作らず、
    どの画面でも上の真ん中に出す(`static/js/progress.js`)。マスタの窓
    (z-index 80)の上、全画面の確認(200)の下 */

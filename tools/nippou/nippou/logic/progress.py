@@ -50,6 +50,7 @@ PHASE_DONE = "done"          # 終わり
 # 共有へ保存
 PHASE_CHECK = "check"        # 送る前の7項目(直ごと)
 PHASE_SEND = "send"          # 共有へ送っている(ページごと)
+PHASE_SEND_SUMMARY = "send_summary"  # 直ごとの集計を共有へ(直ごと)
 PHASE_AFTER = "after"        # 2つ目の出力先・履歴・標準作業時間
 PHASE_MONTH = "month"        # 月替わり
 # マスタ
@@ -65,6 +66,7 @@ PHASE_TEXT: dict[str, str] = {
     PHASE_DONE: "終わりました",
     PHASE_CHECK: "送る前に確かめています",
     PHASE_SEND: "共有へ送っています",
+    PHASE_SEND_SUMMARY: "直ごとの集計を共有へ送っています",
     PHASE_AFTER: "集計CSV・履歴・標準作業時間を写しています",
     PHASE_MONTH: "月替わりを確かめています",
     PHASE_MASTER_WRITE: "元のファイルに書いています",
@@ -74,7 +76,7 @@ PHASE_TEXT: dict[str, str] = {
 #: 仕事ごとの段の並び(どこまで来たかを「3/4」で出すため)
 JOB_PHASES: dict[str, tuple[str, ...]] = {
     JOB_IMPORT: (PHASE_READ, PHASE_WRITE, PHASE_SUMMARY, PHASE_CSV),
-    JOB_PUSH: (PHASE_CHECK, PHASE_SEND, PHASE_AFTER, PHASE_MONTH),
+    JOB_PUSH: (PHASE_CHECK, PHASE_SEND, PHASE_SEND_SUMMARY, PHASE_AFTER, PHASE_MONTH),
     JOB_MASTER: (PHASE_MASTER_WRITE, PHASE_RELOAD),
 }
 
@@ -90,7 +92,11 @@ PHASE_UNIT: dict[str, str] = {
     PHASE_WRITE: "ページ",
     PHASE_CHECK: "直",
     PHASE_SEND: "ページ",
+    PHASE_SEND_SUMMARY: "直",
 }
+
+#: 「中止」を受ける段(共有へ送っているあいだだけ。束の切れ目で止まる)
+STOPPABLE_PHASES: frozenset[str] = frozenset({PHASE_SEND, PHASE_SEND_SUMMARY})
 
 #: 段の並び(取り込み)。**前からある名前**なので残す
 PHASE_ORDER: tuple[str, ...] = JOB_PHASES[JOB_IMPORT]
@@ -113,6 +119,13 @@ class Progress:
     file_no: int = 0
     file_count: int = 0
     file_name: str = ""
+    #: 「中止」を押された(いまの束を送り終えたら止まる)
+    stopping: bool = False
+
+    @property
+    def can_stop(self) -> bool:
+        """「中止」を出すか。共有へ送っているあいだだけ。"""
+        return self.running and self.phase in STOPPABLE_PHASES
 
     @property
     def percent(self) -> int:
@@ -165,6 +178,8 @@ class Progress:
             parts.append(name)
         if self.label:
             parts.append(self.label)
+        if self.stopping:
+            parts.append("中止しています(いまの束を送り終えたら止まります)")
         return "  ".join(parts)
 
     def as_dict(self) -> dict[str, Any]:
@@ -175,7 +190,9 @@ class Progress:
                 "percent": self.percent, "label": self.label,
                 "headline": self.headline, "note": self.note,
                 "file_no": self.file_no, "file_count": self.file_count,
-                "file_name": self.file_name}
+                "file_name": self.file_name,
+                "can_stop": self.can_stop and not self.stopping,
+                "stopping": self.stopping}
 
 
 def idle() -> Progress:

@@ -16,7 +16,7 @@
 import { api } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import { paintCharts } from "../chart.js";
-import { watch as watchJob } from "../progress.js";
+import { confirmPush, watch as watchJob } from "../progress.js";
 import { cue } from "../sound.js";
 
 export function start() {
@@ -107,6 +107,7 @@ export function start() {
 
   /** 共有へ渡して、**その場で画面を「渡しました」に変える。** */
   async function pushAndPaint() {
+    if (!(await confirmPush())) return;
     const btn = document.getElementById("review-act");
     if (btn) btn.disabled = true;
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`

@@ -3,6 +3,7 @@
 //! 単体のデスクトップ版は、× で自分の Python にだけ「終わってよいか」を訊いていた。
 //! 統合では1つの窓に4つのツールが動いているので:
 //!
+//! 0. 各ツールの画面に**打ちかけを置いてもらう**(日報の入力中の行。画面の中にしか無い)
 //! 1. 動いている全ツール(と入口)に**訊くだけ**の問い合わせを送る(`/api/shutdown {"check": true}`)。
 //!    この時点ではどれも止めない(1つでも途中の処理があれば、ほかも止めないため)
 //! 2. 途中の処理があるツールがあれば、**1つの確認**にまとめて出す(ツールの名前と理由を並べる)
@@ -102,7 +103,19 @@ fn busy_reason(body: &serde_json::Value) -> String {
         .unwrap_or_else(|| "実行中の処理があります".to_string())
 }
 
+/// 画面に打ちかけを置いてもらうのを待つ上限(共有へではなく手元の SQLite へ置くだけなので短い)
+const PREPARE_LIMIT: Duration = Duration::from_secs(15);
+
 fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
+    // 0. **画面の打ちかけを置く**(日報の入力中の行は画面の中にしか無い)。
+    //    置けずに「閉じない」を選ばれたら、ここでやめる
+    if !shell.prepare_screens(PREPARE_LIMIT) {
+        crate::places::shell_log(&shell.root, "終了をやめました(画面の打ちかけを置けなかった)");
+        if let Some(id) = quitting {
+            shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
+        }
+        return false;
+    }
     let busy = ask_all(shell, quitting);
     let force = !busy.is_empty();
     if force {

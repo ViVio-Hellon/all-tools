@@ -748,6 +748,9 @@ def _push(ctx):
         lines.extend(f"  {key}: {outcome.error}"
                      for key, outcome in
                      ((o.key, o) for o in summary.failed))
+    if summary.stopped:
+        lines.append(f"中止しました: {summary.stopped}ページは未送信のまま残しています"
+                     "(次に「共有へ保存」を押すと続きから送ります)")
     if summary.concurrency_warning:
         lines.append(summary.concurrency_warning)
     skipped = sum(len(r.skipped) for r in reports)
@@ -795,6 +798,7 @@ def _push(ctx):
         "sound_cue": "" if summary.failed else sound.KEY_PUSHED,
         "succeeded": len(summary.succeeded),
         "failed": len(summary.failed),
+        "stopped": summary.stopped,
         "warning": summary.concurrency_warning,
         "skipped": skipped,
         "rollover": rolls[0][0].as_dict() if rolls else None,
@@ -1714,6 +1718,57 @@ def job_progress_now():
     ここを見に来て棒を伸ばします(`static/js/progress.js`)。
     """
     return jsonify(job_progress.snapshot().as_dict())
+
+
+@bp.post("/api/progress/stop")
+def job_progress_stop():
+    """「中止」(共有へ保存)。**いまの束を送り終えたら止まる。**
+
+    送った分は共有に入っていて、残りは未送信のまま。次に「共有へ保存」を
+    押せば続きから送ります。止められる段でなければ 409。
+    """
+    if not job_progress.request_stop():
+        return jsonify(error_body("not_stoppable",
+                                  "いま止められる仕事は走っていません")), 409
+    log_button_click("push_stop")
+    return jsonify({"ok": True, "message": "いまの束を送り終えたら止めます"})
+
+
+#: これより多く送るときは、押す前に数を見せて確かめる(`GET /api/settings/push/plan`)
+PUSH_CONFIRM_PAGES = 100
+
+
+@bp.get("/api/settings/push/plan")
+def push_plan():
+    """共有へ保存の**下見**。何ページ・何直・いつからいつまでを送るか。
+
+        数が多い場合は分割するか処理前に確認を取ってください
+
+    取り込んだ過去の日報がまとめて未送信になっていると、押した瞬間に
+    何百ページも送り始めていました。多いときは画面が先に数を見せて訊きます
+    (`confirm_needed`)。**読むだけで、共有には触りません。**
+    """
+    from nippou.logic.shift import parse_business_date
+    from nippou.services.nippou_service import format_business_date
+
+    try:
+        headers = list(get_repo().pending_sync_headers())
+    except Exception as exc:                      # noqa: BLE001 - 押すのは止めない
+        log.exception("共有へ保存の下見ができませんでした")
+        return jsonify({"pages": 0, "shifts": 0, "confirm_needed": False,
+                        "error": str(exc)})
+    shifts = {(h.report_date, h.line, h.shift) for h in headers}
+    days = sorted({parse_business_date(h.report_date) for h in headers} - {None})
+    pages = len(headers)
+    # 共有フォルダの上で 25ページの束がおおむね数秒(`pusher.BATCH_PAGES`)
+    minutes = max(1, round(pages / 25 * 4 / 60)) if pages else 0
+    return jsonify({
+        "pages": pages, "shifts": len(shifts),
+        "first_day": format_business_date(days[0]) if days else "",
+        "last_day": format_business_date(days[-1]) if days else "",
+        "minutes": minutes,
+        "confirm_needed": pages >= PUSH_CONFIRM_PAGES,
+    })
 
 
 @bp.get("/api/settings/import/progress")

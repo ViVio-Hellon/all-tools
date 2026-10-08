@@ -225,6 +225,31 @@ document.addEventListener("keydown", (event) => {
 });
 
 wireShell();
+/*
+  **統合ツールの窓を閉じる前に、打ちかけを置く。**
+
+      デスクトップ版の窓の×・終了では、日報の打ちかけはまだ保存されません:
+      保存するようにしてください
+
+  大きなタブの画面(外枠)が、Python に「終わってよいか」を訊く前に頼んで
+  きます(`alltools:before-close`)。すぐ「受けた」を返し、日報入力なら
+  打ちかけを置いて(置けなければ閉じてよいかを訊いて)「済んだ」を返します。
+  頼んでくるのは、この画面を埋め込んでいる親だけ(`window.parent`)。
+*/
+window.addEventListener("message", async (event) => {
+  const data = event.data;
+  if (event.source !== window.parent || window.parent === window) return;
+  if (!data || data.type !== "alltools:before-close") return;
+  const reply = (type, extra = {}) => {
+    try { window.parent.postMessage({ type, seq: data.seq, ...extra }, event.origin); }
+    catch (err) { /* 親がもう居ない */ }
+  };
+  reply("alltools:before-close-ack");
+  let ok = true;
+  try { ok = await nav.leaving(); } catch (err) { ok = true; }
+  reply("alltools:before-close-done", { ok });
+});
+
 nav.start({ onSwap: wireShell });
 // 画面ごとのモジュールを繋ぐ。**最初の1回もここから。** 差し替えのときと
 // 同じ道を通しておかないと、「初回だけ効く」ものが出てくる

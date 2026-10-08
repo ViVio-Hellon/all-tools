@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Iterator, Optional
 
 from .logic.progress import JOB_IMPORT, Progress
 
 _lock = threading.Lock()
 _now: Optional[Progress] = None
+#: 「中止」が押されたか(共有へ保存)。仕事は**束の切れ目で**これを見て止まる
+_stop = threading.Event()
 
 
 def snapshot() -> Progress:
@@ -48,8 +51,29 @@ def start(*, file_count: int = 1, job: str = JOB_IMPORT) -> None:
     """
     with _lock:
         global _now
+        _stop.clear()
         _now = Progress(running=True, job=job,
                         file_count=max(1, int(file_count)))
+
+
+def request_stop() -> bool:
+    """「中止」。**止められる仕事が走っているときだけ**受けて True を返す。
+
+    いまのページの束を送り終えてから止まります(束の途中で切ると、共有に
+    半端なページが残る)。そこまでに送った分は共有に入っていて、残りは
+    未送信のまま ── 次に「共有へ保存」を押せば続きから送ります。
+    """
+    with _lock:
+        global _now
+        if _now is None or not _now.running or not _now.can_stop:
+            return False
+        _stop.set()
+        _now = replace(_now, stopping=True)
+        return True
+
+
+def stop_requested() -> bool:
+    return _stop.is_set()
 
 
 def step(*, phase: str = "", done: Optional[int] = None,
@@ -79,6 +103,7 @@ def step(*, phase: str = "", done: Optional[int] = None,
             file_no=_now.file_no if file_no is None else int(file_no),
             file_count=_now.file_count,
             file_name=_now.file_name if file_name is None else str(file_name),
+            stopping=_now.stopping,
         )
 
 
@@ -87,6 +112,7 @@ def finish() -> None:
     with _lock:
         global _now
         _now = None
+        _stop.clear()
 
 
 @contextmanager

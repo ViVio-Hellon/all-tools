@@ -172,6 +172,26 @@ def _marks(columns: tuple[str, ...]) -> str:
     return ", ".join("?" for _ in columns)
 
 
+def _write_records(conn: sqlite3.Connection, header: HeaderRecord,
+                   details: list[DetailRecord], header_table: str,
+                   detail_table: str, saved_at: str) -> None:
+    """1キーぶんの DELETE と INSERT(確定は呼ぶ側の `with conn`)。"""
+    key = (header.report_date, header.line, header.shift, header.page)
+    key_where = " AND ".join(f"{quote(c)}=?" for c in HEADER_KEY)
+    conn.execute(f"DELETE FROM {quote(detail_table)} WHERE {key_where}", key)
+    conn.execute(f"DELETE FROM {quote(header_table)} WHERE {key_where}", key)
+    conn.execute(
+        f"INSERT INTO {quote(header_table)}"
+        f" ({', '.join(quote(c) for c in HEADER_COLUMNS)})"
+        f" VALUES ({_marks(HEADER_COLUMNS)})",
+        _header_values(header, saved_at))
+    conn.executemany(
+        f"INSERT INTO {quote(detail_table)}"
+        f" ({', '.join(quote(c) for c in DETAIL_COLUMNS)})"
+        f" VALUES ({_marks(DETAIL_COLUMNS)})",
+        [_detail_values(header, d) for d in details])
+
+
 def push_records(db_path: Path, header: HeaderRecord,
                  details: list[DetailRecord],
                  header_table: str, detail_table: str,
@@ -185,42 +205,59 @@ def push_records(db_path: Path, header: HeaderRecord,
     戻り値は Access経路と同じ :class:`ScriptResult` ── 呼び出し側
     (`pusher._push_one`)がどちらの経路かを気にしなくて済むように。
     """
+    return push_records_batch(db_path, [(header, details, header_table, detail_table)],
+                              saved_at=saved_at)
+
+
+#: 1つの束(`push_records_batch`)の中身。(ヘッダ, 明細, ヘッダの表, 明細の表)
+RecordItem = tuple[HeaderRecord, list[DetailRecord], str, str]
+
+
+def push_records_batch(db_path: Path, items: list[RecordItem],
+                       saved_at: str = "") -> ScriptResult:
+    """何ページかを**1回開いて1回で確定する。**
+
+        共有へ保存しています [2/4] 共有へ送っています:
+        プログレスも動かずにとまったままになった
+
+    1ページごとに共有のファイルを開いて確定していました。共有フォルダの
+    上の sqlite3 は確定のたびにファイルへ書き切るのを待つので、取り込んだ
+    何百ページを送ると、それだけで何十分もかかっていました。束ねれば、
+    開くのも確定も束に1回です。
+
+    **束の中のどれかが失敗したら、束ごと何も残しません**(ロールバック)。
+    どれが悪いかは呼ぶ側(`pusher`)が1ページずつ送り直して切り分けます。
+    """
     from datetime import datetime
 
+    if not items:
+        return ScriptResult(success=True, rows=0)
     saved_at = saved_at or datetime.now().isoformat(timespec="seconds")
-    key = (header.report_date, header.line, header.shift, header.page)
-    key_where = " AND ".join(f"{quote(c)}=?" for c in HEADER_KEY)
-
     try:
         conn = _connect(db_path)
     except sqlite3.Error as exc:
         return _failure(f"{db_path.name} を開けません: {exc}", exc)
 
+    rows = 0
     try:
         with conn:                                   # 例外ならロールバック
-            ensure_tables(conn, header_table, detail_table)
-            conn.execute(
-                f"DELETE FROM {quote(detail_table)} WHERE {key_where}", key)
-            conn.execute(
-                f"DELETE FROM {quote(header_table)} WHERE {key_where}", key)
-            conn.execute(
-                f"INSERT INTO {quote(header_table)}"
-                f" ({', '.join(quote(c) for c in HEADER_COLUMNS)})"
-                f" VALUES ({_marks(HEADER_COLUMNS)})",
-                _header_values(header, saved_at))
-            conn.executemany(
-                f"INSERT INTO {quote(detail_table)}"
-                f" ({', '.join(quote(c) for c in DETAIL_COLUMNS)})"
-                f" VALUES ({_marks(DETAIL_COLUMNS)})",
-                [_detail_values(header, d) for d in details])
+            made: set[tuple[str, str]] = set()
+            for header, details, header_table, detail_table in items:
+                if (header_table, detail_table) not in made:
+                    ensure_tables(conn, header_table, detail_table)
+                    made.add((header_table, detail_table))
+                _write_records(conn, header, details, header_table, detail_table,
+                               saved_at)
+                rows += len(details) + 1
     except sqlite3.Error as exc:
-        _logger.warning("sqlite3 への反映に失敗しました key=%s: %s", key, exc)
+        keys = [(h.report_date, h.line, h.shift, h.page) for h, *_ in items]
+        _logger.warning("sqlite3 への反映に失敗しました keys=%s: %s", keys, exc)
         return _failure(str(exc), exc)
     finally:
         conn.close()
 
-    _logger.info("push ok (sqlite3) key=%s rows=%d", key, len(details))
-    return ScriptResult(success=True, rows=len(details) + 1)
+    _logger.info("push ok (sqlite3) pages=%d rows=%d", len(items), rows)
+    return ScriptResult(success=True, rows=rows)
 
 
 def _summary_values(report: PackingReport, saved_at: str) -> tuple[Any, ...]:
@@ -248,6 +285,41 @@ def _agg_detail_values(key: tuple[str, str, str], d: PackingDetail,
             d.coil_vertical_split, d.coil_horizontal_split, saved_at)
 
 
+def _write_summary(conn: sqlite3.Connection, report: PackingReport,
+                   details: list[PackingDetail], summary_table: str,
+                   detail_table: str, stop_table: str, saved_at: str) -> int:
+    """直1つぶんの3つの表を入れ替える(確定は呼ぶ側)。入れた停止の数を返す。"""
+    key = report.key()
+    key_where = " AND ".join(f"{quote(c)}=?" for c in SUMMARY_KEY)
+    for table in (stop_table, detail_table, summary_table):
+        conn.execute(f"DELETE FROM {quote(table)} WHERE {key_where}", key)
+    conn.execute(
+        f"INSERT INTO {quote(summary_table)}"
+        f" ({', '.join(quote(c) for c in SUMMARY_COLUMNS)})"
+        f" VALUES ({_marks(SUMMARY_COLUMNS)})",
+        _summary_values(report, saved_at))
+    conn.executemany(
+        f"INSERT INTO {quote(detail_table)}"
+        f" ({', '.join(quote(c) for c in AGG_DETAIL_COLUMNS)})"
+        f" VALUES ({_marks(AGG_DETAIL_COLUMNS)})",
+        [_agg_detail_values(key, d, saved_at) for d in details])
+    stops = [(*key, d.page, d.row_no, s.stop_no, s.stop_code,
+              s.stop_reason, s.stop_kind, s.stop_minutes, saved_at)
+             for d in details for s in d.stops]
+    conn.executemany(
+        f"INSERT INTO {quote(stop_table)}"
+        f" ({', '.join(quote(c) for c in STOP_DETAIL_COLUMNS)})"
+        f" VALUES ({_marks(STOP_DETAIL_COLUMNS)})", stops)
+    return len(stops)
+
+
+def _ensure_summary_tables(conn: sqlite3.Connection, summary_table: str,
+                           detail_table: str, stop_table: str) -> None:
+    conn.execute(_create_sql(summary_table, SUMMARY_COLUMNS, SUMMARY_KEY))
+    conn.execute(_create_sql(detail_table, AGG_DETAIL_COLUMNS, AGG_DETAIL_KEY))
+    conn.execute(_create_sql(stop_table, STOP_DETAIL_COLUMNS, STOP_DETAIL_KEY))
+
+
 def push_summary(db_path: Path, report: PackingReport,
                  details: list[PackingDetail],
                  summary_table: str, detail_table: str, stop_table: str,
@@ -261,52 +333,50 @@ def push_summary(db_path: Path, report: PackingReport,
     途中で落ちて「合計だけ新しくて明細が古い」形になると、数が
     合わない原因を探すのがいちばん難しくなるので。
     """
+    return push_summary_batch(
+        db_path, [(report, details, summary_table, detail_table, stop_table)],
+        saved_at=saved_at)
+
+
+#: (集計, 明細, 合計の表, 明細の表, 停止の表)
+SummaryItem = tuple[PackingReport, list[PackingDetail], str, str, str]
+
+
+def push_summary_batch(db_path: Path, items: list[SummaryItem],
+                       saved_at: str = "") -> ScriptResult:
+    """何直ぶんかの集計を**1回開いて1回で確定する**(`push_records_batch` と同じ理由)。"""
     from datetime import datetime
 
+    if not items:
+        return ScriptResult(success=True, rows=0)
     saved_at = saved_at or datetime.now().isoformat(timespec="seconds")
-    key = report.key()
-    key_where = " AND ".join(f"{quote(c)}=?" for c in SUMMARY_KEY)
-
     try:
         conn = _connect(db_path)
     except sqlite3.Error as exc:
         return _failure(f"{db_path.name} を開けません: {exc}", exc)
 
+    rows = 0
     try:
         with conn:
-            conn.execute(_create_sql(summary_table, SUMMARY_COLUMNS, SUMMARY_KEY))
-            conn.execute(_create_sql(detail_table, AGG_DETAIL_COLUMNS,
-                                     AGG_DETAIL_KEY))
-            conn.execute(_create_sql(stop_table, STOP_DETAIL_COLUMNS,
-                                     STOP_DETAIL_KEY))
-            for table in (stop_table, detail_table, summary_table):
-                conn.execute(f"DELETE FROM {quote(table)} WHERE {key_where}", key)
-            conn.execute(
-                f"INSERT INTO {quote(summary_table)}"
-                f" ({', '.join(quote(c) for c in SUMMARY_COLUMNS)})"
-                f" VALUES ({_marks(SUMMARY_COLUMNS)})",
-                _summary_values(report, saved_at))
-            conn.executemany(
-                f"INSERT INTO {quote(detail_table)}"
-                f" ({', '.join(quote(c) for c in AGG_DETAIL_COLUMNS)})"
-                f" VALUES ({_marks(AGG_DETAIL_COLUMNS)})",
-                [_agg_detail_values(key, d, saved_at) for d in details])
-            stops = [(*key, d.page, d.row_no, s.stop_no, s.stop_code,
-                      s.stop_reason, s.stop_kind, s.stop_minutes, saved_at)
-                     for d in details for s in d.stops]
-            conn.executemany(
-                f"INSERT INTO {quote(stop_table)}"
-                f" ({', '.join(quote(c) for c in STOP_DETAIL_COLUMNS)})"
-                f" VALUES ({_marks(STOP_DETAIL_COLUMNS)})", stops)
+            made: set[tuple[str, str, str]] = set()
+            for report, details, summary_table, detail_table, stop_table in items:
+                tables = (summary_table, detail_table, stop_table)
+                if tables not in made:
+                    _ensure_summary_tables(conn, *tables)
+                    made.add(tables)
+                stops = _write_summary(conn, report, details, *tables, saved_at)
+                rows += len(details) + stops + 1
     except sqlite3.Error as exc:
-        _logger.warning("集計の反映に失敗しました key=%s: %s", key, exc)
+        keys = [r.key() for r, *_ in items]
+        _logger.warning("集計の反映に失敗しました keys=%s: %s", keys, exc)
         return _failure(str(exc), exc)
     finally:
         conn.close()
 
-    _logger.info("push ok (集計) key=%s rows=%d stops=%d",
-                 key, len(details), len(stops))
-    return ScriptResult(success=True, rows=len(details) + len(stops) + 1)
+    _logger.info("push ok (集計) shifts=%d rows=%d", len(items), rows)
+    return ScriptResult(success=True, rows=rows)
+
+
 def _failure(message: str, exc: Exception) -> ScriptResult:
     """失敗の形を1つに揃える。
 

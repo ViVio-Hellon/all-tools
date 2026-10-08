@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use tauri::{AppHandle, Manager};
 
@@ -29,6 +30,8 @@ pub struct Shell {
     windows: AtomicU64,
     /// 埋め込みの台本(`portal/static/js/embed.js`)。書き換わったら読み直す
     shim: Mutex<Option<(SystemTime, String)>>,
+    /// 終える前の「打ちかけを置いて」の返事を待っている口([`Shell::prepare_screens`])
+    prepared: Mutex<Option<Sender<bool>>>,
 }
 
 impl Shell {
@@ -62,7 +65,39 @@ impl Shell {
             closing: AtomicBool::new(false),
             windows: AtomicU64::new(1),
             shim: Mutex::new(None),
+            prepared: Mutex::new(None),
         })
+    }
+
+    /// 終える前に、**各ツールの画面に打ちかけを置いてもらう**(日報の入力中の行など)。
+    ///
+    ///     デスクトップ版の窓の×・終了では、日報の打ちかけはまだ保存されません:
+    ///     保存するようにしてください
+    ///
+    /// 画面のデータは Python には無く、画面の中にしか無い。大きなタブの画面に頼み
+    /// (`window.__shell.prepareClose()` → 各ツールの枠へ)、返事([`Shell::screens_prepared`])
+    /// を待つ。`false`(置けずに「閉じない」を選ばれた)なら終えない。
+    /// 返事が来ない(画面が固まっている)ときは上限で進む ── 窓が閉じられなくなるよりよい
+    pub fn prepare_screens(&self, limit: Duration) -> bool {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut slot) = self.prepared.lock() {
+            *slot = Some(tx);
+        }
+        self.tell_shell("window.__shell && window.__shell.prepareClose ? window.__shell.prepareClose() : null");
+        let answer = rx.recv_timeout(limit).unwrap_or(true);
+        if let Ok(mut slot) = self.prepared.lock() {
+            *slot = None;
+        }
+        answer
+    }
+
+    /// 大きなタブの画面からの返事(各ツールの画面が打ちかけを置き終えた)
+    pub fn screens_prepared(&self, ok: bool) {
+        if let Ok(slot) = self.prepared.lock() {
+            if let Some(tx) = slot.as_ref() {
+                let _ = tx.send(ok);
+            }
+        }
     }
 
     pub fn set_app(&self, app: AppHandle) {

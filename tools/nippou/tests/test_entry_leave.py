@@ -43,6 +43,34 @@ class LeaveTests(unittest.TestCase):
         self.assertIn("confirm(", keep[:600], "置けなかったときに黙って捨てる")
 
 
+class CloseTests(unittest.TestCase):
+    """統合ツールの窓の × ・「終了」でも打ちかけを置く(外枠が頼んでくる)。"""
+
+    def test_外枠の頼みに答える(self) -> None:
+        app = read("app.js")
+        hook = app[app.index('"alltools:before-close"'):]
+        self.assertIn("event.source !== window.parent", app)
+        self.assertIn('reply("alltools:before-close-ack")', hook[:600])
+        self.assertIn("await nav.leaving()", hook[:800])
+        self.assertIn('reply("alltools:before-close-done", { ok })', hook[:900])
+
+    def test_どの欄でも打ったら数える(self) -> None:
+        """材・寸法のような自由な欄が数えられず、閉じる前に置かれなかった。"""
+        entry = read("views/entry.js")
+        start = entry[entry.index("export function start()"):]
+        self.assertIn('"[data-row][data-family], [data-header], [data-check]")) touched(el)',
+                      start[:900])
+
+    def test_保存は1本ずつ_中身は送る瞬間に集める(self) -> None:
+        """古い自動保存が、新しい保存のあとに着いて上書きしていた。"""
+        entry = read("views/entry.js")
+        self.assertEqual(entry.count('api.post("/api/entry/save"'), 3)
+        for fn in ("async function maybeAutosave", "async function saveNow",
+                   "async function saveDraft"):
+            body = entry[entry.index(fn):]
+            self.assertIn("inOrder(() => {", body[:1200], fn)
+
+
 class StaleReplyTests(unittest.TestCase):
     def test_頼んだあとに打った欄は書き換えない(self) -> None:
         entry = read("views/entry.js")

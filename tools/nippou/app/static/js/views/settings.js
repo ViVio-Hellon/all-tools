@@ -12,7 +12,7 @@ import { refresh } from "../nav.js";
 import { loadCues, previewFile } from "../sound.js";
 // 面(タブ)の作りは全画面で1つ。**並びと鍵の要否はサーバが決める**
 import { attachAll } from "../tabs.js";
-import { watch as watchJob } from "../progress.js";
+import { confirmPush, watch as watchJob } from "../progress.js";
 
 /* ---- 小さな道具 ------------------------------------------------- */
 const byId = (id) => document.getElementById(id);
@@ -1375,6 +1375,7 @@ export function start() {
   }
 
   async function pushToShared(skip) {
+    if (!(await confirmPush())) return;
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");
     try {

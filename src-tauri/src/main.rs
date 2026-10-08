@@ -103,6 +103,7 @@ fn main() {
             services::tool_invoke_raw,
             services::shell_status,
             services::shell_close,
+            services::shell_prepared,
             services::shell_restart_tool,
             drops::shell_dropped_file
         ])

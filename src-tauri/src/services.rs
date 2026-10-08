@@ -166,6 +166,12 @@ pub fn shell_close(app: AppHandle, shell: State<'_, Arc<Shell>>) {
     crate::closing::request_close(shell.inner().clone(), app, None);
 }
 
+/// 終える前の「打ちかけを置いて」の返事(大きなタブの画面の `prepareClose` から)
+#[tauri::command]
+pub fn shell_prepared(shell: State<'_, Arc<Shell>>, ok: bool) {
+    shell.screens_prepared(ok);
+}
+
 /// そのツールの Python を起こし直す(大設定の「もう一度開く」)
 #[tauri::command]
 pub fn shell_restart_tool(shell: State<'_, Arc<Shell>>, tool: String) -> Result<(), String> {

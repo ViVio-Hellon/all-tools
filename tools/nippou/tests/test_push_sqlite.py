@@ -267,22 +267,71 @@ class PushPendingTests(unittest.TestCase):
         from nippou.access_bridge import sqlite_backend as fresh
 
         calls = []
-        real = fresh.push_records
+        real = fresh.push_records_batch
 
-        def flaky(db_path, header, details, ht, dt, saved_at=""):
-            calls.append(header.page)
-            if header.page == 1:
+        def flaky(db_path, items, saved_at=""):
+            pages = [h.page for h, *_ in items]
+            calls.append(pages)
+            if 1 in pages:
                 return ScriptResult(success=False, error=None)
-            return real(db_path, header, details, ht, dt, saved_at)
+            return real(db_path, items, saved_at)
 
-        with patch.object(fresh, "push_records", flaky):
+        with patch.object(fresh, "push_records_batch", flaky):
             summary = p.push_pending(self.repo, self.target)
 
-        self.assertEqual(sorted(calls), [1, 2])
+        # 束(1・2)で失敗 → 1ページずつ送り直して、悪いほうだけ残す
+        self.assertEqual(calls, [[1, 2], [1], [2]])
         self.assertEqual(len(summary.succeeded), 1)
         self.assertEqual(len(summary.failed), 1)
         # 成功したほうだけ反映済みになる
         self.assertEqual([h.page for h in self.repo.pending_sync_headers()], [1])
+
+    def test_束で送る_開くのは束に1回(self) -> None:
+        """**1ページごとに共有を開いて確定していた**(何百ページで何十分)。"""
+        from nippou.access_bridge import pusher as p
+        from nippou.access_bridge import sqlite_backend as fresh
+
+        for page in range(1, 31):
+            self._save(page=page)
+        opened = []
+        real = fresh._connect
+
+        def counting(path):
+            opened.append(path)
+            return real(path)
+
+        with patch.object(fresh, "_connect", counting):
+            summary = p.push_pending(self.repo, self.target)
+        self.assertEqual(len(summary.succeeded), 30)
+        self.assertEqual(self.repo.pending_sync_headers(), [])
+        # 日報は 25 + 5 の2束。集計は直1つで1束
+        self.assertLessEqual(len(opened), 3, opened)
+
+    def test_中止すると束の切れ目で止まり残りは未送信のまま(self) -> None:
+        from nippou import job_progress
+        from nippou.access_bridge import pusher as p
+        from nippou.access_bridge import sqlite_backend as fresh
+        from nippou.logic import progress
+
+        for page in range(1, 31):
+            self._save(page=page)
+        real = fresh.push_records_batch
+
+        def stop_after_first(db_path, items, saved_at=""):
+            result = real(db_path, items, saved_at)
+            job_progress.request_stop()
+            return result
+
+        with job_progress.watching(job=progress.JOB_PUSH), \
+                patch.object(fresh, "push_records_batch", stop_after_first):
+            summary = p.push_pending(self.repo, self.target)
+        self.assertEqual(len(summary.succeeded), p.BATCH_PAGES)
+        self.assertEqual(summary.stopped, 30 - p.BATCH_PAGES)
+        self.assertEqual(len(self.repo.pending_sync_headers()), 30 - p.BATCH_PAGES)
+        # 次に押せば続きから
+        summary = p.push_pending(self.repo, self.target)
+        self.assertEqual(len(summary.succeeded), 30 - p.BATCH_PAGES)
+        self.assertEqual(self.repo.pending_sync_headers(), [])
 
     def test_Accessの道ならAccess経路へ行く(self) -> None:
         from nippou.access_bridge import pusher as p

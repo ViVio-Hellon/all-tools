@@ -313,3 +313,25 @@ class ManualAndEndTests(unittest.TestCase):
         self.assertNotIn("setInterval(beat", self.shell)
         ended = self.shell[self.shell.index("function ended()"):]
         self.assertIn("timers.forEach(clearInterval)", ended[:200])
+
+
+class PrepareCloseTests(unittest.TestCase):
+    """窓の × ・「終了」の前に、各ツールの画面へ打ちかけを置いてもらう。"""
+
+    def test_外枠は訊く前に画面へ頼んで返事を待つ(self) -> None:
+        closing = rust("closing.rs")
+        run = closing[closing.index("fn run("):]
+        self.assertLess(run.index("prepare_screens"), run.index("ask_all"))
+        shell_rs = rust("shell.rs")
+        self.assertIn("window.__shell.prepareClose()", shell_rs)
+        self.assertIn("recv_timeout(limit)", shell_rs)
+        self.assertIn("services::shell_prepared", rust("main.rs"))
+
+    def test_大きなタブの画面が各枠へ頼む(self) -> None:
+        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
+        self.assertIn("async prepareClose()", shell)
+        self.assertIn('invoke("shell_prepared", { ok })', shell)
+        self.assertIn('type: "alltools:before-close"', shell)
+        # ブラウザ版の「終了」も同じ頼みを通る
+        quit_ = shell[shell.index('getElementById("quit")'):]
+        self.assertLess(quit_.index("prepareFrames()"), quit_.index('"/api/shutdown"'))

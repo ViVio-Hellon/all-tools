@@ -6,10 +6,11 @@
 どちらも終わるまで返らないので、進み具合だけ別に置き(`job_progress`)、
 画面が `GET /api/progress` を見に来る(`static/js/progress.js`)。
 
-    共有へ保存 … [1/4] 送る前に確かめています(直ごと)
-                 [2/4] 共有へ送っています(ページごと)
-                 [3/4] 集計CSV・履歴・標準作業時間を写しています
-                 [4/4] 月替わりを確かめています
+    共有へ保存 … [1/5] 送る前に確かめています(直ごと)
+                 [2/5] 共有へ送っています(ページごと。25ページずつ束ねる)
+                 [3/5] 直ごとの集計を共有へ送っています(直ごと)
+                 [4/5] 集計CSV・履歴・標準作業時間を写しています
+                 [5/5] 月替わりを確かめています
     マスタ     … [1/2] 元のファイルに書いています → [2/2] 読み直しています
 """
 from __future__ import annotations
@@ -33,11 +34,26 @@ class WordingTests(unittest.TestCase):
     def test_push_phases_and_units(self) -> None:
         now = logic.Progress(running=True, job=logic.JOB_PUSH,
                              phase=logic.PHASE_SEND, done=3, total=4)
-        self.assertEqual(now.headline, "[2/4] 共有へ送っています 3/4ページ (75%)")
+        self.assertEqual(now.headline, "[2/5] 共有へ送っています 3/4ページ (75%)")
         check = logic.Progress(running=True, job=logic.JOB_PUSH,
                                phase=logic.PHASE_CHECK, done=1, total=2)
-        self.assertIn("[1/4] 送る前に確かめています 1/2直", check.headline)
+        self.assertIn("[1/5] 送る前に確かめています 1/2直", check.headline)
         self.assertEqual(now.title, "共有へ保存しています")
+        # **集計を送る段も数える**(以前は「2/4」のまま棒が動かなかった)
+        summary = logic.Progress(running=True, job=logic.JOB_PUSH,
+                                 phase=logic.PHASE_SEND_SUMMARY, done=4, total=10)
+        self.assertEqual(summary.headline,
+                         "[3/5] 直ごとの集計を共有へ送っています 4/10直 (40%)")
+
+    def test_中止は送っている段だけ(self) -> None:
+        sending = logic.Progress(running=True, job=logic.JOB_PUSH, phase=logic.PHASE_SEND)
+        self.assertTrue(sending.as_dict()["can_stop"])
+        checking = logic.Progress(running=True, job=logic.JOB_PUSH, phase=logic.PHASE_CHECK)
+        self.assertFalse(checking.as_dict()["can_stop"])
+        stopping = logic.Progress(running=True, job=logic.JOB_PUSH,
+                                  phase=logic.PHASE_SEND, stopping=True)
+        self.assertFalse(stopping.as_dict()["can_stop"])
+        self.assertIn("中止しています", stopping.note)
 
     def test_master_has_two_steps(self) -> None:
         now = logic.Progress(running=True, job=logic.JOB_MASTER,
@@ -92,6 +108,37 @@ class PushProgressTests(WebTestCase):
         return [HeaderRecord(report_date="2026年9月29日", line="L-1", shift=s, page=p)
                 for s in ("1直", "2直") for p in (1, 2)]
 
+    def test_下見_多ければ確かめる(self) -> None:
+        """**数が多いときは押す前に訊く**(画面は `confirmPush`)。"""
+        from nippou.db import repository
+        from nippou.db.models import HeaderRecord
+
+        many = [HeaderRecord(report_date=f"2026年9月{d}日", line="L-1", shift="1直", page=p)
+                for d in range(1, 31) for p in (1, 2, 3, 4)]
+        with mock.patch.object(repository.NippouRepository, "pending_sync_headers",
+                               lambda self: list(many)):
+            body = self.get("/api/settings/push/plan").get_json()
+        self.assertEqual(body["pages"], 120)
+        self.assertEqual(body["shifts"], 30)
+        self.assertTrue(body["confirm_needed"])
+        self.assertEqual((body["first_day"], body["last_day"]),
+                         ("2026年9月1日", "2026年9月30日"))
+        with mock.patch.object(repository.NippouRepository, "pending_sync_headers",
+                               lambda _self: self.pending()):
+            body = self.get("/api/settings/push/plan").get_json()
+        self.assertFalse(body["confirm_needed"])
+
+    def test_中止は走っていなければ断る(self) -> None:
+        self.assertEqual(self.post("/api/progress/stop", {}).status_code, 409)
+
+    def test_画面は押す前に下見を見る(self) -> None:
+        progress_js = (JS / "progress.js").read_text(encoding="utf-8")
+        self.assertIn("export async function confirmPush()", progress_js)
+        self.assertIn('"/api/progress/stop"', progress_js)
+        for view in ("views/entry.js", "views/settings.js", "views/review.js"):
+            text = (JS / view).read_text(encoding="utf-8")
+            self.assertIn("if (!(await confirmPush())) return;", text, view)
+
     def test_idle_answer(self) -> None:
         body = self.get("/api/progress").get_json()
         self.assertFalse(body["running"])
@@ -123,6 +170,7 @@ class PushProgressTests(WebTestCase):
                                lambda self: list(headers)), \
                 mock.patch.object(shift_check, "run", fake_run), \
                 mock.patch.object(pusher, "_push_one", fake_push), \
+                mock.patch.object(pusher, "is_sqlite_target", lambda path: False), \
                 mock.patch.object(pusher, "_push_summaries", lambda repo, path: 0):
             res = self.post("/api/settings/push", {})
         self.assertEqual(res.status_code, 200, res.get_json())
