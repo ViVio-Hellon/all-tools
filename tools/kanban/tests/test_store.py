@@ -214,7 +214,10 @@ class TransitionTest(StoreTestBase):
         after = self.store.apply_transition(
             "LVC", "1", models.order_button_changes, operation="order"
         )
-        self.assertEqual(after.rev, before.rev + 1)
+        # 版は全行通しの番号(ほかの行・ほかのラインの版と重ならない)
+        self.assertGreater(after.rev, before.rev)
+        others = {i.rev for i in self.store.items("LVC") if i.mgmt_no != "1"}
+        self.assertNotIn(after.rev, others)
         self.assertTrue(after.is_ordered)
         self.assertEqual(self.store.pending_count(), 1)
         self.assertEqual(after.updated_by, "PC-TEST")
@@ -464,7 +467,28 @@ class SyncBookkeepingTest(StoreTestBase):
         self.assertTrue(start_app._busy_reason(self.store))
         for _ in range(5):
             self.store.mark_items_failed([("LVC", "1")], "対象行なし")
+        # 押したときに積んだ出来事(看板履歴)は送れたことにする(待つのは別の理由。下の試験)
+        self.store.mark_events_sent([e["id"] for e in self.store.unsent_events()])
         self.assertEqual(start_app._busy_reason(self.store), "", "止まれないままになっている")
+
+    def test_busy_reason_waits_for_unsent_comments_and_recent_events(self):
+        """送っていないコメント・記録があるあいだは止めない(相手に届く前に終わらない)。"""
+        import start_app
+
+        self.assertEqual(start_app._busy_reason(self.store), "")
+        self.store.add_comment("LVC", "1", "現場", "急ぎです")
+        self.assertIn("コメント", start_app._busy_reason(self.store))
+        self.store.mark_comments_sent([c["id"] for c in self.store.unsent_comments()])
+        self.assertEqual(start_app._busy_reason(self.store), "")
+
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        self.store.mark_items_synced([("LVC", "1", self.store.item("LVC", "1").rev)])
+        # 押すと確認の区切り(これもコメントの 1 行)が積まれる。送れたことにする
+        self.store.mark_comments_sent([c["id"] for c in self.store.unsent_comments()])
+        self.assertIn("記録", start_app._busy_reason(self.store))
+        # 何日も送れていない記録は待たない(看板履歴の置き場所が見えないまま。二度と終われなくなる)
+        self.store.connection.execute("UPDATE kanban_event SET at = '2000/01/01 00:00:00'")
+        self.assertEqual(start_app._busy_reason(self.store), "")
 
 
 class LockTest(StoreTestBase):
@@ -544,6 +568,7 @@ class ConcurrencyTest(StoreTestBase):
 
     def test_same_row_from_two_hosts_is_serialized(self):
         """同じ行を 2 台が同時に押しても状態が壊れないこと。"""
+        seq_before = int(self.store.get_meta("rev_seq", "0"))
         errors: list[BaseException] = []
         conflicts = []
         barrier = threading.Barrier(2)
@@ -578,7 +603,8 @@ class ConcurrencyTest(StoreTestBase):
         self.assertEqual(errors, [])
         # 片方は必ず競合として弾かれ、状態は 1 回ぶんだけ進む
         self.assertEqual(len(conflicts), 1)
-        self.assertEqual(self.store.item("LVC", "1").rev, 2)
+        self.assertEqual(int(self.store.get_meta("rev_seq", "0")), seq_before + 1)
+        self.assertEqual(self.store.item("LVC", "1").rev, seq_before + 1)
 
 
 class ServiceGroupingTest(StoreTestBase):

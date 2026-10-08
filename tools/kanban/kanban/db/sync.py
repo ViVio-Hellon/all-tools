@@ -121,7 +121,22 @@ def import_all(
     テーブルが存在しないラインは、VBA 版と同じく警告を出さずに読み飛ばす
     (未実装のラインがあるため)。
     """
+    # 書き戻しと重ねない(:attr:`kanban.db.store.Store.sync_lock`)
+    with store.sync_lock:
+        return _import_all(store, gateway, lines, keep_local_changes, progress)
+
+
+def _import_all(
+    store: Store,
+    gateway: SharedDb,
+    lines: Sequence[str] | None,
+    keep_local_changes: bool,
+    progress: Callable[[str, int, int], None] | None,
+) -> ImportResult:
     codes = list(lines) if lines is not None else config.all_line_codes()
+    # **読み始める前の書き戻しの番号を控える。** 別のプロセス(``main.py --export-only``)の
+    # 書き戻しは錠では止められないので、読んだあとに送れた行はこれで見分ける
+    synced_before = store.sync_generation()
     result = ImportResult(
         started_at=datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
         access_mode=gateway.mode,
@@ -153,7 +168,7 @@ def import_all(
             )
             continue
         result.lines.append(
-            _import_line(store, gateway, code, table_name, keep_local_changes)
+            _import_line(store, gateway, code, table_name, keep_local_changes, synced_before)
         )
 
     result.status_rows = _import_line_status(store, gateway)
@@ -178,6 +193,7 @@ def _import_line(
     code: str,
     table_name: str,
     keep_local_changes: bool,
+    synced_before: int | None = None,
 ) -> LineImportResult:
     try:
         snapshot = gateway.read_table(table_name)
@@ -224,6 +240,7 @@ def _import_line(
         rows=rows,
         source_path=gateway.path,
         keep_local_changes=keep_local_changes,
+        synced_before=synced_before,
     )
     applog.info(
         "import_all: %s 取り込み成功 (追加=%d 更新=%d 保護=%d)",
@@ -324,6 +341,13 @@ def export_pending(
         result.skipped_reason = "Access への書き戻しができない環境です(ADO 不可)"
         return result
 
+    # 取り込みと重ねない(:attr:`kanban.db.store.Store.sync_lock`)。重なると、取り込みが
+    # 送る前に読んだ値で、送り終えた行を戻してしまう
+    with store.sync_lock:
+        return _export_pending(store, gateway, use_lock, result)
+
+
+def _export_pending(store: Store, gateway: SharedDb, use_lock: bool, result: ExportResult) -> ExportResult:
     pending = store.pending_items()
     if not pending:
         return result
@@ -692,7 +716,11 @@ def import_comments(store: Store, gateway: SharedDb, lines: Sequence[str]) -> in
         marks = ", ".join("?" for _ in lines)
         rows = gateway.select(
             f"SELECT {', '.join(f'[{n}] AS {k}' for n, k in COMMENT_COLUMNS)}"
-            f" FROM {_quote(COMMENT_TABLE)} WHERE [ライン] IN ({marks}) AND [日時] >= ?",
+            f" FROM {_quote(COMMENT_TABLE)} WHERE [ライン] IN ({marks}) AND [日時] >= ?"
+            # **共有DBに届いた順に足す。** いまの回か前の回かは、この端末に届いた順でも
+            # 決める(:data:`kanban.db.store.Store._OPEN_COMMENT`)ので、片付けの印と
+            # その前後のコメントの順番を崩さない
+            " ORDER BY rowid",
             [*lines, since],
         )
     except Exception as exc:  # noqa: BLE001 - 看板の取り込みは止めない
@@ -805,6 +833,7 @@ class Exporter:
     #: 「届いていない」を画面に出すために、この端末の SQLite に覚えておく鍵
     META_UNDELIVERED_SINCE = "undelivered_since"
     META_UNDELIVERED_WHY = "undelivered_why"
+    META_UNDELIVERED_EVENTS_SINCE = "undelivered_events_since"
 
     def unsent(self) -> int:
         """まだ共有へ届いていないもの(看板の状態・コメント・出来事)の数。手元の SQLite だけを見る。"""
@@ -826,6 +855,9 @@ class Exporter:
 
         共有フォルダが見えない間に押したものは、この端末に預かったまま。以前は帯の
         「未送信 N」だけで、**倉庫に届いていないことが画面からは分からなかった。**
+        数えるのは相手の画面に出るもの(看板の状態・コメント)。出来事(看板履歴)は
+        相手の画面には出ない集計の記録で、置き場所も別のファイルなので、帯では別に
+        数える(`/api/status` の ``undelivered_events``)。
         """
         try:
             if self.store.pending_count() or self.store.unsent_comment_count():
@@ -838,6 +870,15 @@ class Exporter:
             elif self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
                 self.store.set_meta(self.META_UNDELIVERED_SINCE, "")
                 self.store.set_meta(self.META_UNDELIVERED_WHY, "")
+            # 出来事(看板履歴)は別に覚える。**送ってみて残ったときだけ**(押した直後の、
+            # まだ送っていないだけの数秒で帯を出さない)
+            events_since = self.store.get_meta(self.META_UNDELIVERED_EVENTS_SINCE, "")
+            if self.store.unsent_event_count():
+                if not events_since:
+                    self.store.set_meta(self.META_UNDELIVERED_EVENTS_SINCE,
+                                        datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
+            elif events_since:
+                self.store.set_meta(self.META_UNDELIVERED_EVENTS_SINCE, "")
         except Exception:  # noqa: BLE001 - 覚えられなくても送るほうは続ける
             pass
 
@@ -858,6 +899,11 @@ class Exporter:
                 self._task.request_now()
 
     def _run_export(self) -> ExportResult:
+        # コメント・出来事も取り込みと重ねない(コメントは取り込みが同じ表から足す)
+        with self.store.sync_lock:
+            return self._run_export_locked()
+
+    def _run_export_locked(self) -> ExportResult:
         result = export_pending(self.store, self.gateway)
         # **出来事(集計のための記録)も同じ周期で送る。** 失敗しても書き戻しの
         # 結果には混ぜない ── 看板の状態を送れたかどうかと、記録を送れたか

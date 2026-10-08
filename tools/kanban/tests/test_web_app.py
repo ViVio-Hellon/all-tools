@@ -227,6 +227,11 @@ class RouteTestBase(StoreFixture):
     def rev(self, mgmt_no, line=None):
         return self.store.item(line or self.LINE or self.DEFAULT_LINE, mgmt_no).rev
 
+    def batch_items(self, line=None):
+        """一括の対象として送る ``[{mgmt_no, rev}]``(画面に出ていた行。いまの版で)。"""
+        return [{"mgmt_no": i.mgmt_no, "rev": i.rev}
+                for i in self.store.items(line or self.LINE or self.DEFAULT_LINE)]
+
 
 class HealthTest(RouteTestBase):
     def test_health_is_reachable_without_token(self):
@@ -326,7 +331,7 @@ class SiteModeTest(RouteTestBase):
         # 赤と緑が両方点いている状態を作る
         self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
         self.store.apply_transition("LVC", "1", models.ship_button_changes, operation="ship")
-        res = self.post("/api/board/batch-reset", {"line": "LVC"})
+        res = self.post("/api/board/batch-reset", {"line": "LVC", "items": self.batch_items()})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json["done"], 1)
         self.assertFalse(self.store.item("LVC", "1").is_ordered)
@@ -395,7 +400,7 @@ class WarehouseModeTest(RouteTestBase):
         self.assertEqual(res.status_code, 403)
 
     def test_batch_ship(self):
-        res = self.post("/api/board/batch-ship", {"line": "LVC"})
+        res = self.post("/api/board/batch-ship", {"line": "LVC", "items": self.batch_items()})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json["done"], 2)
 
@@ -1959,7 +1964,7 @@ class CommentWarehouseRouteTest(CommentRouteTest):
         rev = self.store.item("LVC", "2").rev
         res = self.post("/api/board/hold", {"line": "LVC", "mgmt_no": "2", "rev": rev})
         self.assertEqual((res.status_code, res.json["error"]["code"]), (409, "unread_comments"))
-        res = self.post("/api/board/batch-ship", {"line": "LVC"})
+        res = self.post("/api/board/batch-ship", {"line": "LVC", "items": self.batch_items()})
         self.assertEqual((res.status_code, res.json["unread_nos"]), (409, ["2"]))
         self.assertFalse(self.store.item("LVC", "4").is_shipped, "一括は 1 枚も進めない")
         self.get("/api/comments?line=LVC&mgmt_no=2")

@@ -908,11 +908,30 @@ def _busy_reason(store) -> str:
     """
     try:
         pending = store.retryable_pending_count()
+        comments = store.unsent_comment_count()
+        events = store.unsent_event_count(within_hours=UNSENT_EVENT_WAIT_HOURS)
     except Exception:  # noqa: BLE001 - 判定できないなら止めてよい
         return ""
+    # **コメントと出来事も待つ。** 以前は看板の状態だけを数えていたので、書いた
+    # コメントが共有へ届く前に「終了」・自動終了で止まり、相手には次にこの端末を
+    # 開くまで届かなかった(画面にも出ていなかった)
+    parts = []
     if pending:
-        return f"共有DBへ未反映の操作が {pending} 件あります"
+        parts.append(f"未反映の操作が {pending} 件")
+    if comments:
+        parts.append(f"送っていないコメントが {comments} 件")
+    if events:
+        parts.append(f"看板履歴へ送っていない記録が {events} 件")
+    if parts:
+        return f"共有DBへ{'・'.join(parts)}あります"
     return ""
+
+
+#: 出来事(看板履歴)を待つのは、この時間内に積んだものだけ。看板履歴は看板マスタとは
+#: 別のファイルで、置き場所が見えないまま何日も経った記録を待っても減らない ──
+#: 待ち続けると二度と終われなくなる(:meth:`kanban.db.store.Store.retryable_pending_count`
+#: と同じ理由)。古い記録は次に開いたときに送る
+UNSENT_EVENT_WAIT_HOURS = 24
 
 
 def _shutdown(store, importer, exporter) -> None:

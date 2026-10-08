@@ -142,17 +142,20 @@ class MultiProcessConcurrencyTest(unittest.TestCase):
         store = Store(self.db_path, host_name="PC-CHECK")
         try:
             conn = store.connection
-            total_items, rev_sum = conn.execute(
-                "SELECT COUNT(*), SUM(rev) FROM kanban_item"
+            total_items, distinct_revs = conn.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT rev) FROM kanban_item"
             ).fetchone()
             applied = conn.execute(
                 "SELECT COUNT(*) FROM operation_log WHERE operation IN ('order','ship')"
             ).fetchone()[0]
+            issued = int(store.get_meta("rev_seq", "0"))
 
-            # rev は更新が確定するたびに 1 だけ増える。
-            # 「増分の合計 == 実際に適用された操作の件数」であれば、
-            # 更新の取りこぼしも二重適用も起きていない。
-            self.assertEqual(rev_sum - total_items, applied)
+            # rev は更新が確定するたびに全行通しの番号を 1 つ使う(取り込みで
+            # 行の数だけ使ったあと)。「使った番号の数 == 実際に適用された操作の
+            # 件数」であれば、更新の取りこぼしも二重適用も起きていない
+            self.assertEqual(issued - total_items, applied)
+            # 版はどの 2 行でも重ならない(別のラインの同じ番号の行に当たらない)
+            self.assertEqual(distinct_revs, total_items)
 
             # 状態の矛盾がないこと
             self.assertEqual(

@@ -52,7 +52,55 @@ export function start(initial) {
     + '捨てた操作は戻せません(ログには残ります)。よろしいですか？'));
   on('master-open', () => openTable(0));
   on('master-add', showAddForm);
+  wireDirtyFields();
   loadMaster();
+}
+
+// ------------------------------------------------------------------
+// 保存したあとの読み直し
+// ------------------------------------------------------------------
+// **ほかの欄の打ちかけを、読み直しで消さない。** 動作の設定・接続先などを保存すると
+// 数字を出し直すために画面ごと読み直していたので、マスタ管理で足しかけていた行や、
+// 別の面で打ちかけていた値が黙って消えた。打って、まだ保存していない欄が保存した面の
+// 外にあるときは読み直さずに、そう言う。
+const dirtyFields = new Set();
+
+function wireDirtyFields() {
+  const mark = (ev) => {
+    const el = ev.target;
+    if (!el || !el.matches || !el.matches('input, textarea, select')) return;
+    if (el.closest('#pw') || el.type === 'search' || el.type === 'file') return;   // パスワードの小窓・絞り込み
+    // 書いて保存する欄だけ数える(フォームの中・マスタの表・文字を打つ欄)。表の選択や
+    // 面の切り替えのような、選んだだけで保存の要らないものは数えない
+    const typed = el.tagName === 'TEXTAREA'
+      || (el.tagName === 'INPUT' && ['text', 'number', 'email', 'url', 'tel', ''].includes(el.type));
+    if (!typed && !el.closest('form, #master-view')) return;
+    dirtyFields.add(el);
+  };
+  document.addEventListener('input', mark, true);
+  document.addEventListener('change', mark, true);
+}
+
+function isDirty(el) {
+  if (!el.isConnected) return false;
+  if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked;
+  if (el.tagName === 'SELECT') return [...el.options].some((o) => o.selected !== o.defaultSelected);
+  return el.value !== el.defaultValue;
+}
+
+/** 少し待ってから読み直す。`origin`(保存した面)の外に打ちかけがあれば読み直さない */
+function reloadSoon(ms, origin) {
+  setTimeout(() => {
+    const scope = origin && origin.closest
+      ? origin.closest('[role="tabpanel"], section, form') : null;
+    const others = [...dirtyFields].filter((el) => isDirty(el) && !(scope && scope.contains(el)));
+    if (others.length) {
+      warn('ほかの欄に保存していない入力があるので、画面を読み直していません。'
+        + 'その入力を保存するか消してから、ページを読み直すと最新の数字が出ます。');
+      return;
+    }
+    location.reload();
+  }, ms);
 }
 
 /** 要確認の片付け(捨てる / もう一度送る)。終わったら数字を出し直すため読み直す */
@@ -63,7 +111,7 @@ async function onFailed(path, note, question) {
   try {
     const r = await api.post(path, { ...creds });
     ok(r.message);
-    setTimeout(() => location.reload(), 1500);
+    reloadSoon(1500, document.getElementById('retry-failed'));
   } catch (e) {
     bad(e.message);
   }
@@ -122,7 +170,7 @@ function wireDistribution() {
   });
   on('dist-reapply', () => send('/api/distribution/reapply', {},
     '配布設定を読み込み直します。この端末で変えてある設定も上書きします。')
-    .then((r) => { if (r) setTimeout(() => location.reload(), 1500); }));
+    .then((r) => { if (r) reloadSoon(1500, document.getElementById('dist-reapply')); }));
   on('dist-remove', () => send('/api/distribution/remove', {},
     '配布設定フォルダを消します。この端末の設定はそのままです。'));
   on('dist-build', async () => {
@@ -215,7 +263,7 @@ function wireBehavior() {
     try {
       const r = await api.post('/api/behavior', { values, ...creds });
       ok(r.message);
-      setTimeout(() => location.reload(), 1200);
+      reloadSoon(1200, form);
     } catch (e) {
       bad(e.message);
       const target = e.field && form.elements[e.field];
@@ -834,7 +882,7 @@ async function onLineChange(ev) {
       warn(r.note);
       try { sessionStorage.setItem('kanban.settings.lineNote', r.note); } catch (e) { /* 残せなくてよい */ }
     }
-    setTimeout(() => location.reload(), r.note ? 2500 : 900);
+    reloadSoon(r.note ? 2500 : 900, document.getElementById('line'));
   } catch (e) {
     ev.target.value = state.line;
     bad(e.message);
@@ -982,7 +1030,7 @@ async function onAccdbChange() {
     try {
       sessionStorage.setItem(SOURCE_RESULT, JSON.stringify({ kind, text, at: Date.now() }));
     } catch (e) { /* 残せなくても、いまは出ている */ }
-    if (r.reconnected) setTimeout(() => location.reload(), 1500);
+    if (r.reconnected) reloadSoon(1500, document.getElementById('save-accdb'));
     else checkSource();
   } catch (e) {
     showSourceResult('bad', `✖ 変えられませんでした(接続先は元のままです)\n${e.message}`);
@@ -1009,7 +1057,7 @@ async function onReimport() {
     const r = await api.post('/api/reimport', creds);
     if (r.failed_lines) warn(r.message);
     else ok(r.message);
-    setTimeout(() => location.reload(), 1200);
+    reloadSoon(1200, btn);
   } catch (e) {
     bad(e.message);
   } finally {
@@ -1321,6 +1369,9 @@ function pickFile(path) {
 // Access をまるごと変換して差し替えると、このツールが共有DBに足した表・列・行
 // (看板履歴・看板コメント・看板の状態)が消える。両方にある表の中身だけを入れ替える。
 let refreshPlanView = null;
+// 「読む」を頼んだ通し番号。**最後に頼んだ結果だけを出す**(続けて 2 回読んで返事が前後
+// すると、出ている結果と違うファイルで入れ替えることになった)
+let refreshSeq = 0;
 
 function wireRefresh() {
   const drop = document.getElementById('rf-drop');
@@ -1354,6 +1405,11 @@ async function refreshUpload(f) {
   drop.classList.add('is-busy');
   showRefreshNote('', `受け取って読んでいます… ${f.name}(${sizeText(f.size)})`);
   document.getElementById('rf-compare').hidden = true;
+  const mine = ++refreshSeq;
+  refreshPlanView = null;   // 読み終わるまで入れ替えさせない
+  updateRefreshButton();
+  const pathEl = document.getElementById('rf-path');
+  const typed = pathEl.value;
   try {
     // 中身をここで読んでから**バイト列のまま**送る(`api.postBytes` の説明)。大きさも添え、
     // 届いた大きさが違えばサーバが断る(欠けたファイルを読んで「小さすぎます」にしない)
@@ -1364,10 +1420,18 @@ async function refreshUpload(f) {
     }
     const query = new URLSearchParams({ name: f.name, size: String(f.size) });
     const r = await api.postBytes(`/api/table-refresh/upload?${query}`, bytes, creds);
-    document.getElementById('rf-path').value = r.path;
+    if (mine !== refreshSeq) return;   // もっと新しく読んだものがある
+    // **打ちかけの場所を黙って上書きしない。** 読んでいるあいだに場所を打ち直していたら、
+    // 落としたファイルの結果は出さずにそう言う(どちらを入れ替えるのか取り違える)
+    if (pathEl.value !== typed) {
+      showRefreshNote('warn', `落としたファイル(${f.name})を読みましたが、そのあいだに場所の欄が`
+        + '打ち直されたので、結果は出していません。使うほうで、もう一度「読む」を押してください。');
+      return;
+    }
+    pathEl.value = r.path;
     renderRefreshPlan(r.plan);
   } catch (e) {
-    showRefreshNote('bad', e.message);
+    if (mine === refreshSeq) showRefreshNote('bad', e.message);
   } finally {
     drop.classList.remove('is-busy');
   }
@@ -1380,11 +1444,15 @@ async function refreshPlan() {
   if (!creds) return;
   showRefreshNote('', `読んでいます… ${path}`);
   document.getElementById('rf-compare').hidden = true;
+  const mine = ++refreshSeq;
+  refreshPlanView = null;   // 読み終わるまで入れ替えさせない
+  updateRefreshButton();
   try {
     const r = await api.post('/api/table-refresh/plan', { path, ...creds });
+    if (mine !== refreshSeq) return;   // もっと新しく読んだものがある
     renderRefreshPlan(r.plan);
   } catch (e) {
-    showRefreshNote('bad', e.message);
+    if (mine === refreshSeq) showRefreshNote('bad', e.message);
   }
 }
 
@@ -1501,7 +1569,7 @@ function checkedRefreshTables() {
 }
 
 function updateRefreshButton() {
-  const n = checkedRefreshTables().length;
+  const n = refreshPlanView ? checkedRefreshTables().length : 0;
   const btn = document.getElementById('rf-run');
   btn.disabled = !n;
   btn.textContent = n ? `選んだ表(${n})の中身を入れ替える` : '選んだ表の中身を入れ替える';
@@ -1510,6 +1578,15 @@ function updateRefreshButton() {
 async function refreshRun() {
   const tables = checkedRefreshTables();
   if (!tables.length || !refreshPlanView) return;
+  // **確かめた(読んだ)ファイルと、いま場所の欄にあるファイルが同じときだけ入れ替える**
+  const typed = document.getElementById('rf-path').value.trim();
+  if (typed !== refreshPlanView.source) {
+    showRefreshNote('warn', '場所の欄が、中身を確かめたファイルと違います。'
+      + 'もう一度「読む」を押して、中身を確かめてから入れ替えてください。');
+    return;
+  }
+  const planned = { source: refreshPlanView.source, size: refreshPlanView.source_facts.size,
+                    modified: refreshPlanView.source_facts.modified };
   const lines = tables.map((name) => {
     const t = refreshPlanView.tables.find((x) => x.name === name);
     return `・${name}(いま ${t.current_rows} 行 → Access ${t.rows} 行)`;
@@ -1523,8 +1600,10 @@ async function refreshRun() {
   btn.disabled = true;
   const result = document.getElementById('rf-result');
   try {
+    // 場所の欄と、確かめたときのファイル(場所・大きさ・更新日時)を送る。サーバが
+    // 同じファイルかを確かめてから入れ替える(違えば断る)
     const r = await api.post('/api/table-refresh/run', {
-      path: refreshPlanView.source, tables, ...creds,
+      path: typed, plan: planned, tables, ...creds,
     });
     result.className = 'banner banner--ok';
     // **書いたファイルを名指しする。** 以前は控え(入れ替える前の中身)の場所だけを
@@ -1655,19 +1734,36 @@ function showMasterWritten(r) {
 /** 「最後のページ」を頼むときの番号。サーバが実際の最後のページに合わせる */
 const LAST_PAGE = 1e9;
 
+// 開いている表(足す欄を閉じるのは、別の表に切り替えたときだけ)と、表を頼んだ通し番号
+let openedTable = null;
+let masterSeq = 0;
+
+/**
+ * 表を開く(開き直す)。
+ *
+ * **打ちかけを消さない。** 以前は開き直すたびに「1 行足す」の欄を閉じ、表を作り直して
+ * ほかのマスで直しかけていた値も消していた ── 1 マス直して Enter を押すと、足しかけて
+ * いた行が消えた。足す欄は別の表に切り替えたときだけ閉じ、直しかけのマスは作り直した
+ * 表へ戻す。**続けて頼んだときは、最後に頼んだ表だけを描く**(前の返事が遅れて届いても
+ * 上書きしない)。
+ */
 async function openTable(page) {
   const table = document.getElementById('master-table').value;
   if (!table) return;
   const db = selectedDb();
   // 並べ替えは同じ表を開き直したとき(ページ送り・直したあと)だけ引き継ぐ
   const sorted = masterSort.column && masterSort.table === table && masterSort.db === db;
+  const mine = ++masterSeq;
   try {
     const v = await api.get(
       `/api/master/table?table=${encodeURIComponent(table)}&page=${page || 0}`
       + (db ? `&db=${encodeURIComponent(db)}` : '')
       + (sorted ? `&sort=${encodeURIComponent(masterSort.column)}&dir=${masterSort.dir}` : ''));
+    if (mine !== masterSeq) return;   // もっと新しく頼んだ表がある
+    const switched = !openedTable || openedTable.table !== v.table || openedTable.db !== (v.db || '');
+    openedTable = { table: v.table, db: v.db || '' };
     masterView = v;
-    closeAddForm();
+    if (switched) closeAddForm();
     // **どのファイルを読み書きしているか**を、開いた表に合わせて出し直す
     const dest = document.getElementById('master-dest');
     if (dest && v.path) {
@@ -1675,7 +1771,9 @@ async function openTable(page) {
       document.getElementById('master-dest-label').textContent = `読み書きする${v.db_label || '共有DB'}`;
       document.getElementById('master-dest-path').textContent = v.path;
     }
+    const editing = switched ? [] : editingCells();
     renderTable(v);
+    restoreEditing(v, editing);
     // 表が決まって初めて「足す」が押せる。隠さずに、押せない理由を出しておく
     const add = document.getElementById('master-add');
     if (add) {
@@ -1769,6 +1867,8 @@ function renderTable(v) {
       } else {
         td.className = 'editable';
         td.title = 'クリックで編集';
+        td.dataset.rowKey = String(row[v.row_key]);
+        td.dataset.column = c;
         td.addEventListener('click', () => editCell(td, v, row, c));
       }
       tr.appendChild(td);
@@ -1841,17 +1941,60 @@ function attachChoices(input, v, column) {
   return dl;
 }
 
-function editCell(td, v, row, column) {
+/** 直しかけのマス(表を作り直す前に控える): 行・列・打ちかけの値・直す前の値 */
+function editingCells() {
+  return [...document.querySelectorAll('#master-view td.editable input')].map((input) => {
+    const td = input.closest('td');
+    input.dataset.moved = '1';   // 作り直しで外れても、外れたことを「直し終えた」と読まない
+    return {
+      rowKey: td.dataset.rowKey, column: td.dataset.column, value: input.value,
+      before: input.dataset.before, focused: document.activeElement === input,
+      start: input.selectionStart, end: input.selectionEnd,
+    };
+  });
+}
+
+/** 作り直した表へ、直しかけのマスを戻す(同じ行・同じ列があれば) */
+function restoreEditing(v, editing) {
+  for (const e of editing) {
+    const td = [...document.querySelectorAll('#master-view td.editable')]
+      .find((x) => x.dataset.rowKey === e.rowKey && x.dataset.column === e.column);
+    const row = v.rows.find((r) => String(r[v.row_key]) === e.rowKey);
+    if (!td || !row) {
+      warn(`直しかけていた「${e.column}」の行が見つからなくなりました(別の端末が消した・並びが変わった)。`
+        + `打っていた値: ${e.value}`);
+      continue;
+    }
+    editCell(td, v, row, e.column, { value: e.value, before: JSON.parse(e.before), focus: e.focused,
+                                     start: e.start, end: e.end });
+  }
+}
+
+/**
+ * 1 マスを直す。`resume` は表を作り直したあとに直しかけを戻すとき(打ちかけの値と、
+ * 直し始めたときの値)。**直し始めたときの値も送る**: 開いたあとに別の端末が同じ
+ * マスを変えていたら、サーバが上書きせずに断る(後から直した人が、先に直した人の
+ * 値を知らないまま消していた)。
+ */
+function editCell(td, v, row, column, resume = null) {
   if (td.querySelector('input')) return;
-  const before = td.textContent;
+  const before = cellText(row[column]);
+  const beforeRaw = resume ? resume.before : (row[column] === undefined ? null : row[column]);
   const input = document.createElement('input');
-  input.value = before;
+  input.value = resume ? resume.value : before;
+  input.dataset.before = JSON.stringify(beforeRaw);
   td.textContent = '';
   td.appendChild(input);
   const dl = attachChoices(input, v, column);
   if (dl) td.appendChild(dl);
-  input.focus();
-  input.select();
+  if (!resume || resume.focus) {
+    input.focus();
+    if (resume && resume.start !== null && resume.start !== undefined) {
+      input.setSelectionRange(resume.start, resume.end);
+    } else if (!resume) {
+      input.select();
+    }
+  }
 
   let done = false;
   const finish = async (save) => {
@@ -1859,7 +2002,7 @@ function editCell(td, v, row, column) {
     done = true;
     const after = input.value;
     td.textContent = before;
-    if (!save || after === before) return;
+    if (!save || after === cellText(beforeRaw)) return;
 
     // **直すたびに訊く。** 解錠状態を持つと、開きっぱなしのタブが
     // 解錠のまま残る(設定画面の他の保護された操作と同じ考え方)
@@ -1871,7 +2014,7 @@ function editCell(td, v, row, column) {
       // 直さずに断ってもらう(サーバが確かめる)
       const r = await api.post('/api/master/update', {
         table: v.table, row_key: row[v.row_key], key: row[v.key_column],
-        column, value: after, db: v.db || '', ...creds,
+        column, value: after, before: beforeRaw, db: v.db || '', ...creds,
       });
       ok('更新しました');
       showMasterWritten(r);
@@ -1880,7 +2023,7 @@ function editCell(td, v, row, column) {
       // 出すと、共有DBと画面が食い違ったまま次の操作に進むことになる
       openTable(v.page);
     } catch (e) {
-      bad(e.message);
+      bad(e.status === 409 ? `${e.message}(打った値: ${after})` : e.message);
       if (e.status === 409) openTable(v.page);   // 他端末が先に変えていた
     }
   };
@@ -1889,7 +2032,10 @@ function editCell(td, v, row, column) {
     if (ev.key === 'Enter') finish(true);
     if (ev.key === 'Escape') finish(false);
   });
-  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('blur', () => {
+    if (input.dataset.moved || !input.isConnected) return;   // 表を作り直した(作り直した表で続ける)
+    finish(true);
+  });
 }
 
 function cellText(value) {

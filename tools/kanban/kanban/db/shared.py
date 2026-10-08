@@ -288,6 +288,12 @@ class SharedDb:
                 results.append(self._execute_one(conn, sql, params))
         finally:
             conn.close()
+            if any(r.ok for r in results):
+                # **書いたら、次に読むときは必ず写し直す。** 共有フォルダは大きさ・更新
+                # 時刻を数秒覚えて返すので、書いた直後の取り込みが「変わっていない」と
+                # 読んで書く前の写しを使い、送ったばかりの値を手元で戻していた
+                # (:meth:`forget_copy`)
+                self.forget_copy()
         return results
 
     @contextmanager

@@ -67,6 +67,8 @@
   gap: var(--gap);
   align-items: start;
 }
+/* ラインを切り替えて、新しいラインの盤が届くまで(前のラインの盤は押せない。board.js) */
+.board[aria-busy="true"] { opacity: .45; pointer-events: none; }
 
 .frame {
   background: var(--surface);
@@ -563,6 +565,8 @@ table.places code { word-break: break-all; }
   width: 100%; padding: .45rem .55rem; resize: vertical;
   border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font: inherit;
 }
+/* 書けなくなったときの書きかけ(隠さずに読むだけで残す。board.js の drawThread) */
+#cm-body[readonly] { background: var(--surface-2); color: var(--muted); }
 #cm-count, .cm-hint { color: var(--muted); font-size: var(--fs-sm); }
 
 /* Access の最新で表の中身を入れ替える(設定 → マスタ管理) */

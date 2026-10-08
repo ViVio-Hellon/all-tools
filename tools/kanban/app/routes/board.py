@@ -95,6 +95,7 @@ def page():
     mode = current_mode()
     line = _resolve_line(request.args.get("line", "")) or ""
 
+    stamp = get_store().state_stamp()
     view = presenter.build(get_service(), line, mode) if line else None
     store = get_store()
     # ``shell_context`` は現場モードの担当ラインを ``line`` として渡す。
@@ -104,7 +105,7 @@ def page():
         "board.html",
         lines=[{"code": c, "label": config.display_name(c), "current": c == line} for c in lines],
         shown_line=line,
-        state=presenter.to_dict(view) if view else None,
+        state=board_dict(view, stamp) if view else None,
         pending=store.pending_count(),
         **shell_context("board"),
     )
@@ -136,10 +137,7 @@ def status():
         {
             "pending": store.pending_count(),
             "failures": len(store.sync_failures()),
-            # 共有へ届いていないものがあれば、いつから・なぜ(書き戻しが手元に覚えたもの。
-            # ここで共有フォルダは見に行かない)
-            "undelivered_since": store.get_meta("undelivered_since", "") if store.pending_count() else "",
-            "undelivered_why": store.get_meta("undelivered_why", "") if store.pending_count() else "",
+            **_undelivered(store),
             "token": store.change_token(),
             "presence": presence.to_dicts(presence.read(store, exclude=mine)),
             "last_import_at": at,
@@ -147,6 +145,29 @@ def status():
             "import_stale": stale,
         }
     )
+
+
+def _undelivered(store) -> dict:
+    """共有へ届いていないもの(帯「⚠ N 件がまだ共有に届いていません」)。
+
+    **送れていないコメントも数える。** 以前は看板の状態(``pending``)だけを見て
+    いたので、共有フォルダが見えないあいだに書いたコメントは、相手に届いていない
+    のに帯にも出なかった。出来事(看板履歴)は相手の画面には出ない集計の記録なので
+    別に数える。いつから・なぜは書き戻しが手元に覚えたもの(ここで共有フォルダは
+    見に行かない)。
+    """
+    rows = store.pending_count()
+    comments = store.unsent_comment_count()
+    waiting = rows + comments
+    return {
+        "undelivered": waiting,
+        "undelivered_comments": comments,
+        # 書き戻しが送ってみて残ったときだけ数える(押した直後の数秒は出さない)
+        "undelivered_events": (store.unsent_event_count()
+                               if store.get_meta("undelivered_events_since", "") else 0),
+        "undelivered_since": store.get_meta("undelivered_since", "") if waiting else "",
+        "undelivered_why": store.get_meta("undelivered_why", "") if waiting else "",
+    }
 
 
 #: 取り込み間隔の何倍まで待つか。1 回や 2 回の失敗で騒がない
@@ -378,16 +399,21 @@ def batch_reset():
     if line is None:
         return jsonify(_err("no_line", "対象のラインがありません")), 400
 
+    expected, problem = _batch_items(line)
+    if problem is not None:
+        return problem
     svc = get_service()
-    unread = _unread_guard(line, [i.mgmt_no for i in svc.items(line) if i.is_delivered_candidate])
+    unread = _unread_guard(line, [i.mgmt_no for i in svc.items(line)
+                                  if i.is_delivered_candidate and i.mgmt_no in expected])
     if unread is not None:
         return unread
     try:
-        result = svc.batch_reset(line)
+        result = svc.batch_reset(line, expected_revs=expected)
     except LockTimeout:
         return _locked()
-    log.info("一括確認: line=%s 件数=%d", line, result.count)
-    return jsonify({**_payload(line), "done": result.count})
+    skipped = _skipped(expected, result)
+    log.info("一括確認: line=%s 件数=%d 飛ばした=%d", line, result.count, len(skipped))
+    return jsonify({**_payload(line), "done": result.count, "skipped": skipped})
 
 
 @write_bp.post("/api/board/batch-ship")
@@ -399,16 +425,60 @@ def batch_ship():
     if line is None:
         return jsonify(_err("no_line", "対象のラインがありません")), 400
 
+    expected, problem = _batch_items(line)
+    if problem is not None:
+        return problem
     svc = get_service()
-    unread = _unread_guard(line, [i.mgmt_no for i in svc.items(line) if i.needs_shipping])
+    unread = _unread_guard(line, [i.mgmt_no for i in svc.items(line)
+                                  if i.needs_shipping and i.mgmt_no in expected])
     if unread is not None:
         return unread
     try:
-        result = svc.batch_ship(line)
+        result = svc.batch_ship(line, expected_revs=expected)
     except LockTimeout:
         return _locked()
-    log.info("一括発送: line=%s 件数=%d", line, result.count)
-    return jsonify({**_payload(line), "done": result.count})
+    skipped = _skipped(expected, result)
+    log.info("一括発送: line=%s 件数=%d 飛ばした=%d", line, result.count, len(skipped))
+    return jsonify({**_payload(line), "done": result.count, "skipped": skipped})
+
+
+def _batch_items(line: str):
+    """一括の対象 ``[{mgmt_no, rev}]``(画面に出ていて、確認で訊いたもの)。
+
+    **一括は、訊いたときに画面に出ていた行だけを動かす。** 以前は押された時点の
+    サーバの状態で選び直していたので、「3 件を発送済みにしますか？」に OK した
+    あとに取り込みで赤が増えると、訊いていない看板まで発送済みになった。画面が
+    見ていた版と同じ行だけを動かし、変わっていた行は飛ばして知らせる。
+    """
+    raw = (request.get_json(silent=True) or {}).get("items")
+    if not isinstance(raw, list):
+        return None, (jsonify({**_payload(line), **_err(
+            "bad_request", "画面が古いため一括の対象が分かりません。画面を開き直してください。", "items")}), 400)
+    expected: dict[str, int] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        no = str(entry.get("mgmt_no", "")).strip()
+        rev = _as_rev(entry.get("rev"))
+        if no and rev is not None:
+            expected[no] = rev
+    return expected, None
+
+
+def _skipped(expected: dict[str, int], result) -> list[str]:
+    """訊いたのに動かさなかった看板(版が変わっていた・もう対象でない)。"""
+    done = {item.mgmt_no for item in result.items}
+    return sorted((no for no in expected if no not in done), key=lambda n: (len(n), n))
+
+
+def _as_rev(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 @bp.post("/api/refresh")
@@ -449,16 +519,31 @@ def refresh():
 # ------------------------------------------------------------------
 # 共通
 # ------------------------------------------------------------------
+def board_dict(view, stamp: int) -> dict:
+    """盤(ビューモデル)を JSON の形にし、**その盤を作る前の状態の番号**を添える。
+
+    画面は、いま描いている盤より古い状態の盤を描かない。返事は届く順が入れ替わる
+    (押した返事より先に頼んだ自動更新の返事が、あとから届く)ので、頼んだ順ではなく
+    サーバの状態の順で決める。番号は盤を作る**前**に読む ── 作っている途中で状態が
+    進んでも、盤のほうが新しいだけで、古い盤に新しい番号が付くことはない。
+    """
+    out = presenter.to_dict(view)
+    out["stamp"] = stamp
+    return out
+
+
 def _payload(line: str) -> dict:
     from kanban import presence
 
+    stamp = get_store().state_stamp()
     store = get_store()
     view = presenter.build(get_service(), line, current_mode())
     mine = presence.registered_line(current_mode(), current_line() or "")
     return {
-        "board": presenter.to_dict(view),
+        "board": board_dict(view, stamp),
         "pending": store.pending_count(),
         "failures": len(store.sync_failures()),
+        **_undelivered(store),
         "presence": presence.to_dicts(presence.read(store, exclude=mine)),
     }
 
@@ -489,8 +574,15 @@ def _apply(action, label: str):
     mgmt_no = str(body.get("mgmt_no", "")).strip()
     if not mgmt_no:
         return jsonify(_err("bad_request", "対象が指定されていません", "mgmt_no")), 400
-    rev = body.get("rev")
-    rev = int(rev) if isinstance(rev, int) or (isinstance(rev, str) and rev.isdigit()) else None
+    # **版は必ず要る。** 以前は版が無ければ確かめずに通していた ── 画面がどの盤を
+    # 見て押したのかが分からないまま、いまの行を動かすことになる。版は全行通しの
+    # 番号なので(:data:`kanban.db.store._META_REV_SEQ`)、別のラインの盤を見て押した
+    # 押下も、ここで必ず断れる
+    rev = _as_rev(body.get("rev"))
+    if rev is None:
+        return jsonify({**_payload(line), **_err(
+            "bad_request", "画面が古いため、どの状態を見て押したのか分かりません。画面を開き直してください。",
+            "rev")}), 400
 
     unread = _unread_guard(line, [mgmt_no])
     if unread is not None:

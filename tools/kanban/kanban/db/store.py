@@ -61,6 +61,7 @@ _MIGRATION_COLUMNS = {
         "dirty_columns": "TEXT NOT NULL DEFAULT ''",
         "hold": "TEXT NOT NULL DEFAULT ''",
         "hold_at": "TEXT NOT NULL DEFAULT ''",
+        "synced_gen": "INTEGER NOT NULL DEFAULT 0",
     },
     "line_status": {
         "remote_status": "TEXT NOT NULL DEFAULT ''",
@@ -111,6 +112,22 @@ MAX_SYNC_ATTEMPTS = 5
 #: アプリ側の不具合なので、この理由で諦めた行は起動時に送り直す
 #: (:meth:`Store.requeue_failures`)
 URI_AUTHORITY_FAILURE = "invalid uri authority"
+
+#: 行の版(``rev``)の通し番号。**ライン・行をまたいで同じ番号を二度使わない**
+#: (:meth:`Store._next_rev`)。
+#:
+#: 以前は行ごとに 1, 2, 3… と数えていたので、LVC の 5 番と HVC の 5 番は
+#: たいてい同じ版だった。倉庫の画面でラインのタブを切り替えた直後、遅れて
+#: 届いた前のラインの盤が描かれたまま押すと、**別のラインの同じ番号の行が、
+#: 版が合うので通ってしまった**(LVC のつもりで HVC を発送した)。版を通し
+#: 番号にすれば、ほかの行の版はどの行にも当たらない ── 画面が古ければ必ず断る
+_META_REV_SEQ = "rev_seq"
+
+#: 書き戻しに成功した回の通し番号(:meth:`Store.mark_items_synced`)。
+#: 取り込みは読み始める前の番号を控え、それより後に送れた行の状態列は、
+#: その回に読んだ(送る前の)共有DBの値で上書きしない
+#: (:meth:`Store.import_line` の ``synced_before``)
+_META_SYNC_GEN = "sync_gen"
 
 #: 「この端末のモード」を meta テーブルへ記録するときのキー。
 #: config.json ではなくここへ保存する理由は Store.get_device_mode 参照。
@@ -170,6 +187,16 @@ class Store:
         self.busy_timeout_ms = busy_timeout_ms
         self.max_retry = max_retry
         self._local = threading.local()
+        self.sync_lock = threading.RLock()
+        """取り込みと書き戻しを**同時に走らせない**ための錠(:mod:`kanban.db.sync`)。
+
+        取り込み(定期・「↻ 更新」・マスタを直したあと)と書き戻し(定期・押した直後)は
+        別のスレッドで動く。重なると、取り込みが共有DBを読んだあとに書き戻しが送って
+        未反映の印を下ろし、取り込みが**送る前に読んだ古い値**でその行を書き戻していた。
+
+            打った値が勝手に戻ることがありました
+
+        とんでもない話である。この端末の取り込み・書き戻しはすべてこの錠を取る。"""
         self._journal_mode: str | None = None
         self.records_seen = False
         """取り込みで「倉庫に表示」の出来事を書くか(倉庫モードの端末だけ True)。
@@ -296,6 +323,10 @@ class Store:
         self.retry(_apply, "ensure_schema")
         self.set_meta("schema_version", str(SCHEMA_VERSION))
         try:
+            self._renumber_shared_revs()
+        except Exception:  # noqa: BLE001 - 振り直せなくても起動は止めない(行ごとの版で動く)
+            applog.exception("行の版の振り直しでエラー")
+        try:
             removed = self.prune_operation_log()
             if removed:
                 applog.info("古い操作履歴を %d 件 片付けました", removed)
@@ -311,6 +342,69 @@ class Store:
                 )
         except Exception:  # noqa: BLE001 - 手入れの失敗で起動を止めない
             applog.exception("送り直しの準備でエラー")
+
+    def _renumber_shared_revs(self) -> None:
+        """同じ版(``rev``)を持つ行が残っていれば、通し番号で振り直す(古い版の作業用DB)。
+
+        起動したときだけ通る。画面はまだ盤を持っていないので、振り直しても誰の
+        押下も断られない(:data:`_META_REV_SEQ`)。
+        """
+        conn = self.connection
+        dup = conn.execute(
+            "SELECT 1 FROM kanban_item GROUP BY rev HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if dup is None:
+            return
+
+        def _apply() -> None:
+            with self.write_transaction() as c:
+                keys = [(r["line"], r["mgmt_no"]) for r in c.execute(
+                    "SELECT line, mgmt_no FROM kanban_item ORDER BY line, row_order, mgmt_no")]
+                for line, mgmt_no in keys:
+                    c.execute("UPDATE kanban_item SET rev = ? WHERE line = ? AND mgmt_no = ?",
+                              (self._next_rev(c), line, mgmt_no))
+
+        self.retry(_apply, "renumber_revs")
+        applog.info("行の版を通し番号に振り直しました")
+
+    @staticmethod
+    def _next_counter(conn: sqlite3.Connection, key: str, floor: int = 0) -> int:
+        """meta の通し番号を 1 つ進めて返す(書き込みトランザクションの中で呼ぶ)。"""
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        try:
+            current = int(row[0]) if row else 0
+        except (TypeError, ValueError):
+            current = 0
+        value = max(current, floor) + 1
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
+        )
+        return value
+
+    def _next_rev(self, conn: sqlite3.Connection) -> int:
+        """次の版。**どの行のいまの版よりも大きい**(:data:`_META_REV_SEQ`)。"""
+        top = conn.execute("SELECT COALESCE(MAX(rev), 0) FROM kanban_item").fetchone()[0]
+        return self._next_counter(conn, _META_REV_SEQ, int(top or 0))
+
+    def state_stamp(self) -> int:
+        """手元の看板の状態がどこまで進んだか(版の通し番号のいま)。**増えるだけ。**
+
+        画面は盤と一緒に受け取り、手元にある盤より古い状態の盤(遅れて届いた返事)を
+        描かない(views/board.js の ``applyPayload``)。
+        """
+        try:
+            return int(self.get_meta(_META_REV_SEQ, "0") or 0)
+        except ValueError:
+            return 0
+
+    def sync_generation(self) -> int:
+        """いまの書き戻しの通し番号(:data:`_META_SYNC_GEN`)。取り込みが読み始める前に控える。"""
+        try:
+            return int(self.get_meta(_META_SYNC_GEN, "0") or 0)
+        except ValueError:
+            return 0
 
     def requeue_failures(self, marker: str) -> int:
         """失敗の記録に ``marker`` を含む未反映の行を、もう一度送る列に戻す。
@@ -396,8 +490,18 @@ class Store:
         rows: Sequence[dict[str, Any]],
         source_path: str,
         keep_local_changes: bool = True,
+        synced_before: int | None = None,
     ) -> tuple[int, int, int]:
         """Access から読んだ 1 ラインぶんを取り込む。
+
+        ``synced_before`` は、``rows`` を共有DBから**読み始める前**の書き戻しの通し番号
+        (:meth:`sync_generation`)。それより後に書き戻しが済んだ行は、未反映の印が
+        もう下りていても、状態列を ``rows``(送る前に読んだ値)で上書きしない。
+
+            打った値が勝手に戻ることがありました
+
+        ── 取り込みが共有DBを読んだ直後に書き戻しが走り、印を下ろしてから取り込みが
+        古い値を書いていた。とんでもない話である。次の取り込みが正しい値を持ってくる。
 
         ``keep_local_changes`` が True の場合、まだ Access へ書き戻せていない行
         (``dirty = 1``)の状態列は上書きしない。書き戻し前に再取り込みを行っても
@@ -440,7 +544,7 @@ class Store:
                     for row in conn.execute(
                         "SELECT mgmt_no, dirty, dirty_columns, material, size, want,"
                         " unwant, ordered_at, shipped, confirmed_at, permanent,"
-                        " hold, hold_at, row_order"
+                        " hold, hold_at, row_order, synced_gen"
                         " FROM kanban_item WHERE line = ?",
                         (line,),
                     )
@@ -468,7 +572,7 @@ class Store:
                             " unwant, ordered_at, shipped, confirmed_at, permanent,"
                             " hold, hold_at,"
                             " row_order, rev, updated_at, updated_by, dirty)"
-                            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,0)",
+                            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
                             (
                                 line,
                                 mgmt_no,
@@ -483,6 +587,7 @@ class Store:
                                 row.get("hold", ""),
                                 row.get("hold_at", ""),
                                 order,
+                                self._next_rev(conn),
                                 now,
                                 "import",
                             ),
@@ -491,6 +596,15 @@ class Store:
                     elif keep_local_changes and current["dirty"]:
                         if self._refresh_protected_row(
                             conn, line, mgmt_no, order, row, current, now
+                        ):
+                            protected += 1
+                    elif (synced_before is not None
+                          and int(current.get("synced_gen") or 0) > synced_before):
+                        # 読んだあとに送れた行。状態列は読んだ値が古いので触らない
+                        # (未反映と同じに扱う。資材名・サイズ・並びだけ追いつく)
+                        guarded = {**current, "dirty_columns": ",".join(STATE_COLUMNS)}
+                        if self._refresh_protected_row(
+                            conn, line, mgmt_no, order, row, guarded, now
                         ):
                             protected += 1
                     else:
@@ -567,7 +681,7 @@ class Store:
         conn.execute(
             "UPDATE kanban_item SET material = ?, size = ?, want = ?,"
             " unwant = ?, ordered_at = ?, shipped = ?, confirmed_at = ?,"
-            " permanent = ?, hold = ?, hold_at = ?, row_order = ?, rev = rev + 1,"
+            " permanent = ?, hold = ?, hold_at = ?, row_order = ?, rev = ?,"
             " updated_at = ?, updated_by = ?, dirty = 0, dirty_columns = '',"
             " sync_attempts = 0, sync_error = ''"
             " WHERE line = ? AND mgmt_no = ?",
@@ -583,6 +697,7 @@ class Store:
                 incoming["hold"],
                 incoming["hold_at"],
                 order,
+                self._next_rev(conn),
                 now,
                 "import",
                 line,
@@ -639,8 +754,8 @@ class Store:
                     changed = True
 
         if changed:
-            set_clauses.extend(["rev = rev + 1", "updated_at = ?", "updated_by = ?"])
-            params.extend([now, "import"])
+            set_clauses.extend(["rev = ?", "updated_at = ?", "updated_by = ?"])
+            params.extend([self._next_rev(conn), now, "import"])
 
         params.extend([line, mgmt_no])
         conn.execute(
@@ -768,10 +883,11 @@ class Store:
                 assignments = ", ".join(f"{col} = ?" for col in changes)
                 params: list[Any] = list(changes.values())
                 params.extend(
-                    [now, self.host_name, merged_dirty_columns, line, mgmt_no, item.rev]
+                    [self._next_rev(conn), now, self.host_name, merged_dirty_columns,
+                     line, mgmt_no, item.rev]
                 )
                 cursor = conn.execute(
-                    f"UPDATE kanban_item SET {assignments}, rev = rev + 1,"
+                    f"UPDATE kanban_item SET {assignments}, rev = ?,"
                     " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?,"
                     " sync_attempts = 0, sync_error = ''"
                     " WHERE line = ? AND mgmt_no = ? AND rev = ?",
@@ -799,12 +915,18 @@ class Store:
         select: Callable[[KanbanItem], bool],
         changes_for: Callable[[KanbanItem], dict[str, str]],
         operation: str,
+        expected_revs: dict[str, int] | None = None,
     ) -> list[KanbanItem]:
         """条件に合う行をまとめて更新する(一括リセット / 一括発送)。
 
         対象の選定と更新を 1 トランザクションで行うため、選定後に他端末が
         変更した行を取りこぼしたり二重に処理したりしない。戻り値は更新後の
         行の一覧。
+
+        ``expected_revs``(管理番号 → 画面が見ていた版)を渡すと、**その行で、版も
+        同じものだけ**を動かす。一括の確認は画面に出ていた件数・中身で訊いている
+        ので、訊いたあとに入れ替わった行(取り込みで赤が付いた・別の端末が押した)
+        までまとめて動かさない。動かさなかった行は呼ぶ側が「飛ばした」と言う。
         """
 
         def _apply() -> list[KanbanItem]:
@@ -823,6 +945,11 @@ class Store:
                     )
                     targets.append(KanbanItem(**row_dict))
                 targets = [item for item in targets if select(item)]
+                if expected_revs is not None:
+                    targets = [
+                        item for item in targets
+                        if expected_revs.get(item.mgmt_no) == item.rev
+                    ]
                 if not targets:
                     return []
 
@@ -838,10 +965,11 @@ class Store:
                     assignments = ", ".join(f"{col} = ?" for col in changes)
                     params: list[Any] = list(changes.values())
                     params.extend(
-                        [now, self.host_name, merged_dirty_columns, line, item.mgmt_no, item.rev]
+                        [self._next_rev(conn), now, self.host_name, merged_dirty_columns,
+                         line, item.mgmt_no, item.rev]
                     )
                     cursor = conn.execute(
-                        f"UPDATE kanban_item SET {assignments}, rev = rev + 1,"
+                        f"UPDATE kanban_item SET {assignments}, rev = ?,"
                         " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?,"
                         " sync_attempts = 0, sync_error = ''"
                         " WHERE line = ? AND mgmt_no = ? AND rev = ?",
@@ -973,12 +1101,15 @@ class Store:
         def _apply() -> int:
             cleared = 0
             with self.write_transaction() as conn:
+                # この回の通し番号を行に残す。送る前に読み始めていた取り込みが、
+                # この行の状態列を古い値で戻さないように(:meth:`import_line`)
+                gen = self._next_counter(conn, _META_SYNC_GEN)
                 for line, mgmt_no, rev in keys:
                     cursor = conn.execute(
                         "UPDATE kanban_item SET dirty = 0, dirty_columns = '',"
-                        " sync_attempts = 0, sync_error = ''"
+                        " sync_attempts = 0, sync_error = '', synced_gen = ?"
                         " WHERE line = ? AND mgmt_no = ? AND rev = ?",
-                        (line, mgmt_no, rev),
+                        (gen, line, mgmt_no, rev),
                     )
                     cleared += cursor.rowcount
             return cleared
@@ -1074,6 +1205,26 @@ class Store:
                 ).rowcount
 
         return int(self.retry(_apply, "retry_failed"))
+
+    def has_unsent(self, line: str, mgmt_no: str) -> bool:
+        """その看板に、まだ共有DBへ届いていない操作(未反映)があるか。
+
+        マスタ管理で看板を消す前に見る(:func:`kanban.presenters.master.delete_row`)。
+        消すと送り先が無くなり、押した発注が**どこにも届かないまま捨てられる**。
+        """
+        keys = {str(mgmt_no).strip()}
+        try:
+            number = float(str(mgmt_no).strip())
+            if number.is_integer():
+                keys.add(str(int(number)))
+        except ValueError:
+            pass
+        marks = ", ".join("?" for _ in keys)
+        row = self.connection.execute(
+            f"SELECT 1 FROM kanban_item WHERE line = ? AND mgmt_no IN ({marks}) AND dirty = 1 LIMIT 1",
+            (line, *keys),
+        ).fetchone()
+        return row is not None
 
     def pending_count(self) -> int:
         """共有DBへ届いていない行の数。**諦めた行も含みます。**
@@ -1258,10 +1409,17 @@ class Store:
 
         self.retry(_apply, "mark_events_sent")
 
-    def unsent_event_count(self) -> int:
-        row = self.connection.execute(
-            "SELECT COUNT(*) FROM kanban_event WHERE sent = 0"
-        ).fetchone()
+    def unsent_event_count(self, within_hours: float | None = None) -> int:
+        """まだ送っていない出来事の数。``within_hours`` を渡すと、その時間内に積んだものだけ。"""
+        if within_hours is None:
+            row = self.connection.execute(
+                "SELECT COUNT(*) FROM kanban_event WHERE sent = 0"
+            ).fetchone()
+        else:
+            since = (datetime.now() - timedelta(hours=within_hours)).strftime("%Y/%m/%d %H:%M:%S")
+            row = self.connection.execute(
+                "SELECT COUNT(*) FROM kanban_event WHERE sent = 0 AND at >= ?", (since,)
+            ).fetchone()
         return int(row[0])
 
     def prune_sent_events(self, keep_days: int = 90) -> int:
@@ -1280,10 +1438,20 @@ class Store:
     # -- コメント(倉庫 ⇔ 現場のやり取り)---------------------------------
     #
     # 1 回のやり取りは「前の片付け(届いた・取り消した)のあと」に書かれたもの。
-    # 日時は "YYYY/MM/DD HH:MM:SS" の文字列なので、そのまま大小を比べられる。
+    #
+    # **「あと」を書いた端末の時計だけで決めない。** 以前は日時だけを比べていたので、
+    # 片付けと同じ秒に書かれた返事や、時計が遅れている端末(倉庫)の返事が、書いた
+    # そばから「前の回」へ畳まれ、未読にもならなかった ── 新しいコメントが誰にも
+    # 気付かれずに消えた。いまは**この端末に届いた順(番号)**でも見て、片付けより
+    # 後に届いたものか、片付けより後の日時のもののどちらかなら、いまの回に出す。
+    # 迷ったときは見せる側に倒す(古い 1 件がいまの回に残るほうが、新しい 1 件が
+    # 畳まれて見えないよりずっとよい)。
     _OPEN_COMMENT = (
-        "c.kind = '" + "コメント" + "' AND c.at > COALESCE((SELECT MAX(x.at) FROM kanban_comment x"
-        " WHERE x.line = c.line AND x.mgmt_no = c.mgmt_no AND x.kind = '" + "片付け" + "'), '')"
+        "c.kind = '" + "コメント" + "' AND ("
+        "c.id > COALESCE((SELECT MAX(x.id) FROM kanban_comment x"
+        " WHERE x.line = c.line AND x.mgmt_no = c.mgmt_no AND x.kind = '" + "片付け" + "'), 0)"
+        " OR c.at > COALESCE((SELECT MAX(x.at) FROM kanban_comment x"
+        " WHERE x.line = c.line AND x.mgmt_no = c.mgmt_no AND x.kind = '" + "片付け" + "'), ''))"
     )
 
     def add_comment(self, line: str, mgmt_no: str, side: str, body: str) -> dict[str, Any]:
@@ -1331,11 +1499,18 @@ class Store:
         日時と端末)。読まれていなければ空。
         """
         rows = [dict(r) for r in self.connection.execute(
-            "SELECT uid, at, kind, side, host, body FROM kanban_comment"
-            " WHERE line = ? AND mgmt_no = ? ORDER BY at, id",
+            "SELECT id, uid, at, kind, side, host, body FROM kanban_comment"
+            " WHERE line = ? AND mgmt_no = ? ORDER BY id",
             (line, mgmt_no),
         )]
-        last_close = max((r["at"] for r in rows if r["kind"] == COMMENT_CLOSE), default="")
+        # いまの回か前の回かは :data:`_OPEN_COMMENT` と同じ決め方(届いた順か日時の
+        # どちらかで片付けより後ならいまの回)。並びは**この端末に届いた順**
+        close_id = max((r["id"] for r in rows if r["kind"] == COMMENT_CLOSE), default=0)
+        close_at = max((r["at"] for r in rows if r["kind"] == COMMENT_CLOSE), default="")
+
+        def is_open(r: dict[str, Any]) -> bool:
+            return r["id"] > close_id or r["at"] > close_at
+
         marks = [r for r in rows if r["kind"] == COMMENT_READ]
         comments = [r for r in rows if r["kind"] == COMMENT]
         for c in comments:
@@ -1351,10 +1526,12 @@ class Store:
                 r["body"] = r["body"] or "片付けた"
                 r.pop("uid", None)
         shown = [r for r in rows if r["kind"] in (COMMENT, COMMENT_CLOSE, COMMENT_CONFIRM)]
-        now_open = [r for r in shown if r["at"] > last_close]
+        now_open = [r for r in shown if is_open(r)]
         while now_open and now_open[0]["kind"] != COMMENT:   # いまの回はコメントから始める
             now_open.pop(0)
-        older = [r for r in shown if r["at"] <= last_close]
+        older = [r for r in shown if not is_open(r)]
+        for r in shown:
+            r.pop("id", None)
         firsts = [i for i, r in enumerate(older) if r["kind"] == COMMENT]   # 前の回は新しいコメント history 件まで
         keep = firsts[-history:] if history > 0 else []
         older = older[keep[0]:] if keep else []
@@ -1420,7 +1597,7 @@ class Store:
         open_uids = [r[0] for r in conn.execute(
             "SELECT c.uid FROM kanban_comment c"
             f" WHERE c.line = ? AND c.mgmt_no = ? AND c.side <> ? AND {self._OPEN_COMMENT}"
-            " ORDER BY c.at, c.id", (line, mgmt_no, side))]
+            " ORDER BY c.id", (line, mgmt_no, side))]
         if not open_uids:
             return False
         unread = conn.execute(

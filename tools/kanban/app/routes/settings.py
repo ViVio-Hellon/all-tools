@@ -388,6 +388,36 @@ def table_refresh_plan():
     return jsonify({"plan": table_refresh.plan_dict(table_refresh.plan(str(body.get("path", "")), shared))})
 
 
+def _refresh_plan_mismatch(body: dict, path: str) -> str:
+    """入れ替える前に、**画面が確かめた(読んだ)ファイルと同じか**を見る。空文字なら同じ。
+
+    画面は「読む」の結果(どの表が何行か)を見せてから入れ替えさせる。以前は、続けて
+    2 回読んだ返事が前後して届くと、画面に出ている結果と違うファイルで入れ替えたり、
+    落としたファイルが打ちかけの場所を上書きして、確かめていないファイルを使ったり
+    した。画面は入れ物の場所と、確かめたときのファイル(場所・大きさ・更新日時)を送る。
+    """
+    from datetime import datetime
+
+    planned = body.get("plan")
+    if not isinstance(planned, dict):
+        return ""            # 古い画面。確かめようがない(従来どおり)
+    source = str(planned.get("source", "")).strip()
+    if source != path.strip():
+        return ("確かめたファイルと、入れ物のファイルの場所が違います。"
+                "もう一度「読む」を押して、中身を確かめてから入れ替えてください。")
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return ""            # 無いことは入れ替えのほうが理由を添えて断る
+    size = planned.get("size")
+    modified = str(planned.get("modified", "") or "")
+    now = datetime.fromtimestamp(stat.st_mtime).strftime("%Y/%m/%d %H:%M:%S")
+    if (isinstance(size, int) and size != stat.st_size) or (modified and modified != now):
+        return ("確かめたあとに、そのファイルの中身が変わっています。"
+                "もう一度「読む」を押して、中身を確かめてから入れ替えてください。")
+    return ""
+
+
 @bp.post("/api/table-refresh/run")
 def table_refresh_run():
     """選んだ表の中身を入れ替える。`{"path": …, "tables": […]}`。終わったら取り込み直す。"""
@@ -402,6 +432,9 @@ def table_refresh_run():
         return jsonify(_err("bad_tables", "入れ替える表の指定が正しくありません")), 400
     shared, _configured = _shared_db()
     path = str(body.get("path", ""))
+    stale = _refresh_plan_mismatch(body, path)
+    if stale:
+        return jsonify(_err("plan_mismatch", stale)), 409
     result = table_refresh.refresh(path, shared, [str(t) for t in tables], app_config.local_dir("backup"))
 
     # この端末は、いま取り込み直す(看板・マスタ管理にすぐ出す)。ほかの端末は次の取り込みで
@@ -1644,6 +1677,8 @@ def master_update():
     result = master.update_cell(
         shared, table, body.get("row_key"), column, body.get("value"),
         configured=configured, expect_key=body.get("key", master.NO_KEY),
+        # 画面がそのマスに出していた値。開いたあとに別の端末が変えていたら上書きしない
+        expect_before=body.get("before", master.NO_KEY),
     )
     return _master_result(result, table, "update", db=body.get("db", ""))
 
@@ -1693,8 +1728,13 @@ def master_delete():
         return problem
 
     shared, configured = _master_db(body.get("db", ""))
+    unsent = None
+    if body.get("db", "") != DB_ACCESS and table.startswith(config.KANBAN_TABLE_PREFIX):
+        # この端末がまだ送っていない発注のある看板は消さない(送り先が無くなる)
+        line = table[len(config.KANBAN_TABLE_PREFIX):]
+        unsent = lambda key: get_store().has_unsent(line, key)  # noqa: E731
     result = master.delete_row(shared, table, body.get("row_key"), configured=configured,
-                               expect_key=body.get("key", master.NO_KEY))
+                               expect_key=body.get("key", master.NO_KEY), unsent=unsent)
     if body.get("db", "") == DB_ACCESS:
         return _master_result(result, table, "delete", db=DB_ACCESS)
     if result.ok and result.key and table.startswith(config.KANBAN_TABLE_PREFIX):

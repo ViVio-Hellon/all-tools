@@ -76,21 +76,33 @@ function query() {
   return p;
 }
 
+// 頼んだ通し番号。**最後に頼んだ集計だけを描く**(前の返事が遅れて届いても上書きしない)
+let loadSeq = 0;
+
 async function load() {
   loaded = true;
   const run = document.getElementById('stats-run');
+  const fromEl = document.getElementById('stats-from');
+  const toEl = document.getElementById('stats-to');
+  // 頼んだときの期間。**読んでいるあいだに打ち直した期間は上書きしない**(以前は返事が
+  // 来たとたん、打ちかけの期間をサーバの期間で書き換えていた)
+  const sent = { from: fromEl.value, to: toEl.value };
+  const mine = ++loadSeq;
   run.disabled = true;
+  let fresh;
   try {
-    data = await api.get(`/api/stats?${query()}`);
+    fresh = await api.get(`/api/stats?${query()}`);
   } catch (e) {
-    bad(e.message);
+    if (mine === loadSeq) bad(e.message);
     return;
   } finally {
-    run.disabled = false;
+    if (mine === loadSeq) run.disabled = false;
   }
+  if (mine !== loadSeq) return;   // もっと新しく頼んだ集計がある
+  data = fresh;
   // 空で送った(初回)ときは、サーバが決めた既定の期間を入れ物へ戻す
-  document.getElementById('stats-from').value = data.months[0];
-  document.getElementById('stats-to').value = data.months[data.months.length - 1];
+  if (fromEl.value === sent.from) fromEl.value = data.months[0];
+  if (toEl.value === sent.to) toEl.value = data.months[data.months.length - 1];
   render();
 }
 

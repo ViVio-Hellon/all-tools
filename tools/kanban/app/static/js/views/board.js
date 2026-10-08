@@ -10,14 +10,36 @@
 // サーバがずれる。差分を持たないほうが、この規模では確実で速い。
 
 import { api, withLine } from '../api.js';
+import { isQuietLeave } from '../leave.js';
 import { bad, ok, warn } from '../toast.js';
 
 let line = '';
 let busy = false;
-// 送っている最中に押された升(行番号と種類)。**捨てずに**、送り終えたら順に押し直す。
-// 以前は黙って捨てていたので、続けて2行を押すと2つ目が発注されないことがあった
+// 押した升の処理中(押す前にコメントを見せる確認 〜 送り終わる まで)。`busy` は送って
+// いるあいだだけなので、確認の小窓を出しているあいだに次の升を押すと、2つ目の確認が
+// 1つ目の小窓のボタンを付け替え、**1つ目の押下が消えたうえ、そのコメントは見せない
+// まま既読になっていた**。処理中に押された升は預かって、終わってから順に押す
+let acting = false;
+// 送っている最中に押された升(行番号と種類と、押したときの版)。**捨てずに**、送り終えたら
+// 順に押し直す。以前は黙って捨てていたので、続けて2行を押すと2つ目が発注されないことがあった
 let waiting = [];
 let sending = '';        // いま送っている升(「行番号:種類」)。この升の二度押しは預からない
+let pendingTab = null;   // 送っている最中に押されたラインのタブ(終わってから切り替える)
+
+// 盤を返す要求の通し番号。**後から出した要求の盤だけを描く。**
+//
+// 以前は返ってきた順に描いていたので、タブを LVC → HVC と続けて押し、LVC の返事が
+// 遅れて届くと、HVC のタブのまま LVC の盤が出た。そのまま押すと、版がたまたま
+// 同じ HVC の同じ番号の行が動いた(LVC のつもりで HVC を発送した)。自動更新の
+// 遅れた返事が、押した直後の新しい盤を古い盤で上書きすることもあった
+//
+// 決め方は2段: まず**サーバの状態の番号**(`board.stamp`。盤を作る前の状態。増えるだけ)が
+// 新しい盤を描く。同じ状態なら、あとから頼んだほうを描く(コメント・既読は状態の番号を
+// 進めないので、そこは頼んだ順で決める)
+let boardSeq = 0;        // いちばん新しく出した要求の番号
+let shownSeq = 0;        // いま描いている盤の番号
+let shownStamp = 0;      // いま描いている盤の、サーバの状態の番号
+let actionEpoch = 0;     // 押して送った回数(自動更新の読み直しが、そのあいだに押されたかを見る)
 let alerts = [];         // 「発送処理中に注文が取り消されました」(サーバが決めて渡す)
 let canComment = false;  // この画面でコメントを書けるか(倉庫参照は読むだけ)
 let commentSide = '';    // 書くときの名乗り(現場 / 倉庫)
@@ -31,8 +53,9 @@ export function start(initial, initialLine) {
   wireToolbar();
   wireBoard();
   wireComments();
+  wireLeaving();
 
-  if (initial) render(initial);
+  if (initial) applyPayload({ board: initial });
   else if (line) reload();
 
   loadReports();
@@ -47,8 +70,13 @@ let rowsByNo = new Map();
 
 function render(board) {
   const host = document.getElementById('board');
-  if (!host || !board) return;
+  if (!host || !board) return false;
+  // **いま選んでいるラインの盤しか描かない。** 遅れて届いた別のラインの盤を描くと、
+  // タブと盤が食い違ったまま押せてしまう
+  if (line && board.line && board.line !== line) return false;
 
+  host.dataset.line = board.line || line;
+  host.removeAttribute('aria-busy');
   rowsByNo = new Map();
   for (const group of board.groups) {
     for (const r of group.rows) rowsByNo.set(String(r.mgmt_no), { ...r, material: group.material });
@@ -76,6 +104,7 @@ function render(board) {
     host.innerHTML =
       '<div class="empty">このラインに表示する資材がありません。</div>';
   }
+  return true;
 }
 
 function frame(group) {
@@ -150,11 +179,40 @@ function setCount(id, n) {
   if (btn) btn.disabled = !n;
 }
 
-function applyPayload(payload) {
-  if (!payload) return;
-  if (payload.board) render(payload.board);
+/** 盤を返す要求を出す前に呼ぶ。返ってきた盤はこの番号と一緒に `applyPayload` へ渡す */
+function nextSeq() {
+  boardSeq += 1;
+  return boardSeq;
+}
+
+/**
+ * 返ってきた盤で描き直す。`seq` は要求を出したときの番号(`nextSeq`)。
+ * **いま描いている盤より前に出した要求の盤は描かない**(遅れて届いた古い盤)。
+ * 描いたら(盤が無い返事なら何もしなくても)true。
+ */
+function applyPayload(payload, seq) {
+  if (!payload) return false;
+  let drawn = true;
+  if (payload.board) {
+    drawn = false;
+    const stamp = Number(payload.board.stamp || 0);
+    const newer = stamp > shownStamp
+      || (stamp === shownStamp && (seq === undefined || seq > shownSeq));
+    if (newer) {
+      drawn = render(payload.board);
+      if (drawn) {
+        shownStamp = stamp;
+        if (seq !== undefined) shownSeq = seq;
+      }
+    }
+  }
   if ('pending' in payload) setPending(payload.pending, payload.failures);
+  if ('undelivered' in payload) {
+    setUndelivered(payload.undelivered, payload.undelivered_since, payload.undelivered_why,
+                   payload.undelivered_events);
+  }
   if ('presence' in payload) setOpenTerminals(payload.presence);
+  return drawn;
 }
 
 function setPending(n, failures) {
@@ -264,13 +322,27 @@ function markTabs(list) {
   }
 }
 
-async function acknowledge(a) {
-  if (busy) return;
+
+/**
+ * 「発送処理中に注文が取り消されました」を確かめた。`inFlow` は押した升の処理の中から
+ * 呼ぶとき(サイズを押した・送ったら断られた)。それ以外(帯の「確認した」)は、
+ * 送っている最中なら**黙って捨てずに、そう言う**(以前は押しても何も起きなかった)。
+ */
+async function acknowledge(a, inFlow = false) {
+  if (!inFlow && (busy || acting)) {
+    warn('ほかの操作を送っています。終わってから、もう一度「確認した」を押してください。');
+    return;
+  }
   if (!confirm(`${a.message}。\n\n${a.material} ${a.size}(管理番号 ${a.mgmt_no})\n`
                + '倉庫はすでに発送しています。資材を確かめましたか？\n\n'
                + '[OK] を押すと発送の印(緑)を消します。もう一度必要なら、そのあとで出し直してください。')) return;
-  const r = await send('/api/board/acknowledge', { line, mgmt_no: a.mgmt_no, rev: a.rev });
-  if (r) ok('確認しました(発送の印を消しました)');
+  if (!inFlow) acting = true;
+  try {
+    const r = await send('/api/board/acknowledge', { line, mgmt_no: a.mgmt_no, rev: a.rev });
+    if (r) ok('確認しました(発送の印を消しました)');
+  } finally {
+    if (!inFlow) { acting = false; settle(); }
+  }
 }
 
 // ------------------------------------------------------------------
@@ -310,11 +382,120 @@ function renderCommentAlerts(list) {
   box.append(ul);
 }
 
+// ------------------------------------------------------------------
+// 書きかけ(下書き)
+// ------------------------------------------------------------------
+// **書きかけのコメントを画面の外へ消さない。**
+//
+//     打った行が消えることがありました
+//
+// ── とんでもない話である。以前は Esc・枠の外・「閉じる」で何も訊かずに閉じ、
+// 開き直すと欄を空にしていた。覆いが外れたときの自動の読み直し、窓を閉じる・
+// 再読込でも、書きかけは消えた。相手が状態を変えて書けなくなると、欄ごと隠した。
+// いまは看板ごと(ライン:管理番号)にこの端末へ置き(打つたびに)、開いたら戻す。
+const DRAFT_KEY = 'kanban.comments.drafts';
+const drafts = loadDrafts();
+let draftsSaved = true;   // この端末に置けたか(置けない = 読み直すと消える)
+
+function loadDrafts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}');
+    return new Map(Object.entries(raw).filter(([, v]) => typeof v === 'string' && v.trim()));
+  } catch (e) {
+    return new Map();
+  }
+}
+
+function persistDrafts() {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(Object.fromEntries(drafts)));
+    draftsSaved = true;
+  } catch (e) {
+    draftsSaved = false;   // この画面のあいだだけ覚える
+  }
+}
+
+function threadKey(t) {
+  return t ? `${t.line}:${t.mgmt_no}` : '';
+}
+
+function setDraft(key, text) {
+  if (!key) return;
+  if (text && text.trim()) drafts.set(key, text);
+  else drafts.delete(key);
+  persistDrafts();
+}
+
+/** まだ送っていない書きかけの数 */
+function draftCount() {
+  return [...drafts.values()].filter((v) => v.trim()).length;
+}
+
+/** いま開いているやり取りの書きかけ(欄の中身)を置く */
+function saveOpenDraft() {
+  if (!openThread) return;
+  setDraft(threadKey(openThread), document.getElementById('cm-body').value);
+}
+
+/**
+ * 画面を離れるとき(窓を閉じる・再読込・こちらの都合の読み直し・統合ツールの窓を閉じる)に
+ * 書きかけを置き、残っていれば訊く。
+ */
+function wireLeaving() {
+  // 覆いが外れたなどで、こちらの都合で読み直す(leave.js)。置けなければ止める
+  window.addEventListener('app:before-reload', (ev) => {
+    saveOpenDraft();
+    if (draftCount() && !draftsSaved) ev.preventDefault();
+  });
+  // 窓・タブを閉じる・再読込。書きかけがあれば止めて訊く(ブラウザの決まった文言)
+  window.addEventListener('beforeunload', (ev) => {
+    saveOpenDraft();
+    if (isQuietLeave() || !draftCount()) return;
+    ev.preventDefault();
+    ev.returnValue = '';
+  });
+  // 統合ツールの窓の×・終了(外枠が先に頼んでくる)。すぐ「受けた」を返し、書きかけを
+  // 置いて、残っていれば閉じてよいかを訊いてから「済んだ」を返す(日報と同じ約束)
+  window.__alltoolsHandlesClose = true;
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (event.source !== window.parent || window.parent === window) return;
+    if (!data || data.type !== 'alltools:before-close') return;
+    const reply = (type, extra = {}) => {
+      try { window.parent.postMessage({ type, seq: data.seq, ...extra }, event.origin); }
+      catch (e) { /* 親がもう居ない */ }
+    };
+    reply('alltools:before-close-ack');
+    let okToClose = true;
+    try {
+      saveOpenDraft();
+      const n = draftCount();
+      if (n) {
+        okToClose = confirm(`まだ送っていないコメント(書きかけ)が ${n} 件あります。\n`
+          + (draftsSaved ? 'この端末に下書きとして残し、次に開いたときに出します。' : 'この端末に残せません。閉じると消えます。')
+          + '\n\n閉じますか？');
+      }
+    } catch (e) { okToClose = true; }
+    reply('alltools:before-close-done', { ok: okToClose });
+  });
+}
+
 function wireComments() {
   const modal = document.getElementById('comment-modal');
   if (!modal) return;
   const body = document.getElementById('cm-body');
-  const close = () => { modal.hidden = true; openThread = null; reload(); };
+  // 書きかけがあれば訊く(閉じても下書きとして残す。送ったつもりで閉じるのを防ぐ)
+  const close = () => {
+    saveOpenDraft();
+    if (body.value.trim() && !confirm('まだ送っていないコメントがあります(送るには「送る」)。\n'
+      + '閉じても下書きとしてこの端末に残し、次に開いたときに出します。\n\n閉じますか？')) {
+      body.focus();
+      return;
+    }
+    modal.hidden = true;
+    openThread = null;
+    reload();
+  };
   document.getElementById('cm-close').addEventListener('click', close);
   modal.addEventListener('click', (ev) => { if (ev.target === modal) close(); });
   document.addEventListener('keydown', (ev) => { if (!modal.hidden && ev.key === 'Escape') close(); });
@@ -323,7 +504,20 @@ function wireComments() {
     try { localStorage.setItem(FOLD_KEY, folded() ? '0' : '1'); } catch (e) { /* この画面のあいだだけ */ }
     applyFold();
   });
-  body.addEventListener('input', countChars);
+  body.addEventListener('input', () => { saveOpenDraft(); countChars(); });
+  // 書けなくなったあとの書きかけは読むだけになる。要らなければここで捨てる
+  // (捨てないと、閉じるたび・離れるたびに「送っていないコメントがあります」と訊かれる)
+  const discard = document.getElementById('cm-discard');
+  if (discard) {
+    discard.addEventListener('click', () => {
+      if (!confirm('この看板の書きかけ(下書き)を消しますか？\n消すと戻せません。')) return;
+      body.value = '';
+      saveOpenDraft();
+      discard.hidden = true;
+      document.getElementById('cm-form').hidden = body.readOnly;
+      countChars();
+    });
+  }
   body.addEventListener('keydown', (ev) => {
     // Ctrl+Enter で送る(Enter だけでは送らない ── 改行のつもりで押して送ってしまう)
     if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); postComment(); }
@@ -334,27 +528,39 @@ function countChars() {
   const body = document.getElementById('cm-body');
   const max = Number(body.maxLength) || 200;
   document.getElementById('cm-count').textContent = `${body.value.length} / ${max}`;
-  document.getElementById('cm-send').disabled = !body.value.trim();
+  document.getElementById('cm-send').disabled = !body.value.trim() || body.readOnly;
 }
 
 async function openComments(l, mgmtNo) {
-  openThread = { line: l, mgmt_no: mgmtNo };
-  document.getElementById('cm-body').value = '';
-  await loadThread(l, mgmtNo, { quiet: false });
+  // 前に開いていたやり取りの書きかけを置いてから、開く看板の書きかけを戻す
+  saveOpenDraft();
+  openThread = { line: l, mgmt_no: String(mgmtNo) };
+  const body = document.getElementById('cm-body');
+  body.value = drafts.get(threadKey(openThread)) || '';
+  const shown = await loadThread(l, mgmtNo, { quiet: false });
+  if (!shown || threadKey(openThread) !== `${l}:${mgmtNo}`) return;   // もっと新しく開いたものがある
   const modal = document.getElementById('comment-modal');
   modal.hidden = false;
-  if (canComment) document.getElementById('cm-body').focus();
+  if (canComment && !body.readOnly) {
+    body.focus();
+    body.setSelectionRange(body.value.length, body.value.length);
+  }
 }
 
+/** やり取りを読んで描く。**開いている看板の返事だけ**を描く(前に開いた看板の遅い返事は捨てる) */
 async function loadThread(l, mgmtNo, { quiet }) {
+  const seq = nextSeq();
   try {
     const q = new URLSearchParams({ line: l, mgmt_no: mgmtNo, view: line });
     const r = await api.get(`/api/comments?${q}`);
+    if (!openThread || threadKey(openThread) !== `${r.line}:${r.mgmt_no}`) return false;
     drawThread(r);
     // 既読にしたので、未読の印を消した盤面をもらう(開いたままの描き直しでは使わない)
-    if (!quiet && r.board) applyPayload({ board: r.board });
+    if (!quiet && r.board) applyPayload({ board: r.board }, seq);
+    return true;
   } catch (e) {
     if (!quiet) bad(e.message);
+    return false;
   }
 }
 
@@ -392,16 +598,27 @@ function drawThread(r) {
   // 古い順(返事が問いかけの下に来る)。「何をして確認済みになったか」を区切りに出す
   for (const c of r.closed) closed.append(c.kind === '片付け' ? closeMark(c) : bubble(c, r.side));
 
+  // **書けなくなっても、書きかけは隠さない。** 開いているあいだに相手が状態を変えて
+  // 書けない段階になると、以前は欄ごと隠していた(打った文が見えなくなる)。読むだけに
+  // して理由を添え、写し取れるように残す
   const form = document.getElementById('cm-form');
-  form.hidden = !r.can_comment;
+  const bodyEl = document.getElementById('cm-body');
+  const draft = bodyEl.value.trim();
+  form.hidden = !r.can_comment && !draft;
+  bodyEl.readOnly = !r.can_comment;
+  const discard = document.getElementById('cm-discard');
+  if (discard) discard.hidden = r.can_comment || !draft;
   document.getElementById('cm-send').hidden = !r.can_comment;
   document.getElementById('cm-send').textContent = `送る(${r.side}として)`;
-  document.getElementById('cm-body').maxLength = r.max_len || 200;
-  document.getElementById('cm-body').placeholder = r.hint || '';
+  bodyEl.maxLength = r.max_len || 200;
+  bodyEl.placeholder = r.hint || '';
   // 書けないときは理由(段階が違う)を言う。倉庫参照は「読むだけ」
   const ro = document.getElementById('cm-readonly');
   ro.hidden = r.can_comment;
-  ro.textContent = r.cannot_reason || '倉庫参照モードでは読むだけです。';
+  ro.textContent = (r.cannot_reason || '倉庫参照モードでは読むだけです。')
+    + (!r.can_comment && draft
+      ? ' 書きかけはこの端末に下書きとして残しています(送れるようになったら送れます。写し取ることもできます)。'
+      : '');
   countChars();
 }
 
@@ -448,31 +665,73 @@ function bubble(c, mySide) {
   return el;
 }
 
+// 送っている最中か / 送っている最中にもう一度送るよう頼まれたか
+let posting = false;
+let postAgain = false;
+
+/**
+ * 書いたコメントを送る。**送った分だけを欄から消す。**
+ *
+ * 以前は送っている最中の Ctrl+Enter を黙って捨て、返事が来たら欄を丸ごと空にして
+ * いた ── 送っているあいだに打ち足した分が消えた。いまは送った文だけを取り除き、
+ * 打ち足した分は残す。送っている最中にもう一度頼まれたら、終わってから続けて送る。
+ */
 async function postComment() {
-  if (!openThread || busy) return;
+  if (!openThread) return;
+  if (posting) {
+    postAgain = true;
+    ok('いま送っています。続けて書いた分は、そのあとで送ります');
+    return;
+  }
   const bodyEl = document.getElementById('cm-body');
-  const text = bodyEl.value.trim();
+  if (bodyEl.readOnly) return;
+  const raw = bodyEl.value;
+  const text = raw.trim();
   if (!text) return;
-  busy = true;
+  const thread = { ...openThread };
+  const key = threadKey(thread);
+  posting = true;
+  postAgain = false;
   document.getElementById('cm-send').disabled = true;
+  const seq = nextSeq();
+  let sent = false;
   try {
-    const r = await api.post('/api/comments', { ...openThread, body: text, view: line });
-    bodyEl.value = '';
-    drawThread(r);
-    if (r.board) applyPayload({ board: r.board });
+    const r = await api.post('/api/comments', { ...thread, body: text, view: line });
+    sent = true;
+    // 送った文だけを取り除く(送っているあいだに打ち足した分は残す)。別の看板を
+    // 開き直していたら、その看板の下書きから取り除く
+    const same = threadKey(openThread) === key;
+    const now = same ? bodyEl.value : (drafts.get(key) || '');
+    let rest = now;
+    if (now.startsWith(raw)) rest = now.slice(raw.length).replace(/^\s+/, '');
+    else if (now.trim() === text) rest = '';
+    else warn('送った文のあとで書き直した文が欄に残っています。確かめてから送ってください。');
+    setDraft(key, rest);
+    if (same) {
+      bodyEl.value = rest;
+      drawThread(r);
+    }
+    if (r.board) applyPayload({ board: r.board }, seq);
     ok('コメントを送りました');
   } catch (e) {
-    // 開いているあいだに相手が状態を変えて、いまは書けない段階になった
+    // 開いているあいだに相手が状態を変えて、いまは書けない段階になった。
+    // **書いた文は欄に残す**(読むだけにして理由を添える。drawThread)
     if (e.code === 'comment_closed' && e.body) {
-      drawThread(e.body);
-      if (e.body.board) applyPayload({ board: e.body.board });
-      warn(e.message);
+      if (threadKey(openThread) === key) drawThread(e.body);
+      if (e.body.board) applyPayload({ board: e.body.board }, seq);
+      warn(`${e.message} 書いた文は下書きとして残しています。`);
+      postAgain = false;
       return;
     }
     bad(e.message);
+    postAgain = false;
   } finally {
-    busy = false;
+    posting = false;
     countChars();
+    if (sent && postAgain && threadKey(openThread) === key && bodyEl.value.trim()) {
+      postAgain = false;
+      postComment();
+    }
   }
 }
 
@@ -483,6 +742,9 @@ async function postComment() {
 // どのボタンでも、それまでのコメントは確認済みになる。**相手のコメントを読んでからでないと
 // 押せない**: 未読のある看板は、押す前に中身を見せてから進める(もう読んだなら何も訊かない)。
 // 届いたばかりで画面にまだ出ていない未読は、サーバが断って知らせる(send の unread_comments)。
+//
+// **小窓は一度に 1 つ。** 呼ぶのは押した升の処理の中(`acting` のあいだ)だけで、その
+// あいだに押された升は預かる(hold)。小窓のボタンを付け替えて前の押下を消さない。
 const ACTION_LABEL = { size: '赤を付ける / 消す', ship: '発送(緑)', hold: '注文中(黄)' };
 
 /** 見せて「進める」を選んだら true。相手からの未読が無ければ何も訊かずに true */
@@ -490,9 +752,11 @@ async function confirmComments(nos, action) {
   const targets = nos.map((no) => rowsByNo.get(String(no))).filter((r) => r && r.unread);
   if (!targets.length) return true;
   const threads = [];
+  let seq = 0;
   for (const r of targets) {
     try {
       const q = new URLSearchParams({ line, mgmt_no: r.mgmt_no, view: line });
+      seq = nextSeq();
       threads.push(await api.get(`/api/comments?${q}`));   // 開いた = 見せた(既読になる)
     } catch (e) { /* 取れなかった看板は飛ばす(押す操作は止めない) */ }
   }
@@ -524,7 +788,7 @@ async function confirmComments(nos, action) {
   });
   // 見せたので未読の印を消した盤面にする(やめたときも、読んだことは変わらない)
   const last = threads[threads.length - 1];
-  if (last && last.board) applyPayload({ board: last.board });
+  if (last && last.board) applyPayload({ board: last.board }, seq);
   return go;
 }
 
@@ -533,25 +797,43 @@ function wireBoard() {
   const host = document.getElementById('board');
   if (!host) return;
 
-  host.addEventListener('click', async (ev) => {
+  host.addEventListener('click', (ev) => {
     const cell = ev.target.closest('.cell');
     if (!cell || cell.disabled) return;
     const rowEl = cell.closest('.row');
     if (!rowEl) return;
-    if (busy) { hold(rowEl.dataset.no, cell.dataset.kind); return; }
-
     const kind = cell.dataset.kind;
-    if (kind === 'comment') { openComments(line, rowEl.dataset.no); return; }
 
+    // 💬 は読むだけなので、送っている最中でも開く(以前は黙って捨てていた)
+    if (kind === 'comment') { openComments(host.dataset.line || line, rowEl.dataset.no); return; }
+
+    // **出ている盤が、選んでいるラインの盤でなければ押させない**(タブを切り替えて、
+    // 新しいラインの盤がまだ届いていないあいだ)
+    if (host.dataset.line && host.dataset.line !== line) {
+      warn('ラインを読み込んでいます。盤が切り替わってから押してください。');
+      return;
+    }
+    if (busy || acting) { hold(rowEl.dataset.no, kind, rowEl.dataset.rev); return; }
+    press(rowEl, cell);
+  });
+}
+
+/** 押した升を送る(押す前の確かめ 〜 送り終わる まで `acting`) */
+async function press(rowEl, cell) {
+  const kind = cell.dataset.kind;
+  acting = true;
+  try {
     // 赤なし・緑ありの行でサイズを押した → 出し直す前に確かめてもらう
     if (kind === 'size' && rowEl.classList.contains('row--alert')) {
       const a = alerts.find((x) => x.line === line && x.mgmt_no === rowEl.dataset.no);
-      if (a && a.can_acknowledge) { await acknowledge(a); return; }
+      if (a && a.can_acknowledge) { await acknowledge(a, true); return; }
     }
 
     // **押すとコメントは確認済みになる**(前の回へ移る)。いまのコメントがあれば、押す前に見せる
     if (!(await confirmComments([rowEl.dataset.no], ACTION_LABEL[kind] || '押す'))) return;
 
+    // 版は**押したときに見ていた**もの。確かめているあいだにその行が変わっていれば、
+    // サーバが断っていまの盤を出す(見ていない状態に対して押さない)
     const body = {
       line,
       mgmt_no: rowEl.dataset.no,
@@ -575,24 +857,54 @@ function wireBoard() {
     } finally {
       sending = '';
     }
-  });
+  } finally {
+    acting = false;
+    settle();
+  }
 }
 
-/** 送っている最中の押下を預かる。同じ升の二度押しは1回にする(押し直しで取り消さない) */
-function hold(no, kind) {
+/**
+ * 送っている最中の押下を預かる。同じ升の二度押しは1回にする(押し直しで取り消さない)。
+ * **押したときの版も覚える。** 押し直すときに版が変わっていたら(送っているあいだに
+ * その行が動いた)、見ていない状態に対して押すことになるので押さずに知らせる。
+ */
+function hold(no, kind, rev) {
   if (kind === 'comment' || sending === `${no}:${kind}`) return;
   if (waiting.some((w) => w.no === no && w.kind === kind)) return;
-  waiting.push({ line, no, kind });
+  waiting.push({ line, no, kind, rev: String(rev) });
+}
+
+/** 処理が終わったら、預かったタブの切り替え・押下を順に片付ける */
+function settle() {
+  setTimeout(() => {
+    if (busy || acting) return;
+    if (pendingTab) {
+      const tab = pendingTab;
+      pendingTab = null;
+      waiting = [];   // 前のラインで預かった押下は、ラインを変えたら捨てる(drain と同じ)
+      switchTab(tab);
+      return;
+    }
+    drain();
+  }, 0);
 }
 
 /** 預かった押下を1つずつ、描き直した盤面の升で押し直す(ラインを変えたら捨てる) */
 function drain() {
-  if (busy || !waiting.length) return;
+  if (busy || acting || !waiting.length) return;
   const next = waiting.shift();
   if (next.line !== line) { waiting = []; return; }
-  const cell = document.querySelector(`#board .row[data-no="${next.no}"] .cell[data-kind="${next.kind}"]`);
-  if (cell && !cell.disabled) cell.click();
-  else drain();
+  const rowEl = document.querySelector(`#board .row[data-no="${CSS.escape(next.no)}"]`);
+  const cell = rowEl && rowEl.querySelector(`.cell[data-kind="${next.kind}"]`);
+  if (!rowEl || !cell || cell.disabled) { drain(); return; }
+  if (rowEl.dataset.rev !== next.rev) {
+    const r = rowsByNo.get(String(next.no));
+    warn(`${r ? `${r.material} ${(r.size && r.size.label) || ''}` : `管理番号 ${next.no}`} は、送っているあいだに状態が変わったので`
+      + `「${ACTION_LABEL[next.kind] || '押す'}」を押しませんでした。いまの状態を見てから押し直してください。`);
+    drain();
+    return;
+  }
+  press(rowEl, cell);
 }
 
 function wireToolbar() {
@@ -600,9 +912,10 @@ function wireToolbar() {
     const btn = document.getElementById('refresh');
     btn.disabled = true;
     btn.textContent = '↻ 読み込み中…';
+    const seq = nextSeq();
     try {
       const r = await api.post(withLine('/api/refresh', line), {});
-      applyPayload(r);
+      applyPayload(r, seq);
       if (r.imported === false) {
         warn(r.import_message || '共有DBから取り込めませんでした。前回取り込めた内容を表示しています。');
       } else {
@@ -617,36 +930,64 @@ function wireToolbar() {
     }
   });
 
-  on('batch-reset', async () => {
-    const n = document.getElementById('c-reset').textContent;
-    const nos = [...rowsByNo.values()].filter((r) => r.batch_reset).map((r) => r.mgmt_no);
-    if (!(await confirmComments(nos, '届いた資材を一括確認する'))) return;
-    if (!confirm(`${n} 件の資材到着を確認し、表示を元に戻しますか？`)) return;
-    const r = await send('/api/board/batch-reset', { line }, '届いた資材を一括確認する');
-    if (r) ok(`${r.done} 件をリセットしました`);
-  });
+  on('batch-reset', () => batch('batch-reset', 'batch_reset', '届いた資材を一括確認する',
+    (n) => `${n} 件の資材到着を確認し、表示を元に戻しますか？`,
+    (r) => `${r.done} 件をリセットしました`));
 
-  on('batch-ship', async () => {
-    const n = document.getElementById('c-ship').textContent;
-    const nos = [...rowsByNo.values()].filter((r) => r.batch_ship).map((r) => r.mgmt_no);
-    if (!(await confirmComments(nos, 'まとめて発送済みにする'))) return;
-    if (!confirm(`このラインの未発送品 ${n} 件を、まとめて発送済みにしますか？`)) return;
-    const r = await send('/api/board/batch-ship', { line }, 'まとめて発送済みにする');
-    if (r) ok(`${r.done} 件を発送済みにしました`);
-  });
+  on('batch-ship', () => batch('batch-ship', 'batch_ship', 'まとめて発送済みにする',
+    (n) => `このラインの未発送品 ${n} 件を、まとめて発送済みにしますか？`,
+    (r) => `${r.done} 件を発送済みにしました`));
+}
+
+/**
+ * 一括(届いた資材を一括確認 / 表示中のラインを全て発送済みに)。
+ *
+ * **訊いたときに画面に出ていた行だけを動かす。** 以前は押した時点のサーバの状態で
+ * 選び直していたので、「3 件を〜しますか？」に OK したあとに取り込みで増えた看板
+ * まで動いた。訊いた行と版(`[{mgmt_no, rev}]`)を送り、サーバは版が同じ行だけを
+ * 動かして、飛ばした行を返す。
+ */
+async function batch(path, flag, action, question, done) {
+  if (busy || acting) {
+    warn('ほかの操作を送っています。終わってから、もう一度押してください。');
+    return;
+  }
+  acting = true;
+  try {
+    const nos = [...rowsByNo.values()].filter((r) => r[flag]).map((r) => r.mgmt_no);
+    if (!(await confirmComments(nos, action))) return;
+    // 小窓のあとに描き直されていれば、その盤で数え直して訊く
+    const items = [...rowsByNo.values()].filter((r) => r[flag])
+      .map((r) => ({ mgmt_no: String(r.mgmt_no), rev: r.rev }));
+    if (!items.length) { warn('対象の看板がもうありません(ほかの端末が先に動かしました)。'); return; }
+    if (!confirm(question(items.length))) return;
+    const r = await send(`/api/board/${path}`, { line, items }, action);
+    if (r) {
+      ok(done(r));
+      if (r.skipped && r.skipped.length) {
+        warn(`${r.skipped.length} 件は、確かめたあとに状態が変わったので動かしませんでした`
+          + `(管理番号 ${r.skipped.join('、')})。いまの盤を見てから、必要なら押し直してください。`);
+      }
+    }
+  } finally {
+    acting = false;
+    settle();
+  }
 }
 
 /** 送って、返ってきた盤面で描き直す。断られたときも描き直す */
 async function send(path, body, action = '押す', tries = 0) {
   busy = true;
+  actionEpoch += 1;
+  const seq = nextSeq();
   try {
     const r = await api.post(path, body);
-    applyPayload(r);
+    applyPayload(r, seq);
     return r;
   } catch (e) {
     // サーバは断るときも更新後の盤面を一緒に返す。押す前の状態に
     // 戻さず、**いま本当にどうなっているか**を出す
-    applyPayload(e.body);
+    applyPayload(e.body, seq);
     if (e.code === 'unread_comments' && tries < 3) {
       // 届いたばかりの相手のコメントがあった(画面にまだ出ていなかった)。見せてから押し直す
       busy = false;
@@ -658,15 +999,15 @@ async function send(path, body, action = '押す', tries = 0) {
     if (e.code === 'cancelled_while_shipping') {
       // 画面が古くて、赤なし・緑ありに気付かずに押した。確かめてもらう
       const a = alerts.find((x) => x.line === body.line && x.mgmt_no === body.mgmt_no);
-      if (a && a.can_acknowledge) { busy = false; await acknowledge(a); return null; }
+      if (a && a.can_acknowledge) { busy = false; await acknowledge(a, true); return null; }
       warn(e.message);
     } else if (e.status === 409) warn(e.message);
-    else if (e.status === 422 || e.status === 403) warn(e.message);
+    else if (e.status === 422 || e.status === 403 || e.status === 400) warn(e.message);
     else bad(e.message);
     return null;
   } finally {
     busy = false;
-    if (waiting.length) setTimeout(drain, 0);
+    settle();
   }
 }
 
@@ -681,34 +1022,67 @@ function on(id, fn) {
 function wireTabs() {
   const tabs = document.getElementById('line-tabs');
   if (!tabs) return;
-  tabs.addEventListener('click', async (ev) => {
+  tabs.addEventListener('click', (ev) => {
     const tab = ev.target.closest('.tab');
-    if (!tab || busy) return;
-    line = tab.dataset.line;
-    tabs.querySelectorAll('.tab').forEach((t) => {
-      t.setAttribute('aria-selected', String(t === tab));
-    });
-    await reload();
-    loadReports();
+    if (!tab) return;
+    // 送っている最中は、終わってから切り替える(以前は黙って捨てていた)
+    if (busy || acting) {
+      pendingTab = tab;
+      ok(`送り終えたら ${tab.textContent.trim()} に切り替えます`);
+      return;
+    }
+    switchTab(tab);
   });
 }
 
+async function switchTab(tab) {
+  if (!tab || !tab.isConnected) return;
+  line = tab.dataset.line;
+  document.querySelectorAll('#line-tabs .tab').forEach((t) => {
+    t.setAttribute('aria-selected', String(t === tab));
+  });
+  // 新しいラインの盤が届くまで、前のラインの盤は押せない(wireBoard が断る)
+  const host = document.getElementById('board');
+  if (host && host.dataset.line !== line) host.setAttribute('aria-busy', 'true');
+  await reload();
+  loadReports();
+}
+
+/**
+ * いま選んでいるラインの盤を取り直す。描けたら true。
+ *
+ * **返事が届いたときに、頼んだときと同じラインを選んでいる・そのあいだに押されて
+ * いない、ときだけ描く。** 押した返事(新しい盤)を、その前に頼んだ読み直しの返事
+ * (古い盤)で上書きしない。
+ */
 async function reload() {
+  const want = line;
+  const epoch = actionEpoch;
+  const seq = nextSeq();
   try {
-    applyPayload(await api.get(withLine('/api/board', line)));
+    const r = await api.get(withLine('/api/board', want));
+    if (want !== line) return false;
+    if (epoch !== actionEpoch || busy) return false;   // 押した返事のほうが新しい
+    return applyPayload(r, seq);
   } catch (e) {
-    bad(e.message);
+    if (want === line) bad(e.message);
+    return false;
   }
 }
 
 // ------------------------------------------------------------------
 // 印刷
 // ------------------------------------------------------------------
+let reportSeq = 0;
+
 async function loadReports() {
   const host = document.getElementById('reports');
   if (!host) return;
+  const want = line;
+  const mine = ++reportSeq;
   try {
-    const r = await api.get(withLine('/api/report/available', line));
+    const r = await api.get(withLine('/api/report/available', want));
+    if (mine !== reportSeq || want !== line) return;   // もっと新しく頼んだ / ラインが変わった
     host.innerHTML = '';
     for (const rep of r.reports) {
       const a = document.createElement('a');
@@ -726,7 +1100,7 @@ async function loadReports() {
       host.appendChild(a);
     }
   } catch (e) {
-    host.innerHTML = '';
+    if (mine === reportSeq) host.innerHTML = '';
   }
 }
 
@@ -742,23 +1116,31 @@ async function loadReports() {
 //
 // **変わっていなければ描き直さない。** 描き直すとホバー中のツールチップが
 // 消え、押しかけたボタンが作り直される。
+//
+// **重ねて回さない。** 前の回の返事が遅れているあいだに次の回を始めると、遅れた
+// 返事が新しい盤を上書きした。**描けたときだけ「見た」ことにする**(`lastToken`)
+// ── 読み直しに失敗したのに見たことにすると、次に何かが変わるまで古い盤のままだった。
 function startPolling() {
   const ms = window.APP.boardPollMs || 5000;
   if (poll) clearInterval(poll);
 
+  let ticking = false;
   const tick = async () => {
-    if (busy || document.hidden) return;
+    if (ticking || busy || acting || document.hidden) return;
+    ticking = true;
     try {
       const s = await api.get('/api/status');
       setPending(s.pending, s.failures);
-      setUndelivered(s.pending, s.undelivered_since, s.undelivered_why);
+      setUndelivered('undelivered' in s ? s.undelivered : s.pending, s.undelivered_since,
+                     s.undelivered_why, s.undelivered_events);
       setOpenTerminals(s.presence);
       setFreshness(s.import_age_sec, s.import_stale, s.last_import_at);
       if (s.token !== lastToken) {
-        if (lastToken) await reload();
-        lastToken = s.token;
+        if (!lastToken) lastToken = s.token;
+        else if (!busy && !acting && await reload()) lastToken = s.token;
       }
     } catch (e) { /* 接続断は health.js が帯で知らせる */ }
+    finally { ticking = false; }
   };
 
   // **1 回目は待たない。** 開いた直後の数秒だけ「誰も開いていない」に
@@ -783,15 +1165,27 @@ function startPolling() {
 
 // 共有へ届いていないもの。共有フォルダが見えない間に押した発注・発送・コメントは、この端末に
 // 預かったまま。以前は帯の「未送信 N」だけで、相手(倉庫・現場)に届いていないことが分からなかった。
-// つながると自動で送る(書き戻しが数秒ごとに確かめる)ので、押し直しは要らない
-function setUndelivered(pending, since, why) {
+// つながると自動で送る(書き戻しが数秒ごとに確かめる)ので、押し直しは要らない。
+// **送っていないコメントも数える**(以前は看板の状態だけで、コメントが届いていなくても
+// 帯が出なかった)。看板履歴(集計の記録)だけが残っているときは、そう添える
+function setUndelivered(count, since, why, events) {
   const el = document.getElementById('undelivered');
   if (!el) return;
-  if (!pending || !since) { el.hidden = true; return; }
-  el.hidden = false;
-  el.textContent = `⚠ ${pending} 件がまだ共有に届いていません(${why || '共有DBに届きません'}。${since.slice(5, 16)} から)。`
-    + 'この端末に預かっているので、押し直さなくてかまいません。つながると自動で送ります。'
-    + 'それまで相手(倉庫・現場)の画面には出ません。';
+  if (count && since) {
+    el.hidden = false;
+    el.textContent = `⚠ ${count} 件がまだ共有に届いていません(${why || '共有DBに届きません'}。${since.slice(5, 16)} から)。`
+      + 'この端末に預かっているので、押し直さなくてかまいません。つながると自動で送ります。'
+      + 'それまで相手(倉庫・現場)の画面には出ません。'
+      + (events ? `(集計の記録 ${events} 件も送っていません)` : '');
+    return;
+  }
+  if (events) {
+    el.hidden = false;
+    el.textContent = `⚠ 集計の記録(看板履歴)${events} 件をまだ送れていません。`
+      + 'この端末に預かっていて、届くようになったら自動で送ります(看板の状態とコメントは届いています)。';
+    return;
+  }
+  el.hidden = true;
 }
 
 // 取り込みが止まっていないか(帯の「最終取り込み」)

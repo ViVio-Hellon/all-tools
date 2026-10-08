@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .. import access_control, applog, config
 from ..db.shared import (
@@ -770,8 +770,13 @@ def update_cell(
     *,
     configured: bool = True,
     expect_key: Any = NO_KEY,
+    expect_before: Any = NO_KEY,
 ) -> EditResult:
     """1 マスだけ直す。
+
+    ``expect_before`` は画面がそのマスに出していた値。**開いたあとに別の端末が同じ
+    マスを変えていたら、上書きせずに断る**(後から直した人が、先に直した人の値を
+    知らないまま消していた)。
 
     **表ごと保存しない。** 画面が持っている古い行をまとめて書き戻すと、
     その間に他端末が変えた分を巻き込んで消します。直したマスだけを送ります。
@@ -812,14 +817,29 @@ def update_cell(
     current = next(
         r for r in snapshot.rows if str(r.get(ROW_KEY, "")).strip() == str(row_key).strip()
     )
+    if expect_before is not NO_KEY and not _same_key(current.get(column), expect_before):
+        shown = "" if current.get(column) is None else _key_text(current.get(column))
+        return EditResult(
+            False,
+            f"開いたあとに別の端末が「{column}」を「{shown}」に変えています。"
+            "画面を開き直して、いまの値を確かめてから直してください。",
+            "not_found",
+        )
     refused = _kanban_problem(
         table, snapshot, {**current, column: clean}, [column], self_row_key=row_key, kind=kind
     )
     if refused is not None:
         return refused
 
-    sql = f"UPDATE {_ident(table)} SET {_ident(column)} = ? WHERE {where[0]}"
-    results, refused = _write(shared, [(sql, [clean, *where[1]])])
+    # **読んだときの値のままのときだけ書く**(読んでから書くまでのあいだに変わって
+    # いたら 0 件になり、下で「開き直してください」と断る)
+    params: list[Any] = [clean, *where[1]]
+    guard = ""
+    if expect_before is not NO_KEY:
+        guard = f" AND {_ident(column)} IS ?"
+        params.append(current.get(column))
+    sql = f"UPDATE {_ident(table)} SET {_ident(column)} = ? WHERE {where[0]}{guard}"
+    results, refused = _write(shared, [(sql, params)])
     if refused is not None:
         return refused
     result = results[0]
@@ -962,8 +982,12 @@ def delete_row(
     *,
     configured: bool = True,
     expect_key: Any = NO_KEY,
+    unsent: Callable[[str], bool] | None = None,
 ) -> EditResult:
     """1 行消す。
+
+    ``unsent(管理番号)`` は、この端末にその看板の**まだ共有DBへ届いていない操作**が
+    あるか(:meth:`kanban.db.store.Store.has_unsent`)。あれば消さない。
 
     **足せるなら消せないと困ります** ── 番号を打ち間違えて足した行を、
     直す手段だけでは取り除けません(キー列は直せないため)。
@@ -990,7 +1014,9 @@ def delete_row(
 
     # **動いている看板は消さない。** 発注中・発送済み・注文中の看板を消すと、
     # 倉庫はその注文を見失い、現場の赤も行き場を失う(実機テストで見つけた)
-    if _classify(table, shared) == "kanban":
+    guard = ""
+    is_kanban = _classify(table, shared) == "kanban"
+    if is_kanban:
         busy = _busy_state(target)
         if busy:
             return EditResult(
@@ -999,9 +1025,27 @@ def delete_row(
                 "先に看板の画面で片付けて(届いたら赤を消す・倉庫は発送や注文中を外す)から消してください。",
                 "in_use",
             )
+        # **この端末から送っていない発注があれば消さない。** 共有DBの行はまだ空でも、
+        # 押した赤がこの端末に預かったまま。消すと送り先が無くなり、発注ごと捨てられる
+        if unsent is not None and key_text and unsent(key_text):
+            return EditResult(
+                False,
+                f"{key_column} {key_text} には、この端末からまだ共有DBへ届いていない操作(発注など)があります。"
+                "届いてから(看板画面の「未反映」が 0 になってから)、看板の画面で片付けて消してください。",
+                "in_use",
+            )
+        # **消す瞬間にも確かめる。** 読んでから消すまでのあいだに、ほかの端末の発注が
+        # 届いていたら 0 件になる(下で「開き直してください」と断る)
+        busy_cols = [col for col in _BUSY_COLUMNS if col in snapshot.columns]
+        guard = "".join(
+            f" AND COALESCE(TRIM(CAST({_ident(col)} AS TEXT)), '') <> ?" for col in busy_cols
+        )
+    else:
+        busy_cols = []
 
-    sql = f"DELETE FROM {_ident(table)} WHERE {where[0]}"
-    results, refused = _write(shared, [(sql, list(where[1]))])
+    params = list(where[1]) + [config.MARK_ON] * len(busy_cols)
+    sql = f"DELETE FROM {_ident(table)} WHERE {where[0]}{guard}"
+    results, refused = _write(shared, [(sql, params)])
     if refused is not None:
         return refused
     result = results[0]
@@ -1011,7 +1055,8 @@ def delete_row(
     if result.affected == 0:
         return EditResult(
             False,
-            "対象の行が見つかりませんでした。画面を開き直してください。",
+            "対象の行が見つからないか、消す直前に発注・発送・注文中になりました。画面を開き直してください。"
+            if guard else "対象の行が見つかりませんでした。画面を開き直してください。",
             "not_found",
         )
 
@@ -1023,6 +1068,10 @@ def _key_text(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     return "" if value is None else str(value).strip()
+
+
+#: 動いている看板かを見る列(発注・発送・注文中)
+_BUSY_COLUMNS = (config.COL_WANT, config.COL_SHIPPED, config.COL_HOLD)
 
 
 def _busy_state(row: dict[str, Any]) -> str:

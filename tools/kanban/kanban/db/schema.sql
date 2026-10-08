@@ -44,13 +44,14 @@ CREATE TABLE IF NOT EXISTS kanban_item (
     hold          TEXT    NOT NULL DEFAULT '', -- 保留(画面表示は「注文中」)
     hold_at       TEXT    NOT NULL DEFAULT '', -- 注文中日時(旧: 理由)
     row_order     INTEGER NOT NULL DEFAULT 0,  -- Access 上の並び順
-    rev           INTEGER NOT NULL DEFAULT 1,  -- 楽観ロック用(更新ごとに +1)
+    rev           INTEGER NOT NULL DEFAULT 1,  -- 楽観ロック用(更新ごとに全行通しの番号を振り直す)
     updated_at    TEXT    NOT NULL DEFAULT '',
     updated_by    TEXT    NOT NULL DEFAULT '', -- 更新した端末名
     dirty         INTEGER NOT NULL DEFAULT 0,  -- 1 = 共有DBへ未反映
     dirty_columns TEXT    NOT NULL DEFAULT '', -- 未反映の列名(カンマ区切り、論理名)
     sync_attempts INTEGER NOT NULL DEFAULT 0,
     sync_error    TEXT    NOT NULL DEFAULT '',
+    synced_gen    INTEGER NOT NULL DEFAULT 0,  -- 書き戻しに成功した回の通し番号(取り込みが古い値で戻さないため)
     PRIMARY KEY (line, mgmt_no)
 );
 

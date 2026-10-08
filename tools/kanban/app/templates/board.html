@@ -94,6 +94,8 @@
     </form>
     <p class="card__note" id="cm-readonly" hidden>倉庫参照モードでは読むだけです。</p>
     <div class="modal__actions">
+      {# 書けなくなったあとに残った書きかけを捨てる(書けるあいだは欄を空にすればよい) #}
+      <button class="btn btn--ghost" type="button" id="cm-discard" hidden>下書きを消す</button>
       <button class="btn" type="button" id="cm-close">閉じる</button>
       <button class="btn btn--primary" type="submit" form="cm-form" id="cm-send">送る</button>
     </div>

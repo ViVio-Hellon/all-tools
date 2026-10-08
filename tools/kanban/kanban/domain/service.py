@@ -224,14 +224,19 @@ class KanbanService:
         """現場の一括リセット対象(赤と緑が両方点灯)の件数。"""
         return sum(1 for item in self.store.items(line) if item.is_delivered_candidate)
 
-    def batch_reset(self, line: str) -> BatchResult:
-        """届いた資材を一括確認してリセットする(VBA の一括解除)。"""
+    def batch_reset(self, line: str, expected_revs: dict[str, int] | None = None) -> BatchResult:
+        """届いた資材を一括確認してリセットする(VBA の一括解除)。
+
+        ``expected_revs`` を渡すと、画面が見ていた版のままの行だけを動かす
+        (:meth:`kanban.db.store.Store.apply_batch`)。
+        """
         applog.info("batch_reset: 開始 line=%s", line)
         updated = self.store.apply_batch(
             line,
             select=lambda item: item.is_delivered_candidate,
             changes_for=lambda item: models.batch_reset_changes(),
             operation="batch_reset",
+            expected_revs=expected_revs,
         )
         applog.info("batch_reset: 完了 line=%s 件数=%d", line, len(updated))
         if updated:
@@ -242,8 +247,8 @@ class KanbanService:
         """倉庫の一括発送対象(発注済み・未発送)の件数。"""
         return sum(1 for item in self.store.items(line) if item.needs_shipping)
 
-    def batch_ship(self, line: str) -> BatchResult:
-        """表示中のラインの未発送品を一括で発送済みにする。"""
+    def batch_ship(self, line: str, expected_revs: dict[str, int] | None = None) -> BatchResult:
+        """表示中のラインの未発送品を一括で発送済みにする(``expected_revs`` は batch_reset と同じ)。"""
         applog.info("batch_ship: 開始 line=%s", line)
         # **行ごとに決める。** 注文中の行は発送と同時に解除する ── 1 行ずつ
         # 押したときと同じ結果にする(まとめたほうだけ黄が残ると、倉庫から
@@ -253,6 +258,7 @@ class KanbanService:
             select=lambda item: item.needs_shipping,
             changes_for=models.batch_ship_changes,
             operation="batch_ship",
+            expected_revs=expected_revs,
         )
         applog.info("batch_ship: 完了 line=%s 件数=%d", line, len(updated))
         if updated:

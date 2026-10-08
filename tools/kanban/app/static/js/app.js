@@ -6,6 +6,7 @@
 import { api, SCREEN } from './api.js';
 import * as desktop from './desktop.js';
 import { startHealthWatch } from './health.js';
+import { quietReload } from './leave.js';
 import { wireThemeToggle } from './theme.js';
 import { bad, ok } from './toast.js';
 
@@ -205,8 +206,13 @@ function showHolder(active) {
   holding = active;
   if (active) {
     // 持ち主に戻った。**盤を取り直す。** 使えなかったあいだに他の端末が
-    // 動かしているので、そのまま操作させると古い盤を押すことになる
-    location.reload();
+    // 動かしているので、そのまま操作させると古い盤を押すことになる。
+    // 書きかけのコメントは置いてから読み直す(leave.js)。置けなければ読み直さず、
+    // 覆いだけ外して盤を取り直す
+    if (!quietReload()) {
+      const cover = document.getElementById('screen-blocked');
+      if (cover) cover.remove();
+    }
     return;
   }
   document.body.appendChild(blockedOverlay());
@@ -239,7 +245,9 @@ function blockedOverlay() {
       await fetch(`/api/alive?take=1&screen=${encodeURIComponent(SCREEN)}`,
                   { method: 'POST', cache: 'no-store' });
       // 取り直してから使う。使えなかったあいだの変化を持ち込まない
-      location.reload();
+      // (書きかけのコメントは置いてから。leave.js)
+      holding = true;
+      if (!quietReload()) el.remove();
     } catch (e) {
       btn.disabled = false;
       bad('切り替えられませんでした');
