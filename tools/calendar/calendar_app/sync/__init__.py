@@ -27,7 +27,8 @@ def total_pending_count(conn: sqlite3.Connection) -> int:
     return sum(unsent.values()) + pending_delete_count(conn)
 
 
-def reconcile_after_reimport(conn: sqlite3.Connection) -> None:
+def reconcile_after_reimport(conn: sqlite3.Connection,
+                             specs=None) -> None:
     """Access からの総入れ替え取り込みの直後に呼ぶ。
 
     取り込みは対象テーブルを ``DELETE`` してから Access の内容で作り直すため、
@@ -39,8 +40,13 @@ def reconcile_after_reimport(conn: sqlite3.Connection) -> None:
     やらないとどうなるか: 例えば送信記録だけを削除して済ませると、
     次の送信サイクルはテーブルの全行を「未送信」と誤認し、
     Access に既にある内容をもう一度 INSERT して重複を作ってしまう。
+
+    **入れ替えた表だけを揃える**(``specs``)。名簿だけの取り込み元
+    (マスタDB)を取り込んだときにまで全部の表を「送信済み」にすると、
+    保存用DBとマスタDBを続けて取り込むあいだに入った登録が、
+    **送っていないのに送信済み**になって二度と送られなかった。
     """
-    for spec in _specs.WRITE_BACK_SPECS:
+    for spec in (_specs.WRITE_BACK_SPECS if specs is None else specs):
         rows = conn.execute(f'SELECT "{spec.key_column}" FROM "{spec.sqlite_table}"')
         ids = [row[0] for row in rows]
         if ids:

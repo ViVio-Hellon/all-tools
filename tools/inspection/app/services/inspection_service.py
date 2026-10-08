@@ -197,6 +197,10 @@ class InspectionService:
         self._done = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._status: Dict[str, Any] = {"state": "idle", "scanned": 0, "current": "", "message": ""}
+        # 検索の世代。**フォルダを変えたら進める**(``start_scan(supersede=True)``)。
+        # 走っている検索は、終わったときに世代が変わっていれば結果を捨てて、
+        # いまのフォルダで調べ直す
+        self._gen = 0
 
     # ---- 前回の控え -------------------------------------------------
     def load_cache(self) -> bool:
@@ -234,16 +238,37 @@ class InspectionService:
             self.log.warning("一覧の控えを保存できませんでした: %s", exc)
 
     def clear(self) -> None:
-        """いまの一覧を捨てる(フォルダ設定を変えたとき。別のフォルダの一覧を出さない)。"""
+        """いまの一覧を捨てる(フォルダ設定を変えたとき。別のフォルダの一覧を出さない)。
+
+        走っている検索があれば、その結果も入れさせない(世代を進める)。
+        """
         with self._lock:
             self._inventory = None
             self._from_cache = False
+            self._gen += 1
 
     # ---- 検索 -----------------------------------------------------
-    def start_scan(self, reason: str = "") -> bool:
+    def start_scan(self, reason: str = "", supersede: bool = False) -> bool:
+        """裏で検索を始める。始めた(または調べ直しを約束した)なら True。
+
+        :param supersede: 走っている検索があれば、**その結果を捨てさせて**
+            いまの設定で調べ直させる。フォルダを変えたときに使う。
+
+        【なぜ要るか】
+        以前は検索の途中でフォルダを変えると、ここが「もう走っている」で
+        何もせずに返り、走っていた検索が**前のフォルダの一覧**を入れて
+        控えにも書いた。画面は「フォルダを変更しました」と言うのに、
+        出ているのは前のフォルダの点検表 ── そのまま選んで印刷できてしまう。
+        """
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                return False
+                if not supersede:
+                    return False
+                self._gen += 1
+                self._done.clear()
+                self._status.update(state="scanning", scanned=0, current="", message="",
+                                    started_at=time.time(), reason=reason)
+                return True
             self._done.clear()
             self._status = {"state": "scanning", "scanned": 0, "current": "", "message": "",
                             "started_at": time.time(), "reason": reason}
@@ -251,32 +276,62 @@ class InspectionService:
             self._thread.start()
             return True
 
+    def _stale(self, gen: int, root: str) -> bool:
+        """この検索の結果はもう古いか(世代が進んだ・フォルダが変わった)。``_lock`` の中で呼ぶ。"""
+        if gen != self._gen:
+            return True
+        return os.path.normcase(os.path.normpath(root or "")) != os.path.normcase(
+            os.path.normpath(self.settings.effective_root_folder() or ""))
+
     def _scan_worker(self) -> None:
+        # 古くなった結果は捨てて、いまのフォルダで調べ直す(何度でも)。
+        # **終わってよいかは錠の中で決める** ── 終わる直前にフォルダが
+        # 変わったら(``start_scan(supersede=True)``)、もう1回調べる
+        while True:
+            gen = self._scan_once()
+            with self._lock:
+                if gen is not None and gen == self._gen:
+                    self._thread = None
+                    self._done.set()
+                    return
+
+    def _scan_once(self) -> Optional[int]:
+        """1回調べる。結果を入れた(か諦めた)ならそのときの世代、古くて捨てたなら None。"""
+        with self._lock:
+            gen = self._gen
         root = self.settings.effective_root_folder()
         self.log.info("フォルダ検索開始: %s", root)
 
         def progress(scanned: int, current: str) -> None:
             with self._lock:
-                self._status.update(scanned=scanned, current=current)
+                if gen == self._gen:            # 捨てる検索の進み具合は出さない
+                    self._status.update(scanned=scanned, current=current)
 
         try:
             inventory = scan_folder(root, self.cfg.extensions, self.cfg.require_name_prefix, progress)
         except Exception as exc:  # noqa: BLE001
-            self.log.exception("フォルダ検索でエラーが発生しました")
             with self._lock:
+                if self._stale(gen, root):
+                    self.log.info("前のフォルダの検索が失敗しましたが、フォルダが変わったので調べ直します")
+                    return None
                 self._status.update(state="error", message=f"フォルダ検索でエラーが発生しました: {exc}")
                 reason = self._status.get("reason", "")
+            self.log.exception("フォルダ検索でエラーが発生しました")
             event_log.record("scan", event_log.NG, code="SCAN_FAILED", message="フォルダ検索でエラーが発生しました",
                              detail=f"{type(exc).__name__}: {exc}", folder=root, reason=reason)
-            self._done.set()
-            return
+            return gen
         with self._lock:
+            # **前のフォルダの一覧を入れない。** 調べているあいだにフォルダが
+            # 変わっていたら(世代が進んだ・設定が別のフォルダを指す)、捨てて調べ直す
+            if self._stale(gen, root):
+                self.log.info("フォルダが変わったので、前のフォルダ(%s)の検索結果を捨てて調べ直します", root)
+                return None
             self._inventory = inventory
             self._from_cache = False
             self._status.update(state="done", scanned=inventory.total_files, current="")
-        self._save_cache(inventory)
-        with self._lock:
             reason = self._status.get("reason", "")
+            # 控えに書くのも錠の中(書いているあいだに別のフォルダの結果が入れ替わらない)
+            self._save_cache(inventory)
         if not inventory.root_exists:
             self.log.warning("点検表フォルダが見つかりません: %s", root)
             event_log.record(
@@ -298,7 +353,7 @@ class InspectionService:
                           inventory.scan_ms, len(inventory.errors))
             for err in inventory.errors[:20]:
                 self.log.warning("フォルダ読取エラー: %s (%s)", err["path"], err["message"])
-        self._done.set()
+        return gen
 
     def wait(self, timeout: float) -> bool:
         return self._done.wait(timeout)

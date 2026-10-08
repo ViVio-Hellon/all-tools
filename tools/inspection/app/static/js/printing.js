@@ -49,12 +49,22 @@ export async function start() {
   }
 }
 
+// 問い合わせの番号。**見張りは1本だけ** ── 印刷を始めた・表に戻った・
+// 再接続した、のたびに poll() が呼ばれる。問い合わせの返事を待っているあいだに
+// 呼ばれると、返事が来たところでそれぞれが次を仕掛け、見張りが2本・3本と
+// 増えていた(古い返事で進み具合が戻って見えることもある)。いちばん新しい
+// 1本だけが続きを仕掛ける
+let pollSeq = 0;
+
 function poll() {
   clearTimeout(timer);
+  const mine = ++pollSeq;
   api.get("/api/print/status").then((data) => {
+    if (mine !== pollSeq) return;
     render(data.job);
     if (data.job && data.job.active) timer = setTimeout(poll, window.APP.jobPollMs || 500);
   }, () => {
+    if (mine !== pollSeq) return;
     timer = setTimeout(poll, 2000);    // 切れたことは赤い帯が知らせる
   });
 }

@@ -8,6 +8,10 @@ Python 版では標準ライブラリのみで動かすため JSON ファイル�
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
+from pathlib import Path
 from typing import Any
 
 from . import config
@@ -53,23 +57,60 @@ def load() -> dict[str, Any]:
         return {}
 
 
+#: 設定ファイルの「読んで・直して・書く」を1つずつにする錠。
+#: **同時に2つ保存すると、片方の値が消えていた** ── どちらも同じ古い
+#: 中身を読み、自分の1項目だけ直して書くので、後に書いたほうが先の
+#: 変更を古い値で上書きする(設定画面の保存と、配布設定・端末の記録が
+#: 重なったときなど)。「打った値が勝手に戻ることがありました」の一因
+LOCK = threading.RLock()
+
+
 def save(data: dict[str, Any]) -> None:
-    """設定ファイル全体を書き出す (一時ファイル経由で原子的に置き換える)。"""
+    """設定ファイル全体を書き出す (一時ファイル経由で原子的に置き換える)。
+
+    **一時ファイルの名前は書くたびに変える。** 以前は ``settings.tmp``
+    固定で、2つの保存が重なると同じ一時ファイルへ交互に書き、途中までの
+    中身や相手の中身で置き換えることがあった。
+    """
     path = config.settings_path()
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    with LOCK:
+        fd, name = tempfile.mkstemp(prefix=path.stem + ".", suffix=".tmp",
+                                    dir=str(path.parent))
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            tmp.replace(path)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
 
 def get(key: str, default: Any = "") -> Any:
     return load().get(key, default)
 
 
+def has_value(key: str) -> bool:
+    """その項目が設定ファイルに書かれているか(既定のままか)。"""
+    return key in load()
+
+
 def set_value(key: str, value: Any) -> None:
-    data = load()
-    data[key] = value
-    save(data)
+    with LOCK:
+        data = load()
+        data[key] = value
+        save(data)
+
+
+def update(values: dict[str, Any]) -> None:
+    """いくつかの項目を**まとめて1回で**書く(途中の状態を残さない)。"""
+    with LOCK:
+        data = load()
+        data.update(values)
+        save(data)
 
 
 # ---------------------------------------------------------------------------

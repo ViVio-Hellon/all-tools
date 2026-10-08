@@ -17,6 +17,7 @@
 import { openWindow } from "../desktop.js";
 import { ApiError, api, tokenUrl } from "../api.js";
 import { renderCells, renderHeaders } from "../grid.js";
+import * as leave from "../leave.js";
 import { NONE, confirm, inform, modal, pick } from "../modal.js";
 import * as sync from "../sync.js";
 import { toast, toastError } from "../toast.js";
@@ -28,6 +29,24 @@ let loading = false;          // 二重読み込みを防ぐ
 let drawn = { received: null, today: null };
 let waiting = false;          // モーダルを閉じたら描き直す約束
 
+/*
+  【遅れて届いた返事で、いまの画面を上書きしない】
+  月の読み込みは何本も重なりうる(翌月を押してすぐ今日を押す・登録の
+  直後に背景の同期で読み直す)。以前は**届いた順に**描いていたので、
+  遅れて届いた古い月の返事が、利用者が移った先の月を上書きしていた。
+  また、登録の返事(登録した行が入っている)のあとに、登録より前に
+  頼んだ読み直しの返事が届くと、**打った行が画面から消えた**ように見えた。
+
+  頼むたびに番号を進め、**最後に頼んだものの返事だけ**を描く。
+  登録も番号を進める(登録より前に頼んだ読み込みの返事は捨てる)。
+*/
+let loadSeq = 0;
+// 最後に頼んだ月。「翌月」はここから数える(描いた月から数えると、
+// 返事を待つあいだの2回目の「翌月」が同じ月を頼み直すだけになっていた)
+let target = null;
+// 登録・削除を送っている最中か。**そのあいだは背景の読み直しを待たせる**
+let submitting = 0;
+
 export function start() {
   el.grid = document.getElementById("cal-grid");
   el.headers = document.getElementById("cal-headers");
@@ -36,7 +55,10 @@ export function start() {
 
   document.getElementById("cal-prev").addEventListener("click", () => move(-1));
   document.getElementById("cal-next").addEventListener("click", () => move(1));
-  document.getElementById("cal-today").addEventListener("click", () => load());
+  document.getElementById("cal-today").addEventListener("click", () => {
+    const now = new Date();
+    load(now.getFullYear(), now.getMonth() + 1);
+  });
   document.getElementById("cal-print").addEventListener("click", openPrint);
 
   // 「今すぐ同期」で取り込み直したら、内容が変わっているので描き直す
@@ -56,7 +78,15 @@ export function start() {
     if (event.key === "PageDown") { event.preventDefault(); move(1); }
   });
 
-  load();
+  // **保存していない連絡を言えるようにしておく**(読み込み直し・窓の × の前に訊く)
+  leave.register(() => {
+    if (liveDraft && String(liveDraft.text || "").trim()) {
+      return `${liveDraft.label} ${liveDraft.line} ${liveDraft.group}班 への連絡(まだ登録していません)`;
+    }
+    return liveRest;
+  });
+
+  load().then(restoreDraft);
 }
 
 /* ------------------------------------------------------------------
@@ -64,13 +94,18 @@ export function start() {
    ------------------------------------------------------------------ */
 async function load(year, month) {
   const query = (year && month) ? `?year=${year}&month=${month}` : "";
+  const mine = ++loadSeq;
+  if (year && month) target = { year, month };
   loading = true;
   try {
-    render(await api.get(`/api/calendar${query}`));
+    const payload = await api.get(`/api/calendar${query}`);
+    // **後から別の月を頼んでいたら描かない**(遅れて届いた古い返事)
+    if (mine !== loadSeq) return;
+    render(payload);
   } catch (err) {
-    toastError(err);
+    if (mine === loadSeq) toastError(err);
   } finally {
-    loading = false;
+    if (mine === loadSeq) loading = false;
   }
 }
 
@@ -91,6 +126,9 @@ function reload() {
  */
 function onSync(status) {
   if (!status || loading) return;
+  // 登録を送っている最中は読み直さない(登録より前の中身で上書きしない)。
+  // 終わったあとの次の合図で読み直す
+  if (submitting) { waiting = true; return; }
 
   const received = status.last_received_at || "";
   const today = status.today || "";
@@ -113,13 +151,17 @@ function onSync(status) {
 }
 
 function move(delta) {
-  if (!view) return;
-  const index = view.year * 12 + (view.month - 1) + delta;
+  const base = target || view;
+  if (!base) return;
+  const index = base.year * 12 + (base.month - 1) + delta;
   load(Math.floor(index / 12), (index % 12) + 1);
 }
 
 function render(payload) {
   view = payload;
+  // 描いた月を「最後に頼んだ月」にそろえる(範囲の外を頼んだときはサーバが
+  // 端の月に丸めて返すので、次の「翌月」はそこから数える)
+  target = { year: payload.year, month: payload.month };
   // 描いた時点の基準を先に更新する。**このあと `sync.apply` が
   // 購読者を呼ぶので、順番を逆にすると自分の更新で描き直しが走る**
   if (payload.sync) {
@@ -230,7 +272,32 @@ async function registerRest(date, label) {
     body.early = early === NONE ? "" : early.name;
   }
 
-  await submit("/api/rest", body);
+  // **送れなかったら、選んだ内容を持ったまま「もう一度」を出す。**
+  // 以前は失敗の知らせだけ出て、4つ選び直すしかなかった。札(`submit_id`)は
+  // 送り直しても同じ ── 返事だけ届かなかった登録を2回入れない
+  body.submit_id = newSubmitId();
+  liveRest = `${label} ${worker.name} さんの休み(まだ登録していません)`;
+  try {
+    for (;;) {
+      const result = await submit("/api/rest", body);
+      if (result.ok) return;
+      const err = result.err;
+      if (refusedForGood(err)) {
+        // 業務としての断り。**理由はサーバが持っている**ので、そのまま出す。
+        // 409(先に変わっていた)は画面が古いので、あわせて読み直す
+        await inform("登録できません", err.message);
+        if (err.status === 409) await reload();
+        return;
+      }
+      const again = await confirm("まだ登録していません",
+        `${explain(err)}\n\n選んだ内容: ${worker.name} さん`
+        + (body.shift ? `(${body.shift}直)` : "") + ` ${label} の休み`,
+        { okLabel: "もう一度送る", cancelLabel: "やめる" });
+      if (!again) return;
+    }
+  } finally {
+    liveRest = null;
+  }
 }
 
 /** 繋ぎに選ばれたものの見せ方。「未登録のまま」も**選んだ結果**。 */
@@ -380,29 +447,145 @@ async function registerComment(date, label) {
   });
   if (!chosen) return;
 
-  const text = await modal({
-    title: `${label} ${chosen.line} ${chosen.group}班 への連絡`,
-    step: "2 / 2",
-    render(body) {
-      const area = document.createElement("textarea");
-      area.className = "textarea";
-      area.id = "cm-text";
-      area.placeholder = "連絡の内容を入力してください";
-      area.setAttribute("data-autofocus", "1");
-      body.appendChild(area);
-    },
-    actions: [
-      { label: "取り消し", value: null },
-      { label: "登録する", kind: "primary",
-        value: () => {
-          const area = document.getElementById("cm-text");
-          return area && area.value.trim() ? area.value.trim() : undefined;
-        } },
-    ],
-  });
-  if (!text) return;
+  await writeComment({ date, label, line: chosen.line, group: chosen.group,
+                       text: "", submit_id: newSubmitId() });
+}
 
-  await submit("/api/comment", { date, line: chosen.line, group: chosen.group, text });
+/* -- 連絡の打ちかけ ---------------------------------------------------
+   【何が起きていたか】
+   本文を打って「登録する」を押すと、**送る前にダイアログを閉じていた。**
+   送れなかったとき(通信の失敗・取り込みの最中・起動し直し)は知らせが
+   出るだけで、打った本文はもうどこにも無かった。背景をうっかり押す・
+   Esc を押す・画面が読み込み直される、でも黙って消えた。
+   「打った行が消えることがありました」── とんでもない話である。
+
+   【どうするか】
+   * 打っているあいだ、本文を `sessionStorage` に置く(読み込み直しても戻る。
+     タブごとに別なので、別の画面へは漏れない)
+   * 送れなかったら、**同じ本文のままダイアログを開き直し**、理由を上に出す
+   * 本文がある画面は、閉じる前に訊く(`modal.js` の `dirty`)
+   * 送り直しは同じ札(`submit_id`)で送る。返事だけ届かなかった連絡を
+     2行にしない。本文を直したら別の送信なので、札を付け直す
+   --------------------------------------------------------------------- */
+const DRAFT_KEY = "calendar.commentDraft";
+// いま打っている(か、送っている)連絡。`leave.js` に「保存していない」と言う
+let liveDraft = null;
+// 送れずに「もう一度」を待っている休みの登録(説明の文)
+let liveRest = null;
+
+function saveDraft(draft) {
+  liveDraft = draft;
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch (_err) { /* 使えないブラウザでは画面の中だけで持つ */ }
+}
+
+function dropDraft() {
+  liveDraft = null;
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch (_err) { /* 同上 */ }
+}
+
+function storedDraft() {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null");
+    return draft && draft.date && draft.line && draft.group ? draft : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+/** 読み込み直す前に打っていた連絡があれば、開き直して戻す。 */
+async function restoreDraft() {
+  const draft = storedDraft();
+  if (!draft || !String(draft.text || "").trim()) { dropDraft(); return; }
+  // **使っていない画面(2枚目のタブ)では戻さない**(使っている画面のもの)
+  const block = document.getElementById("screen-block");
+  if (block && !block.hidden) return;
+  if (document.querySelector(".modal")) return;
+  await writeComment(draft,
+    "読み込み直す前に打っていた連絡を戻しました。内容を確かめて「登録する」を押してください。");
+}
+
+async function writeComment(draft, firstNote = "") {
+  let note = firstNote;
+  for (;;) {
+    saveDraft(draft);
+    const text = await modal({
+      title: `${draft.label} ${draft.line} ${draft.group}班 への連絡`,
+      step: "2 / 2",
+      // 本文があれば、閉じる前に訊く
+      dirty: () => {
+        const area = document.getElementById("cm-text");
+        return !!(area && area.value.trim());
+      },
+      render(body) {
+        if (note) {
+          const why = document.createElement("div");
+          why.className = "note note--warn";
+          why.id = "cm-note";
+          why.style.whiteSpace = "pre-wrap";
+          why.textContent = note;
+          body.appendChild(why);
+        }
+        const area = document.createElement("textarea");
+        area.className = "textarea";
+        area.id = "cm-text";
+        area.placeholder = "連絡の内容を入力してください";
+        area.setAttribute("data-autofocus", "1");
+        area.value = draft.text || "";
+        // 打つたびに置いておく(読み込み直し・タブの入れ替えに備える)
+        area.addEventListener("input", () => {
+          draft.text = area.value;
+          saveDraft(draft);
+        });
+        body.appendChild(area);
+      },
+      actions: [
+        { label: "取り消し", value: null },
+        { label: "登録する", kind: "primary",
+          value: () => {
+            const area = document.getElementById("cm-text");
+            return area && area.value.trim() ? area.value.trim() : undefined;
+          } },
+      ],
+    });
+    if (!text) { dropDraft(); return; }
+
+    // 前に送った本文と違えば別の送信。札を付け直す(同じ札だと、
+    // サーバは「もう受けた」として直した本文を書かない)
+    if (draft.sent !== undefined && draft.sent !== text) draft.submit_id = newSubmitId();
+    draft.text = text;
+    draft.sent = text;
+    saveDraft(draft);
+
+    const result = await submit("/api/comment", {
+      date: draft.date, line: draft.line, group: draft.group, text,
+      submit_id: draft.submit_id });
+    if (result.ok) { dropDraft(); return; }
+    // **本文を持ったまま開き直す。** 理由はダイアログの上に出す
+    note = explain(result.err);
+  }
+}
+
+/** 送信1回ごとの札。送り直しても同じ札を使う(サーバが二重に書かない)。 */
+function newSubmitId() {
+  if (window.crypto && window.crypto.randomUUID) return crypto.randomUUID();
+  return `c-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/** 送り直しても通らない断りか(業務としての断り)。 */
+function refusedForGood(err) {
+  return err instanceof ApiError && (err.status === 409 || err.status === 422);
+}
+
+/** 送れなかった理由を、入力を残したことと一緒に言う。 */
+function explain(err) {
+  if (err instanceof ApiError && err.status && err.status !== 500) {
+    // サーバの断り(使用中・起動し直し・業務の断り)。理由はサーバが持っている
+    return err.message;
+  }
+  return `送れませんでした(${err && err.message ? err.message : String(err)})。`
+    + "入力はそのまま残してあります。つながりを確かめて、もう一度「登録する」を押してください。";
 }
 
 function field(label, id) {
@@ -511,26 +694,41 @@ async function deleteDay(date, label) {
   const marks = {};
   day.items.forEach((item) => { marks[item.id] = item.mark; });
 
-  await submit("/api/delete", { date, ids, marks });
+  const result = await submit("/api/delete", { date, ids, marks });
+  if (result.ok) return;
+  const err = result.err;
+  if (refusedForGood(err)) {
+    await inform("削除できません", err.message);
+    if (err.status === 409) await reload();
+    return;
+  }
+  toastError(err);
 }
 
 /* ------------------------------------------------------------------
    送信
    ------------------------------------------------------------------ */
+/**
+ * 送って、返ってきた月を描く。**断られても投げない** ── `{ok, err}` を返し、
+ * 入力をどう残すかは呼んだ側が決める(連絡なら本文を持ったまま開き直す)。
+ */
 async function submit(path, body) {
+  // 登録より前に頼んでいた月の読み込みの返事は捨てる(登録した行が
+  // 入っていない中身で、登録の結果を上書きさせない)
+  const mine = ++loadSeq;
+  submitting += 1;
   try {
     const payload = await api.post(path, body);
-    render(payload);
+    // 送っているあいだに利用者が別の月へ移っていたら、そちらを描いたままにする
+    if (mine === loadSeq) render(payload);
+    else sync.apply(payload.sync);
     toast(payload.message, "ok");
+    return { ok: true, payload };
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
-      // 業務としての断り。**理由はサーバが持っている**ので、そのまま出す。
-      // 409(先に変わっていた)は画面が古いので、あわせて読み直す
-      await inform("登録できません", err.message);
-      if (err.status === 409) await load(view.year, view.month);
-      return;
-    }
-    toastError(err);
+    return { ok: false, err };
+  } finally {
+    submitting -= 1;
+    if (mine === loadSeq) loading = false;
   }
 }
 

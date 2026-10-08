@@ -66,7 +66,8 @@ def update_settings():
         event_log.record("settings.folder", event_log.INFO, before=before_folder,
                          after=biz.settings.effective_root_folder())
         biz.inspection.clear()
-        biz.inspection.start_scan("フォルダ設定の変更")
+        # 検索の途中でも**前のフォルダの結果を入れさせない**(捨てて調べ直させる)
+        biz.inspection.start_scan("フォルダ設定の変更", supersede=True)
     return jsonify(_state(biz, rescan=rescan))
 
 
@@ -112,7 +113,7 @@ def _distribution_reply(biz, result):
     if rescan:
         # 点検表フォルダが替わった。前のフォルダの一覧を出さない
         biz.inspection.clear()
-        biz.inspection.start_scan("配布設定の読み込み")
+        biz.inspection.start_scan("配布設定の読み込み", supersede=True)
     return jsonify(_state(biz, message=result.message, rescan=rescan))
 
 

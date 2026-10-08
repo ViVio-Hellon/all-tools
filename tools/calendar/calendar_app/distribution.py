@@ -330,6 +330,20 @@ def _mark_applied() -> None:
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
+    # 読んでから書くまでを錠の中で(あいだに入った保存を古い値で消さない)
+    with user_settings.LOCK:
+        _apply_locked(bundle, overwrite, result)
+    if result.applied:
+        if ITEM_LABELS[user_settings.KEY_LOG_DIR] in result.applied:
+            # ログの書き先が変わった。**その場で付け替える**(次の起動を待つと、
+            # 配った初日のログが指定先に無い)
+            from . import logging_utils
+
+            logging_utils.reconfigure()
+    return result
+
+
+def _apply_locked(bundle: Bundle, overwrite: bool, result: Result) -> None:
     current = user_settings.load()
     for key, value in bundle.settings.items():
         if _present(current.get(key)) and not overwrite:
@@ -344,13 +358,6 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     if result.applied:
         current[KEY_APPLIED] = {"at": _now()}
         user_settings.save(current)
-        if ITEM_LABELS[user_settings.KEY_LOG_DIR] in result.applied:
-            # ログの書き先が変わった。**その場で付け替える**(次の起動を待つと、
-            # 配った初日のログが指定先に無い)
-            from . import logging_utils
-
-            logging_utils.reconfigure()
-    return result
 
 
 def apply_on_start() -> Result:

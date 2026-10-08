@@ -116,9 +116,8 @@ def _rows(source: sources.SourceConnection, table: str) -> list[dict[str, Any]]:
 # 表ごとの取り込み
 # ---------------------------------------------------------------------------
 def _import_data_table(conn: sqlite3.Connection,
-                       source: sources.SourceConnection) -> int:
+                       rows: list[dict[str, Any]]) -> int:
     """休み管理テーブルを取り込む。"""
-    rows = _rows(source, config.TABLE_DATA)
     conn.execute(f'DELETE FROM "{config.TABLE_DATA}"')
     for row in rows:
         # 取り込み元の ID をそのまま主キーに使うことで、画面で選んだ行と
@@ -148,9 +147,8 @@ def _import_data_table(conn: sqlite3.Connection,
 
 
 def _import_history_table(conn: sqlite3.Connection,
-                          source: sources.SourceConnection) -> int:
+                          rows: list[dict[str, Any]]) -> int:
     """削除履歴テーブルを取り込む。"""
-    rows = _rows(source, config.TABLE_DEL_HISTORY)
     conn.execute(f'DELETE FROM "{config.TABLE_DEL_HISTORY}"')
     for row in rows:
         source_id = row.get("ID") if isinstance(row.get("ID"), int) else None
@@ -177,7 +175,7 @@ def _import_history_table(conn: sqlite3.Connection,
 
 
 def _import_member_table(conn: sqlite3.Connection,
-                         source: sources.SourceConnection) -> int:
+                         rows: list[dict[str, Any]]) -> int:
     """班員名簿 (マスタ DB 側) を取り込む。
 
     VBA では列位置(0始まり)で参照していたが、取り込み元が sqlite3 に
@@ -186,7 +184,6 @@ def _import_member_table(conn: sqlite3.Connection,
     「扱える列がありません」と出る ── 黙って位置で拾うより、
     形が違うことを見せるほうがよい。
     """
-    rows = _rows(source, config.TABLE_MEMBER)
     conn.execute(f'DELETE FROM "{config.TABLE_MEMBER}"')
     imported = 0
     for row in rows:
@@ -238,11 +235,11 @@ def _align_autoincrement(conn: sqlite3.Connection, table: str,
 
 #: テーブル名 -> 取り込み関数
 def _import_access_table(conn: sqlite3.Connection,
-                         source: sources.SourceConnection) -> int:
+                         rows: list[dict[str, Any]]) -> int:
     """アクセス権限 (マスタ DB 側。他のツールと共用) を取り込む。"""
     from . import access_control
 
-    return access_control.import_rows(conn, source)
+    return access_control.import_row_list(conn, rows)
 
 
 _IMPORTERS: dict[str, Callable[[sqlite3.Connection, Any], int]] = {
@@ -272,14 +269,25 @@ def import_source(conn: sqlite3.Connection, path: str | Path, *,
     :param force: 未送信の変更があっても取り込みを強行する
     :raises PendingChangesError: 未送信の変更が残っている (force=False のとき)
     :raises SourceError: 取り込み元を開けない
+    :raises sqlite3.OperationalError: 手元の錠が取れない (登録の最中など)
+
+    【確かめるのは2回 ── 入れ替える直前に、錠を取ってからもう一度】
+    以前は入口で1回だけ「送信待ちが0件か」を見て、そのあと共有を読み、
+    それから手元を入れ替えていた。**共有を読んでいるあいだ(数秒かかる
+    こともある)に登録された行は、確かめたあとに増えたので見えず、
+    入れ替えでそのまま消えた。** 送信待ちにも残らないので、取り込み元へも
+    届かない(「打った行が消えることがありました」── とんでもない話である)。
+
+    いまは、共有を**読み終えてから** ``BEGIN IMMEDIATE`` で手元の書き込みを
+    止め、その中で数え直す。0件でなければ入れ替えずにやめる
+    (``PendingChangesError``。自動同期は今回の取り込みを見送るだけ)。
+    錠を取ってから入れ替え終わるまでは登録が待たされるが、読み終えた行を
+    書くだけなので一瞬で済む。待ちきれなかった登録は画面に「もう一度」を
+    出す(``app/routes/calendar.py``)── 黙って消えるよりずっとよい。
     """
+    # 入口の数は記録のためだけ。**断るかどうかは入れ替える直前に決める**
+    # (下の BEGIN IMMEDIATE の中)。名簿だけの取り込み元なら断らない
     pending = total_pending_count(conn)
-    if pending and not force:
-        raise PendingChangesError(
-            f"取り込み元へ未送信の変更が {pending} 件あります。\n"
-            "先に同期してから取り込み直すか、"
-            "変更を破棄する場合は force=True を指定してください。"
-        )
 
     target = Path(path)
     result = ImportResult(source=str(target))
@@ -287,44 +295,79 @@ def import_source(conn: sqlite3.Connection, path: str | Path, *,
 
     # **取り込み元は1つの時点で読む**(``reading``)。表ごとに読むと、
     # その合間に他の端末が書けてしまい、表どうしが少しずれた組み合わせを
-    # 取り込むことがある。**手元は1トランザクション**(``with conn``)で
-    # 入れ替えるので、途中の状態が画面に出ることも無い
+    # 取り込むことがある。**読むのは手元の錠を取る前**(取ってから読むと、
+    # 共有が遅い日にそのあいだずっと登録を待たせる)
+    snapshot: dict[str, list[dict[str, Any]]] = {}
     with source_db.connect(target, read_only=True) as source, source.reading():
         result.opened_by = source.way
         available = set(source.table_names())
-        with conn:  # 取り込み全体を 1 トランザクションにする
-            for table_name, func in _IMPORTERS.items():
-                if table_name not in available:
-                    result.skipped.append(table_name)
-                    continue
+        for table_name in _IMPORTERS:
+            if table_name not in available:
+                result.skipped.append(table_name)
+                continue
+            snapshot[table_name] = _rows(source, table_name)
 
-                # このテーブルは総入れ替えされるため、書き戻し対象なら
-                # 送信記録・削除予約を先に片付けておく
-                spec = _SPEC_BY_SOURCE_TABLE.get(table_name)
-                if spec is not None:
-                    conn.execute(
-                        f'DELETE FROM "{outbox_sync.SYNC_LOG_TABLE}" '
-                        'WHERE "テーブル名"=?',
-                        (spec.sqlite_table,),
-                    )
-                db.discard_pending_deletes(conn, table_name)
+    # 送信待ちと関わる表(書き戻しのある表)を入れ替えるか。名簿だけなら
+    # 送信待ちは消えないので、数え直す必要は無い
+    replaces_outbox = any(name in _SPEC_BY_SOURCE_TABLE for name in snapshot)
 
-                count = func(conn, source)
-                result.tables[table_name] = count
-                debug_log(f"importer.import_source: {table_name} {count} 件")
+    # **手元は1トランザクション**で入れ替えるので、途中の状態が画面に
+    # 出ることも無い。``IMMEDIATE`` にするのは、数え直してから入れ替え
+    # 終わるまで、ほかの接続(登録の API)に書かせないため
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if replaces_outbox and not force:
+            pending_now = total_pending_count(conn)
+            if pending_now:
+                debug_log("importer.import_source: 読んでいるあいだに未送信が"
+                          f"{pending_now}件増えたため入れ替えをやめる")
+                raise PendingChangesError(_pending_message(pending_now))
 
-            # 取り込み直した内容は取り込み元に存在することが保証されている
-            # ため、送信済みとして記録し、次回送信での二重 INSERT を防ぐ
-            reconcile_after_reimport(conn)
+        for table_name, rows in snapshot.items():
+            # このテーブルは総入れ替えされるため、書き戻し対象なら
+            # 送信記録・削除予約を先に片付けておく
+            spec = _SPEC_BY_SOURCE_TABLE.get(table_name)
+            if spec is not None:
+                conn.execute(
+                    f'DELETE FROM "{outbox_sync.SYNC_LOG_TABLE}" '
+                    'WHERE "テーブル名"=?',
+                    (spec.sqlite_table,),
+                )
+            db.discard_pending_deletes(conn, table_name)
 
-            if force and pending:
-                debug_log(f"importer.import_source: 未送信の変更 {pending} 件を破棄")
+            count = _IMPORTERS[table_name](conn, rows)
+            result.tables[table_name] = count
+            debug_log(f"importer.import_source: {table_name} {count} 件")
 
-            db.set_meta(conn, "last_import_at", db.now_string())
-            db.set_meta(conn, "last_import_source", str(target))
+        # 取り込み直した内容は取り込み元に存在することが保証されている
+        # ため、送信済みとして記録し、次回送信での二重 INSERT を防ぐ。
+        # **入れ替えた表だけ**(名簿だけの取り込みで、未送信の登録を
+        # 「送信済み」にしない)
+        replaced = [_SPEC_BY_SOURCE_TABLE[name] for name in snapshot
+                    if name in _SPEC_BY_SOURCE_TABLE]
+        if replaced:
+            reconcile_after_reimport(conn, replaced)
+
+        if force and pending:
+            debug_log(f"importer.import_source: 未送信の変更 {pending} 件を破棄")
+
+        db.set_meta(conn, "last_import_at", db.now_string())
+        db.set_meta(conn, "last_import_source", str(target))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
     debug_log(f"importer.import_source: 終了 {result.describe()}")
     return result
+
+
+def _pending_message(pending: int) -> str:
+    return (f"取り込み元へ未送信の変更が {pending} 件あります。\n"
+            "先に同期してから取り込み直すか、"
+            "変更を破棄する場合は force=True を指定してください。")
 
 
 def import_master_table(conn: sqlite3.Connection, path: str | Path,
@@ -357,8 +400,10 @@ def import_master_table(conn: sqlite3.Connection, path: str | Path,
     with source_db.connect(target, read_only=True) as source:
         if not source.has_table(table_name):
             raise ValueError(f"{target.name} に {table_name} 表がありません")
-        with conn:
-            count = func(conn, source)
+        rows = _rows(source, table_name)
+    # 読み終えてから手元を書く(共有を読んでいるあいだ手元を塞がない)
+    with conn:
+        count = func(conn, rows)
     debug_log(f"importer.import_master_table: {table_name} {count} 件 ({target})")
     return count
 
@@ -366,11 +411,11 @@ def import_master_table(conn: sqlite3.Connection, path: str | Path,
 def import_all(conn: sqlite3.Connection, paths: list[str | Path], *,
                force: bool = False) -> list[ImportResult]:
     """複数の取り込み元 (保存用DB とマスタDB) をまとめて取り込む。"""
-    results = []
-    for index, path in enumerate(paths):
-        # 未送信チェックは最初の 1 回だけ行えばよい
-        results.append(import_source(conn, path, force=force or index > 0))
-    return results
+    # 未送信の確かめは**どの取り込み元でも**行う。1つ目を取り込んだあと、
+    # 2つ目を読んでいるあいだに登録が入ることがある。名簿だけの取り込み元
+    # なら送信待ちは消えないので、数え直しは書き戻しのある表のときだけ
+    # (``import_source``)
+    return [import_source(conn, path, force=force) for path in paths]
 
 
 # ---------------------------------------------------------------------------

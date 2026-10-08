@@ -102,10 +102,10 @@ def main(argv: list[str] | None = None) -> int:
     conn = db.connect(args.db)
     status = 0
 
-    for index, path in enumerate(args.paths):
+    for path in args.paths:
         try:
-            # 未反映チェックは最初の 1 ファイルだけで足りる
-            result = import_source(conn, path, force=args.force or index > 0)
+            # 未反映の確かめはファイルごとに行う(名簿だけのファイルは断らない)
+            result = import_source(conn, path, force=args.force)
             print(result.describe())
         except PendingChangesError as exc:
             print(f"エラー: {exc}", file=sys.stderr)

@@ -116,6 +116,17 @@ class SqliteTransport:
         skipped = 0
         errors: list[str] = []
         try:
+            # **削除を先に送る。** 送れない日に「消してから同じ人・同じ日を
+            # 登録し直す」と、以前は登録を先に送っていた ── 取り込み元には
+            # 消す前の行がまだあるので、新しい登録は「先に登録済み」として
+            # 取りやめになり、そのあと削除が届いて**両方とも消えた**。
+            # 自然キーで消す削除が、いま送ったばかりの同じ文面の行に
+            # 当たることも、先に消せば起きない
+            sent_deletes, delete_errors = sync_deletes.forward_pending_deletes(
+                conn, source, config.TABLE_DATA)
+            applied += sent_deletes
+            errors.extend(delete_errors)
+
             for spec in sync_specs.WRITE_BACK_SPECS:
                 if spec.source_table == config.TABLE_DATA:
                     # 休み管理だけ業務レベルの二重登録確認を挟む
@@ -131,11 +142,6 @@ class SqliteTransport:
                     result = outbox_sync.write_back(conn, source, [spec])
                     applied += result.total
                     errors.extend(result.errors)
-
-            sent_deletes, delete_errors = sync_deletes.forward_pending_deletes(
-                conn, source, config.TABLE_DATA)
-            applied += sent_deletes
-            errors.extend(delete_errors)
         finally:
             # この端末の設定を置いていく。**送信の成否とは切り離す** ──
             # 見るためのもので、業務データではない。中身が変わったときと
@@ -255,9 +261,24 @@ class AutoSync:
         # 総入れ替え後に送信記録を「すべて送信済み」へ揃える処理は
         # import_source 自身が行う (手動取り込みなど他の経路でも
         # 同じ整合性が必要なため、共通化してそちら側に寄せてある)。
-        from ..importer import import_source
+        from ..importer import PendingChangesError, import_source
 
-        import_source(conn, self.source_path)
+        try:
+            import_source(conn, self.source_path)
+        except PendingChangesError:
+            # **共有を読んでいるあいだに登録が入った。** 入口で0件と確かめた
+            # だけでは足りず、そのまま入れ替えると、その登録が消えていた
+            # (「打った行が消えることがありました」)。``import_source`` が
+            # 錠を取ってから数え直して止めたので、今回は見送る。次の周期で
+            # 送ってから取り込み直す
+            debug_log("AutoSync.receive: 取り込み中に未送信が増えたため見送る")
+            return False
+        except sqlite3.OperationalError as exc:
+            if not source_db.is_lock_error(exc):
+                raise
+            # 手元が使用中(登録の最中など)。待てば通るので、次の周期に回す
+            debug_log(f"AutoSync.receive: 手元が使用中のため見送る {exc}")
+            return False
         self._receive_members(conn)
         db.set_meta(conn, "last_received_at", db.now_string())
         conn.commit()

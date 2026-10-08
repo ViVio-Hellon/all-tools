@@ -49,6 +49,9 @@ class SyncService:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running = False
+        #: 走っているあいだに頼まれた次の1回(``None`` = 頼まれていない。
+        #: 真偽は「取り込みまでするか」)
+        self._rerun: Optional[bool] = None
         self._status = SyncStatus()
         self._auto: Optional[AutoSync] = None
         self._stop = threading.Event()
@@ -186,6 +189,10 @@ class SyncService:
             return False
         with self._lock:
             if self._running:
+                # **頼まれたことを捨てない。** 以前はここで黙って返していたので、
+                # 背景の取り込みの最中に登録すると、その登録は次の周期(既定20秒)
+                # まで送られなかった。終わったらもう1回回す約束だけ残す
+                self._rerun = bool(self._rerun) or receive
                 return False
             self._running = True
 
@@ -209,6 +216,18 @@ class SyncService:
         return self.status()
 
     def _run_once(self, receive: bool) -> None:
+        """1回回す。走っているあいだに頼まれていれば、続けてもう1回。"""
+        while True:
+            self._run_one(receive)
+            with self._lock:
+                again = self._rerun
+                self._rerun = None
+                if again is None or self._stop.is_set():
+                    self._running = False
+                    return
+            receive = again
+
+    def _run_one(self, receive: bool) -> None:
         auto = self._auto
         # 同期1回ごとに追跡番号を立てる(``s=XXXXXX``)。その1回の送信・
         # 取り込みの行が揃う。画面の「今すぐ同期」から呼ばれたときは
@@ -227,8 +246,6 @@ class SyncService:
             self._status = SyncStatus(state=SyncState.OFFLINE, message=str(exc))
             self._last_error = str(exc)
         finally:
-            with self._lock:
-                self._running = False
             _note_change(before, self._status)
             if token is not None:
                 logging_utils.reset_trace(token)

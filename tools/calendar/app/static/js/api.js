@@ -7,6 +7,7 @@
 */
 
 import * as busy from "./busy.js";
+import { reloadSafely } from "./leave.js";
 import * as screen from "./screen.js";
 
 const TOKEN = window.APP.token;
@@ -68,10 +69,24 @@ async function request(path, options = {}) {
         // 夜のあいだに自動終了して朝また起動すると、開けっぱなしのタブが
         // 持っている起動トークンは前のプロセスのもので、押すと全部断られる。
         // 見張り(`health.js`)も気づくが、そちらは15秒ごとなので、
-        // その隙に押した人には「通信に失敗しました」としか出なかった
-        location.reload();
+        // その隙に押した人には「通信に失敗しました」としか出なかった。
+        // **ただし打ちかけがあれば先に訊く**(`leave.js`)── 黙って読み込み
+        // 直すと、ダイアログに打った連絡がそのまま消えていた
+        const writing = (options.method || "GET") !== "GET";
+        const reloading = await reloadSafely(
+          "アプリが起動し直されたため、この画面のままでは保存できません。",
+          { byUser: writing });
         // 読み込み直すまでのあいだ、呼んだ側に嘘の成功を返さない
-        await new Promise(() => {});
+        if (reloading) await new Promise(() => {});
+        // 「あとで」なら断りとして返す。**呼んだ側は入力を開いたまま残す**
+        throw new ApiError(res.status, { error: {
+          code: "stale_screen",
+          message: writing
+            ? "アプリが起動し直されたため、まだ保存していません。"
+              + "入力はそのまま残してあります。画面を読み込み直してから、"
+              + "もう一度保存してください。"
+            : "アプリが起動し直されたため、最新の内容を読めません。"
+              + "画面を読み込み直してください。" } });
       }
       throw new ApiError(res.status, body);
     }

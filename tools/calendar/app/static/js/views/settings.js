@@ -11,6 +11,7 @@
 import { saveText } from "../desktop.js";
 import { withPassword } from "../adminpass.js";
 import { ApiError, api } from "../api.js";
+import * as leave from "../leave.js";
 import { confirm, inform, modal } from "../modal.js";
 import * as sync from "../sync.js";
 import { toast, toastError } from "../toast.js";
@@ -19,7 +20,74 @@ import * as theme from "../theme.js";
 
 let state = null;
 
+/*
+  【打った値・選んだ値を、描き直しで戻さない】
+  この画面は帯の同期の状態が変わるたびに(送信待ちがあるあいだは1秒ごと)
+  設定を読み直して描き直す。以前は「いま焦点のある欄」だけをよけていたので、
+  ラインを選んで別の欄へ移った・参照パスを打って次の欄へ移っただけで、
+  **選んだライン・打ったパスがサーバの古い値に戻り**、そのまま「保存」を
+  押すと戻った値が送られていた(ラインの選択は焦点があっても戻していた)。
+  「打った値が勝手に戻ることがありました」── とんでもない話である。
+
+  欄ごとに「触った」印(`dirty`)を持ち、**印のある欄は描き直しで触らない。**
+  印を外すのは、その欄の保存が通ったときだけ(断られたときは打った値を残す)。
+*/
+const FIELDS = {
+  "st-line": "ライン",
+  "st-data-dir": "保存用DBのフォルダ",
+  "st-master-dir": "マスタDBのフォルダ",
+  "st-auto": "自動同期",
+  "st-interval": "取り込み間隔",
+  "st-log-dir": "ログフォルダ",
+};
+const dirty = new Set();
+// パスワードを取り消したら**本当の設定に戻す**欄(選ぶだけの欄)。
+// 打った文字(パス)は戻さない ── 打ち直しになる
+const REVERT_ON_CANCEL = new Set(["st-line"]);
+
+/*
+  【遅れて届いた読み込みの返事で、保存した値を戻さない】
+  保存の直前に出た読み込み(帯の同期が頼んだもの)の返事が、保存の返事より
+  あとに届くと、**保存前の値で描き直していた**。頼んだ順に番号を振り、
+  保存を挟んだ読み込み・後から頼み直した読み込みの返事は捨てる。
+*/
+let loadSeq = 0;
+let epoch = 0;
+// 帯の同期の状態のうち、この画面に出すもの。**変わったときだけ**読み直す
+let lastSyncSig = "";
+
+function markDirty(id) {
+  dirty.add(id);
+  const node = document.getElementById(id);
+  if (node) node.classList.add("is-dirty");
+}
+
+function clean(ids) {
+  ids.forEach((id) => {
+    dirty.delete(id);
+    const node = document.getElementById(id);
+    if (node) node.classList.remove("is-dirty");
+  });
+}
+
+/** 書き込みを送る・書き込みの返事を描く。**それより前の読み込みの返事を捨てる** */
+function bumpEpoch() {
+  epoch += 1;
+}
+
 export function start() {
+  Object.keys(FIELDS).forEach((id) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.addEventListener("input", () => markDirty(id));
+    node.addEventListener("change", () => markDirty(id));
+  });
+  leave.register(() => {
+    if (!dirty.size) return null;
+    return "設定画面の " + [...dirty].map((id) => `「${FIELDS[id]}」`).join("")
+      + "(まだ保存していません)";
+  });
+
   bind("st-line-save", saveLine);
   bind("st-auto-save", saveAutoSync);
 
@@ -50,8 +118,17 @@ export function start() {
   bind("st-pw-save", () => changeAdminPassword(false));
   bind("st-pw-reset", () => changeAdminPassword(true));
 
-  // 帯の同期状態が変わったら、この画面の表示も合わせる
-  sync.subscribe(() => { if (state) load(); });
+  // 帯の同期状態が変わったら、この画面の表示も合わせる。**変わったときだけ**
+  // (以前は届くたびに ── 送信待ちがあるあいだは1秒ごとに ── 読み直していた)
+  sync.subscribe((status) => {
+    if (!state || !status) return;
+    const sig = JSON.stringify([status.state, status.text, status.pending,
+      status.offline, status.configured, status.enabled, status.message,
+      status.last_received_at]);
+    if (sig === lastSyncSig) return;
+    lastSyncSig = sig;
+    load();
+  });
 
   load();
   master.start();
@@ -66,11 +143,22 @@ function bind(id, handler) {
    読み込みと描画
    ------------------------------------------------------------------ */
 async function load() {
+  const mine = ++loadSeq;
+  const startedAt = epoch;
   try {
-    render(await api.get("/api/settings"));
+    const payload = await api.get("/api/settings");
+    // 後から頼み直した・あいだに保存を挟んだ → この返事は古い
+    if (mine !== loadSeq || startedAt !== epoch) return;
+    render(payload);
   } catch (err) {
-    toastError(err);
+    if (mine === loadSeq) toastError(err);
   }
+}
+
+/** 書き込みの返事を描く(それより前に出ていた読み込みの返事は捨てる)。 */
+function renderFresh(payload) {
+  bumpEpoch();
+  render(payload);
 }
 
 function render(payload) {
@@ -89,7 +177,8 @@ function render(payload) {
       return option;
     }));
   }
-  line.value = payload.my_line || "";
+  // **選びかけのラインは戻さない**(保存するまで)
+  if (!dirty.has("st-line")) line.value = payload.my_line || "";
   // どう切り替えるか。**表で決まっていればパスワードは要らない**
   const access = document.getElementById("st-line-access");
   if (access && payload.access) {
@@ -230,9 +319,11 @@ function startDistribution() {
   const send = async (path, body) => {
     why.hidden = true;
     try {
+      bumpEpoch();
       const payload = await api.post(path, { ...body, password: password.value });
       password.value = "";
-      render(payload);
+      // 配布設定を読み込み直すと参照パスなども変わる。打ちかけの欄は残す
+      renderFresh(payload);
       toast(payload.message || "済みました", "ok");
       sync.refresh();
       master.refresh();
@@ -321,9 +412,9 @@ function withDefault(id, fallback) {
 
 function setValue(id, value) {
   const node = document.getElementById(id);
-  // **入力中の欄は書き換えない。** 帯の同期状態が更新されるたびに
-  // 描き直すので、打っている途中の文字が消えてしまう
-  if (node && document.activeElement !== node) node.value = value;
+  // **入力中の欄・触った欄は書き換えない。** 帯の同期状態が更新されるたびに
+  // 描き直すので、焦点だけ見ていると、打ち終えて次の欄へ移った値が戻る
+  if (node && document.activeElement !== node && !dirty.has(id)) node.value = value;
 }
 
 /* ------------------------------------------------------------------
@@ -334,17 +425,28 @@ function setValue(id, value) {
    `adminpass.js` に1つだけ置いてある ── マスタ確認の「次のライン」も
    同じ関門を通るので、2か所に持つと必ず片方が古くなる。
    ------------------------------------------------------------------ */
-async function post(path, body) {
+/**
+ * @param {string[]} ids この保存で送る欄。通ったら「触った」印を外す。
+ *        **断られたら外さない** ── 打った値を残す(以前は読み直して消していた)
+ */
+async function post(path, body, ids = []) {
+  bumpEpoch();
   const result = await withPassword((sending) => api.post(path, sending), body);
   if (result.ok) {
-    render(result.payload);
+    clean(ids);
+    renderFresh(result.payload);
     toast(result.payload.message, "ok");
     sync.refresh();
     return result.payload;
   }
-  // 保存しなかったときは、選びかけた値(ラインの選択など)を本当の設定に戻す。
-  // 戻さないと、保存されていないのに画面だけ変わったように見える
-  if (result.cancelled) { await load(); return null; }
+  // 保存しなかったときは、選びかけた値(ラインの選択)を本当の設定に戻す。
+  // 戻さないと、保存されていないのに画面だけ変わったように見える。
+  // **打ったパスは戻さない**(打ち直させない。欄に「未保存」の印が残る)
+  if (result.cancelled) {
+    clean(ids.filter((id) => REVERT_ON_CANCEL.has(id)));
+    await load();
+    return null;
+  }
 
   const err = result.error;
   if (result.exhausted) {
@@ -359,11 +461,13 @@ async function post(path, body) {
 }
 
 const saveLine = () =>
-  post("/api/settings/line", { line: document.getElementById("st-line").value });
+  post("/api/settings/line", { line: document.getElementById("st-line").value },
+       ["st-line"]);
 
 async function savePath(field, inputId) {
   const payload = await post("/api/settings/paths",
-                             { [field]: document.getElementById(inputId).value });
+                             { [field]: document.getElementById(inputId).value },
+                             [inputId]);
   // 参照パスが変わるとマスタ管理の可否も変わる
   if (payload) master.refresh();
 }
@@ -409,8 +513,10 @@ function markTheme(box) {
    ------------------------------------------------------------------ */
 function renderLog(log) {
   const input = document.getElementById("st-log-dir");
-  // 打ちかけを描き直しで消さない
-  if (input && document.activeElement !== input) input.value = log.setting || "";
+  // 打ちかけを描き直しで消さない(焦点が外れても、保存するまでは残す)
+  if (input && document.activeElement !== input && !dirty.has("st-log-dir")) {
+    input.value = log.setting || "";
+  }
   const pill = document.getElementById("st-log-pill");
   if (pill) {
     pill.textContent = log.fallback_reason ? "指定先に書けません"
@@ -429,8 +535,10 @@ function renderLog(log) {
 
 async function saveLogDir(value) {
   try {
+    bumpEpoch();
     const payload = await api.post("/api/settings/log-dir", { log_dir: value });
-    render(payload);
+    clean(["st-log-dir"]);
+    renderFresh(payload);
     toast(payload.message, payload.log && payload.log.fallback_reason ? "warn" : "ok");
   } catch (err) {
     if (err instanceof ApiError && (err.status === 422 || err.status === 400)) {
@@ -572,8 +680,9 @@ async function changeAdminPassword(reset) {
     ? { current: now, reset: true }
     : { current: now, new: next, confirm: confirmValue };
   try {
+    bumpEpoch();
     const payload = await api.post("/api/settings/admin-password", body);
-    render(payload);
+    renderFresh(payload);
     // 打った値は残さない。肩越しに見られる時間を短くする
     ids.forEach((id) => { document.getElementById(id).value = ""; });
     // 前に断られた理由が残っていたら消す(変えられたのに赤い文が出たままだった)
@@ -591,15 +700,16 @@ const saveAutoSync = () =>
   post("/api/settings/auto-sync", {
     enabled: document.getElementById("st-auto").value === "1",
     interval: Number(document.getElementById("st-interval").value),
-  });
+  }, ["st-auto", "st-interval"]);
 
 /* ------------------------------------------------------------------
    取り込み
    ------------------------------------------------------------------ */
 async function runImport(target, force) {
   try {
+    bumpEpoch();
     const payload = await api.post("/api/import", { target, force });
-    render(payload);
+    renderFresh(payload);
     toast(payload.message, "ok");
     sync.refresh();
     master.refresh();
@@ -629,8 +739,9 @@ async function runCsvImport() {
     return;
   }
   try {
+    bumpEpoch();
     const payload = await api.post("/api/import/csv", { path });
-    render(payload);
+    renderFresh(payload);
     toast(payload.message, "ok");
   } catch (err) {
     if (err instanceof ApiError && err.status === 422) {
@@ -652,6 +763,8 @@ async function browseInto(targetId, opts = {}) {
   const chosen = await browse(target.value.trim(), opts);
   if (chosen) {
     target.value = chosen;
+    // 選んだだけで、まだ保存していない(描き直しで戻さない)
+    if (FIELDS[targetId]) markDirty(targetId);
     target.focus();
   }
 }
@@ -701,14 +814,18 @@ function browse(startPath, opts = {}) {
 
       body.append(jump, box, message);
 
+      // 続けて押したとき、**遅れて届いた前の返事で一覧を戻さない**
+      let browseSeq = 0;
       async function show(where) {
+        const mine = ++browseSeq;
         let view;
         try {
           view = await api.post("/api/settings/browse", { path: where });
         } catch (err) {
-          toastError(err);
+          if (mine === browseSeq) toastError(err);
           return;
         }
+        if (mine !== browseSeq) return;
         path.textContent = view.path || "(場所を選んでください)";
         message.textContent = view.message || "";
         input.value = view.path || "";

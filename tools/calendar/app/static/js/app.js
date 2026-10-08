@@ -14,13 +14,20 @@ import { ApiError, api } from "./api.js";
 import * as busy from "./busy.js";
 import { isDesktop } from "./desktop.js";
 import * as health from "./health.js";
+import * as leave from "./leave.js";
 import { confirm, inform } from "./modal.js";
 import * as screen from "./screen.js";
 import * as sync from "./sync.js";
 import * as theme from "./theme.js";
 import { toast, toastError } from "./toast.js";
 
+// 統合ツールの外枠へ「閉じる前の頼みはこの画面が自分で受ける」と知らせる
+// (外枠の代わりの受け手は、これが無い画面のときだけ働く)
+window.__alltoolsHandlesClose = true;
+
 busy.watchClicks();
+// タブを閉じる・別の画面へ移る前に、保存していない入力があれば止める
+leave.wireBeforeUnload();
 // 帯の「暗くする / 明るくする」(`theme.js`)
 theme.wireToggle();
 screen.wireTakeOver();
@@ -42,6 +49,32 @@ health.onResume(() => sync.refresh());
 document.addEventListener("app:client-error", (event) => {
   toast(`画面でエラーが起きました(記録番号 ${event.detail.ref})。`
         + "うまく動かないときは、この番号を管理者に伝えてください。", "warn");
+});
+
+/* ------------------------------------------------------------------
+   統合ツールの窓の × ・「終了」の前
+
+   外枠(大きなタブの画面)は、Python に「終わってよいか」を訊く前に、
+   各ツールの画面へ `alltools:before-close` を送ってくる。以前は答えて
+   いなかったので、外枠は少し待って閉じていた ── 連絡の本文や設定の欄を
+   打っている途中でも、何も聞かれずに消えた。
+
+   すぐ「受けた」を返し、保存していない入力があれば閉じてよいかを訊いて
+   (`leave.js`)、「済んだ」を返す。頼んでくるのは、この画面を埋め込んで
+   いる親だけ(`window.parent`)。日報(`tools/nippou/app/static/js/app.js`)と同じ形。
+   ------------------------------------------------------------------ */
+window.addEventListener("message", async (event) => {
+  const data = event.data;
+  if (event.source !== window.parent || window.parent === window) return;
+  if (!data || data.type !== "alltools:before-close") return;
+  const reply = (type, extra = {}) => {
+    try { window.parent.postMessage({ type, seq: data.seq, ...extra }, event.origin); }
+    catch (_err) { /* 親がもう居ない */ }
+  };
+  reply("alltools:before-close-ack");
+  let ok = true;
+  try { ok = await leave.mayClose(); } catch (_err) { ok = true; }
+  reply("alltools:before-close-done", { ok });
 });
 
 /* ------------------------------------------------------------------
@@ -76,6 +109,8 @@ if (syncNow) {
 const quit = document.getElementById("quit");
 if (quit) {
   quit.addEventListener("click", async () => {
+    // 保存していない入力があれば、先にそれを訊く(終了すると消える)
+    if (!await leave.mayClose({ remember: false })) return;
     // デスクトップ版は統合ツールの窓の中で動く。終えると、ほかのツールのタブも閉じる
     if (!await confirm("終了しますか?",
                        isDesktop

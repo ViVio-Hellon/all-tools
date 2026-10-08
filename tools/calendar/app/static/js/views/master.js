@@ -16,6 +16,7 @@
 
 import { withPassword } from "../adminpass.js";
 import { ApiError, api } from "../api.js";
+import * as leave from "../leave.js";
 import { confirm, inform, modal } from "../modal.js";
 import { toast, toastError } from "../toast.js";
 
@@ -28,7 +29,49 @@ let current = "";
 // 列名を押すたびに 昇順 → 降順 → 表の既定 と回る
 let sort = { column: "", desc: false };
 
+/*
+  【打ちかけの行を、ほかの行の保存で消さない】
+  表は保存・追加・削除・再読込・絞り込み・表の切り替えのたびに**丸ごと
+  描き直す。** 以前は、1行目を直している途中で2行目を保存すると、
+  返ってきた表で描き直して**1行目の打ちかけが黙って消えた。**
+  「打った値が勝手に戻ることがありました」── とんでもない話である。
+
+  打ちかけの行は鍵ごとに覚えておき(`carried`)、描き直した表の同じ行へ
+  戻す。「開いたときの中身」(`opened`)も**最初に開いたときのまま**持ち回す
+  ── 描き直しのたびに新しい中身へ取り替えると、そのあいだに別の端末が
+  直した値を、こちらの古い打ちかけで黙って上書きしてしまう(サーバが
+  「先に直されています」と断れなくなる)。
+  消してよいかは利用者が決める: 再読込・絞り込み・表の切り替え・並べ替えは
+  打ちかけがあれば先に訊く。
+*/
+const carried = new Map();
+// 行を足す画面に打ちかけた値(送れなかったとき開き直す)
+let addDraft = null;
+
+function rowId(table, key) {
+  return `${table}\u0000${key}`;
+}
+
+/** 打ちかけを消してよいかを訊く。無ければそのまま true。 */
+async function mayDiscard(what) {
+  if (!carried.size) return true;
+  const ok = await confirm("保存していない変更があります",
+    `${what}と、保存していない行(${carried.size} 行)の内容は消えます。続けますか?`,
+    { okLabel: "消して続ける", cancelLabel: "やめる", danger: true });
+  if (ok) carried.clear();
+  return ok;
+}
+
 export function start() {
+  leave.register(() => {
+    const parts = [];
+    if (carried.size) parts.push(`マスタ管理の ${carried.size} 行`);
+    if (addDraft && Object.values(addDraft).some((v) => String(v || "").trim())) {
+      parts.push("マスタ管理の「行を追加」");
+    }
+    return parts.length ? `${parts.join("・")}(まだ保存していません)` : null;
+  });
+
   el.pill = document.getElementById("st-master-pill");
   el.why = document.getElementById("st-master-why");
   el.source = document.getElementById("st-master-source");
@@ -37,13 +80,23 @@ export function start() {
   el.pick = document.getElementById("st-master-table-pick");
   el.add = document.getElementById("st-master-add");
 
-  document.getElementById("st-master-reload").addEventListener("click", () => load());
-  el.add.addEventListener("click", addRow);
-  el.query.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); load(); }
+  document.getElementById("st-master-reload").addEventListener("click", async () => {
+    if (!await mayDiscard("読み込み直す")) return;
+    load();
+  });
+  el.add.addEventListener("click", () => addRow());
+  el.query.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!await mayDiscard("絞り込む")) return;
+    load();
   });
   if (el.pick) {
-    el.pick.addEventListener("change", () => {
+    el.pick.addEventListener("change", async () => {
+      if (!await mayDiscard("表を切り替える")) {
+        el.pick.value = current;            // 選び直しを取り消す
+        return;
+      }
       current = el.pick.value;
       // 表を変えたら絞り込みと並べ替えは外す。前の表の言葉で絞ったまま
       // 「1件もありません」と出ると、空なのか絞れているのか分からない
@@ -67,21 +120,28 @@ function viewOf() {
            sort: sort.column, desc: sort.desc };
 }
 
+// 読み込みの番号。**後から頼み直したら、前の返事は描かない**
+let loadSeq = 0;
+
 async function load() {
+  const mine = ++loadSeq;
   const view = viewOf();
   const table = current ? `&table=${encodeURIComponent(current)}` : "";
   const order = view.sort
     ? `&sort=${encodeURIComponent(view.sort)}&desc=${view.desc ? 1 : 0}` : "";
   try {
-    render(await api.get(`/api/master?q=${encodeURIComponent(view.q)}${table}${order}`));
+    const payload = await api.get(`/api/master?q=${encodeURIComponent(view.q)}${table}${order}`);
+    if (mine !== loadSeq) return;
+    render(payload);
   } catch (err) {
-    toastError(err);
+    if (mine === loadSeq) toastError(err);
   }
 }
 
 function render(payload) {
   state = payload;
   current = payload.table;
+  forgetVanished(payload);
   // サーバが受け付けた並びに合わせる(知らない列なら既定に戻っている)
   sort = { column: payload.sort || "", desc: !!payload.desc };
   renderPicker(payload);
@@ -159,6 +219,22 @@ function renderPicker(payload) {
   el.pick.value = payload.table;
 }
 
+/**
+ * 打ちかけの行が**取り込み元から無くなっていた**ら、覚えをやめて知らせる。
+ * 絞り込み中・切った表示では、見えないだけかもしれないので触らない。
+ */
+function forgetVanished(payload) {
+  if (payload.query || payload.truncated || !payload.row_key) return;
+  const present = new Set((payload.rows || []).map(
+    (row) => rowId(payload.table, row[payload.row_key])));
+  const prefix = `${payload.table}\u0000`;
+  const gone = [...carried.keys()].filter((id) => id.startsWith(prefix) && !present.has(id));
+  if (!gone.length) return;
+  gone.forEach((id) => carried.delete(id));
+  toast(`保存していない変更のあった ${gone.length} 行は、取り込み元から無くなっていました`
+        + "(別の端末で削除されたなど)。", "warn");
+}
+
 function empty(text) {
   const node = document.createElement("p");
   node.className = "empty";
@@ -224,6 +300,10 @@ function rowNode(payload, row) {
   const key = row[payload.row_key];
   const tr = document.createElement("tr");
   const inputs = {};
+  const id = rowId(payload.table, key);
+  // 描き直す前に打ちかけていた行。値と「開いたときの中身」を戻す
+  const kept = carried.get(id);
+  if (kept) tr.dataset.dirty = "1";
 
   // **列ごとに描き分ける。** 打てない欄に枠を出すと「打てるのに
   // 保存できない」ように見えるので、読むだけの欄はただの文字にする
@@ -250,17 +330,26 @@ function rowNode(payload, row) {
     }
     const input = document.createElement("input");
     input.type = "text";
-    input.value = row[column.name] ?? "";
+    input.value = kept && column.name in kept.values
+      ? kept.values[column.name] : (row[column.name] ?? "");
     // **空欄が何を意味するか**を書いておく。端末一覧の「次のライン」は
     // 空が普通の状態なので、何も書かないと使い方が分からない
     if (column.placeholder) input.placeholder = column.placeholder;
     suggest(input, payload.table, column);
-    input.addEventListener("input", () => { tr.dataset.dirty = "1"; });
+    input.addEventListener("input", () => {
+      tr.dataset.dirty = "1";
+      // 打った値を鍵ごとに覚える(ほかの行の保存で描き直されても戻す)
+      const values = {};
+      Object.keys(inputs).forEach((name) => { values[name] = inputs[name].value; });
+      carried.set(id, { values, opened });
+    });
     inputs[column.name] = input;
     td.appendChild(input);
     tr.appendChild(td);
   });
 
+  // **描いた時点の中身**。打ちかけを持ち回した行は、最初に開いたときのまま
+  const opened = kept ? kept.opened : { ...row };
   const act = document.createElement("td");
   act.className = "act";
   if (Object.keys(inputs).length) {
@@ -272,8 +361,7 @@ function rowNode(payload, row) {
     // いれば、サーバが断る(`calendar_app/master_admin.py`)── 送るのは
     // 打てた列すべてなので、渡さないと自分が触っていない欄まで
     // 古い写しで上書きしてしまう
-    const opened = { ...row };
-    save.addEventListener("click", () => saveRow(payload, key, inputs, opened));
+    save.addEventListener("click", () => saveRow(payload, key, inputs, opened, save));
     act.appendChild(save);
   }
   // **直せなくても消せる表がある**(端末一覧)。入れ替えて使わなく
@@ -315,14 +403,9 @@ function suggest(input, table, column) {
 
 /** 列名を押した。昇順 → 降順 → 表の既定 と回る。 */
 async function sortBy(column) {
-  // **打ちかけの値を黙って消さない。** 並べ替えは描き直しなので、
-  // 保存していない欄の中身は消える
-  if (el.host.querySelector("tr[data-dirty]")) {
-    const ok = await confirm("保存していない変更があります",
-      "並べ替えると、保存していない欄の内容は消えます。並べ替えますか?",
-      { okLabel: "並べ替える", danger: true });
-    if (!ok) return;
-  }
+  // **打ちかけの値を黙って消さない。** 並べ替えると、保存していない行が
+  // 200行の外へ出て見えなくなることがある。先に訊く
+  if (!await mayDiscard("並べ替える")) return;
   if (sort.column !== column) sort = { column, desc: false };
   else if (!sort.desc) sort = { column, desc: true };
   else sort = { column: "", desc: false };
@@ -332,7 +415,14 @@ async function sortBy(column) {
 /* ------------------------------------------------------------------
    直す
    ------------------------------------------------------------------ */
-async function saveRow(payload, key, inputs, opened) {
+async function saveRow(payload, key, inputs, opened, button) {
+  // **返事が来るまで、この行の「保存」は押せなくする。** ダブルクリックの
+  // 2回目が「開いたときの中身」のまま届き、1回目で変わった行と食い違って
+  // 「先に直されています」と断られていた(自分の1回目に負ける)
+  if (button) {
+    if (button.disabled) return;
+    button.disabled = true;
+  }
   const values = {};
   const expected = {};
   // **打てた列だけ送る。** 読むだけの欄まで送ると、サーバは捨てるだけだが
@@ -342,8 +432,14 @@ async function saveRow(payload, key, inputs, opened) {
     // 開いたときの中身。**これが変わっていたらサーバが断る**
     expected[name] = (opened && opened[name]) ?? "";
   });
-  await send("/api/master/save",
-             { table: payload.table, key, values, expected });
+  try {
+    await send("/api/master/save",
+               { table: payload.table, key, values, expected },
+               { saved: rowId(payload.table, key) });
+  } finally {
+    // 描き直されていれば新しいボタンになっている(古いほうは捨てられる)
+    if (button && button.isConnected) button.disabled = false;
+  }
 }
 
 async function deleteRow(payload, key, row) {
@@ -359,19 +455,38 @@ async function deleteRow(payload, key, row) {
        ? "その端末が次に起動すると、また一覧に出ます。" : ""),
     { okLabel: "削除する", danger: true });
   if (!ok) return;
-  await send("/api/master/delete", { table: payload.table, key });
+  await send("/api/master/delete", { table: payload.table, key },
+             { saved: rowId(payload.table, key) });
 }
 
-async function addRow() {
+async function addRow(prefill = null, note = "") {
   if (!state || !canAdd(state)) return;
 
   // **足すときに打てる列だけ出す。** 端末一覧なら PC名・ログインID・
   // 次のライン の3つで、鍵(端末キー)はサーバが組み立てる
+  const table = state.table;
   const fields = state.columns.filter((c) => c.at_create !== false);
+  addDraft = { ...(prefill || {}) };
+  const read = () => {
+    const out = {};
+    document.querySelectorAll("#ma-add input").forEach((input) => {
+      out[input.dataset.name] = input.value;
+    });
+    return out;
+  };
   const values = await modal({
     title: `${state.label}に追加`,
     wide: true,
+    // 打ちかけがあれば、閉じる前に訊く
+    dirty: () => Object.values(read()).some((v) => String(v || "").trim()),
     render(body) {
+      if (note) {
+        const why = document.createElement("div");
+        why.className = "note note--warn";
+        why.style.whiteSpace = "pre-wrap";
+        why.textContent = note;
+        body.appendChild(why);
+      }
       const host = document.createElement("div");
       host.id = "ma-add";
       fields.forEach((column) => {
@@ -382,7 +497,9 @@ async function addRow() {
         const input = document.createElement("input");
         input.className = "input";
         input.dataset.name = column.name;
+        if (prefill && column.name in prefill) input.value = prefill[column.name];
         if (column.placeholder) input.placeholder = column.placeholder;
+        input.addEventListener("input", () => { addDraft = read(); });
         suggest(input, state.table, column);
         if (column === fields[0]) input.setAttribute("data-autofocus", "1");
         field.append(label, input);
@@ -394,10 +511,7 @@ async function addRow() {
       { label: "取り消し", value: null },
       { label: "追加する", kind: "primary",
         value: () => {
-          const out = {};
-          document.querySelectorAll("#ma-add input").forEach((input) => {
-            out[input.dataset.name] = input.value;
-          });
+          const out = read();
           // 必須が空なら閉じない(サーバも断るが、往復させない)
           const missing = fields.some(
             (c) => c.required && !String(out[c.name] || "").trim());
@@ -405,11 +519,26 @@ async function addRow() {
         } },
     ],
   });
-  if (!values) return;
-  await send("/api/master/add", { table: state.table, values });
+  if (!values) { addDraft = null; return; }
+  addDraft = values;
+  const result = await send("/api/master/add", { table, values }, { quiet: true });
+  if (result.ok) { addDraft = null; return; }
+  // **断られても打った値は捨てない。** 理由を上に出して、同じ値で開き直す
+  // (以前は 409/422・パスワードの取り消しで、打った行がまるごと消えていた)
+  const err = result.error;
+  const why = result.cancelled
+    ? "管理者パスワードを取り消したので、まだ追加していません。追加するには、もう一度「追加する」を押してください。"
+    : (err && err.message ? err.message : String(err));
+  if (state && state.table === table) await addRow(values, why);
+  else addDraft = null;
 }
 
-async function send(path, body) {
+/**
+ * @param {{saved?: string, quiet?: boolean}} [opts]
+ *   saved … 通ったら打ちかけの覚えを外す行 / quiet … 断りを出さない(呼んだ側が出す)
+ * @returns {Promise<{ok:boolean, error?:any, cancelled?:boolean}>}
+ */
+async function send(path, body, opts = {}) {
   // 端末のライン予約は**管理者パスワードで守られている**
   // (他の端末の設定を決めるので、その端末で変えるのと同じこと)。
   // 聞き方は `adminpass.js` に1つだけ置いてある
@@ -417,24 +546,31 @@ async function send(path, body) {
   const result = await withPassword((sending) => api.post(path, sending),
                                     { ...body, view: viewOf() });
   if (result.ok) {
+    // 保存した行の覚えだけを外す。**ほかの行の打ちかけは描き直したあとに戻る**
+    if (opts.saved) carried.delete(opts.saved);
+    loadSeq += 1;                    // これより前の読み込みの返事は捨てる
     render(result.payload);
     toast(result.payload.message, "ok");
-    return;
+    return result;
   }
-  if (result.cancelled) return;
+  if (result.cancelled) return result;
 
   const err = result.error;
   if (err instanceof ApiError && err.body && err.body.columns) {
     // 断られても**いまの中身は返ってくる**ので、描き直したうえで理由を出す
+    // (打ちかけの行は、描き直したあとに戻る)
+    loadSeq += 1;
     render(err.body);
   }
+  if (opts.quiet) return result;
   if (result.exhausted) {
     await inform("管理者パスワードが確認できません", err.message);
-    return;
+    return result;
   }
   if (err instanceof ApiError && (err.status === 422 || err.status === 409)) {
     await inform("直せません", err.message);
-    return;
+    return result;
   }
   toastError(err);
+  return result;
 }

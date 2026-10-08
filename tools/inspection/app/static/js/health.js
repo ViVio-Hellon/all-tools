@@ -36,7 +36,13 @@ async function beat() {
     wasOffline = false;
     // **別のプロセスに入れ替わっていたら**(再起動・入れ替え)、この画面の
     // トークンはもう通らない。読み込み直して新しい画面を受け取る
+    //
+    // **打ちかけの部数と、設定に打ちかけたフォルダは持ち越す。** 以前は黙って
+    // 読み込み直し、打った部数が1に、設定の欄に打ちかけたパスが消えていた
+    // (「打った値が勝手に戻ることがありました」)。選んだ点検表はもともと
+    // `sessionStorage` に控えてある
     if (lastPid !== null && body && body.pid !== lastPid) {
+      keepTyped();
       location.replace("/");
       return;
     }
@@ -54,6 +60,38 @@ async function beat() {
   } catch {
     if (++misses === MISSES_BEFORE_OFFLINE) { setOffline(true); wasOffline = true; }
   }
+}
+
+/* ---------------------------------------------------------------- 持ち越し */
+const CARRY_KEY = "isp.carry";
+// 持ち越しを使う期限。古い控えで、あとから開いた画面の値を上書きしない
+const CARRY_MS = 10 * 60 * 1000;
+
+function keepTyped() {
+  try {
+    const dialog = document.getElementById("settings-dialog");
+    const folder = dialog && dialog.open ? document.getElementById("settings-folder").value : null;
+    const copies = document.getElementById("copies");
+    sessionStorage.setItem(CARRY_KEY, JSON.stringify({
+      copies: copies ? copies.value : null, folder, at: Date.now() }));
+  } catch { /* 控えられなくても読み込み直しはする */ }
+}
+
+/**
+ * 読み込み直す前に打っていた値を受け取る(1回だけ)。無ければ null。
+ * @returns {{copies: (string|null), folder: (string|null)} | null}
+ */
+let carried;
+export function takeCarried() {
+  if (carried !== undefined) return carried;
+  carried = null;
+  try {
+    const raw = sessionStorage.getItem(CARRY_KEY);
+    sessionStorage.removeItem(CARRY_KEY);
+    const data = raw ? JSON.parse(raw) : null;
+    if (data && Date.now() - Number(data.at || 0) < CARRY_MS) carried = data;
+  } catch { carried = null; }
+  return carried;
 }
 
 /** いますぐ確かめる(再接続ボタン・表に戻ったとき)。 */

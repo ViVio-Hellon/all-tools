@@ -38,11 +38,30 @@ from ..logging_utils import debug_log
 
 __all__ = [
     "was_sent_to_access",
+    "sending_op_id",
+    "unsent_delete_matches",
     "queue_delete",
     "pending_delete_count",
     "forward_pending_deletes",
     "natural_key_where",
 ]
+
+
+def sending_op_id(conn: sqlite3.Connection, sqlite_table: str,
+                  row_id: int) -> str | None:
+    """いま送っている最中(「送信中」の予約がある)なら、その送信IDを返す。
+
+    送っている最中の行は、**取り込み元へもう届いているかもしれない。**
+    届いているかどうかは送った側にしか分からず、その返事はまだ来ていない。
+    """
+    row = conn.execute(
+        f'SELECT "送信ID" FROM "{outbox_sync.SYNC_LOG_TABLE}" '
+        'WHERE "テーブル名"=? AND "行ID"=? AND "状態"=?',
+        (sqlite_table, row_id, outbox_sync.SYNC_SENDING),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row[0] or "") or ""
 
 
 def was_sent_to_access(conn: sqlite3.Connection, sqlite_table: str, row_id: int) -> bool:
@@ -83,7 +102,15 @@ def queue_delete(
     戻り値: 転送予約を行ったら True。
     """
     access_id = row["access_id"] if "access_id" in row.keys() else None
-    if access_id is None and not was_sent_to_access(conn, spec.sqlite_table, row_id):
+    # **送っている最中の行も「届いたかもしれない」として扱う。** 以前は
+    # 「済」か取り込み元の ID があるときだけ削除を予約していたので、
+    # 背景の送信が INSERT を終えて「済」を書く前に消すと、手元からは
+    # 消えたのに取り込み元には残り、次の取り込みで**消したはずの行が
+    # 戻ってきた**。届いていなかったなら、送信IDで消す削除は何にも当たらない
+    op_id = (sending_op_id(conn, spec.sqlite_table, row_id)
+             if access_id is None else None)
+    if (access_id is None and op_id is None
+            and not was_sent_to_access(conn, spec.sqlite_table, row_id)):
         debug_log(
             f"sync.deletes.queue_delete: {spec.source_table} 行{row_id} は "
             "Access未送信のため転送不要 (ローカル削除のみ)"
@@ -98,10 +125,33 @@ def queue_delete(
         name: (row[name] or "") if name in row.keys() else ""
         for name in ("日付", "区分", "登録内容", "識別コード", "班", "ライン")
     }
+    if op_id:
+        # 送信IDが分かれば**その1行だけ**に当てられる(自然キーより確か)
+        natural_key[OP_ID_KEY] = op_id
     db.queue_pending_delete(
         conn, spec.source_table, access_id=access_id, natural_key=natural_key
     )
     return True
+
+
+#: 削除予約の自然キーに添える送信IDの鍵(取り込み元の送信ID列の名前)
+OP_ID_KEY = outbox_sync.DEFAULT_OP_ID_COLUMN
+
+
+def unsent_delete_matches(conn: sqlite3.Connection, table_name: str,
+                          wanted: dict[str, object]) -> bool:
+    """``wanted`` の値がすべて一致する削除予約が、まだ届いていないか。"""
+    for row in db.pending_deletes(conn):
+        if row["table_name"] != table_name:
+            continue
+        try:
+            key = json.loads(row["natural_key"] or "{}")
+        except ValueError:
+            continue
+        if all(str(key.get(name) or "") == str(value or "")
+               for name, value in wanted.items()):
+            return True
+    return False
 
 
 def pending_delete_count(conn: sqlite3.Connection) -> int:
@@ -118,7 +168,8 @@ def natural_key_where(natural_key: dict[str, str]) -> dict[str, object]:
     持っているので、変換すると逆に一致しなくなる
     (Access のときは ``#...#`` リテラルにするため date 型へ直していた)。
     """
-    return {k: v for k, v in natural_key.items() if v not in (None, "")}
+    return {k: v for k, v in natural_key.items()
+            if v not in (None, "") and k != OP_ID_KEY}
 
 
 def forward_pending_deletes(
@@ -140,10 +191,15 @@ def forward_pending_deletes(
     errors: list[str] = []
     for row in rows:
         source_id = row["access_id"]
+        natural_key = json.loads(row["natural_key"] or "{}")
+        op_id = natural_key.get(OP_ID_KEY)
         if source_id:
             where: dict[str, object] = {"ID": source_id}
+        elif op_id and _has_op_id_column(source, table_name):
+            # 送っている最中に消した行。送信IDで**その1行だけ**に当てる
+            # (届いていなかったなら何にも当たらない ── それで正しい)
+            where = {OP_ID_KEY: op_id}
         else:
-            natural_key = json.loads(row["natural_key"] or "{}")
             where = natural_key_where(natural_key)
 
         if not where:
@@ -172,3 +228,12 @@ def forward_pending_deletes(
     if sent_seqs:
         db.mark_deletes_sent(conn, sent_seqs)
     return len(sent_seqs), errors
+
+
+def _has_op_id_column(source: "source_db.SourceConnection", table_name: str) -> bool:
+    """取り込み元の表に送信ID列があるか。**無ければ自然キーで消す**
+    (無い列で絞ると毎回失敗し、削除予約が永遠に残って取り込みも止まる)。"""
+    try:
+        return OP_ID_KEY in source.columns(table_name)
+    except source_db.SourceError:
+        return False

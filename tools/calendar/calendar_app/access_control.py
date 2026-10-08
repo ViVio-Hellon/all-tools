@@ -278,7 +278,15 @@ def import_rows(conn: sqlite3.Connection, source) -> int:
     **全部の行を写す**(他ツールの値も)。マスタ管理の画面は取り込み元を
     直に読むが、手元の写しも同じ中身にしておくと、調べるときに迷わない。
     """
-    rows = source.query(f'SELECT * FROM "{TABLE}"')
+    return import_row_list(conn, source.query(f'SELECT * FROM "{TABLE}"'))
+
+
+def import_row_list(conn: sqlite3.Connection, rows) -> int:
+    """読み終えた行を手元へ写す。**取り込み元はもう閉じていてよい。**
+
+    取り込みは、先に取り込み元を読み終えてから手元の錠を取る
+    (``importer.import_source``)。読んでいるあいだ手元を塞がないため。
+    """
     conn.execute(f'DELETE FROM "{TABLE}"')
     count = 0
     for row in rows:

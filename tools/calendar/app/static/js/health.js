@@ -24,6 +24,7 @@
 */
 
 import { tokenUrl } from "./api.js";
+import { reloadSafely } from "./leave.js";
 import * as screen from "./screen.js";
 
 const POLL_MS = window.APP.healthPollMs || 15000;
@@ -68,10 +69,15 @@ export function watch() {
       // タブ(夜のあいだに idle_exit で終わり、朝また起動した、など)は
       // 画面もサーバも無事に見えるのに、押すと全部 403 になる。
       // どちらも読み込み直せば直るので、区別せずにやり直す。
+      //
+      // **打ちかけがあれば先に訊く**(`leave.js`)。以前は黙って読み込み直し、
+      // ダイアログに打っていた連絡や設定の欄がそのまま消えていた。
+      // 「あとで」なら、片付いたあとの見張りで読み込み直す(版と pid は
+      // 覚え直さない ── 覚え直すと、古い画面のまま気づかなくなる)
       const moved = (window.APP.version && health.version !== window.APP.version)
         || (window.APP.pid && health.pid !== window.APP.pid);
       if (moved) {
-        location.reload();
+        reloadSafely("アプリが起動し直されました(版の更新・自動終了のあとの起動など)。");
         return;
       }
       window.APP.version = health.version;

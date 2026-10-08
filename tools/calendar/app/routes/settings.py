@@ -27,6 +27,7 @@ tkinter 版では上部のボタンに散らばっていた
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -183,8 +184,8 @@ def set_paths():
     if blocked is not None:
         return blocked
 
-    for key, raw in pending:
-        user_settings.set_value(key, raw)
+    # 2つ一度に送られたときも**まとめて1回で**書く(片方だけ変わった状態を残さない)
+    user_settings.update(dict(pending))
 
     service = sync_service.get_service()
     service.reload()
@@ -194,13 +195,24 @@ def set_paths():
         message = (f"{' と '.join(changed)}のフォルダを保存しました。"
                    "ただし、そのフォルダに取り込み元(.sqlite3)が見つかりません。")
     else:
-        # 取り込み元が sqlite3 になってから、**書けない端末は無い**
-        user_settings.set_auto_sync(True)
+        # 取り込み元が sqlite3 になってから、**書けない端末は無い**ので、
+        # はじめて場所を決めた端末は自動同期を入れる。ただし**利用者が
+        # 切ってあるなら黙って入れ直さない** ── 以前は参照パスを保存する
+        # たびに入っていて、切ったはずの自動同期が勝手に戻っていた
+        # (「打った値が勝手に戻ることがありました」)
+        if not user_settings.has_value(user_settings.KEY_AUTO_SYNC):
+            user_settings.set_auto_sync(True)
         service.start()
-        message = (f"{' と '.join(changed)}のフォルダを保存しました。"
-                   f"{found.name} を使います。"
-                   f"入力のたびに送信し、{user_settings.sync_interval()} 秒ごとに"
-                   "取り込み直します。")
+        if user_settings.auto_sync_enabled():
+            message = (f"{' と '.join(changed)}のフォルダを保存しました。"
+                       f"{found.name} を使います。"
+                       f"入力のたびに送信し、{user_settings.sync_interval()} 秒ごとに"
+                       "取り込み直します。")
+        else:
+            message = (f"{' と '.join(changed)}のフォルダを保存しました。"
+                       f"{found.name} を使います。"
+                       "自動同期は切ったままです(入れるときは「自動同期」で"
+                       "「する」を選んで保存してください)。")
     log.info("参照パスを保存しました: %s (保存用DB=%s / 自動同期=%s)",
              changed, found, service.enabled)
     return jsonify(_ok(message))
@@ -343,8 +355,11 @@ def reapply_distribution():
 def set_auto_sync():
     """自動同期の入切と間隔。"""
     body = request.get_json(silent=True) or {}
+    # **先に全部確かめてから、まとめて書く。** 以前は入切を書いてから間隔を
+    # 確かめていたので、間隔で断ったのに入切だけ変わっていた
+    values: dict[str, Any] = {}
     if "enabled" in body:
-        user_settings.set_auto_sync(bool(body["enabled"]))
+        values[user_settings.KEY_AUTO_SYNC] = bool(body["enabled"])
     if "interval" in body:
         try:
             interval = int(body["interval"])
@@ -354,7 +369,9 @@ def set_auto_sync():
         # 下限は ``settings.sync_interval()`` が持っているので、ここは形だけ見る
         if interval < 5 or interval > 3600:
             return _refuse("out_of_range", "間隔は 5〜3600 秒で指定してください。")
-        user_settings.set_value(user_settings.KEY_SYNC_INTERVAL, interval)
+        values[user_settings.KEY_SYNC_INTERVAL] = interval
+    if values:
+        user_settings.update(values)
 
     sync_service.get_service().reload()
     log.info("自動同期の設定を変更しました: 有効=%s 間隔=%s",
@@ -448,9 +465,10 @@ def do_import():
     conn = get_db()
     done: list[str] = []
     try:
-        for index, path in enumerate(paths):
-            # 未反映チェックは最初の1回だけでよい(2つ目からは同じ取り込み)
-            result = import_source(conn, str(path), force=force or index > 0)
+        for path in paths:
+            # 未反映の確かめは**どの取り込み元でも**する。1つ目のあと、2つ目を
+            # 読んでいるあいだに登録が入ることがある(``import_source``)
+            result = import_source(conn, str(path), force=force)
             done.append(result.describe())
     except PendingChangesError as exc:
         # **破棄してよいかは利用者が決める。** ここで勝手に消さない
@@ -459,6 +477,11 @@ def do_import():
             "message": f"{exc}",
             "hint": "未反映の変更を破棄して取り込みますか?",
         }}), 409
+    except sqlite3.OperationalError as exc:
+        # 手元の錠が取れなかった(登録や背景の同期の最中)。**待てば通る**
+        log.warning("取り込みを見送りました(手元が使用中): %s", exc)
+        return _refuse("busy", "いま別の処理が手元のデータを使っています。"
+                               "少し待ってからもう一度押してください。", status=409)
     except (SourceError, ValueError, OSError) as exc:
         log.warning("取り込みに失敗しました: %s", exc)
         return _refuse("import_failed", str(exc))

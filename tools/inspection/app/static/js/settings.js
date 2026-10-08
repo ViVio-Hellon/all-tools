@@ -13,6 +13,7 @@
 
 import { api } from "./api.js";
 import * as desktop from "./desktop.js";
+import { takeCarried } from "./health.js";
 import * as sheet from "./inspection.js";
 import * as logs from "./logs.js";
 import * as tabs from "./tabs.js";
@@ -105,12 +106,14 @@ function renderDistribution(dist) {
 }
 
 /* ---------------------------------------------------------------- 開く */
-export async function open() {
+export async function open(typed = null) {
   why("settings-error", "");
   let data;
   try { data = await api.get("/api/settings"); } catch (err) { toastError(err); return; }
   render(data);
-  $("settings-folder").value = data.settings.root_folder || "";
+  // 読み込み直す前に打ちかけていたフォルダがあれば、それを戻す(まだ保存していない)
+  $("settings-folder").value = typed != null ? typed : (data.settings.root_folder || "");
+  if (typed != null) why("settings-error", "読み込み直す前に打っていたフォルダを戻しました。まだ保存していません。");
   $("settings-dialog").showModal();
   if (tabs.current($("settings-tabs")) === "folder") $("settings-folder").focus();
   if (tabs.current($("settings-tabs")) === "logs") logs.load();
@@ -118,12 +121,18 @@ export async function open() {
 }
 
 /* ---------------------------------------------------------------- 点検表フォルダ */
+// 続けて押したとき、**遅れて届いた前の返事で一覧を戻さない**(押した先と違う
+// フォルダの中身が出て、そこで「保存」を押すと別のフォルダになる)
+let browseSeq = 0;
+
 async function browseTo(path) {
+  const mine = ++browseSeq;
   let data;
   try { data = await api.get(`/api/fs/list?path=${encodeURIComponent(path || "")}`); } catch (err) {
-    $("fs-note").textContent = err.message;
+    if (mine === browseSeq) $("fs-note").textContent = err.message;
     return;
   }
+  if (mine !== browseSeq) return;
   $("fs-path").firstElementChild.textContent = data.path || "";
   $("fs-path").title = data.path || "";
   $("fs-up").disabled = !data.parent;
@@ -202,7 +211,10 @@ async function sendDistribution(path, body) {
 /* ---------------------------------------------------------------- 初期化 */
 export function init() {
   tabs.attach($("settings-tabs"));
-  $("btn-settings").addEventListener("click", open);
+  $("btn-settings").addEventListener("click", () => open());
+  // サーバが入れ替わって読み込み直す直前に、設定にフォルダを打ちかけていた(`health.js`)
+  const carried = takeCarried();
+  if (carried && carried.folder != null) open(carried.folder);
   $("settings-close").addEventListener("click", () => $("settings-dialog").close());
 
   $("settings-save").addEventListener("click", () => {

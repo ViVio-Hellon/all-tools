@@ -28,6 +28,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import sqlite3
+import threading
+import time
+from collections import OrderedDict
 from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, render_template, request
@@ -162,12 +166,6 @@ def register_rest():
         return _refuse("not_listed",
                        "その作業者は選べません。ライン設定と班員名簿を確認してください。")
 
-    # 二重登録。ここで見えるのは**手元に取り込んだぶんまで**で、
-    # 他のラインとの重複は取り込み元へ送る時点で防ぐ(sync/business_rules.py)
-    if repo.exists_record(day, worker.code):
-        return _refuse("already_registered",
-                       f"{worker.name} さんは既に登録済みです。", status=409)
-
     shift = overtime = early = ""
     if not worker.is_day_shift:
         shift = str(body.get("shift", "")).strip()
@@ -177,11 +175,24 @@ def register_rest():
         overtime = str(body.get("overtime", "")).strip() or config.UNREGISTERED
         early = str(body.get("early", "")).strip() or config.UNREGISTERED
 
-    repo.save_record(day, config.KUBUN_REST, worker.name, worker.code,
-                     shift=shift, overtime=overtime, early=early,
-                     group=worker.group, line=worker.line)
-    log.info("休みを登録しました: %s %s(%s)", day, worker.name, worker.code)
-    return jsonify(_after_change(day, f"{worker.name} さんの休みを登録しました"))
+    message = f"{worker.name} さんの休みを登録しました"
+
+    def save() -> Optional[Any]:
+        # 二重登録。ここで見えるのは**手元に取り込んだぶんまで**で、
+        # 他のラインとの重複は取り込み元へ送る時点で防ぐ(sync/business_rules.py)。
+        # **確かめてから書くまでを1つの錠の中で行う** ── 別々だと、同時に
+        # 届いた2つの登録(ダブルクリック・2枚の画面)が両方とも
+        # 「まだ無い」と見て、同じ人・同じ日が2行できた
+        if repo.exists_record(day, worker.code):
+            return _refuse("already_registered",
+                           f"{worker.name} さんは既に登録済みです。", status=409)
+        repo.save_record(day, config.KUBUN_REST, worker.name, worker.code,
+                         shift=shift, overtime=overtime, early=early,
+                         group=worker.group, line=worker.line)
+        log.info("休みを登録しました: %s %s(%s)", day, worker.name, worker.code)
+        return None
+
+    return _register(conn, body, day, message, save)
 
 
 @bp.post("/api/comment")
@@ -207,10 +218,13 @@ def register_comment():
     if (line, group) not in Repository(conn).get_line_group_pairs():
         return _refuse("not_listed", "そのライン・班の組み合わせはありません。")
 
-    Repository(conn).save_record(day, config.KUBUN_OTHER, text, "-",
-                                 group=group, line=line)
-    log.info("連絡を登録しました: %s %s %s班", day, line, group)
-    return jsonify(_after_change(day, f"{line} {group}班 への連絡を登録しました"))
+    def save() -> Optional[Any]:
+        Repository(conn).save_record(day, config.KUBUN_OTHER, text, "-",
+                                     group=group, line=line)
+        log.info("連絡を登録しました: %s %s %s班", day, line, group)
+        return None
+
+    return _register(conn, body, day, f"{line} {group}班 への連絡を登録しました", save)
 
 
 @bp.post("/api/delete")
@@ -248,28 +262,163 @@ def delete():
                 return _bad_request("削除する項目の指定が正しくありません。")
 
     conn = get_db()
-    # **その日の行だけを消す。** 別の日のIDを混ぜて投げられても通さない
-    records = {record.id: record for record in Repository(conn).get_day_records(day)}
-    unknown = [value for value in ids if value not in records]
-    if unknown:
-        # 取り込み直しで消えた直後などに起きる。「先に変わっていた」を伝える
-        return _refuse("gone", "選んだ項目は既に削除されています。"
-                               "画面を更新してからやり直してください。", status=409)
+    # **照らし合わせてから消すまでを1つの錠の中で行う。** 別々だと、
+    # 照らし合わせた直後に背景の取り込みが表を入れ替え、同じIDの別の行を
+    # 消すことがあった(照らし合わせた意味が無くなる)
+    try:
+        _begin_immediate(conn)
+    except sqlite3.OperationalError as exc:
+        return _busy(exc)
+    try:
+        # **その日の行だけを消す。** 別の日のIDを混ぜて投げられても通さない
+        records = {record.id: record
+                   for record in Repository(conn).get_day_records(day)}
+        unknown = [value for value in ids if value not in records]
+        if unknown:
+            conn.rollback()
+            # 取り込み直しで消えた直後などに起きる。「先に変わっていた」を伝える
+            return _refuse("gone", "選んだ項目は既に削除されています。"
+                                   "画面を更新してからやり直してください。", status=409)
 
-    # **中身まで見る。** ダイアログを開いたまま放置しているあいだに取り込み
-    # 直しが走ると、同じIDが別の行になっていることがある(番号は再利用
-    # されうる)。ここを飛ばすと、最悪「別の人の休みを消して、履歴にも
-    # その人が残る」── 押した人には気づく手立てが無い
-    changed = [record_id for record_id in ids
-               if record_id in marks
-               and str(marks[record_id]) != presenter.record_mark(records[record_id])]
-    if changed:
-        return _refuse("gone", "選んだ項目の内容が変わっています。"
-                               "画面を更新してからやり直してください。", status=409)
+        # **中身まで見る。** ダイアログを開いたまま放置しているあいだに取り込み
+        # 直しが走ると、同じIDが別の行になっていることがある(番号は再利用
+        # されうる)。ここを飛ばすと、最悪「別の人の休みを消して、履歴にも
+        # その人が残る」── 押した人には気づく手立てが無い
+        changed = [record_id for record_id in ids
+                   if record_id in marks
+                   and str(marks[record_id]) != presenter.record_mark(records[record_id])]
+        if changed:
+            conn.rollback()
+            return _refuse("gone", "選んだ項目の内容が変わっています。"
+                                   "画面を更新してからやり直してください。", status=409)
 
-    count = Repository(conn).delete_records_by_ids(ids)
+        # ``delete_records_by_ids`` は ``with conn`` で確定させる(この錠ごと)
+        count = Repository(conn).delete_records_by_ids(ids)
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        if not _is_lock(exc):
+            raise
+        return _busy(exc)
+    except BaseException:
+        conn.rollback()
+        raise
     log.info("削除しました: %s 件数=%s", day, count)
     return jsonify(_after_change(day, f"{count} 件を削除しました"))
+
+
+# ---------------------------------------------------------------------------
+# 登録の書き込み(錠・送り直し・使用中)
+# ---------------------------------------------------------------------------
+#: 受け付けた送信の札(画面が「登録する」1回ごとに付けてくる ``submit_id``)。
+#: **同じ札がもう一度来たら、書かずに「登録しました」を返す。** 返事が
+#: 届く前に通信が切れると、画面は失敗に見えて同じ中身を送り直す ──
+#: 札が無いと、同じ連絡が2行できていた。プロセスの中だけ覚えれば足りる
+#: (送り直しは数秒〜数分のうちに、同じプロセスへ来る)
+_SEEN_SUBMITS: "OrderedDict[str, float]" = OrderedDict()
+_SEEN_LOCK = threading.Lock()
+_SEEN_MAX = 500
+#: 札を覚えておく長さ(秒)。これより古い札は捨てる
+_SEEN_TTL_SEC = 6 * 3600
+
+
+def _submit_id(body: dict[str, Any]) -> str:
+    value = str(body.get("submit_id") or "").strip()
+    return value[:80]
+
+
+def _seen(submit_id: str) -> bool:
+    if not submit_id:
+        return False
+    with _SEEN_LOCK:
+        now = time.monotonic()
+        while _SEEN_SUBMITS:
+            oldest, at = next(iter(_SEEN_SUBMITS.items()))
+            if now - at <= _SEEN_TTL_SEC and len(_SEEN_SUBMITS) <= _SEEN_MAX:
+                break
+            _SEEN_SUBMITS.pop(oldest, None)
+        return submit_id in _SEEN_SUBMITS
+
+
+def _remember(submit_id: str) -> None:
+    if submit_id:
+        with _SEEN_LOCK:
+            _SEEN_SUBMITS[submit_id] = time.monotonic()
+
+
+def _forget(submit_id: str) -> None:
+    if submit_id:
+        with _SEEN_LOCK:
+            _SEEN_SUBMITS.pop(submit_id, None)
+
+
+def _begin_immediate(conn) -> None:
+    """手元の書き込みの錠を取る。取れなければ ``OperationalError``。
+
+    背景の取り込みは、表を入れ替えるあいだこの錠を持つ。待つのは
+    ``busy_timeout``(``db.connect``)まで。
+    """
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def _is_lock(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
+
+
+def _busy(exc: BaseException):
+    """手元が使用中で書けなかった。**入力は画面に残したまま**もう一度を頼む。
+
+    取り込み(数秒に1回)が表を入れ替えている最中などに起きる。黙って
+    失敗させると打った連絡が消えたように見えるので、503 で
+    「待てば通る」と伝える(画面はダイアログを開いたまま残す)。
+    """
+    log.warning("手元が使用中のため登録を断りました: %s", exc)
+    return _refuse("busy",
+                   "いま取り込み中のため、まだ登録していません。"
+                   "入力はそのまま残してあります。少し待ってから、"
+                   "もう一度「登録する」を押してください。", status=503)
+
+
+def _register(conn, body: dict[str, Any], day: _dt.date, message: str, save):
+    """登録を1件書く。**確かめと書き込みを1つの錠の中で**行う。
+
+    ``save()`` は錠の中で呼ばれ、断るときは返事(``_refuse``)を返す。
+    同じ札(``submit_id``)の送り直しは書かずに成功を返す。
+    """
+    submit_id = _submit_id(body)
+    try:
+        _begin_immediate(conn)
+    except sqlite3.OperationalError as exc:
+        return _busy(exc)
+    try:
+        if _seen(submit_id):
+            conn.rollback()
+            log.info("同じ送信の送り直しを受けました(書かずに返します): %s", submit_id)
+            return jsonify(_after_change(day, message))
+        # 札は**書く前に、錠の中で**覚える。書き込みは確定と同時に錠を離す
+        # (``save_record``)ので、後で覚えると、並んで来た同じ札が
+        # その隙に「まだ見ていない」と見てしまう
+        _remember(submit_id)
+        refused = save()
+        if refused is not None:
+            conn.rollback()
+            _forget(submit_id)
+            return refused
+        if conn.in_transaction:
+            conn.commit()
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        _forget(submit_id)
+        if not _is_lock(exc):
+            raise
+        return _busy(exc)
+    except BaseException:
+        conn.rollback()
+        _forget(submit_id)
+        raise
+    return jsonify(_after_change(day, message))
 
 
 # ---------------------------------------------------------------------------

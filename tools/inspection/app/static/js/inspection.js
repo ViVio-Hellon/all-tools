@@ -7,10 +7,13 @@
 */
 
 import { api } from "./api.js";
+import { takeCarried } from "./health.js";
 import { toast, toastError } from "./toast.js";
 
 const $ = (id) => document.getElementById(id);
 const SEL_KEY = "isp.selection";
+// 読めなかったフォルダの中にあって、**いったん外している**選択(読めたら戻す)
+const HELD_KEY = "isp.held";
 const VIEW_KEY = "isp.view";
 
 export const state = {
@@ -18,6 +21,7 @@ export const state = {
   items: new Map(),     // id → 点検表
   order: [],            // 表示順の id
   selection: [],        // 選んだ順の id(この順で印刷する)
+  held: [],             // 読めなかったフォルダの中の選択 [{id, at, item}](読めたら戻す)
   activeCat: null,
   activeSub: null,
   search: "",
@@ -74,6 +78,7 @@ function commit() {
   if (has && !hadSelection) api.post("/api/excel/warm").catch(() => { /* 先回りなので失敗しても続ける */ });
   hadSelection = has;
   save(SEL_KEY, state.selection);
+  save(HELD_KEY, state.held);
   renderCategories();
   renderSubnav();
   syncItems();
@@ -131,7 +136,33 @@ function visibleItems() {
   return sub ? sub.items : [];
 }
 
+/** パスの比べ方(区切りと大文字小文字・末尾の区切りをそろえる)。 */
+function normPath(path) {
+  return String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * その点検表が、**今回読めなかったフォルダの中**にあったか。
+ *
+ * どこにあったか分からない(前の一覧に無い・読めなかった数が多くて切られた)
+ * ときは「読めなかったかもしれない」とみなす ── 外すのは確かなときだけ。
+ */
+function unreadableFor(inv) {
+  const errors = inv.errors || [];
+  const dirs = new Set(errors.map((e) => normPath(e.path)));
+  const truncated = errors.length >= 50;
+  return (item) => {
+    if (!dirs.size) return false;
+    if (!item || truncated) return true;
+    const base = normPath(inv.root);
+    const cat = `${base}/${String(item.category || "").toLowerCase()}`;
+    const sub = `${cat}/${String(item.subcategory || "").toLowerCase()}`;
+    return dirs.has(base) || dirs.has(cat) || dirs.has(sub);
+  };
+}
+
 function applyInventory(inv, note) {
+  const previous = state.items;
   state.inventory = inv;
   state.items = new Map();
   state.order = [];
@@ -142,13 +173,50 @@ function applyInventory(inv, note) {
   // **フォルダが見えないあいだは選択を消さない。** 共有の一時的な断で一覧が空に
   // なっただけなのに、選んでおいた点検表(とカテゴリの位置)まで解除して覚え直して
   // いた。見えたときに一覧と突き合わせる
+  //
+  // **一部のフォルダが一時的に読めなかっただけでも、選択を消さない。** 以前は
+  // フォルダ全体が見えないときだけを守っていたので、共有の1つのサブフォルダが
+  // 一瞬読めなかった(ロック・権限・ネットワークの瞬断)だけで、その中の
+  // 選択が**黙って永久に**解除されていた。読めなかったフォルダの中の選択は
+  // いったん外して覚えておき(`held`)、読めた一覧で戻す。読めたのに無ければ
+  // そのとき解除する
   const reachable = inv.root_exists !== false;
   if (reachable) {
-    const before = state.selection.length;
-    state.selection = state.selection.filter((id) => state.items.has(id));
-    if (before !== state.selection.length) {
-      toast(`${before - state.selection.length} 件の選択を解除しました(一覧から無くなったため)`, "warn");
+    const unreadable = unreadableFor(inv);
+    const keep = [];
+    const heldNow = [];
+    let dropped = 0;
+    state.selection.forEach((id, at) => {
+      if (state.items.has(id)) { keep.push(id); return; }
+      const old = previous.get(id);
+      const item = old ? { category: old.category, subcategory: old.subcategory } : null;
+      if (unreadable(item)) heldNow.push({ id, at, item });
+      else dropped += 1;
+    });
+    let back = 0;
+    for (const h of state.held || []) {
+      if (keep.includes(h.id) || heldNow.some((x) => x.id === h.id)) continue;
+      if (state.items.has(h.id)) {
+        keep.splice(Math.min(h.at, keep.length), 0, h.id);
+        back += 1;
+      } else if (unreadable(h.item)) {
+        heldNow.push(h);
+      } else {
+        dropped += 1;
+      }
     }
+    const newlyHeld = heldNow.filter((h) => !(state.held || []).some((x) => x.id === h.id)).length;
+    state.selection = keep;
+    state.held = heldNow;
+    save(HELD_KEY, state.held);
+    if (dropped) {
+      toast(`${dropped} 件の選択を解除しました(一覧から無くなったため)`, "warn");
+    }
+    if (newlyHeld) {
+      toast(`${newlyHeld} 件の選択は、読めなかったフォルダの中にあるため、いったん外しています`
+            + "(読めたら戻します)", "warn");
+    }
+    if (back) toast(`読めなかったフォルダが読めたので、${back} 件の選択を戻しました`, "ok");
     const cat = currentCategory();
     state.activeCat = cat ? cat.name : null;
     const sub = currentSub(cat);
@@ -497,6 +565,7 @@ async function toggleTheme() {
 /* ---------------------------------------------------------------- 初期化 */
 export function init() {
   state.selection = load(SEL_KEY, []);
+  state.held = load(HELD_KEY, []);
   const view = load(VIEW_KEY, {});
   state.activeCat = view.cat || null;
   state.activeSub = view.sub || null;
@@ -515,7 +584,11 @@ export function init() {
   });
   $("btn-sub-all").addEventListener("click", () => selectIds(visibleItems().map((it) => it.id)));
   $("btn-sub-none").addEventListener("click", () => deselectIds(visibleItems().map((it) => it.id)));
-  $("btn-clear-sel").addEventListener("click", () => { state.selection = []; commit(); });
+  $("btn-clear-sel").addEventListener("click", () => {
+    state.selection = [];
+    state.held = [];              // 「全部外す」は、いったん外しているものも外す
+    commit();
+  });
 
   let timer = null;
   $("search").addEventListener("input", (ev) => {
@@ -538,6 +611,9 @@ export function init() {
     else $("copies").removeAttribute("aria-invalid");
   });
   $("copies").addEventListener("blur", () => { const n = getCopies(); if (n !== null) setCopies(n); });
+  // サーバが入れ替わって読み込み直した直前に打っていた部数(`health.js`)
+  const carried = takeCarried();
+  if (carried && carried.copies) $("copies").value = carried.copies;
 
 
   renderSelection();

@@ -13,9 +13,16 @@
   * 開いたら中の最初の要素へ焦点を移す。閉じたら**開く前に居た場所へ戻す**
   * 開いているあいだは後ろをタブ移動させない
   * **開いた直後のひと押しは受けない**(下記)
+  * **打ちかけのある画面は、黙って閉じない**(`spec.dirty`)。背景を
+    うっかり押した・Esc を押しただけで、打った連絡が消えていた
+    (「打った行が消えることがありました」)。閉じる前に訊く
+  * 重なったときは**いちばん上の1枚だけ**がキーを受ける(上の確認で
+    押した Esc が、下の画面まで閉じてしまわないように)
 */
 
 let openCount = 0;
+// 開いている画面の重なり(後に開いたものほど上)
+const stack = [];
 
 /**
  * 開いた直後に、**続けざまの2打目**を受けない時間 (ms)。
@@ -58,6 +65,8 @@ export const NONE = Symbol("none");
  * @param {boolean} [spec.wide]         広い箱(削除・閲覧・作業者選択)
  * @param {string} [spec.tag]           見出しの前に出す札(「残業繋ぎ」など)
  * @param {string} [spec.tone]          札の色みの区別 (`overtime` / `early`)
+ * @param {() => boolean} [spec.dirty]  打ちかけがあるか。あれば取り消す前に訊く
+ * @param {(box:HTMLElement) => void} [spec.onOpen] 開いて描いた直後に呼ぶ
  * @returns {Promise<any>} 取り消しなら `null`
  */
 export function modal(spec) {
@@ -121,7 +130,8 @@ export function modal(spec) {
           // ことを意味する(「次へ」を押したが班を選んでいない、など)。
           // 直値の場合は必ず閉じる
           if (typeof action.value !== "function") {
-            close(action.value);
+            if (action.value === null || action.value === undefined) cancel();
+            else close(action.value);
             return;
           }
           const value = action.value();
@@ -136,11 +146,15 @@ export function modal(spec) {
 
     // -- 開閉 ------------------------------------------------------
     let closed = false;
+    let guarding = false;
+    const self = {};
     function close(value) {
       if (closed) return;
       closed = true;
       document.removeEventListener("keydown", onKey, true);
       back.remove();
+      const at = stack.indexOf(self);
+      if (at >= 0) stack.splice(at, 1);
       openCount -= 1;
       if (openCount === 0) document.body.style.removeProperty("overflow");
       // **開く前に居た場所へ焦点を戻す。** 戻さないと、閉じたあとの
@@ -151,10 +165,26 @@ export function modal(spec) {
       resolve(value === undefined ? null : value);
     }
 
+    /** 取り消し(Esc・背景・取り消しボタン)。**打ちかけがあれば訊いてから。** */
+    async function cancel() {
+      if (closed || guarding) return;
+      let dirty = false;
+      try { dirty = !!(spec.dirty && spec.dirty()); } catch (_err) { dirty = false; }
+      if (!dirty) { close(null); return; }
+      guarding = true;
+      const ok = await confirm("入力した内容を消しますか?",
+        "この画面に打った内容は、まだ保存していません。\n閉じると消えます。",
+        { okLabel: "消して閉じる", cancelLabel: "入力に戻る", danger: true });
+      guarding = false;
+      if (ok) close(null);
+    }
+
     function onKey(event) {
+      // **いちばん上の1枚だけがキーを受ける**(下の画面は黙る)
+      if (stack[stack.length - 1] !== self) return;
       if (event.key === "Escape") {
         event.stopPropagation();
-        close(null);
+        cancel();
         return;
       }
       if (event.key !== "Tab") return;
@@ -189,13 +219,14 @@ export function modal(spec) {
     });
 
     back.addEventListener("mousedown", (event) => {
-      if (event.target === back) close(null);
+      if (event.target === back) cancel();
     });
     document.addEventListener("keydown", onKey, true);
 
     spec.render(body, close);
 
     document.body.appendChild(back);
+    stack.push(self);
     openCount += 1;
     document.body.style.overflow = "hidden";
 
@@ -203,7 +234,13 @@ export function modal(spec) {
                 || body.querySelector("button, input, select, textarea")
                 || (foot && foot.querySelector("button"));
     if (target) target.focus();
+    if (spec.onOpen) spec.onOpen(box);
   });
+}
+
+/** いま開いている画面があるか(`.modal` を数えるより確か)。 */
+export function isOpen() {
+  return openCount > 0;
 }
 
 /**

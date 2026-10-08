@@ -36,6 +36,8 @@
 .btn--primary[data-busy]::after{color:var(--on-accent)}
 .btn--danger[data-busy]::after{color:var(--on-error)}
 @keyframes spin{to{transform:rotate(1turn)}}
+/* 待機中は押しても届かない(`busy.js`)。押せない形にはしない ── 押せるかどうかは画面が決める */
+[data-busy]{cursor:progress}
 
 /* ================================================================
    カード
@@ -68,6 +70,8 @@
 }
 .textarea{min-height:96px; resize:vertical; line-height:1.6}
 .input:disabled,.select:disabled{background:var(--sunken); color:var(--muted)}
+/* 触ったが、まだ保存していない欄(`views/settings.js`)。描き直しでは戻さない */
+.input.is-dirty, .select.is-dirty{border-color:var(--state-warn); background:var(--state-warn-bg)}
 
 .row{display:flex; gap:var(--gap-sm); align-items:flex-end; flex-wrap:wrap}
 .row > .field{flex:1 1 200px; min-width:0}

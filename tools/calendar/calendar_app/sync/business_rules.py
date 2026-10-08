@@ -90,6 +90,16 @@ def _already_registered(source: "source_db.SourceConnection",
         return False
 
 
+def _waiting_for_delete(conn: sqlite3.Connection, source_table: str,
+                        values: dict[str, object]) -> bool:
+    """同じ人・同じ日・同じ区分の削除が、まだ取り込み元へ届いていないか。"""
+    from .deletes import unsent_delete_matches
+
+    return unsent_delete_matches(conn, source_table, {
+        "日付": values.get("日付"), "区分": values.get("区分"),
+        "識別コード": values.get("識別コード")})
+
+
 def send_data_with_duplicate_guard(
     conn: sqlite3.Connection,
     source: "source_db.SourceConnection",
@@ -114,6 +124,16 @@ def send_data_with_duplicate_guard(
             values = {k: row[k] for k in row.keys() if k != spec.key_column}
 
             guard = duplicate_guard(spec.source_table, values)
+            if guard and _waiting_for_delete(conn, spec.source_table, values):
+                # **同じ人・同じ日を消して登録し直したところ。** 消す前の行が
+                # まだ取り込み元にあるうちに確かめると「先に登録済み」に
+                # 見えて取りやめになり、あとで削除が届いて両方とも消える。
+                # 削除が届くまで送らずに待つ(送信待ちに残す。次の周期で送る)
+                debug_log(
+                    f"business_rules: {spec.source_table} 行{row_id} は "
+                    "同じ人・同じ日の削除がまだ届いていないため次回に回す")
+                failed.append(row_id)
+                continue
             if guard and _already_registered(source, guard):
                 outbox_sync.mark_synced(conn, spec, [row_id])
                 result.duplicates += 1
