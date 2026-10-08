@@ -292,6 +292,11 @@ def main() -> int:
         checked = entry("--check")
         result(checked.returncode == 0,
                f"ランチャーの起動確認: 使える(終了コード {checked.returncode}: {last_line(checked)})")
+        if checked.returncode != 0 and WINDOWS:
+            sys.path.insert(0, str(ROOT))
+            from portal import desktop_window, instance_guard
+            print("--- 統合ツールの exe の窓(窓, 題名, 持ち主がいるか, 見えているか):",
+                  desktop_window.exe_windows(instance_guard.DESKTOP_EXES), flush=True)
         others = [pid for pid in tree if pid != app.pid]
         began = time.monotonic()
         stopped = entry("--launcher")

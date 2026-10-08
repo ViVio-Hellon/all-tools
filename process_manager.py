@@ -131,7 +131,8 @@ CHECK_READY, CHECK_STOPPED, CHECK_STARTING = 0, 1, 2
 def _desktop_windows() -> Optional[list[int]]:
     from portal import app_config, desktop_window, instance_guard
 
-    return desktop_window.main_windows(instance_guard.DESKTOP_EXES, f"{app_config.display_name()} VER")
+    # 大きなタブの窓の題名は「統合ツール」「統合ツール — 日報」(画面の題名に合わせて変わる)
+    return desktop_window.main_windows(instance_guard.DESKTOP_EXES, app_config.display_name())
 
 
 def check() -> int:

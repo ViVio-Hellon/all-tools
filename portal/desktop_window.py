@@ -6,7 +6,9 @@
 プロセスを落とすのではない。
 
 見つけるのは、実行ファイルの名前が統合ツールの exe(`instance_guard.DESKTOP_EXES`)で、
-題名が「統合ツール VER…」の窓(大きなタブの窓)だけ。別窓(印刷など)や確認の窓には送らない。
+**持ち主の無い**(確認の窓は大きなタブの窓が持ち主)、題名が「統合ツール」で始まる窓
+(大きなタブの窓)だけ。題名は画面の題名に合わせて「統合ツール — 日報」のように変わる
+(外枠が `on_document_title_changed` で写す)。別窓(印刷など。題名はツールの名前)にも送らない。
 標準ライブラリ(ctypes)だけで書く。
 """
 from __future__ import annotations
@@ -16,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 WM_CLOSE = 0x0010
+GW_OWNER = 4
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
@@ -48,31 +51,34 @@ def main_windows(exe_names: tuple[str, ...], title_prefix: str) -> Optional[list
     """大きなタブの窓(見えているもの)。Windows でなければ None(確かめられない)。"""
     if os.name != "nt":
         return None
+    return [hwnd for hwnd, title, owned, visible in exe_windows(exe_names)
+            if visible and not owned and title.startswith(title_prefix)]
+
+
+def exe_windows(exe_names: tuple[str, ...]) -> list[tuple[int, str, bool, bool]]:
+    """統合ツールの exe の、題名のある窓すべて(窓, 題名, 持ち主がいるか, 見えているか)。Windows だけ。"""
     import ctypes
     from ctypes import wintypes
 
     user32 = _user32()
     wanted = {name.lower() for name in exe_names}
-    found: list[int] = []
+    found: list[tuple[int, str, bool, bool]] = []
     names: dict[int, str] = {}
 
     @_ENUM_PROC
     def visit(hwnd, _lparam):                     # noqa: ANN001
-        if not user32.IsWindowVisible(hwnd):
-            return True
         length = user32.GetWindowTextLengthW(hwnd)
         if length <= 0:
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        if not buf.value.startswith(title_prefix):
-            return True
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value not in names:
             names[pid.value] = _image_name(pid.value).lower()
         if names[pid.value] in wanted:
-            found.append(int(hwnd))
+            found.append((int(hwnd), buf.value, bool(user32.GetWindow(hwnd, GW_OWNER)),
+                          bool(user32.IsWindowVisible(hwnd))))
         return True
 
     user32.EnumWindows(visit, 0)
@@ -96,6 +102,8 @@ def _user32():
     for name in ("IsWindowVisible", "IsIconic", "SetForegroundWindow"):
         getattr(user32, name).argtypes = [wintypes.HWND]
         getattr(user32, name).restype = wintypes.BOOL
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
     user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.GetWindowTextLengthW.restype = ctypes.c_int
     user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
