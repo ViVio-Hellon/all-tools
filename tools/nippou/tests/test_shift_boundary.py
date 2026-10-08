@@ -408,6 +408,35 @@ class SaveGateTests(BoundaryWebTestCase):
         self.assertEqual(body["shift"], "1直")
         self.assertEqual(self.keys(), [(report_date, "1直", 1)])
 
+    def test_打ちかけも選べば元の直へ置ける(self):
+        """v4.24.0: 移る前・読み直す前の保存は、訊いたうえで打ちかけのまま置く。
+
+        選ばずに送った打ちかけは今までどおり見送り(どちらへも書かない)、
+        選んだ答えが付いていれば、その直へ**確定の関門を通さずに**置きます。
+        """
+        self.put_now_in("1")
+        first = self.post("/api/entry/save", self.sheet()).get_json()
+        report_date = first["report_date"]
+        self.clear_anchor()
+
+        self.put_now_in("2")
+        skipped = self.post("/api/entry/save", self.sheet(
+            lot="2222222", draft=True, header={"worker": ""},
+            opened=self.opened(report_date, "1直"))).get_json()
+        self.assertFalse(skipped["saved"])
+        self.assertTrue(skipped["shift_changed"]["crossed"])
+
+        placed = self.post("/api/entry/save", self.sheet(
+            lot="2222222", draft=True, header={"worker": ""},
+            opened=self.opened(report_date, "1直"), shift_choice="opened")).get_json()
+        self.assertTrue(placed["saved"])
+        self.assertEqual(placed["shift"], "1直")
+        self.assertEqual(self.keys(), [(report_date, "1直", 1)])
+        from nippou import constants
+
+        _header, details = self.repo().load(report_date, constants.LINE_NAMES[0], "1直", 1)
+        self.assertEqual(details[0].lot, "2222222")
+
     def test_選んだその1回は終わった直でも通る(self):
         """**押した人のぶんは行き先を残します。**
 

@@ -64,6 +64,7 @@ REFUSE_BAD_VALUE = "bad_value"        # 入れた値の形が違う
 REFUSE_NO_FILE = "no_file"            # そのファイルが無い / 届かない
 REFUSE_NO_TABLE = "no_table"          # その表が無い
 REFUSE_NO_ROW = "no_row"              # その行がもう無い
+REFUSE_CHANGED = "changed"            # 開いたあとに、ほかで直された(v4.24.0)
 REFUSE_WRITE_FAILED = "write_failed"  # 書けなかった
 
 # 型の言い方。**画面側で「整数」と書き分けない**(列を足す窓と同じ言葉 ── v4.14.0)
@@ -553,9 +554,42 @@ class Result:
     shift_times: Optional[list[list[str]]] = None
 
 
+def _as_shown(value: Any) -> str:
+    """一覧に出したときの形(`page` と同じ ── None は空、ほかは文字)。"""
+    return "" if value is None else str(value)
+
+
+def changed_since(before: Optional[dict[str, Any]],
+                  original: Optional[dict[str, Any]]) -> list[str]:
+    """**開いたときの値**(`original`)から、いまの行で変わっている列。
+
+    比べるのは `original` に入っている列だけです ── 画面は「直した列」の
+    開いたときの値だけを送ってくるので、**別の列をほかの人が直したぶんは
+    ぶつかりません**(そのまま残ります)。同じ列をほかの人が先に直していたら、
+    ここに挙がります。
+    """
+    if not original or before is None:
+        return []
+    return [name for name, seen in original.items()
+            if name in before and _as_shown(before[name]) != _as_shown(seen)]
+
+
 def save_row(file_key: str, table: str, row_key: Any,
-             values: dict[str, Any], *, unlocked: bool = False) -> Result:
-    """1行を書き換える。"""
+             values: dict[str, Any], *, unlocked: bool = False,
+             original: Optional[dict[str, Any]] = None) -> Result:
+    """1行を書き換える。
+
+    `original` は**画面が行を開いたときの値**(直した列のぶん。v4.24.0)。
+
+    【2つの端末で同じ行を直すと、先に直したほうが消えていました】
+    画面は窓を開いたときの1行ぶんを**まるごと**送っていたので、あいだに
+    ほかの端末が別の列を直していても、開いたときの古い値で全部の列を
+    書き戻していました(打った値が勝手に戻ることがありました)。
+
+    画面は直した列だけを送り、その列の開いたときの値を添えます。書く直前の
+    行と比べて、**同じ列がほかで直されていれば書かずに断ります**(409)。
+    添えてこない古い画面は、これまでどおり書きます。
+    """
     path, refused = _ready(file_key, table, unlocked)
     if refused:
         return refused
@@ -577,6 +611,23 @@ def save_row(file_key: str, table: str, row_key: Any,
             if problem:
                 return Result(False, problem, REFUSE_BAD_VALUE)
             before = _row_before(src, file_key, table, _row_key(row_key))
+            if original:
+                # **書く直前の行で比べる**(書き込みのロックの中。一覧を出した
+                # ときの値ではなく、いまの元のファイルの値)
+                now = _row_now(src, table, _row_key(row_key))
+                if now is None:
+                    return Result(False, "その行はもうありません。一覧を出し直してください。",
+                                  REFUSE_NO_ROW)
+                moved = changed_since(now, original)
+                if moved:
+                    log.info("マスタの行は開いたあとに直されていました: %s / %s rowid=%s %s",
+                             file_key, table, row_key, moved)
+                    return Result(
+                        False,
+                        f"この行の {'・'.join(moved)} は、開いたあとにほかで直されています。"
+                        "上書きしないよう、書きませんでした。一覧を出し直して、"
+                        "いまの値を見てから直してください。",
+                        REFUSE_CHANGED)
             changed = src.update(table, clean, {"rowid": _row_key(row_key)})
     except source_db.SourceError as exc:
         return _write_failed(table, exc, file_key, "更新")
@@ -710,6 +761,14 @@ def _write_failed(table: str, exc: Exception, file_key: str = "",
 # ==================================================================
 #: 表どうしの結びつき(外部キー)を決めてあるファイル。書くときに守らせる
 FK_FILES: frozenset[str] = frozenset({"vc"})
+
+
+def _row_now(src: source_db.SourceConnection, table: str,
+             row: int) -> Optional[dict[str, Any]]:
+    """書く直前の1行(どのファイルでも)。無ければ None。"""
+    found = src.query(f"SELECT * FROM {source_db.quote_identifier(table)}"
+                      " WHERE rowid = ?", [row])
+    return found[0] if found else None
 
 
 def _row_before(src: source_db.SourceConnection, file_key: str, table: str,

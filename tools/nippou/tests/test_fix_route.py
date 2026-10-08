@@ -170,12 +170,13 @@ class RefusalRouteTests(WebTestCase):
         たいてい画面を開いた直後(空のまま)なので、いちばん必要なときに
         だけ動かない、という形でした。
         """
-        found = re.search(r"async function saveDraft\(\) \{(.*?)\n\}",
+        # 中身は `placeDraft`(v4.24.0 ── 置けたか・直の変わり目・ページ違いを分けて返す)
+        found = re.search(r"async function placeDraft\([^)]*\) \{(.*?)\n\}",
                           ENTRY_JS, re.S)
         self.assertIsNotNone(found)
         body = found.group(1)
         self.assertIn('err.code === "empty_sheet"', body)
-        self.assertIn("return true", body)
+        self.assertIn("return { ok: true }", body)
 
     def test_管理者モードの切り替え先まで書く(self) -> None:
         """断られた人が次にすることが書いていないと、そこで止まります。"""

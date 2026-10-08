@@ -210,9 +210,15 @@ export const api = {
   /**
    * `mute` … 断られても音の出来事(「断られた」)にしない。**押さずに走るもの**
    * (自動保存)のため。待機の姿や記録は押したときと同じ
+   *
+   * `signal` … 画面を出たら取り消す合図(`nav.pageSignal()`、v4.24.0)。
+   * **出たあとに返ってきた答えを、次の画面へ塗らせない**ため ── 前のページの
+   * 12行が、引き直したばかりの新しいページへ塗られ、自動保存で書かれていました。
+   * 取り消されると `AbortError` で落ちます(`isAbort` で見分ける)
    */
-  post: (path, data, { mute = false } = {}) =>
-    request(path, { method: "POST", body: JSON.stringify(data ?? {}) }, { mute }),
+  post: (path, data, { mute = false, signal } = {}) =>
+    request(path, { method: "POST", body: JSON.stringify(data ?? {}),
+                    ...(signal ? { signal } : {}) }, { mute }),
   /**
    * ファイルそのものを送る(取り込み)。
    *
@@ -236,6 +242,11 @@ export const api = {
     } catch (err) { /* 送れなくても閉じるのは止めない */ }
   },
 };
+
+/** 画面を出たので取り消した通信か(`signal`)。**失敗として出さない。** */
+export function isAbort(err) {
+  return Boolean(err) && (err.name === "AbortError" || err.code === 20);
+}
 
 /**
  * 誰も押していない通信(1分ごとの見張りなど)。

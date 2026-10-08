@@ -475,6 +475,142 @@ def _opened_key(payload: dict):
                               page=max(1, page))
 
 
+#: 画面のページと書き先が食い違ったとき、打ちかけ(自動保存・移る前の保存)を
+#: 見送る理由。**書かずに 200 で返す**(誰も押していないので騒がない)
+PAGE_MOVED_SKIP = "画面のページと書き先が違うので保存しませんでした"
+
+#: **画面の外から書いたページ**と、その時刻(`awake_clock`)。
+#:
+#: 全停入力は、画面の12行を使わずにサーバが1ページを書きます。書く先が
+#: 空のページ(=画面に出ているページ)のこともあるので、ページ番号だけでは
+#: 「古い画面」を見分けられません ── 閉じる間際の送信が、打ちかけの空の行を
+#: 全停の行の上へ書いていました。**その画面を描いた時刻より後に、画面の
+#: 外から書かれたページ**へは、その画面からは書かせません。
+_WRITTEN_ASIDE: dict[tuple, float] = {}
+
+
+def note_written_aside(key: tuple) -> None:
+    """画面の12行を通さずにページを書いた(全停入力など)。`screen_mismatch` が見ます。"""
+    from nippou import awake_clock
+
+    _WRITTEN_ASIDE[tuple(key)] = awake_clock.now()
+    while len(_WRITTEN_ASIDE) > 64:               # 覚えるのは最近のぶんだけ
+        del _WRITTEN_ASIDE[next(iter(_WRITTEN_ASIDE))]
+
+
+def screen_mismatch(ctx, calc, payload: dict, target=None) -> Optional[dict]:
+    """画面が出しているページと、**いまの書き先**が食い違っていないか(v4.24.0)。
+
+    【打った行が、別のページに書かれていました】
+
+        打った行が消えることがありました
+        打った値が勝手に戻ることがありました
+
+    ── とんでもない話である。書き先(`_target`)はサーバが覚えている1つ
+    だけで、**画面がどのページを出しているかを見ていませんでした。**
+    比べていたのは直の変わり目(報告日と直)だけです(`_crossing`)。そのため、
+
+        次ページ発行   … 第1ページの12行が、出したばかりの空の第2ページへ
+        最新のページに戻る / 帯の「✕」 … 直していた第1ページの中身が、
+                         閉じる間際の送信で最新のページへ
+        全停入力       … 打ちかけの空の行が、全停の行の上へ
+
+    と、**画面に出ていないページへ、画面の中身が黙って書かれていました。**
+    ほかにも同じ処理をしている箇所があると思われるので、比べるのはこの
+    1か所にして、画面の中身を受け取る口(保存・発行・決まる値・ロット・印・
+    排他・戻る前の保存)はどれもここを通します。
+
+    見分け方:
+
+        ライン       … 名乗っていれば必ず同じでなければならない
+        呼出中       … 報告日・直・ページの3つとも、呼び出した紙と同じ
+        呼出していない … 報告日と直が同じなのにページだけ違う
+                       (報告日か直が違うのは直の変わり目 ── そちらは
+                        `_crossing` が「どちらへ入れるか」を訊きます)
+
+    画面が名乗らなければ比べません(開いた直後・古い画面。これまでどおり)。
+    食い違っていれば、その中身(言うこと・画面のキー・書き先)を返します。
+    """
+    opened = _opened_key(payload)
+    if not opened.filled:
+        return None
+    report_date, line, shift, page = target or _target(ctx, calc)
+    raw = payload.get("opened") if isinstance(payload.get("opened"), dict) else {}
+    seen_line = str(raw.get("line", "") or "").strip()
+    differs = bool(seen_line) and seen_line != line
+    if ctx.recall.active:
+        differs = differs or ((opened.report_date, opened.shift, opened.page)
+                              != (report_date, shift, page))
+    elif (opened.report_date, opened.shift) == (report_date, shift):
+        differs = differs or opened.page != page
+    where = f"{opened.report_date} {opened.shift} 第{opened.page}ページ"
+    now = f"{report_date} {shift} 第{page}ページ"
+    found = {
+        "opened": {**opened.as_dict(), "line": seen_line},
+        "target": {"report_date": report_date, "line": line, "shift": shift,
+                   "page": page},
+    }
+    if differs:
+        found["message"] = (
+            f"この画面は {where} を出していますが、書き先は {now} に"
+            "変わっています。別のページへ書かないよう、保存しませんでした。"
+            "画面を読み直してください(打ちかけは、出ているページを開き直して"
+            "打ち直してください)")
+        return found
+    # 同じページでも、**この画面を描いたあとに画面の外から書かれていれば**古い
+    # (全停入力。`note_written_aside`)。描いた時刻を名乗らない画面は比べない
+    written = _WRITTEN_ASIDE.get((report_date, line, shift, page))
+    try:
+        loaded = float(raw.get("loaded")) if raw.get("loaded") not in (None, "") else None
+    except (TypeError, ValueError):
+        loaded = None
+    if written is not None and loaded is not None and loaded < written:
+        found["message"] = (
+            f"{now} は、この画面を開いたあとに全停入力などで書き直されています。"
+            "上書きしないよう、保存しませんでした。画面を読み直してください")
+        return found
+    return None
+
+
+def page_moved_refusal(found: dict, *, silent: bool = False):
+    """`screen_mismatch` の答えを応答にする。**どちらも書いていない。**
+
+    打ちかけ(`silent`)は 200 で見送る ── 押した人がいないので騒がない。
+    押した操作は 409(ぶつかった)── 送られたものは正しく、画面が古いだけ。
+
+    **画面ぜんぶは返しません。** 返すと、画面は書き先のキーと**古いページの
+    中身**を一緒に塗り、次の保存でそのまま書き先へ送ってしまいます。
+    """
+    if silent:
+        return jsonify({"saved": False, "skipped": PAGE_MOVED_SKIP,
+                        "page_moved": found}), 200
+    body = error_body("page_moved", found["message"])
+    body["saved"] = False
+    body["page_moved"] = found
+    return jsonify(body), 409
+
+
+def _screen_key(ctx, calc, payload: dict):
+    """決まる値を返すときに描く紙(キー)。**直の変わり目なら、画面が開いた直のまま。**
+
+    `None` ならいつもどおり書き先(`_target`)で描きます。
+
+    書き先で描くと、17:00 をまたいだ画面へ「2直」のキーが返り、画面は
+    自分を2直だと思い直します ── 次の保存は「またいだ」と見なされず、
+    1直のつもりで打った行が黙って2直へ入ります。どちらへ入れるかを訊く
+    のは保存(`save`)なので、それまでは開いた紙のまま描きます。
+    """
+    if ctx.recall.active:
+        return None
+    opened = _opened_key(payload)
+    if not opened.filled:
+        return None
+    report_date, line, shift, _page = _target(ctx, calc)
+    if (opened.report_date, opened.shift) == (report_date, shift):
+        return None
+    return (opened.report_date, line, opened.shift, opened.page)
+
+
 def _crossing(ctx, payload: dict, report_date: str, shift: str, page: int,
               current_date: str, current_shift: str):
     """直の変わり目をまたいだか。**2つの道を1つの判断に寄せる。**
@@ -892,6 +1028,13 @@ def update_state():
     payload = request.get_json(silent=True) or {}
     ctx = work_context.get_context()
     calc = current_calculator()
+    # **古いページの中身で、いまのページの値を決めない**(v4.24.0)。決めた値と
+    # 一緒に書き先のキーが返ると、画面は古い12行を新しいページのものだと
+    # 思い直し、次の自動保存でそのまま書きます(`screen_mismatch`)
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        return page_moved_refusal(moved)
+    key = _screen_key(ctx, calc, payload)
 
     state = presenter.parse_state(payload)
 
@@ -926,12 +1069,12 @@ def update_state():
     # 計算し直す前に入れる ── 作業時間・引き継ぎも、打ったときと同じに通す
     stamped = _apply_stamp(state, ctx, payload.get("stamp"), calc=calc)
 
-    problem = _recalculate(state, ctx, calc)
+    problem = _recalculate(state, ctx, calc, shift=key[2] if key else "")
 
     marks = None
     row = payload.get("row")
     if isinstance(row, int) and 1 <= row <= constants.ROW_COUNT:
-        _, _, shift, _ = _target(ctx, calc)
+        _, _, shift, _ = key or _target(ctx, calc)
         # **値だけ運ぶ。焦点は動かさない。**
         #
         # VBA `Same_Text` は `KZ(num+1)` `KH(num+1)` に文字を入れるだけで、
@@ -946,7 +1089,7 @@ def update_state():
             state, row, day_temp=shift, shift_end_times=_shift_end_times(calc),
             carried_rows=_carried_rows(payload))
 
-    body = _view(state, ctx, calc, problem=problem)
+    body = _view(state, ctx, calc, problem=problem, key=key)
     if marks is not None:
         # **写した印を画面へ返す。** 画面はこれを持ち直して、次に送って
         # きます ── 「ツールが入れた値が、まだ人に触られずに残っている
@@ -1113,10 +1256,13 @@ def toggle_check():
 
     ctx = work_context.get_context()
     calc = current_calculator()
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        return page_moved_refusal(moved)
     state = presenter.parse_state(payload)
     state = presenter.apply_exclusion(state, name)
     log_button_click(f"exclusion:{name}", line=ctx.line)
-    return jsonify(_view(state, ctx, calc))
+    return jsonify(_view(state, ctx, calc, key=_screen_key(ctx, calc, payload)))
 
 
 def build_service(ctx, calc) -> NippouService:
@@ -1177,6 +1323,15 @@ def save():
             return jsonify(body)
         body["message"] = work_context.LINE_GATE_MESSAGE
         return jsonify(body), 409
+    # **画面に出ていないページへは書かない**(v4.24.0 `screen_mismatch`)。
+    # 何かを決める前・固定を動かす前に見ます ── 古い画面の送信で、書き先の
+    # 直まで動かさないために
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        log.warning("画面のページと書き先が違うので保存しませんでした %s → %s (%s)",
+                    moved["opened"], moved["target"],
+                    "打ちかけ" if silent else "押した保存")
+        return page_moved_refusal(moved, silent=silent)
     # **保存が最初の1手のこともある。** 作業者を打ってそのまま
     # 「保存(確定)」を押されると `settle` を通らないので、ここでも見ます
     # ── 固定は「作業者が決まった最初の1回」だけ働きます
@@ -1211,7 +1366,11 @@ def save():
                          current_date, current_shift)
     choice = str(payload.get("shift_choice", ""))
     if crossing.crossed:
-        if silent:
+        # **打ちかけでも、人が選んだのなら選んだ直へ置く**(v4.24.0)。移る前・
+        # 読み直す前の保存は「どちらへ入れるか」を訊いてから、選ばれた答えを
+        # 添えて打ちかけのまま置きます ── 確定(7項目の関門)に通すと、直して
+        # いない行が1つあるだけで置けず、読み直しで打ちかけが消えていました
+        if silent and not (draft and choice in shift_boundary.CHOICES):
             # **自動保存は黙って見送る。** 誰も押していないところに
             # 聞き返しを出しても選べませんし、どちらかへ勝手に書けば
             # それこそ黙って間違った直に入ります。気づかせる役は
@@ -1428,6 +1587,10 @@ def save():
 
     if silent and not draft:
         service.mark_autosaved(now)
+    # **画面で打っているページ**。控えから「新しいほう」を戻すときに、打って
+    # いる最中のこのページは戻さない(`local_backup.note_editing`)
+    from nippou.services import local_backup
+    local_backup.note_editing(key)
     factor = _recalculate_factors(state, report_date, line, shift)
     _refresh_summary(report_date, line, shift)
     exported = _export_daily_csv(report_date, line) if not silent else None
@@ -1862,6 +2025,10 @@ def lookup_lot():
 
     ctx = work_context.get_context()
     calc = current_calculator()
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        return page_moved_refusal(moved)
+    key = _screen_key(ctx, calc, payload)
     state = presenter.parse_state(payload)
     lot_no = state.value(row, "LOT").strip()
     # Gコースの印は**引けたときだけ**付け直す(v4.17.0)。打ち直した・引けなかった・
@@ -1871,7 +2038,7 @@ def lookup_lot():
     # 7桁そろうまでは**黙って何もしない**(VBA も `Exit Sub` するだけ)。
     # 打っている途中に毎回断られると、打ち終われない
     if lot_fill.check_length(lot_no) is not None:
-        body = _view(state, ctx, calc)
+        body = _view(state, ctx, calc, key=key)
         body["lot"] = {"row": row, "state": lot_fill.REFUSE_SHORT}
         return jsonify(body)
 
@@ -1881,7 +2048,7 @@ def lookup_lot():
     if found.refusal is not None:
         # **入力そのものは受け付ける。** 引けなかったからといって、打った
         # ロット番号を消したり保存を止めたりしない(手で埋められる)
-        body = _view(state, ctx, calc)
+        body = _view(state, ctx, calc, key=key)
         body["lot"] = {"row": row, "state": found.refusal.reason,
                        "message": found.refusal.message}
         return jsonify(body)
@@ -1889,7 +2056,7 @@ def lookup_lot():
     if found.choices:
         # 選ばせる。**まだ何も書き換えない** ── 選ぶ前に書くと、選び直した
         # ときにどこまでが前の引当のものか分からなくなる
-        body = _view(state, ctx, calc)
+        body = _view(state, ctx, calc, key=key)
         body["lot"] = {"row": row, "state": "choose", "lot_no": lot_no,
                        "choices": found.choices,
                        "message": f"引当が{len(found.choices)}件あります。選んでください。"}
@@ -1898,9 +2065,9 @@ def lookup_lot():
     for family, value in found.fill.values.items():
         state.set(row, family, value)
     state.set(row, "hiki_no", found.fill.hiki_no)
-    problem = _recalculate(state, ctx, calc)
+    problem = _recalculate(state, ctx, calc, shift=key[2] if key else "")
 
-    body = _view(state, ctx, calc, problem=problem)
+    body = _view(state, ctx, calc, problem=problem, key=key)
     body["lot"] = {
         "row": row, "state": "filled", "lot_no": lot_no,
         "order_no": found.fill.order_no, "hiki_no": found.fill.hiki_no,
@@ -1940,10 +2107,14 @@ def toggle_mark():
 
     ctx = work_context.get_context()
     calc = current_calculator()
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        return page_moved_refusal(moved)
+    sheet = _screen_key(ctx, calc, payload)
     state = presenter.parse_state(payload)
     state.set(row, "ET", etc_marks.toggle(state.value(row, "ET"), key))
-    problem = _recalculate(state, ctx, calc)
-    return jsonify(_view(state, ctx, calc, problem=problem))
+    problem = _recalculate(state, ctx, calc, shift=sheet[2] if sheet else "")
+    return jsonify(_view(state, ctx, calc, problem=problem, key=sheet))
 
 
 @bp.post("/api/entry/newpage")
@@ -2001,6 +2172,14 @@ def new_page():
     # 途中でどちらの直かを訊くと、片方だけが済んだ状態になりかねません。
     # 選ぶ場所は1つ(保存)にしておくほうが、何が起きたか読めます
     report_date, line, shift, page = _target(ctx, calc)
+    # **画面に出ていないページを「いまのページ」として保存しない**(v4.24.0)。
+    # 発行は「画面の12行を書き先へ保存する」入口なので、保存と同じ関門です
+    moved = screen_mismatch(ctx, calc, payload,
+                            target=(report_date, line, shift, page))
+    if moved:
+        log.warning("画面のページと書き先が違うので発行しませんでした %s → %s",
+                    moved["opened"], moved["target"])
+        return page_moved_refusal(moved)
     now = datetime.now()
     current_shift, current_date = service.current_shift_info(
         now, ctx.force_day_shift())

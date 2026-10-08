@@ -195,6 +195,49 @@ class MasterEditTests(WebTestCase):
             "key": 1, "values": {"内訳": "休憩・食事"}})
         self.assertEqual(self.rows()[0][1], "0")
 
+    def test_開いたあとに同じ列が直されていたら409で書かない(self) -> None:
+        """v4.24.0: 開いたときの古い値で、ほかの端末が直した値を書き戻していた。"""
+        self.unlock()
+        opened = self.browse(file="transmission", table="作業停止時間内訳_1")
+        row = opened["page"]["rows"][0]
+        # ほかの端末が同じ列を先に直した
+        self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1",
+            "key": row[opened["row_key"]], "values": {"内訳": "先に直した"},
+            "original": {"内訳": row["内訳"]}})
+        # こちらは開いたときの値を添えて送る
+        res = self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1",
+            "key": row[opened["row_key"]], "values": {"内訳": "あとから"},
+            "original": {"内訳": row["内訳"]}})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "changed")
+        self.assertIn("内訳", res.get_json()["error"]["message"])
+        self.assertEqual(self.rows()[0][0], "先に直した", "先に直したぶんが消えた")
+
+    def test_別の列が直されていてもぶつからない(self) -> None:
+        """直した列だけを送るので、ほかの人が直した別の列はそのまま残る。"""
+        self.unlock()
+        opened = self.browse(file="transmission", table="作業停止時間内訳_1")
+        row = opened["page"]["rows"][0]
+        key = row[opened["row_key"]]
+        self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1", "key": key,
+            "values": {"内訳番号": "7"}, "original": {"内訳番号": row["内訳番号"]}})
+        res = self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1", "key": key,
+            "values": {"内訳": "休憩・食事"}, "original": {"内訳": row["内訳"]}})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.rows()[0], ("休憩・食事", "7"))
+
+    def test_開いたときの値が合えば書く(self) -> None:
+        self.unlock()
+        res = self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1",
+            "key": 1, "values": {"内訳": "休憩・食事"}, "original": {"内訳": "休憩食事"}})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self.rows()[0][0], "休憩・食事")
+
     def test_1行足す(self) -> None:
         self.unlock()
         res = self.post("/api/master/row/add", {

@@ -36,6 +36,8 @@ const WATCH_MS = 60000;
 const FRAME_MIN = 480;
 
 const $ = (id) => document.getElementById(id);
+// 打ちかけの控え(このタブの中だけ)。`gw:draft` と同じ作り
+const DRAFT_KEY = "vc:draft";
 
 export function start() {
   const signal = pageSignal();
@@ -146,9 +148,41 @@ export function start() {
     try {
       const body = await api.get("/api/vc/state");
       applyState(body.state);
+      restoreDraft();
     } catch (err) {
       toastError(err);
     }
+  }
+
+  /*
+    **打ちかけを、このタブの中だけ覚える**(v4.24.0。梱包資材の画面と同じ作り)。
+
+    ほかの画面を見て戻る・1分ごとの塗り直しで画面が作り直されると、選んだ
+    品種も打った肉厚も消えていました。業務の記録ではなく打ちかけの控えなので、
+    共有にもDBにも書かず、`sessionStorage` に置きます。計算の結果は覚えません
+    (戻ったら「計算」を押し直す ── 古い結果を出し続けないため)。
+  */
+  function saveDraft() {
+    try {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
+        selected, fields: fields(), computed: [...computed],
+      }));
+    } catch (err) { /* 覚えられないだけ */ }
+  }
+
+  function restoreDraft() {
+    let draft = null;
+    try { draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null"); } catch (err) { draft = null; }
+    if (!draft || !draft.fields) return;
+    // 品種がマスタから消えていたら、選んだことにはしない(欄の文字だけ戻す)
+    if (draft.selected && productOf(draft.selected)) selected = draft.selected;
+    computed = new Set((draft.computed || []).filter((n) => FIELDS.includes(n)));
+    for (const name of FIELDS) {
+      if (typeof draft.fields[name] === "string") input(name).value = draft.fields[name];
+    }
+    writeFields(null);
+    renderProducts();
+    renderInsides();
   }
 
   /** ほかの端末でマスタが直された。一覧だけ描き直し、打った内容は触らない。 */
@@ -403,6 +437,7 @@ export function start() {
   /** 欄を直した。計算で入った欄のうち、これを元にしていたものを消す(D1)。 */
   function changed(name) {
     computed.delete(name);                      // 手で直した欄は「手で入れた」扱い
+    queueMicrotask(saveDraft);                  // 打ちかけを控える(下の片付けのあと)
     for (const [target, sources] of Object.entries(SOURCES)) {
       if (computed.has(target) && sources.includes(name)) {
         input(target).value = "";
@@ -421,15 +456,25 @@ export function start() {
   // ==================================================================
   // 計算 ── 操作
   // ==================================================================
+  /*
+    **品種は最後に押したぶんだけ**(v4.24.0)。続けて2つ押すと、答えの着く順が
+    入れ替わることがあり、**先に押した品種の答えがあとから着いて**、画面は
+    あとの品種を選んだまま前の品種の欄で計算していました。押した回を数えます。
+  */
+  let pickSeq = 0;
+
   async function select(name) {
+    const mine = ++pickSeq;
     const sent = fields();
     try {
       const body = await api.post("/api/vc/select", { product: name, fields: sent });
+      if (mine !== pickSeq) return;      // あとから別の品種が押された
       selected = body.product;
       chosenInside = null;
       computed = new Set();
       result = null;                             // 品種を変えたら結果も消す(D2)
       writeFields(body.fields, sent);
+      saveDraft();
       showErrors({});
       $("vc-calc-error").hidden = true;
       applyState(body.state);
@@ -448,10 +493,12 @@ export function start() {
   }
 
   async function chooseInside(inside) {
+    const mine = ++pickSeq;
     const sent = fields();
     try {
       const body = await api.post("/api/vc/inside",
                                   { product: selected, inside, fields: sent });
+      if (mine !== pickSeq) return;      // あとから別の品種・内径が押された
       // 変わるのは内径の欄だけ(Big_Click / Small_Click)
       const before = input("inside").value;
       writeFields({ inside: body.fields.inside }, sent);
@@ -469,12 +516,15 @@ export function start() {
   async function run() {
     $("vc-calc-error").hidden = true;
     const sent = fields();
+    const mine = pickSeq;
     try {
       const body = await api.post("/api/vc/run", { product: selected, fields: sent });
+      if (mine !== pickSeq) return;      // 計算を待つあいだに品種・内径を選び直した
       result = body.result;
       const typed = typedSince(sent);
       computed = new Set(typed ? [] : result.computed);
       writeFields(body.fields, sent);
+      saveDraft();
       showErrors({});
       applyState(body.state);
       setStale(typed);
@@ -874,20 +924,24 @@ export function start() {
     const picked = $("vc-add-product").value;
     const isNew = picked === NEW_PRODUCT;
     const length = root.querySelector('input[name="vc-add-length"]:checked')?.value || "formula";
+    // 送った文字を控える。**返事を待つあいだに次のぶんを打ち始めていたら、
+    // そちらは消さない**(前は返事が来た時点の欄を全部空にしていた)
+    const ADD_IDS = ["vc-add-name", "vc-add-vcatu", "vc-add-vendor", "vc-add-insides",
+      "vc-add-thicknesses", "vc-add-block"];
+    const sent = Object.fromEntries(ADD_IDS.map((id) => [id, $(id).value]));
     const body = await send("/api/vc/quick-block", {
       product: isNew ? "" : picked,
-      new_product: isNew ? $("vc-add-name").value : "",
-      new_vcatu: isNew ? $("vc-add-vcatu").value : "",
-      new_vendor: isNew ? $("vc-add-vendor").value : "",
+      new_product: isNew ? sent["vc-add-name"] : "",
+      new_vcatu: isNew ? sent["vc-add-vcatu"] : "",
+      new_vendor: isNew ? sent["vc-add-vendor"] : "",
       length,
-      insides: $("vc-add-insides").value,
-      thicknesses: $("vc-add-thicknesses").value,
-      block: $("vc-add-block").value,
+      insides: sent["vc-add-insides"],
+      thicknesses: sent["vc-add-thicknesses"],
+      block: sent["vc-add-block"],
       tone: $("vc-add-tone").value,
     });
     if (!body) return;
-    for (const id of ["vc-add-name", "vc-add-vcatu", "vc-add-vendor", "vc-add-insides",
-      "vc-add-thicknesses", "vc-add-block"]) $(id).value = "";
+    for (const id of ADD_IDS) if ($(id).value === sent[id]) $(id).value = "";
     // 足した枠を「選んだ枠を直す」に選んでおく(続けて行を足す・消す)
     const added = gridBlocks[gridBlocks.length - 1];
     if (added) { $("vc-grid-block").value = added.name; fillGridHints(); }
@@ -991,11 +1045,14 @@ export function start() {
     const choice = $("vc-grid-length").value || "none";
     const length = !b || b.product ? "none"
       : choice.startsWith("product:") ? "product" : choice;
+    // 送った文字を控える(返事を待つあいだに打ち直したぶんは消さない)
+    const sentInsides = $("vc-grid-insides").value;
+    const sentThick = $("vc-grid-thicknesses").value;
     const body = await send("/api/vc/quick-grid", {
       block: $("vc-grid-block").value,
       // 空なら、いまの内径・肉厚のまま(空のマスに長さを入れるだけのとき)
-      insides: $("vc-grid-insides").value.trim() || (b ? b.insides.join(",") : ""),
-      thicknesses: $("vc-grid-thicknesses").value.trim()
+      insides: sentInsides.trim() || (b ? b.insides.join(",") : ""),
+      thicknesses: sentThick.trim()
         || (b ? b.thicknesses.join(",") : ""),
       length,
       product: choice.startsWith("product:") ? choice.slice("product:".length) : "",
@@ -1003,7 +1060,10 @@ export function start() {
       fill_empty: $("vc-grid-fill").checked,
       overwrite: $("vc-grid-overwrite").checked,
     });
-    if (body) { $("vc-grid-insides").value = ""; $("vc-grid-thicknesses").value = ""; }
+    if (body) {
+      if ($("vc-grid-insides").value === sentInsides) $("vc-grid-insides").value = "";
+      if ($("vc-grid-thicknesses").value === sentThick) $("vc-grid-thicknesses").value = "";
+    }
   }, { signal });
 
   $("vc-edit-source-save").addEventListener("click", async () => {
@@ -1101,8 +1161,34 @@ export function start() {
   }, { signal });
 
   // ---- 共通 ----
+  /*
+    **書いている最中はもう送らない**(v4.24.0)。マスタは共有の元のファイルで、
+    遅い日は返事まで数秒かかります。そのあいだの2度押しで、**同じ枠・同じ品種が
+    2回足されていました。** 押した瞬間に印を立て、書くボタンを止めます。
+  */
+  let sending = false;
+  const WRITE_BUTTONS = ["vc-add-make", "vc-grid-make", "vc-edit-source-save",
+                         "vc-edit-delete", "vc-del-product-go"];
+
+  function writeButtons(disabled) {
+    for (const id of WRITE_BUTTONS) {
+      const btn = $(id);
+      if (!btn) continue;
+      if (disabled) {
+        if (!btn.disabled) btn.dataset.sendLocked = "1";
+        btn.disabled = true;
+      } else if (btn.dataset.sendLocked) {
+        delete btn.dataset.sendLocked;
+        btn.disabled = false;
+      }
+    }
+  }
+
   /** 書く口へ送り、返ってきた早見表と枠の一覧を描き直す。断られたら理由を出す。 */
   async function send(url, payload) {
+    if (sending) return null;          // 返事を待っている(2度押し)
+    sending = true;
+    writeButtons(true);
     note("");
     try {
       const body = await api.post(url, { ...payload, password: $("vc-grid-password").value });
@@ -1119,6 +1205,9 @@ export function start() {
       note(err.message, "error");
       if (err.status === 403) $("vc-grid-password").focus();
       return null;
+    } finally {
+      sending = false;
+      writeButtons(false);
     }
   }
 

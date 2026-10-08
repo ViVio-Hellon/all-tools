@@ -48,10 +48,25 @@ function dims() {
   return out;
 }
 
-function fill(map) {
+/*
+  **打った回数**(v4.24.0)。寸法の欄に打つたびに1つ進め、その欄に覚えます
+  (`data-edit-at`)。ロットを引いているあいだに打った寸法は、引いた答えで
+  書き換えません(VC計算の `writeFields(values, sent)` と同じ考え)。
+
+      打った値が勝手に戻ることがありました
+
+  ── 幅を 999 に打ち直した直後に、打つ前に頼んだロットの答えが着いて、
+  幅が元の寸法へ戻っていました。
+*/
+let editSeq = 0;
+
+function fill(map, since = null) {
   for (const [name, value] of Object.entries(map)) {
     const el = document.querySelector(`[data-dim="${name}"]`);
-    if (el && value !== null && value !== undefined) el.value = value;
+    if (!el || value === null || value === undefined) continue;
+    // 頼んだあとに打った欄は、打った値のまま
+    if (since !== null && Number(el.dataset.editAt || 0) > since) continue;
+    el.value = value;
   }
 }
 
@@ -155,6 +170,15 @@ function paintGCourse(g) {
   }
 }
 
+/*
+  **答えは最後に頼んだロットのぶんだけ**(v4.24.0)。打ち間違えたロット(遅い)を
+  すぐ打ち直す(速い)と、**打ち間違えたほうの答えがあとから着いて**、欄には
+  直したロット番号が出たまま、別のロットの寸法・材質・オーダーが入って
+  いました。頼んだ回を数え、古い回の答えと、欄のロットが変わったあとの答えは捨てます。
+*/
+let lotSeq = 0;
+let orderSeq = 0;
+
 /** LotNo を離れたときに引く。**7桁そろってから**(打つ途中で読みに行かない)。 */
 async function lookupLot() {
   // **全角で打たれても引けるようにする。**
@@ -178,9 +202,15 @@ async function lookupLot() {
   }
   if (lotNo === lastLot) return;      // もう引いてある
   lastLot = lotNo;
+  const mine = ++lotSeq;
+  orderSeq += 1;                      // 前のロットのオーダーの答えも捨てる
+  const since = editSeq;
+  const current = () => val("lot-no").trim().normalize("NFKC").toUpperCase();
   state("search-state", "引いています…");
   try {
     const body = await api.post("/api/gw/lot", { lot_no: lotNo });
+    // 引いているあいだに別のロットを頼んだ・欄のロットを打ち直した
+    if (mine !== lotSeq || current() !== lotNo) return;
     state("search-state", "");
     if (!body.found) {
       lastLotInfo = null;
@@ -198,19 +228,21 @@ async function lookupLot() {
     // オーダーが決まらないうちは、いったん白紙に戻す。
     // 決まれば下の `applyOrder` が入れ直します
     if (!body.order) clearAuto();
-    // 寸法は**サーバが決めたもの**(Gコースなら BOX最終実績 ── v4.17.0)
+    // 寸法は**サーバが決めたもの**(Gコースなら BOX最終実績 ── v4.17.0)。
+    // 引いているあいだに打った寸法は、打った値のまま(`since`)
     fill({
       thickness_mm: body.size.thickness_mm,
       width_mm: body.size.width_mm,
       length_mm: body.size.length_mm,
-    });
+    }, since);
     paintGCourse(body.g_course);
     lastLotInfo = body.lot;
     showFacts(body.lot, body.order);
-    if (body.order) applyOrder(body.order, body.auto);
+    if (body.order) applyOrder(body.order, body.auto, since);
     saveDraft();
     toast(`ロット ${lotNo} を引きました`, "ok");
   } catch (err) {
+    if (mine !== lotSeq) return;      // 古い回の失敗は、いまのロットの話ではない
     state("search-state", "");
     lastLot = "";                     // 失敗したら、次はもう一度引かせる
     toastError(err);
@@ -221,24 +253,29 @@ async function lookupLot() {
 async function lookupOrder() {
   const orderNo = val("order-no").trim();
   if (!orderNo) return;
+  const mine = ++orderSeq;
+  const lotAtSend = lotSeq;
+  const since = editSeq;
   try {
     const body = await api.post("/api/gw/order", {
       order_no: orderNo,
       vertical_bands: document.querySelector('[data-dim="vertical_bands"]')?.value ?? "",
     });
+    // 選び直した・ロットを引き直した ── この答えはもう画面のものではない
+    if (mine !== orderSeq || lotAtSend !== lotSeq || val("order-no").trim() !== orderNo) return;
     if (!body.found) { note(body.message, "warn"); return; }
     note("");
     showFacts(lastLotInfo, body.order);
-    applyOrder(body.order, body.auto);
+    applyOrder(body.order, body.auto, since);
     saveDraft();
     toast(`オーダー ${orderNo} を反映しました`, "ok");
-  } catch (err) { toastError(err); }
+  } catch (err) { if (mine === orderSeq) toastError(err); }
 }
 
-function applyOrder(order, auto) {
+function applyOrder(order, auto, since = null) {
   const spec = byId("pack-spec");
   if (spec) spec.value = order.pack_spec_no || "";
-  applyAuto(auto);
+  applyAuto(auto, since);
 }
 
 /*
@@ -290,7 +327,7 @@ function clearAuto() {
   markDecided([]);
 }
 
-function applyAuto(auto) {
+function applyAuto(auto, since = null) {
   if (!auto) { clearAuto(); return; }
   const check = (id, value) => {
     const el = byId(id);
@@ -313,7 +350,7 @@ function applyAuto(auto) {
   const band = byId("band-kind");
   if (band && auto.band_kind) band.value = auto.band_kind;
   if (auto.vertical_bands !== null && auto.vertical_bands !== undefined) {
-    fill({ vertical_bands: auto.vertical_bands });
+    fill({ vertical_bands: auto.vertical_bands }, since);
     syncAngle();
   }
 
@@ -793,10 +830,19 @@ async function showFigure() {
   card.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+/*
+  **結果は最後に押した計算のぶんだけ**(v4.24.0)。続けて押す・下書きを入れ
+  直した計算と押した計算が重なると、古い入力の結果があとから着いて、画面の
+  入力と食い違う結果(と、その結果の紙)が出ていました。
+*/
+let calcSeq = 0;
+
 async function calculate() {
+  const mine = ++calcSeq;
   state("calc-state", "計算しています…");
   try {
     const body = await api.post("/api/gw/calculate", payload());
+    if (mine !== calcSeq) return;     // あとから押した計算がある
     showProblems([]);
     showResult(body);
     perPack = body.per_pack;
@@ -809,6 +855,7 @@ async function calculate() {
     saveDraft();
     toast(body.message || "計算しました", "ok");
   } catch (err) {
+    if (mine !== calcSeq) return;
     state("calc-state", "");
     showResult(null);
     byId("per-pack").hidden = true;
@@ -836,9 +883,10 @@ async function calculate() {
 /* ---------------------------------------------------------------- */
 const DRAFT_KEY = "gw:draft";
 // 覚える欄(寸法・資材のチェックは data 属性で拾う)
+// 梱包数(紙)と1梱包ごとの表の行数も(v4.24.0 ── 戻ってくると1に戻っていた)
 const DRAFT_IDS = ["lot-no", "band-kind", "stack-pattern", "pack-spec", "use-vc",
                    "vc-a", "vc-b", "vc-name-a", "vc-name-b", "input-weight",
-                   "use-combined", "combined-load"];
+                   "use-combined", "combined-load", "print-packs", "per-pack-rows"];
 // 画面が配られたときの姿(クリアで戻す先)
 let pristine = null;
 let restoring = false;
@@ -996,7 +1044,10 @@ function wireSpins() {
 }
 
 export function start() {
-  // 前の画面のぶんは持ち越さない
+  // 前の画面のぶんは持ち越さない。**前の画面で頼んだ答えも、この画面には塗らない**
+  lotSeq += 1;
+  orderSeq += 1;
+  calcSeq += 1;
   perPack = null;
   breakdownText = "";
   lastLot = "";
@@ -1023,6 +1074,10 @@ export function start() {
   for (const [, el] of draftFields()) {
     el.addEventListener("input", saveDraft);
     el.addEventListener("change", saveDraft);
+  }
+  // 寸法に打ったら数える(引いた答えで、打った寸法を戻さない ── `fill`)
+  for (const el of document.querySelectorAll("[data-dim]")) {
+    el.addEventListener("input", () => { el.dataset.editAt = String(++editSeq); });
   }
   byId("order-no")?.addEventListener("change", saveDraft);
   byId("clear-inputs")?.addEventListener("click", clearInputs);

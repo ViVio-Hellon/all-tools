@@ -141,7 +141,8 @@ class KnownCasesTests(unittest.TestCase):
     def test_共有へ保存したら設定画面を塗り直す(self) -> None:
         text = self.source("views/settings.js")
         head = text.index('api.post("/api/settings/push"')
-        self.assertIn("refresh()", text[head:head + 900])
+        # 打ちかけの置き場所を持ち越す塗り直し(`refreshKeeping`、v4.24.0)
+        self.assertIn("refreshKeeping()", text[head:head + 900])
 
     def test_前の直を引き継いだら塗り直す(self) -> None:
         text = self.source("views/entry.js")

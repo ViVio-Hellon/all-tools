@@ -51,6 +51,7 @@ STATUS = {
     master_admin.REFUSE_NO_FILE: 404,
     master_admin.REFUSE_NO_TABLE: 404,
     master_admin.REFUSE_NO_ROW: 409,
+    master_admin.REFUSE_CHANGED: 409,
     master_admin.REFUSE_WRITE_FAILED: 422,
 }
 
@@ -108,11 +109,17 @@ def unlock():
 
 @bp.post("/api/master/row/save")
 def save_row():
-    """1行を書き換える。`{"file":…, "table":…, "key":…, "values":{…}}`"""
+    """1行を書き換える。`{"file":…, "table":…, "key":…, "values":{…}, "original":{…}}`
+
+    `original` は画面が行を開いたときの値(直した列のぶん)。書く直前の行と
+    違えば 409 で断ります(`master_admin.save_row`)。
+    """
     body = request.get_json(silent=True) or {}
+    original = body.get("original")
     return _run(body, lambda: master_admin.save_row(
         _file(body), _table(body), body.get("key"), _values(body),
-        unlocked=_unlocked()))
+        unlocked=_unlocked(),
+        original=original if isinstance(original, dict) else None))
 
 
 @bp.post("/api/master/row/add")

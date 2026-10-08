@@ -14,7 +14,7 @@ import { api, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
-import { beforeLeave, pageSignal, refresh } from "../nav.js";
+import { beforeLeave, onSaved, pageSignal, refresh } from "../nav.js";
 import { paintRibbon, showShiftMoved } from "../ribbon.js";
 import { playKey } from "../sound.js";
 // 開閉と焦点の戻しは1か所に置く(作業者選択・全停入力と同じ作り)
@@ -27,7 +27,23 @@ import { confirmPush, watch as watchJob } from "../progress.js";
 // 欄から離れてから送るまでの間合い(ms)。連続入力の途中で送らない
 const SETTLE_MS = 120;
 
-let settleTimer = null;
+/*
+  **欄ごとの間合い**(v4.24.0)。前は画面に1つだけで、ロット番号の7桁目を
+  打った瞬間や次の欄から離れた瞬間に、**別の欄の「決まる値を決める」や
+  ロット引きを取り消していました** ── 取り消された欄の値は、次に誰かが
+  送るまでサーバに届きません。欄(と種類)ごとに持ちます。
+*/
+const settleTimers = new Map();
+
+function later(key, fn) {
+  clearTimeout(settleTimers.get(key));
+  settleTimers.set(key, setTimeout(() => { settleTimers.delete(key); fn(); }, SETTLE_MS));
+}
+
+function stopTimers() {
+  for (const timer of settleTimers.values()) clearTimeout(timer);
+  settleTimers.clear();
+}
 
 /* ================================================================
    写した印 ── **誰が入れた開始時刻か**
@@ -63,10 +79,58 @@ let carriedSheet = "";
   ときに頼んだ答えが返って「1」へ戻っていた(打った値が黙って消える)。
 */
 let editSeq = 0;
-function touched(el) { el.dataset.editAt = String(++editSeq); }
-// どこまで書けたか(書けたときの `editSeq`)。これより後に打ったものが打ちかけ
-let savedSeq = 0;
-const unsaved = () => editSeq > savedSeq;
+function touched(el) { if (el) el.dataset.editAt = String(++editSeq); }
+
+/*
+  **打ちかけがあるかは、中身で見る**(v4.24.0)。
+
+  前は「打った回数」と「書けた回数」を比べていました。打った(`input`)ときしか
+  数えないので、**✕ で行を空にした・ダブルクリックで時刻を入れた・etc の印を
+  押した・理由を書いた・昼稼働を付けた・上の行と同じ・作業者を選んだ**は、
+  どれも「打っていない」扱いでした ── 移る前に置かれず、黙って消えていました
+  (打った値が勝手に戻ることがありました)。ほかにも同じ処理をしている箇所が
+  あると思われるので、数えるのをやめて、**最後に書けた中身と、いまの中身を
+  比べます。** 欄を書き換える道が増えても、ここは直さずに済みます。
+*/
+let lastSavedSnap = "";
+
+/** 画面の中身(写した印・画面のキーは含めない ── 打った値だけ)。 */
+function snap() {
+  const { rows, header, checks, day_shift: dayShift } = collect();
+  return JSON.stringify({ rows, header, checks, dayShift });
+}
+
+const unsaved = () => snap() !== lastSavedSnap;
+
+/** いまの中身を「書いたもの」にする。済んだ操作のあと、移る前に呼ぶ(`nav.markSaved`)。 */
+function markSaved() { lastSavedSnap = snap(); }
+
+/**
+ * 書けた応答のあと。**送ったあとに誰も触っていなければ**、塗り終えた画面が
+ * そのまま書いた中身です(サーバは決めた値ごと書いて、同じものを返す)。
+ * 触っていれば、送った中身までが書けたもの。
+ *
+ * `typed` は**塗る前に**見ておく(塗ると、塗った欄も「動いた」に数えるので)。
+ */
+function noteSaved(sentSnap, typed) {
+  lastSavedSnap = typed ? sentSnap : snap();
+}
+
+/*
+  **描いた回数**(v4.24.0)。画面を引き直す(`start()`)たびに1つ進めます。
+
+  モジュールは画面を引き直しても読み直されないので、前の画面で出した要求の
+  答えが、**引き直したあとの新しい画面へ塗られていました**(前のページの12行が
+  新しいページに出て、自動保存がそれを書く)。答えが返ったときに、頼んだときの
+  回と違えば捨てます。画面を出るときは要求そのものも取り消します(`pageSignal`)。
+*/
+let gen = 0;
+const live = (mine) => mine === gen;
+
+/** 画面の中身を送る要求。**画面を出たら取り消す**(`api.post` の `signal`)。 */
+function send(path, data, options = {}) {
+  return api.post(path, data, { ...options, signal: pageSignal() });
+}
 
 /*
   **保存は1本ずつ、送る瞬間の中身で。**
@@ -161,8 +225,7 @@ function maybeLookup(el) {
   }
   if (lastLookedUp.get(row) === value) return false;
   lastLookedUp.set(row, value);
-  clearTimeout(settleTimer);
-  settleTimer = setTimeout(() => lookupLot(row), SETTLE_MS);
+  later(`lot:${row}`, () => lookupLot(row));
   return true;
 }
 
@@ -433,12 +496,16 @@ function paintFilled(filled) {
 async function copyAbove(input) {
   const row = Number(input.dataset.row);
   if (!row || input.readOnly || input.disabled) return;
+  const mine = gen;
   try {
-    const body = await api.post("/api/entry/state", {
+    const since = editSeq;
+    const body = await send("/api/entry/state", {
       ...collect(), row, changed: "MAI", copy_above: { row },
     });
-    // 焦点のある欄も書き換える(いまダブルクリックした欄そのものなので)
-    paint(body, { forceRow: row });
+    if (!live(mine)) return;            // 引き直したあとの画面へは塗らない
+    // 焦点のある欄も書き換える(いまダブルクリックした欄そのものなので)。
+    // **頼んだあとに打った欄は別**(`since`)
+    paint(body, { forceRow: row, since });
     const copied = body.copied;
     if (copied?.ok) {
       flash(row, Object.keys(copied.values || {}));
@@ -450,7 +517,7 @@ async function copyAbove(input) {
   } catch (err) {
     toastError(err);
   }
-  maybeAutosave();
+  if (live(mine)) maybeAutosave();
 }
 
 /* ---- 「直の終わり」── 終了の時/分に入っているあいだ、そのすぐ下に出す ---- */
@@ -485,11 +552,14 @@ function hideEndChip() {
 
 async function stampShiftEnd(row) {
   if (!row) return;
+  const mine = gen;
   try {
-    const body = await api.post("/api/entry/state", {
+    const since = editSeq;
+    const body = await send("/api/entry/state", {
       ...collect(), row, changed: "SH", stamp: { row, which: "shift_end" },
     });
-    paint(body, { forceRow: row });
+    if (!live(mine)) return;
+    paint(body, { forceRow: row, since });
     if (body.stamp && !body.stamp.ok && body.stamp.message) {
       toast(body.stamp.message, "warn");
     } else if (body.stamp?.ok) {
@@ -499,7 +569,7 @@ async function stampShiftEnd(row) {
   } catch (err) {
     toastError(err);
   }
-  maybeAutosave();
+  if (live(mine)) maybeAutosave();
 }
 
 /** 画面の入力内容をひとまとめにする。サーバへはこの形で送る。 */
@@ -542,10 +612,16 @@ function collect() {
 function openedKey() {
   const el = document.getElementById("sheet-key");
   if (!el) return null;
+  const loaded = Number(el.dataset.tabLoaded);
   return {
     report_date: el.dataset.openedDate || "",
     shift: el.dataset.openedShift || "",
     page: Number(el.dataset.openedPage || 1),
+    // **ラインとページまで名乗る**(v4.24.0)。書き先がこの画面のページと違えば、
+    // サーバは書きません(`entry.screen_mismatch`)。描いた時刻は、全停入力の
+    // ように画面の外から同じページが書き直されたあとの古い画面を見分けるため
+    line: el.dataset.openedLine || "",
+    ...(Number.isFinite(loaded) && loaded > 0 ? { loaded } : {}),
   };
 }
 
@@ -559,6 +635,9 @@ function openedKey() {
  */
 function paint(view, { forceRow = 0, since = null } = {}) {
   if (!view) return;
+  // **画面のページと書き先が違う、の断りには画面が付いていない**(v4.24.0)。
+  // 塗ると、見るだけ・作業者の関門まで「無い」扱いで外れます
+  if (view.page_moved && !view.rows) return;
   // **別の紙になったら、写した印は捨てる。** 行番号は紙ごとの番号です
   const sheet = `${view.report_date || ""}|${view.line || ""}|`
               + `${view.shift || ""}|${view.page || ""}`;
@@ -572,6 +651,8 @@ function paint(view, { forceRow = 0, since = null } = {}) {
     carried.clear();
     for (const row of view.carried) carried.add(Number(row));
   }
+  // 頼んだあとに打った(書き換わった)欄は書き換えない(返ってきたのは打つ前の値の答え)
+  const newer = (el) => since !== null && Number(el.dataset.editAt || 0) > since;
   for (const el of inputs()) {
     const next = view.rows?.[el.dataset.row]?.[el.dataset.family];
     if (next === undefined || next === el.value) continue;
@@ -581,14 +662,26 @@ function paint(view, { forceRow = 0, since = null } = {}) {
     const typing = el === document.activeElement;
     if (typing && Number(el.dataset.row) !== forceRow) continue;
     el.value = next;
+    // **書き換えたことも「その欄が動いた」に数える。** これより前に頼んだ答えが
+    // あとから着いても、いま入れた値を古い値へ戻さない(ロットで引いた材が、
+    // 引く前に頼んだ答えで空へ戻っていた)
+    touched(el);
   }
+  // 作業者などの上の欄・チェックも同じ決まり(前は焦点のある欄しか守らず、
+  // 打ち終えて離れた直後に着いた古い答えで戻っていた)
   for (const el of document.querySelectorAll("[data-header]")) {
     const next = view.header?.[el.dataset.header];
-    if (next !== undefined && el !== document.activeElement) el.value = next;
+    if (next === undefined || next === el.value) continue;
+    if (el === document.activeElement || newer(el)) continue;
+    el.value = next;
+    touched(el);
   }
   for (const el of document.querySelectorAll("[data-check]")) {
     const next = view.checks?.[el.dataset.check];
-    if (next !== undefined) el.checked = next;
+    if (next === undefined || next === el.checked) continue;
+    if (newer(el)) continue;
+    el.checked = next;
+    touched(el);
   }
   paintStopSums();
   const lead = document.getElementById("page-lead");
@@ -604,7 +697,7 @@ function paint(view, { forceRow = 0, since = null } = {}) {
   paintFlow(view.flow);
   paintPrevShift(view.prev_shift);
   paintReadOnly(view);
-  paintReason(view);
+  paintReason(view, since);
   paintMarks(view.marks);
   paintGMarks(view.g_marks);
   paintLot(view.lot);
@@ -1055,20 +1148,30 @@ let reasonAsked = "";
  * **どの行に欄が要るかを決めるのはサーバ**(`presenters/entry.
  * reason_entries`)です。ここは受け取った並びをそのまま写します。
  */
-function paintReason(view) {
+function paintReason(view, since = null) {
   const host = document.getElementById("reason-rows");
   const entries = view.reason_entries;
   if (!host || entries === undefined) return;
 
   const typing = document.activeElement;
   const keep = typing && typing.dataset && typing.dataset.reason;
+  // 頼んだあとに書いた理由(`since` より後に動いた欄)
+  const newer = (input) => Boolean(input) && since !== null
+    && Number(input.dataset.editAt || 0) > since;
 
   // いま打っている欄は作り直さない(カーソルが飛ぶ)
   const have = new Map([...host.querySelectorAll("[data-reason-row]")]
     .map((el) => [el.dataset.reasonRow, el]));
   const wanted = new Set(entries.map((e) => String(e.row)));
   for (const [row, el] of have) {
-    if (!wanted.has(row)) el.remove();
+    if (wanted.has(row)) continue;
+    // **書いてある理由の欄は消さない**(v4.24.0)。打っている最中・頼んだあとに
+    // 書いたものは、答えが「要らない」と言っても消すと戻せません。次の答えで
+    // 要らないままなら、そのとき消えます(空の欄はすぐ消す)
+    const input = el.querySelector("input");
+    if (input && String(input.value || "").trim()
+        && (input === typing || newer(input) || since === null)) continue;
+    el.remove();
   }
 
   for (const entry of entries) {
@@ -1088,6 +1191,8 @@ function paintReason(view) {
       input.size = 44;
       input.placeholder = "例: 棚卸し準備、点検表の差し替え";
       input.addEventListener("blur", () => settle());
+      // **書いたら数える**(打ちかけの見張り・遅れて着いた答えから守る)
+      input.addEventListener("input", () => touched(input));
       box.append(label, input);
       // 行の順に差し込む(並べ替えではなく、入れる場所を選ぶ)
       const after = [...host.querySelectorAll("[data-reason-row]")]
@@ -1095,8 +1200,9 @@ function paintReason(view) {
       host.insertBefore(box, after || null);
     }
     const input = box.querySelector("input");
-    if (input && input !== keep && input.value !== entry.text) {
+    if (input && input !== keep && input.value !== entry.text && !newer(input)) {
       input.value = entry.text;
+      touched(input);
     }
     if (entry.empty) box.dataset.empty = "1"; else delete box.dataset.empty;
     let lot = box.querySelector(".lead");
@@ -1412,10 +1518,13 @@ function askAllocation(lot) {
 
 /** ロット番号でサーバに引かせる。`hiki_no` を添えるとその引当で埋める。 */
 async function lookupLot(row, hikiNo = "") {
+  const mine = gen;
   try {
     const since = editSeq;
-    const body = await api.post("/api/entry/lot",
-                                { ...collect(), row, hiki_no: hikiNo });
+    const body = await send("/api/entry/lot",
+                            { ...collect(), row, hiki_no: hikiNo });
+    // **引き直したあとの画面へは塗らない**(前のページの行が新しいページに出る)
+    if (!live(mine)) return;
     // **その行は焦点があっても書き換える。** LOT を離れた指は次の欄に
     // 移っているので、守ると材・調質だけが入らない(引いているあいだに
     // 打った欄だけは、打った値のまま)
@@ -1427,10 +1536,11 @@ async function lookupLot(row, hikiNo = "") {
 
 /** 欄から離れたときに、決まる値を決めてもらう。 */
 async function settle(row, changed = "") {
+  const mine = gen;
   try {
     const since = editSeq;
-    const body = await api.post("/api/entry/state",
-                                { ...collect(), row, changed });
+    const body = await send("/api/entry/state", { ...collect(), row, changed });
+    if (!live(mine)) return;            // 引き直したあとの画面へは塗らない
     paint(body, { since });
     // **重量を計算し直してよいか聞く。**
     //
@@ -1443,7 +1553,7 @@ async function settle(row, changed = "") {
   } catch (err) {
     toastError(err);
   }
-  maybeAutosave();
+  if (live(mine)) maybeAutosave();
 }
 
 /**
@@ -1477,13 +1587,17 @@ async function stampTime(input) {
   if (!which || !row || input.readOnly || input.disabled) return;
   // **人が入れた値**として扱う(ツールが写した開始時刻の印は落とす)
   if (which === "start") forgetCarried(row);
+  const mine = gen;
   try {
-    const body = await api.post("/api/entry/state", {
+    const since = editSeq;
+    const body = await send("/api/entry/state", {
       ...collect(), row, changed: which === "start" ? "KH" : "SH",
       stamp: { row, which },
     });
-    // 焦点のある欄も書き換える(いまダブルクリックした欄そのものなので)
-    paint(body, { forceRow: row });
+    if (!live(mine)) return;
+    // 焦点のある欄も書き換える(いまダブルクリックした欄そのものなので)。
+    // **頼んだあとに打った欄は別**(`since`)
+    paint(body, { forceRow: row, since });
     if (body.stamp && !body.stamp.ok && body.stamp.message) {
       toast(body.stamp.message, "warn");
     }
@@ -1491,7 +1605,7 @@ async function stampTime(input) {
   } catch (err) {
     toastError(err);
   }
-  maybeAutosave();
+  if (live(mine)) maybeAutosave();
 }
 
 /*
@@ -1550,6 +1664,8 @@ async function clearRow(row) {
   for (const el of tr.querySelectorAll("[data-family]")) {
     if (el.disabled || el.readOnly) continue;
     el.value = "";
+    // **人が消した欄。** 前に頼んだ答えが遅れて着いても、消す前の値へ戻さない
+    touched(el);
   }
   // 空にした行は、写した値も含めて無くなった
   forgetCarried(row);
@@ -1560,10 +1676,14 @@ async function clearRow(row) {
 /** 「重量を変更しますか？」。**はい**なら、その行だけ計算し直す。 */
 async function askWeight(ask) {
   if (!confirm(ask.message)) return;      // いいえ ── 入っている値のまま
+  const mine = gen;
   try {
-    paint(await api.post("/api/entry/state",
-                         { ...collect(), row: ask.row,
-                           redo_weight: [ask.row] }));
+    const since = editSeq;
+    const body = await send("/api/entry/state",
+                            { ...collect(), row: ask.row, redo_weight: [ask.row] });
+    if (!live(mine)) return;
+    // 聞いているあいだ・頼んだあとに打った欄は、打った値のまま(`since`)
+    paint(body, { since });
     toast(`${ask.row}行目の重量を ${ask.next} にしました`, "ok");
   } catch (err) {
     toastError(err);
@@ -1587,15 +1707,25 @@ async function maybeAutosave() {
   // 本当に断られた回が読めなくなります
   if (!tabLock.mayEdit()) return;
   const note = document.getElementById("save-note");
+  const mine = gen;
   try {
     // `mute`: 断られても「断られた」の音にしない(押していない場面で驚かせない ──
     // 下のトーストと同じ理由)
     let since = 0;
+    let sent = "";
     const body = await inOrder(() => {
+      // 順番が来たときに画面が引き直されていたら送らない(新しい画面の中身を
+      // 前の画面の自動保存として送らない)
+      if (!live(mine)) return { saved: false, skipped: "" };
       since = editSeq;
+      sent = snap();
       return api.post("/api/entry/save", { ...collect(), silent: true }, { mute: true });
     });
-    if (body.saved) savedSeq = Math.max(savedSeq, since);
+    if (!live(mine)) return;
+    if (body.saved) noteSaved(sent, editSeq !== since);
+    // **画面のページと書き先が違う。** 書いていません(`screen_mismatch`)。
+    // 黙っていると、打ち続けた行がどこにも入らないまま進みます
+    if (body.page_moved) { showPageMoved(body.page_moved); return; }
     // **見送られた理由が「直が変わった」なら、帯にも出す。** 1分ごとの
     // 見張りが拾うより先に分かるので、待たせない
     const moved = body.shift_changed;
@@ -1687,6 +1817,9 @@ async function openFinding(at) {
           shift: at.shift, page: at.page || 1,
         });
     toast(body.message, "ok");
+    // 書き先が替わった。**置いた中身を「書いたもの」にしてから移る**(閉じる
+    // 間際の送信が、前のページの中身を開いた先へ送らないように)
+    markSaved();
     location.href = body.next || "/";
   } catch (err) { toastError(err); }
 }
@@ -1816,34 +1949,47 @@ function paintShiftFindings(standing) {
   書けていないのに移ると打ちかけが消えます。
 */
 async function saveNow(shiftChoice = "") {
+  const mine = gen;
+  let since = 0;
   try {
     // 確定保存には `silent` を付けない。**間引きの対象外**で、
     // 押したときは必ず書く(サーバが判断するのは自動保存だけ)
-    let since = 0;
+    let sent = "";
     const body = await inOrder(() => {
       since = editSeq;
+      sent = snap();
       const payload = collect();
       if (shiftChoice) payload.shift_choice = shiftChoice;
       return api.post("/api/entry/save", payload);
     });
-    if (body.saved) savedSeq = Math.max(savedSeq, since);
-    paint(body);
+    if (!live(mine)) return Boolean(body.saved);
+    const typed = editSeq !== since;
+    // **保存を待つあいだに打った欄は、打った値のまま**(`since`)。前は応答で
+    // 画面ぜんぶを塗り直していて、押してから打った1文字が消えていました
+    paint(body, { since });
+    if (body.saved) noteSaved(sent, typed);
     // 書けたのだから、帯の知らせはもう役目を終えている
     if (body.saved) showShiftMoved("");
     showExport(body.export);
     return Boolean(body.saved);
   } catch (err) {
+    if (!live(mine)) return false;
     if (err.status === 409 && err.body?.shift_changed?.crossed) {
       // **断りではなく、聞き返し。** トーストは出さない ── 数秒で
       // 消えるものに「どちらへ入れるか」を任せられない
-      if (err.body) paint({ ...err.body, message: "" });
+      if (err.body) paint({ ...err.body, message: "" }, { since });
       showShiftMoved(err.body.shift_changed.message);
-      askShift(err.body.shift_changed);
+      return askShift(err.body.shift_changed);
+    }
+    // **画面のページと書き先が違う**(409 `page_moved`)。書いていません。
+    // 画面ぜんぶは付いてこないので塗らない
+    if (err.body?.page_moved) {
+      showPageMoved(err.body.page_moved);
       return false;
     }
     // 422(LOT重複)は画面ぜんぶも返ってくる。断られた画面が
-    // 古いままにならないよう、そちらも写す
-    if (err.body) paint({ ...err.body, message: "" });
+    // 古いままにならないよう、そちらも写す(待つあいだに打った欄は残す)
+    if (err.body) paint({ ...err.body, message: "" }, { since });
     // 保存前チェックで断られたときは、**「この直をチェック」と同じ場所へ**。
     // トーストは数秒で消えるので、7項目の断りをそこだけに載せると、
     // 目を離した隙に「なぜ保存できないのか」が画面から消えます
@@ -1870,20 +2016,58 @@ async function saveNow(shiftChoice = "") {
  * まだあります ── そのときは移りません)。
  */
 async function saveDraft() {
+  return (await placeDraft()).ok;
+}
+
+/**
+ * 打ちかけを置いて、**どうなったか**を返す(`saveDraft` の中身)。
+ *
+ *     ok      … 置けた(または置くまでもない ── 空の紙)
+ *     crossed … 直が変わっていて見送られた。**置けていません**(どちらへ入れるかを訊く)
+ *     moved   … 画面のページと書き先が違って見送られた。**置けていません**
+ *
+ * 前は「見送られた(skipped)」をまとめて「置けた」と読んでいたので、直の
+ * 変わり目に読み直しを押すと、打ちかけがどこにも置かれないまま消えていました。
+ */
+async function placeDraft(shiftChoice = "") {
+  const mine = gen;
+  let since = 0;
   try {
-    let since = 0;
+    let sent = "";
     const body = await inOrder(() => {
       since = editSeq;
-      return api.post("/api/entry/save", { ...collect(), draft: true });
+      sent = snap();
+      const payload = { ...collect(), draft: true };
+      // 直の変わり目で選ばれた答え(`askShift`)。打ちかけのまま、選んだ直へ置く
+      if (shiftChoice) payload.shift_choice = shiftChoice;
+      return api.post("/api/entry/save", payload);
     });
-    if (body.saved || body.skipped) savedSeq = Math.max(savedSeq, since);
-    paint({ ...body, message: "" });
+    if (!live(mine)) return { ok: Boolean(body.saved) };
+    if (body.page_moved) {
+      showPageMoved(body.page_moved);
+      return { ok: false, moved: body.page_moved };
+    }
+    if (body.shift_changed?.crossed) {
+      paint({ ...body, message: "" }, { since });
+      // 置けなかった理由を帯に出す(移る・読み直す前なら、このあと訊きます)
+      showShiftMoved(body.shift_changed.message);
+      return { ok: false, crossed: body.shift_changed };
+    }
     // **打っていない紙は「書けなかった」ではありません。**
     // サーバは1行も打っていない紙を作りません(空の紙を残さないため)。
     // ここを「保存できなかった」と読むと、移る手前で止まります
-    return Boolean(body.saved) || Boolean(body.skipped);
+    const ok = Boolean(body.saved) || Boolean(body.skipped);
+    const typed = editSeq !== since;
+    paint({ ...body, message: "" }, { since });
+    if (ok) noteSaved(sent, typed);
+    return { ok };
   } catch (err) {
-    if (err.body) paint({ ...err.body, message: "" });
+    if (!live(mine)) return { ok: false };
+    if (err.body?.page_moved) {
+      showPageMoved(err.body.page_moved);
+      return { ok: false, moved: err.body.page_moved };
+    }
+    if (err.body) paint({ ...err.body, message: "" }, { since });
     // **空の紙は、失いようがない。**
     //
     //     直してほしいといいつつないから直せないんですが
@@ -1892,22 +2076,53 @@ async function saveDraft() {
     // その保存が「まだ1行も打っていません」で断られると、開くほうまで
     // 黙って止まっていました ── 開いたばかりの画面は空なので、
     // **直しに行こうとするときほど**止まります
-    if (err.code === "empty_sheet") { savedSeq = Math.max(savedSeq, editSeq); return true; }
+    if (err.code === "empty_sheet") { markSaved(); return { ok: true }; }
     toastError(err);
-    return false;
+    return { ok: false };
   }
 }
 
-/** どちらの直へ入れるかを訊く。**選ばれるまで1行も書かれていない。** */
-function askShift(moved) {
+/**
+ * 画面のページと書き先が違う(`screen_mismatch`)。**書いていません。**
+ *
+ * トーストは数秒で消えるので、保存の並びの一言にも残します。画面を引き直す
+ * までは、この画面の保存はどれも同じ断りになります。
+ */
+function showPageMoved(found) {
+  const text = found?.message || "画面のページと書き先が違うので保存しませんでした";
+  toast(text, "warn");
+  const note = document.getElementById("save-note");
+  if (note) {
+    note.textContent = "画面のページと書き先が違うので保存しませんでした ── 画面を読み直してください";
+    note.dataset.state = "failed";
+  }
+}
+
+/**
+ * どちらの直へ入れるかを訊く。**選ばれるまで1行も書かれていない。**
+ *
+ * 書けたかどうかで解ける約束を返します(選ばずに閉じたら false)── 移る前・
+ * 読み直す前の保存がこれを待ちます(v4.24.0。待たずに移ると、選ぶ前に
+ * 打ちかけが画面ごと消えていました)。
+ */
+function askShift(moved, { draft = false } = {}) {
   const why = document.getElementById("shift-modal-why");
   const box = document.getElementById("shift-modal-choices");
-  if (!why || !box) {
+  const modal = document.getElementById("shift-modal");
+  if (!why || !box || !modal) {
     // 置き場所が無い画面。**黙って諦めない** ── 選べないままだと
     // 保存できないので、せめて理由は出す
     toast(moved.message, "warn");
-    return;
+    return Promise.resolve(false);
   }
+  let answer = () => {};
+  const done = new Promise((resolve) => { answer = resolve; });
+  // 選ばずに閉じた(✕・Esc・背景)。**閉じ方は modals.js が持つ**ので、窓が
+  // 隠れたことで見る
+  const watch = new MutationObserver(() => {
+    if (modal.hidden && !picking) { watch.disconnect(); answer(false); }
+  });
+  let picking = false;
   why.textContent = moved.message;
   box.replaceChildren();
   for (const choice of moved.choices || []) {
@@ -1920,13 +2135,18 @@ function askShift(moved) {
     const note = document.createElement("small");
     note.textContent = choice.note || "";
     row.append(head, note);
-    row.addEventListener("click", () => {
+    row.addEventListener("click", async () => {
+      picking = true;
+      watch.disconnect();
       closeModal("shift-modal");
-      saveNow(choice.value);
+      // 移る前の保存なら打ちかけのまま置く(確定の関門は通さない)
+      answer(draft ? (await placeDraft(choice.value)).ok : await saveNow(choice.value));
     });
     box.appendChild(row);
   }
   openModal("shift-modal");
+  watch.observe(modal, { attributes: true, attributeFilter: ["hidden"] });
+  return done;
 }
 
 /*
@@ -1939,7 +2159,10 @@ function askShift(moved) {
 async function backToCurrent() {
   try {
     const body = await api.post("/api/settings/back", collect());
-    toast(body.message, "ok");
+    toast(body.message, body.page_moved ? "warn" : "ok");
+    // **書けたもの(か、書けない紙)として移る。** 閉じる間際の送信が、直していた
+    // ページの中身を、戻った先の最新のページへ書いていました
+    markSaved();
     location.href = body.next || "/";
   } catch (err) { toastError(err); }
 }
@@ -1952,13 +2175,25 @@ async function backToCurrent() {
  */
 async function keepTyped() {
   if (!unsaved() || !tabLock.mayEdit()) return true;
-  if (await saveDraft()) return true;
+  const placed = await placeDraft();
+  if (placed.ok) return true;
+  // **直が変わっていた。** どちらへ入れるかを訊いてから移る(訊かずに移ると、
+  // 打ちかけはどこにも置かれずに消えます)
+  if (placed.crossed && await askShift(placed.crossed, { draft: true })) return true;
+  if (placed.moved) {
+    return confirm(`${placed.moved.message || "画面のページと書き先が違います。"}\n\n`
+                   + "このまま続けると、この画面の打ちかけは消えます。続けますか?");
+  }
   return confirm("打ちかけの行を保存できませんでした。\n"
                  + "このまま続けると、保存していない行は消えます。続けますか?");
 }
 
 export function start() {
+  // **新しい画面の回。** これより前に出した要求の答えは、この画面へ塗らない
+  gen += 1;
   beforeLeave(keepTyped);
+  // 済んだ操作(全停入力・帯の ✕ など、ほかの部品)のあとに「書いたもの」にする口
+  onSaved(markSaved);
   // 作業停止①〜⑤の切り替え(見出しの ①〜⑤・行の「停止」の欄)
   document.addEventListener("click", (ev) => {
     const to = ev.target.closest?.("[data-stop-to]");
@@ -1986,9 +2221,16 @@ export function start() {
       const el = ev.target;
       if (el && el.matches
           && el.matches("[data-row][data-family], [data-header], [data-check]")) touched(el);
+      // 理由の欄・昼稼働も同じ(前は数えておらず、書いても「打っていない」扱い)
+      else if (el && el.matches && el.matches("[data-reason], #hd-day-shift")) touched(el);
     }, { capture: true, signal: pageSignal() });
   }
   // 閉じる・読み直す(F5)。返事は待てないので、置くだけ送る
+  //
+  // **送る中身には、この画面がどのページか(と描いた時刻)が入っています**
+  // (`collect().opened`)。書き先がもう別のページなら、サーバは書きません
+  // (`screen_mismatch`)── 次ページ発行・戻る・全停のあとの送信が、古い
+  // ページの中身を新しい書き先へ書いていました
   window.addEventListener("pagehide", () => {
     if (unsaved() && tabLock.mayEdit()) {
       api.beacon("/api/entry/save", { ...collect(), draft: true });
@@ -2016,7 +2258,10 @@ export function start() {
     "handover-blocked", handoverBox?.dataset.blocked === "1");
 
   // 前の画面のぶんが残っていることがある(ES モジュールは読み直されない)
-  clearTimeout(settleTimer);
+  stopTimers();
+  // 「最後に引いたロット」も紙ごと(前のページの同じ行と同じ番号を打つと、
+  // 引かないまま材・調質が空で残っていた)
+  lastLookedUp.clear();
   askingRow = 0;
   lastProblem = "";
   // いま描かれている状態を出発点にする。`null` のままだと、最初の応答で
@@ -2064,7 +2309,6 @@ export function start() {
       paintMarks(lastMarks);
     });
     el.addEventListener("blur", () => {
-      clearTimeout(settleTimer);
       // ロット番号は、**打ち終わった時点**で `maybeLookup` がもう引いて
       // います。離れたときは、まだ引いていないぶんだけ引く(貼り付けの
       // 直後に離れた場合など)。同じ番号を二度引かないのは向こうの仕事
@@ -2072,16 +2316,14 @@ export function start() {
         // 打ち終わった時点で `maybeLookup` がもう引いています。まだ
         // 引いていないぶん(貼り付けた直後に離れた等)だけここで引く
         if (!maybeLookup(el)) {
-          settleTimer = setTimeout(() => settle(Number(el.dataset.row)),
-                                   SETTLE_MS);
+          later(`settle:${el.id}`, () => settle(Number(el.dataset.row)));
         }
         return;
       }
       // **どの欄を直したかを添える。** 重量を計算し直してよいか聞くのは
       // 個装単位 枚数・梱包単位 包数 を直したときだけなので(サーバの
       // `calculations.weight_needs_asking`)、欄の名前が要る
-      settleTimer = setTimeout(
-        () => settle(Number(el.dataset.row), el.dataset.family), SETTLE_MS);
+      later(`settle:${el.id}`, () => settle(Number(el.dataset.row), el.dataset.family));
     });
     // 選ぶ欄(合紙・停止理由の記号)は、選んだ時点で決まる ── 離れるのを
     // 待つと、選んだのに合計が動かない時間ができる
@@ -2112,9 +2354,14 @@ export function start() {
       // (`paintMarks` に、押せなくしていた頃の話を書いてあります)
       markRow = rowForMarks();
       paintMarks(lastMarks);
+      const mine = gen;
       try {
-        paint(await api.post("/api/entry/mark",
-                             { ...collect(), row: markRow, key: btn.dataset.mark }));
+        const since = editSeq;
+        const body = await send("/api/entry/mark",
+                                { ...collect(), row: markRow, key: btn.dataset.mark });
+        if (!live(mine)) return;
+        // 印を待つあいだに打った欄は、打った値のまま(`since`)
+        paint(body, { since });
       } catch (err) { toastError(err); }
     });
   }
@@ -2137,6 +2384,7 @@ export function start() {
     const field = row && document.getElementById(`reason-${row}`);
     if (field && text) {
       field.value = text.value.trim();
+      touched(field);
       settle();
     }
     closeModal("reason-modal");
@@ -2145,14 +2393,20 @@ export function start() {
   // 最初に描かれている欄にも配線する(以後は `paintReason` が付ける)
   for (const el of document.querySelectorAll("[data-reason]")) {
     el.addEventListener("blur", () => settle());
+    el.addEventListener("input", () => touched(el));
   }
 
   // ---- チェックボックスの排他制御 ----
   for (const el of document.querySelectorAll("[data-check]")) {
     el.addEventListener("change", async () => {
+      const mine = gen;
       try {
-        paint(await api.post("/api/entry/check",
-                             { ...collect(), name: el.dataset.check }));
+        // 押したこのチェックも答えに従う(排他)。頼んだあとに触ったものだけ残す
+        const since = editSeq;
+        const body = await send("/api/entry/check",
+                                { ...collect(), name: el.dataset.check });
+        if (!live(mine)) return;
+        paint(body, { since });
       } catch (err) { toastError(err); }
     });
   }
@@ -2281,9 +2535,12 @@ export function start() {
       あるので、いまの値を1度送って決め直してもらいます(決めるのはサーバ)。
     */
     let guide = null;
+    const mine = gen;
     try {
-      const fresh = await api.post("/api/entry/state", collect());
-      paint(fresh);
+      const since = editSeq;
+      const fresh = await send("/api/entry/state", collect());
+      if (!live(mine)) return;
+      paint(fresh, { since });
       guide = fresh.page_guide;
     } catch (err) {
       toastError(err);
@@ -2305,23 +2562,29 @@ export function start() {
       はいと言われたら `confirm` を添えて同じ道へ投げ直す。**止めるのでは
       なく、確かめるだけ**なので、断り方は用意しない。
     */
-    const send = (extra = {}) =>
+    const issue = (extra = {}) =>
       api.post("/api/entry/newpage", { ...collect(), ...extra });
     try {
       let body;
       try {
         // 上で聞いたぶんは「はい」をもらってある
-        body = await send({ confirm: true });
+        body = await issue({ confirm: true });
       } catch (err) {
         if (!err.body?.needs_confirm) throw err;
         if (!confirm(err.message)) return;
-        body = await send({ confirm: true });
+        body = await issue({ confirm: true });
       }
       toast(body.message, "ok");
+      // **送った12行は、いまのページとして書けています。** 書けたものとして
+      // から引き直す ── 前は「まだ保存していない」と思ったまま引き直したので、
+      // 移る前の保存が第1ページの12行を、出したばかりの空の第2ページへ
+      // 書いていました(打った行が消えることがありました)
+      markSaved();
       // ページが変わったので画面ごと引き直す(空の12行が返ってくる)
       refresh();
     } catch (err) {
-      if (err.body) paint({ ...err.body, message: "" });
+      if (!live(mine)) return;
+      if (err.body) paint({ ...err.body, message: "" }, { since: editSeq });
       // 発行も**確定の入口**なので、断りは「この直をチェック」と
       // 同じ場所へ。トーストだけだと、消えたあとに理由が残りません
       if (err.body?.check_findings?.length) {
@@ -2369,6 +2632,8 @@ export function start() {
       }
       const body = await api.post("/api/settings/page", { page: wanted });
       toast(body.message, "ok");
+      // 置いた中身は書けている。**書き先が替わったので、もう送らない**
+      markSaved();
       refresh();
     } catch (err) {
       // 戻せないと、選んだページと出ている中身が食い違ったままになる
@@ -2418,6 +2683,7 @@ export function start() {
       if (!await saveDraft()) return;
       const body = await api.post("/api/settings/page", { page: wanted });
       toast(body.message, "ok");
+      markSaved();
       refresh();
     } catch (err) {
       toastError(err);
@@ -2474,6 +2740,14 @@ export function start() {
   async function pushShared(skip = "") {
     if (!(await confirmPush())) return;
     const note = document.getElementById("save-note");
+    // **送るのは DB の中身なので、打ちかけを先に置く**(v4.24.0)。前は画面に
+    // しか無い行(自動保存の前に打った行)を置かずに送り、共有には1つ前の
+    // 中身が出ていました。置けなければ送りません
+    if (unsaved() && tabLock.mayEdit() && !(await saveDraft())) {
+      toast("打ちかけの行を保存できなかったので、共有へは送りませんでした。"
+            + "先に「保存(確定)」を押してください", "warn");
+      return;
+    }
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");
     try {
@@ -2672,20 +2946,26 @@ export function start() {
     次に座った人は何を押せばよいのか分かりません。
   */
   document.getElementById("start-next-shift")?.addEventListener("click", async () => {
+    // 打ちかけがあれば先に置く(置けずに「やめる」なら進まない)
+    if (!(await keepTyped())) return;
     try {
       const body = await api.post("/api/entry/start-next", {});
       toast(body.message, "ok");
-      // 開く紙が変わるので、値の入った古い画面を残せません
+      // 開く紙が変わるので、値の入った古い画面を残せません。**書いたものと
+      // してから移る**(閉じる間際の送信が、古い紙の中身を新しい直へ送らない)
+      markSaved();
       location.href = body.next || "/";
     } catch (err) { toastError(err); }
   });
 
   document.getElementById("read-only-back")?.addEventListener("click", async () => {
+    if (!(await keepTyped())) return;
     try {
       const body = await api.post("/api/settings/back", {});
       toast(body.message || "いまの直に戻りました", "ok");
       // **画面ごと引き直す。** 開く紙が変わるので、値の入った古い画面を
-      // 残せません
+      // 残せません(書いたものとしてから ── 閉じる間際の送信を出さない)
+      markSaved();
       location.href = "/";
     } catch (err) {
       toastError(err);
@@ -2701,7 +2981,9 @@ export function start() {
     }
   });
 
+  // **描かれたままの中身が出発点**(サーバが描いた = 書いてある中身)
+  markSaved();
+
   // 画面を出るときにタイマーを止める(`nav.js` が合図をくれる)
-  pageSignal().addEventListener("abort", () => clearTimeout(settleTimer),
-                                { once: true });
+  pageSignal().addEventListener("abort", stopTimers, { once: true });
 }

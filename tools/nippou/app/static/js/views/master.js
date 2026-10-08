@@ -75,21 +75,32 @@ function note(text, kind = "info") {
 }
 
 /** サーバから、まるごとの状態を引き直す。 */
+/*
+  **一覧は最後に頼んだぶんだけ描く**(v4.24.0)。絞り込みは打つたびに引き直す
+  ので、答えの着く順が入れ替わると、**打ち終えた絞り込みより前の一覧**が
+  あとから描かれ、その一覧の行を直すことになっていました(別の行の値で窓が
+  開く)。頼んだ回を数え、古い回の答えは捨てます。
+*/
+let loadSeq = 0;
+
 async function load(over = {}) {
+  const mine = ++loadSeq;
   const file = over.file ?? (state?.file || "");
   const table = over.table ?? (over.file ? "" : (state?.table || ""));
   const query = over.q ?? val("tbl-q");
   const sort = over.sort ?? (state?.page?.sort || "");
   const dir = over.sort_dir ?? (state?.page?.sort_dir || "asc");
   try {
-    paint(await api.get(
+    const body = await api.get(
       "/api/master/browse"
       + `?file=${encodeURIComponent(file)}`
       + `&table=${encodeURIComponent(table)}`
       + `&q=${encodeURIComponent(query)}`
       + `&sort=${encodeURIComponent(sort)}`
-      + `&sort_dir=${encodeURIComponent(dir)}`));
-  } catch (err) { toastError(err); }
+      + `&sort_dir=${encodeURIComponent(dir)}`);
+    if (mine !== loadSeq) return;      // あとから頼んだ一覧がある
+    paint(body);
+  } catch (err) { if (mine === loadSeq) toastError(err); }
 }
 
 /** 書いたあとの応答。**まるごと返ってくる**ので、そのまま写す。 */
@@ -402,12 +413,53 @@ function paintShiftTimes(rows) {
   }
 }
 
+/*
+  **押したら、返事が来るまでもう押せない**(v4.24.0)。
+
+  書く先は共有の元のファイルで、遅い日は返事まで数秒かかります。そのあいだに
+  もう1度押す(ダブルクリック)と、**同じ行が2行足されていました。** 押した
+  瞬間に印を立ててボタンも止め、返事が来たら戻します(待機の姿を出すのは
+  250ms 後なので、それより前の2度目はそちらでは止まりません)。
+*/
+let writing = false;
+
+function rowButtons(disabled) {
+  for (const id of ["row-save", "row-delete"]) {
+    const btn = byId(id);
+    if (btn) btn.disabled = disabled;
+  }
+}
+
+/**
+ * 直した列だけと、その列の**開いたときの値**(v4.24.0)。
+ *
+ * 前は1行ぶんをまるごと送っていたので、開いているあいだにほかの端末が別の
+ * 列を直していても、開いたときの古い値で書き戻していました。直した列だけを
+ * 送り、開いたときの値を添えます ── サーバは書く直前の行と比べ、同じ列が
+ * ほかで直されていれば断ります(409)。
+ */
+function changedValues(row) {
+  const values = {};
+  const original = {};
+  for (const [col, value] of Object.entries(rowValues())) {
+    const before = row[col] ?? "";
+    if (value === before) continue;
+    values[col] = value;
+    original[col] = before;
+  }
+  return { values, original };
+}
+
 async function writeRow(url, extra) {
+  if (writing) return;               // 返事を待っている(2度押し)
+  writing = true;
+  rowButtons(true);
   // **進み具合を出す**([1/2] 元のファイルに書く → [2/2] 読み直す)。
   // 書く先は共有の元のファイルなので、遅い日は待たされる(`progress.js`)
   const stop = watchJob("マスタに書いています");
   try {
     const body = await api.post(url, rowBody(extra));
+    loadSeq += 1;                      // 書く前に頼んだ一覧で、書いたあとの一覧を塗らない
     paint(body);
     paintShiftTimes(body.shift_times);
     closeModal("row-modal");
@@ -418,6 +470,8 @@ async function writeRow(url, extra) {
     rowError(err.body?.error?.message || err.message);
   } finally {
     stop();
+    writing = false;
+    rowButtons(false);
   }
 }
 
@@ -508,10 +562,16 @@ export function start() {
   onLeave(() => clearTimeout(findTimer));
 
   byId("tbl-add")?.addEventListener("click", () => openRow(null));
+  writing = false;
   byId("row-save")?.addEventListener("click", () => {
     if (editing) {
+      const { values, original } = changedValues(editing);
+      if (!Object.keys(values).length) {
+        rowError("変えたところがありません。");
+        return;
+      }
       writeRow("/api/master/row/save",
-               { key: editing[state.row_key], values: rowValues() });
+               { key: editing[state.row_key], values, original });
     } else {
       writeRow("/api/master/row/add", { values: rowValues() });
     }

@@ -261,7 +261,8 @@ class LeftOverMaterialTests(WebTestCase):
     def test_受注が決まらなければ白紙に戻す(self) -> None:
         """**ここが本体。** `if (!auto) return;` では残ります。"""
         text = self.source()
-        head = text[text.index("function applyAuto(auto)"):][:120]
+        # 引数に `since`(引いているあいだに打った寸法を守る ── v4.24.0)が付いても同じ
+        head = text[text.index("function applyAuto(auto"):][:140]
         self.assertIn("clearAuto()", head,
                       "受注が無いときに前の選択が残ります")
 

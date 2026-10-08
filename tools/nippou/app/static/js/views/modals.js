@@ -11,7 +11,7 @@
 
 import { api } from "../api.js";
 import { toast, toastError } from "../toast.js";
-import { pageSignal } from "../nav.js";
+import { leaving, markSaved, pageSignal } from "../nav.js";
 
 /* ---------------------------------------------------------------- */
 /* モーダルの開閉                                                     */
@@ -270,6 +270,14 @@ export function start() {
     if (!picked) { toast("停止理由を選んでください", "warn"); return; }
     // **取り返しがつかない操作なので確かめる。** 新しいページとして保存される
     if (!confirm(`「${picked}」で全停入力します。よろしいですか?`)) return;
+    /*
+      **打ちかけを先に置く**(v4.24.0)。全停は、空のページがあればそこへ書きます
+      (`_all_stop_target_page`)。打ちかけが画面にしか無いと、DB の上では
+      そのページは空なので、**全停の行がいま打っているページに書かれ、閉じる
+      間際の送信がその上へ打ちかけ(空の行)を書いていました。** 先に置けば
+      全停は次のページへ入ります。置けずに「やめる」を選ばれたら全停もしない
+    */
+    if (!(await leaving())) return;
     try {
       const body = await api.post("/api/formstop/execute", {
         reason: picked, code: pickedCode,
@@ -281,6 +289,9 @@ export function start() {
       });
       toast(body.message, "ok");
       close("formstop-modal");
+      // 全停のページはサーバが書いた。**この画面の中身はもう送らない**
+      // (サーバも、全停のあとに描いた画面からしか、そのページへは書かせない)
+      markSaved();
       location.href = body.next || "/";
     } catch (err) {
       // **断られた先を出してやる。** 「すでに全停入力があります(第1
@@ -319,9 +330,12 @@ function showAllStopStuck(message, page) {
   btn.className = "btn btn--sm";
   btn.textContent = `第${page}ページを開く`;
   btn.addEventListener("click", async () => {
+    // 移る前に打ちかけを置く(ページを替えると、ここの中身は書き先を失う)
+    if (!(await leaving())) return;
     try {
       const body = await api.post("/api/settings/page", { page });
       toast(body.message, "ok");
+      markSaved();
       location.href = body.next || "/";
     } catch (err) { toastError(err); }
   });

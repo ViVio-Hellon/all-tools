@@ -129,20 +129,36 @@ function wireShell() {
 function wireRibbonChips(box) {
   if (!once(box)) return;
   ribbon.wireChips(box, {
+    /*
+      **閉じる前に、直していたぶんを置く**(v4.24.0)。
+
+      ここは `/api/settings/back` へ空のまま送っていたので、サーバは何も保存
+      せずに呼び出しを解いていました ──「閉じる前に、開いていたぶんは保存
+      されます」と言いながら、直した値は消え、しかも閉じる間際の送信が
+      **直していたページの中身を、戻った先の最新のページへ**書いていました。
+      先に日報入力の打ちかけを置き(`nav.leaving()`)、済んだら「書いたもの」に
+      してから移ります(`nav.markSaved()`)。
+    */
     back: async (asked = "") => {
       if (!confirm(asked || ("過去データを閉じて、いまの直の入力に戻ります。"
                    + "\n(閉じる前に、開いていたぶんは保存されます)"))) return;
+      if (!(await nav.leaving())) return;
       try {
         const body = await api.post("/api/settings/back", {});
         toast(body.message || "作業に戻りました", "ok");
+        nav.markSaved();
         location.href = "/";
       } catch (err) { toastError(err); }
     },
+    // 管理者モードを終える前にも置く。**外れたあとでは、呼び出した過去の直へは
+    // 書けません**(見るだけになる)── 直した値が読み直しで消えていました
     adminOff: async () => {
       if (!confirm("管理者モードを終わります。よろしいですか?")) return;
+      if (!(await nav.leaving())) return;
       try {
         await api.post("/api/settings/admin", { enable: false });
         toast("管理者モードを終わりました", "ok");
+        nav.markSaved();
         location.reload();
       } catch (err) { toastError(err); }
     },
@@ -236,6 +252,10 @@ wireShell();
   打ちかけを置いて(置けなければ閉じてよいかを訊いて)「済んだ」を返します。
   頼んでくるのは、この画面を埋め込んでいる親だけ(`window.parent`)。
 */
+// **外枠に「この画面は閉じる前の頼みに自分で答えます」と名乗る**(ほかのツールと
+// 同じ決まり)。名乗らないと、外枠の受け皿(`embed.js`)も同じ頼みに答えて、
+// 2重に訊きます
+window.__alltoolsHandlesClose = true;
 window.addEventListener("message", async (event) => {
   const data = event.data;
   if (event.source !== window.parent || window.parent === window) return;
@@ -247,6 +267,14 @@ window.addEventListener("message", async (event) => {
   reply("alltools:before-close-ack");
   let ok = true;
   try { ok = await nav.leaving(); } catch (err) { ok = true; }
+  // 日報入力のほか(VC計算・梱包資材・設定)は、出る前の確かめを持ちません。
+  // **名乗った以上、外枠の受け皿はもう訊かない**ので、打った欄があればここで訊く
+  try {
+    if (ok && !nav.guarded() && nav.typedHere()) {
+      ok = confirm("保存していない入力があります。閉じますか?\n\n"
+                   + "(閉じると、この画面で打った値は消えます)");
+    }
+  } catch (err) { /* 訊けなければ閉じてよい */ }
   reply("alltools:before-close-done", { ok });
 });
 

@@ -142,6 +142,29 @@ class BackupServiceTests(unittest.TestCase):
         with lb.reader("L-1") as backup:
             self.assertEqual(mai_of(backup, key), "12")          # 控えはそのまま
 
+    def test_画面で打っている最中のページは戻さない(self) -> None:
+        """v4.24.0: 開いて打っているページの中身を、画面の知らないうちに入れ替えない。
+
+        控えの「新しい」は各PCの時計で決まるので、時計の進んだPCの古い中身でも
+        戻ってしまう。打っているあいだは戻さず待ちに残し、離れてから揃える。
+        """
+        key = save(self.a, mai="10")
+        self.a.queue_backup([key])
+        save(self.b, mai="10")
+        lb.flush(self.b)
+        time.sleep(1.1)
+        self.b.save(*_edited(self.b, key, "12"))
+        lb.flush(self.b)
+        lb.note_editing(key)                         # A の画面がこのページを打っている
+        result = lb.flush(self.a, force=True)
+        self.assertEqual(result.pulled, 0, "打っている最中のページを入れ替えた")
+        self.assertEqual(mai_of(self.a, key), "10")
+        self.assertEqual(self.a.backup_pending(), [key], "待ちから落ちた(あとで揃わない)")
+        # 離れたら(しばらく書かなければ)、新しいほうに揃う
+        with patch.object(lb, "EDITING_HOLD_SEC", 0.0):
+            self.assertEqual(lb.flush(self.a, force=True).pulled, 1)
+        self.assertEqual(mai_of(self.a, key), "12")
+
     def test_起動のとき_控えにだけある直を戻し_手元にだけある直を写す(self) -> None:
         theirs = save(self.b, shift="2直")
         lb.flush(self.b)

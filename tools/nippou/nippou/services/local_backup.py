@@ -66,6 +66,34 @@ RETRY_AFTER_SEC = 60.0
 _flush_lock = threading.Lock()
 _retry_at = 0.0
 
+#: **この端末の画面でいま打っているページ**と、最後に書いた時刻(v4.24.0)。
+#:
+#: 写すときに「控えのほうが新しい」ページを手元へ戻しますが、それが**画面に
+#: 開いて打っている最中のページ**だと、画面の知らないうちに中身が入れ替わり、
+#: 次の自動保存が戻した中身を(または戻した中身を画面が)黙って上書きします。
+#: 打っているあいだはそのページを戻さず、写す待ちに残します(離れたあとの
+#: 写しで、新しいほうに揃います)。
+#:
+#: 「新しい」は**各PCの時計**で決めています(`saved_at`)。別のPCの時計が進んで
+#: いると、古い中身が新しく見えます ── ここで守れるのは画面に開いている
+#: ページだけで、ほかのページは時計がずれていれば取り違えます(ログに残します)。
+EDITING_HOLD_SEC = 600.0
+_editing: Optional[tuple[PageKey, float]] = None
+
+
+def note_editing(key: PageKey) -> None:
+    """画面がこのページを打っている(保存した)。`flush` はしばらく戻さない。"""
+    global _editing
+    _editing = (tuple(key), time.monotonic())
+
+
+def editing() -> Optional[PageKey]:
+    """いま打っているページ(最後に書いてから `EDITING_HOLD_SEC` のあいだ)。"""
+    if _editing is None:
+        return None
+    key, at = _editing
+    return key if time.monotonic() - at < EDITING_HOLD_SEC else None
+
 
 def _safe(line: str) -> str:
     from ..access_bridge.pusher import safe_line_name
@@ -249,6 +277,7 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
         for key in pending:
             by_line.setdefault(key[1], []).append(key)
         pulled: set[ShiftKey] = set()
+        open_now = editing()
         for line, keys in by_line.items():
             try:
                 dst = _open_write(path_for(line))
@@ -263,6 +292,14 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
                         mine, theirs = _stamp(repo.conn, key), _stamp(dst, key)
                         # 手元に無い = このPCで消した(待ちに入れたのは消したとき)。
                         # **新しさを比べるのは両方にあるときだけ**
+                        if mine is not None and _newer(theirs, mine) and key == open_now:
+                            # **画面で打っている最中のページは戻さない**(待ちに残す)
+                            log.warning("控えのほうが新しいページですが、この画面で打って"
+                                        "いる最中なので戻しません(離れたあとに揃えます。"
+                                        "別のPCの時計がずれていると、古い中身が新しく見える"
+                                        "ことがあります) key=%s 控え=%s 手元=%s",
+                                        key, theirs, mine)
+                            continue
                         if mine is not None and _newer(theirs, mine):
                             # 控えのほうが新しい(別のPCで直された)── 上書きせず、手元へ戻す
                             with repo.conn:
@@ -311,8 +348,9 @@ def flush_soon() -> None:
 
 def reset() -> None:
     """届かなかった記憶を忘れる(テスト用)。"""
-    global _retry_at
+    global _retry_at, _editing
     _retry_at = 0.0
+    _editing = None
 
 
 # ----------------------------------------------------------------------

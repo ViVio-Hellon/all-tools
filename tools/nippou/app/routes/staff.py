@@ -311,6 +311,11 @@ def execute():
         log.exception("全停入力の保存に失敗しました")
         return jsonify(error_body("save_failed", f"保存に失敗しました: {exc}")), 500
 
+    # **画面の12行を通さずに書いた。** このあと古い画面から届く打ちかけ(閉じる
+    # 間際の送信など)が、全停の行を空の行で上書きしないように(v4.24.0)
+    from .entry import note_written_aside
+
+    note_written_aside((report_date, ctx.line, shift, next_page))
     log.info("all stop executed shift=%s line=%s reason=%s page=%s",
              shift, ctx.line, label, next_page)
     return jsonify({

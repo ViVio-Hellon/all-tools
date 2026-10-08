@@ -51,5 +51,8 @@ export function toast(text, kind = "info") {
  * ような食い違いが起きる。
  */
 export function toastError(err) {
+  // 画面を出たので取り消した通信(`api.post` の `signal`)。**失敗ではない** ──
+  // 出すと、移った先の画面に前の画面の「失敗しました」が出ます
+  if (err && err.name === "AbortError") return;
   toast(err?.message || "処理に失敗しました", "error");
 }

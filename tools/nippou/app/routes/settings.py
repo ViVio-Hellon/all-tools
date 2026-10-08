@@ -331,12 +331,22 @@ def back_to_current():
     service = build_service(ctx, calc)
 
     saved = False
+    moved = None
     if ctx.recall.active:
         # 呼び出し元(画面)が持っている値をそのまま保存する。無ければ
         # DBにあるものがそのまま残るだけなので、保存はしない
         payload = request.get_json(silent=True) or {}
         if payload.get("rows"):
-            saved = _save_recalled(ctx, calc, payload)
+            # **呼び出している紙と、画面に出ている紙が同じときだけ**(v4.24.0)。
+            # 違う紙の中身を呼び出した紙へ書くと、打った行が別のページへ
+            # 入ります(`entry.screen_mismatch`)。戻ること自体は止めません
+            from .entry import screen_mismatch
+            moved = screen_mismatch(ctx, calc, payload)
+            if moved:
+                log.warning("画面のページと呼び出した紙が違うので、戻る前の保存を"
+                            "しませんでした %s → %s", moved["opened"], moved["target"])
+            else:
+                saved = _save_recalled(ctx, calc, payload)
 
     # **この端末のラインへ戻る。** 他ラインの紙を呼び出していると、
     # ここまで `ctx.line` はそのラインのまま ── 戻さないと、いまの直に
@@ -346,10 +356,13 @@ def back_to_current():
         datetime.now(), ctx.force_day_shift())
     service.back_to_current(current_date, current_shift, ctx.line)
     log_button_click("back_to_current")
-    return jsonify({
-        "message": ("直した内容を保存して、いまの直に戻りました" if saved
-                    else "いまの直に戻りました"),
-        "saved": saved, "next": "/"})
+    message = ("直した内容を保存して、いまの直に戻りました" if saved
+               else "いまの直に戻りました")
+    if moved:
+        message = ("いまの直に戻りました。画面のページと呼び出した紙が違ったので、"
+                   "画面の中身は保存していません")
+    return jsonify({"message": message, "saved": saved, "next": "/",
+                    "page_moved": moved})
 
 
 def _block_if_recall(action_name: str):

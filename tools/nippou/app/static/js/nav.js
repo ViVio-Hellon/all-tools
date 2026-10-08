@@ -74,6 +74,63 @@ export async function leaving() {
   try { return Boolean(await guard()); } catch (err) { return true; }
 }
 
+/*
+  **人が打った欄**(v4.24.0)。1分ごとの見張りは、画面を引き直したり確認画面へ
+  連れて行ったりします。出る前の確かめを持たない画面(VC計算・梱包資材・設定)
+  では、打ちかけの値が黙って消えていました。人が打った(`isTrusted`)欄のうち、
+  画面を描いたときの値と違うものが残っていれば「打ちかけがある」と見ます。
+*/
+let typed = [];
+
+function remember(event) {
+  const el = event.target;
+  if (!event.isTrusted || !el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || "")) return;
+  if (!el.closest || !el.closest("main#main")) return;
+  if (!typed.includes(el)) typed.push(el);
+}
+
+function differs(el) {
+  if (el.disabled || el.readOnly) return false;
+  if (el.tagName === "SELECT") {
+    return [...el.options].some((o) => o.selected !== o.defaultSelected);
+  }
+  if (/^(checkbox|radio)$/i.test(el.type || "")) return el.checked !== el.defaultChecked;
+  if (/^(hidden|button|submit|reset|file|password)$/i.test(el.type || "")) return false;
+  return String(el.value || "") !== String(el.defaultValue || "");
+}
+
+/** この画面に、人が打って描いたときから変わった欄が残っているか。 */
+export function typedHere() {
+  typed = typed.filter((el) => el.isConnected);
+  return typed.some(differs);
+}
+
+/** 出る前の確かめを持っている画面か(日報入力)。持っていれば塗り直しても打ちかけは置かれる */
+export function guarded() {
+  return Boolean(guard);
+}
+
+/*
+  **書き終えた、と画面に言う**(v4.24.0)。
+
+  次ページ発行・最新のページに戻る・全停入力・帯の「✕」は、押した時点で
+  サーバがページを書いて(または書き先を替えて)から、画面を引き直します。
+  引き直す前に「まだ保存していない」と思ったままだと、移る前の保存・閉じる
+  間際の送信が**古いページの中身を新しい書き先へ**送っていました
+  (「打った行が消えることがありました」)。済んだ操作のあとはここを呼んで、
+  画面の中身を「書いたもの」にしてから移ります。
+*/
+let saved = null;
+export function onSaved(fn) {
+  saved = fn;
+  page.signal.addEventListener("abort", () => { if (saved === fn) saved = null; },
+                               { once: true });
+}
+
+export function markSaved() {
+  try { saved?.(); } catch (err) { /* 印が付かなくても、サーバは古い送信を断る */ }
+}
+
 /** この場所を差し替えで開けるか。開けないものは普通の遷移に任せる。 */
 function internal(url) {
   return url.origin === location.origin
@@ -159,6 +216,7 @@ export async function go(href, push = true) {
   // ここから先は差し替え。**前の画面のタイマーと listener を先に切る**
   page.abort();
   page = new AbortController();
+  typed = [];
 
   if (push) history.pushState({ nav: 1 }, "", landed);
   here = push ? landed : location.href;
@@ -324,6 +382,8 @@ export function start(hooks = {}) {
   if (!window.history || !window.DOMParser) return;
   if (hooks.onSwap) afterSwap = hooks.onSwap;
   document.addEventListener("click", onClick);
+  document.addEventListener("input", remember, true);
+  document.addEventListener("change", remember, true);
   // 戻る/進む。履歴に積んだのはこちらなので、同じ道で戻す
   window.addEventListener("popstate", () => {
     markRail(location.pathname);

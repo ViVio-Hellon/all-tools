@@ -49,7 +49,7 @@
 
 import { background } from "./api.js";
 import { markStale } from "./asof.js";
-import { refresh } from "./nav.js";
+import { go, guarded, leaving, refresh, typedHere } from "./nav.js";
 import { paintRibbon, showShiftMoved } from "./ribbon.js";
 import { toast } from "./toast.js";
 
@@ -172,7 +172,17 @@ function refreshUnlessTyping() {
   const here = document.activeElement;
   const tag = (here && here.tagName) || "";
   if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+  // **焦点が外れていても、打ちかけは残っています**(v4.24.0)。日報入力は出る前に
+  // 置いてから引き直します(`nav.guarded`)が、ほかの画面(VC計算・梱包資材・
+  // 設定)にはその確かめが無く、1分ごとの塗り直しで打った値が消えていました。
+  // 打ちかけがあれば塗り直しません(次に開いたときに新しくなる)
+  if (!savesTyped() && typedHere()) return;
   refresh();
+}
+
+/** 出る前に打ちかけを**置いてくれる**画面か(日報入力)。設定の確かめは訊くだけなので、1分ごとに訊かせない */
+function savesTyped() {
+  return guarded() && Boolean(document.getElementById("grid-body"));
 }
 
 //: 連れて行かない画面。**設定・管理者は「直す場所」**です
@@ -188,6 +198,16 @@ function refreshUnlessTyping() {
 // 待たせても困りません。設定を閉じて入力へ戻れば、そこで出ます。
 const KEEP_HERE = ["/settings"];
 
+/*
+  **連れて行く前に、打ちかけを置く**(v4.24.0)。
+
+  前は `location.href` で飛ばしていたので、どの画面にいても、1分ごとに
+  打ちかけごと連れ去られていました(日報入力の打ちかけも、出る前の確かめを
+  通らない)。日報入力は確かめ(置いてから出る)を通して移り、確かめを持た
+  ない画面で打ちかけがあれば、**連れて行かずに帯で知らせます。**
+*/
+let reviewNoted = "";
+
 /** 実績の確認画面を出すべきか訊いて、そうなら連れて行く。 */
 async function reviewCheck() {
   // すでに確認画面に居るなら何もしない(自分自身へ飛ばさない)
@@ -195,7 +215,18 @@ async function reviewCheck() {
   if (KEEP_HERE.some((path) => location.pathname.startsWith(path))) return;
   try {
     const body = await background.get("/api/graph/review");
-    if (body.due) location.href = REVIEW_URL;
+    if (!body.due) { reviewNoted = ""; return; }
+    if (!savesTyped() && typedHere()) {
+      // 知らせるのは画面ごとに1度(1分ごとに出すと、打つ手が止まる)
+      if (reviewNoted !== location.pathname) {
+        reviewNoted = location.pathname;
+        toast("直の実績の確認があります。打っている値を保存してから、"
+              + "「グラフ」の確認画面を開いてください", "warn");
+      }
+      return;
+    }
+    // 移る前の確かめ(日報入力なら打ちかけを置く)は `go` の中で通ります
+    await go(REVIEW_URL);
   } catch (err) {
     // 同上
   }
@@ -210,8 +241,13 @@ async function tick() {
 }
 
 export function startShiftEndWatch() {
+  // **読み直す前に、打ちかけを置く**(v4.24.0)。直が変わっているので、置くときに
+  // 「どちらの直へ入れるか」を訊きます(訊かずに読み直すと、閉じる間際の送信は
+  // 直の変わり目で見送られ、打ちかけがどこにも入らずに消えていました)
   document.getElementById("shift-moved-reload")
-    ?.addEventListener("click", () => location.reload());
+    ?.addEventListener("click", async () => {
+      if (await leaving()) location.reload();
+    });
   // タブに戻ってきた・スリープから起きた瞬間も確かめる。**放置していた
   // あいだに直が変わっていることがあり**、次の周期まで古い直のまま操作
   // できてしまう。戻ったことに気づくのは `health.js`(`app:resume`)──

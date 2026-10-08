@@ -103,6 +103,9 @@ def create_app(*, token: Optional[str] = None,
     # 順番待ちの列を伸ばしても、どのみち断るので意味がない
     _register_tab_guard(app)
     _register_db(app)
+    # **ロックを取ったあとにもう1度。** 待っているあいだに打てるタブが替わって
+    # いたら、ここで断る(`_tab_refusal`)
+    _register_tab_recheck(app)
     # **DBの次に置く。** 直を引くのに時間マスタを読むので、接続を用意する
     # フックより後でなければならない
     _register_rollover(app)
@@ -388,6 +391,11 @@ _TAB_GUARDED_PATHS = (
     "/api/settings/back",           # いまの直へ戻る(直していた行を保存する)
     "/api/settings/restore-shift",  # 共有から当直を戻す(行を書き直す)
     "/api/settings/import/apply",   # 過去の日報を取り込む(行を書く)
+    # **書き先を動かす口は、ほかにもありました**(v4.24.0)。どちらも呼び出しと
+    # 同じく `work_context` の書き先を替えるので、見るだけのタブから押されると
+    # 打てるタブの次の自動保存が、そちらのページへ向きます
+    "/api/settings/backfill",       # 終わった直を後から作る(枠を開く)
+    "/api/records/backup/open",     # 控えの直を手元へ入れて呼び出す
 )
 
 # 上の中でも、**読むだけ / 計算するだけ**の口。ここを止めると、見るだけの
@@ -419,6 +427,48 @@ def _carries_rows(req) -> bool:
     return isinstance(body, dict) and bool(body.get("rows"))
 
 
+def _tab_refusal():
+    """「いま打てるタブ」でなければ断りの応答。通してよければ `None`。
+
+    **2度見ます**(v4.24.0)。書き込みのロックを取る前(順番待ちの列を伸ばさない
+    ため)と、**取ったあと**(`_register_tab_recheck`)です。前だけだと、取り込みの
+    ような長い書き込みの後ろで待っているあいだに別のタブが引き継いでも、
+    待っていた要求はそのまま書きます ── 打てる側でなくなったタブの行が、
+    引き継いだタブの行を上書きしていました。
+    """
+    from nippou import awake_clock
+    from nippou.logic import tab_lock
+
+    from .routes.tab import tab_token
+
+    token = tab_token()
+    desk = tab_lock.get_desk()
+    now = awake_clock.now()
+    # 時刻は心拍の口と同じもの(スリープを数えない)。**片方だけ
+    # monotonic だと、起きた直後にここだけ権利を外して断る**
+    if desk.may_edit(token, now=now):
+        if not (_carries_rows(request) and desk.stale(token, now=now)):
+            return None
+        # **打てる側でも、表が古ければ書かせない。** 引き継いだ
+        # タブの表は、前のタブが最後に書いた行を知りません
+        # (`logic/tab_lock.py`「引き継いだタブの画面は古い」)。
+        # 見るのは**表の中身を送ってくる要求だけ** ── 記録の画面からの
+        # 呼び出しは表を持っていないので、古いも新しいもありません
+        log.warning("古い画面からの書き込みを断りました: %s", request.path)
+        return jsonify(error_body(
+            "stale_tab",
+            "この画面を開いたあとに、別のタブで保存されています。"
+            "上書きしないよう、この画面を読み直します")), 409
+    log.warning("打てないタブからの書き込みを断りました: %s", request.path)
+    # 409(ぶつかった)。**400 ではない** ── 送られたものは正しく、
+    # いまこのタブが打てる側でない、というだけ
+    return jsonify(error_body(
+        "other_tab",
+        "この日報は、もう1つのタブで開いています。"
+        "打てるのは1つだけです ── 打ちたいときは、この画面の"
+        "「このタブで入力する」を押してください")), 409
+
+
 def _register_tab_guard(app: Flask) -> None:
     """**画面を無効にするだけでは足りない。**
 
@@ -431,37 +481,7 @@ def _register_tab_guard(app: Flask) -> None:
     def _one_tab_may_write():                   # noqa: ANN202 - Flaskのフック
         if not _tab_guarded(request):
             return None
-        from nippou import awake_clock
-        from nippou.logic import tab_lock
-
-        from .routes.tab import tab_token
-
-        token = tab_token()
-        desk = tab_lock.get_desk()
-        now = awake_clock.now()
-        # 時刻は心拍の口と同じもの(スリープを数えない)。**片方だけ
-        # monotonic だと、起きた直後にここだけ権利を外して断る**
-        if desk.may_edit(token, now=now):
-            if not (_carries_rows(request) and desk.stale(token, now=now)):
-                return None
-            # **打てる側でも、表が古ければ書かせない。** 引き継いだ
-            # タブの表は、前のタブが最後に書いた行を知りません
-            # (`logic/tab_lock.py`「引き継いだタブの画面は古い」)。
-            # 見るのは**表の中身を送ってくる要求だけ** ── 記録の画面からの
-            # 呼び出しは表を持っていないので、古いも新しいもありません
-            log.warning("古い画面からの書き込みを断りました: %s", request.path)
-            return jsonify(error_body(
-                "stale_tab",
-                "この画面を開いたあとに、別のタブで保存されています。"
-                "上書きしないよう、この画面を読み直します")), 409
-        log.warning("打てないタブからの書き込みを断りました: %s", request.path)
-        # 409(ぶつかった)。**400 ではない** ── 送られたものは正しく、
-        # いまこのタブが打てる側でない、というだけ
-        return jsonify(error_body(
-            "other_tab",
-            "この日報は、もう1つのタブで開いています。"
-            "打てるのは1つだけです ── 打ちたいときは、この画面の"
-            "「このタブで入力する」を押してください")), 409
+        return _tab_refusal()
 
     @app.after_request
     def _note_write(response):                  # noqa: ANN202 - Flaskのフック
@@ -473,6 +493,21 @@ def _register_tab_guard(app: Flask) -> None:
             from .routes.tab import tab_token
             tab_lock.get_desk().note_write(tab_token(), now=awake_clock.now())
         return response
+
+
+def _register_tab_recheck(app: Flask) -> None:
+    """書き込みのロックを取った**あと**に、打てるタブかをもう1度見る(`_tab_refusal`)。
+
+    `_register_db` より後に登録するので、ロックを取ったあとに走ります
+    (Flask の before_request は登録の順)。断ったときも teardown で
+    ロックは放されます。
+    """
+
+    @app.before_request
+    def _one_tab_may_write_in_lock():           # noqa: ANN202 - Flaskのフック
+        if not g.get("holds_write_lock") or not _tab_guarded(request):
+            return None
+        return _tab_refusal()
 
 
 def _register_line_labels(app: Flask) -> None:

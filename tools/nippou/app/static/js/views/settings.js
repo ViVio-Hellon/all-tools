@@ -8,7 +8,7 @@ import { api, background } from "../api.js";
 import * as desktop from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
-import { refresh } from "../nav.js";
+import { beforeLeave, refresh } from "../nav.js";
 import { loadCues, previewFile } from "../sound.js";
 // 面(タブ)の作りは全画面で1つ。**並びと鍵の要否はサーバが決める**
 import { attachAll } from "../tabs.js";
@@ -16,6 +16,60 @@ import { confirmPush, watch as watchJob } from "../progress.js";
 
 /* ---- 小さな道具 ------------------------------------------------- */
 const byId = (id) => document.getElementById(id);
+
+/* ================================================================
+   **打ったまま保存していない欄を、描き直しで消さない**(v4.24.0)
+
+   この画面は、鍵を開けた・ラインを替えた・音を保存した…のたびに画面ごと
+   描き直します(`refresh()`)。そのたびに、**隣の欄に打ちかけていた置き場所や、
+   選び直した音が、黙って元に戻っていました**(打った値が勝手に戻ることが
+   ありました)。ほかにも同じ処理をしている箇所があると思われるので、描き直す
+   口はどれも `refreshKeeping()` を通し、打ちかけを持ち越します。ほかの画面へ
+   移るときは、打ちかけがあれば訊きます。
+   ================================================================ */
+let kept = null;        // 描き直しのあいだ持ち越す打ちかけ [[id, 値], …]
+let keeping = false;    // 持ち越すので、出る前の確かめは要らない
+
+/** 打ったまま保存していない欄(置き場所の「未保存」・選び直した音)。 */
+function dirtyFields() {
+  const out = [];
+  for (const row of document.querySelectorAll('.path[data-path-state="dirty"]')) {
+    const input = row.querySelector("input[type=text]");
+    if (input?.id) out.push([input.id, input.value]);
+  }
+  for (const el of document.querySelectorAll("[data-sound-file]")) {
+    const moved = [...el.options].some((o) => o.selected !== o.defaultSelected);
+    if (moved && el.id) out.push([el.id, el.value]);
+  }
+  return out;
+}
+
+/** 画面を描き直す。**打ちかけは持ち越す。** */
+function refreshKeeping() {
+  kept = dirtyFields();
+  keeping = true;
+  return Promise.resolve(refresh()).finally(() => { keeping = false; });
+}
+
+/** 描き直した画面へ、持ち越した打ちかけを戻す(戻した欄は「未保存」のまま)。 */
+function restoreKept() {
+  const items = kept || [];
+  kept = null;
+  for (const [id, value] of items) {
+    const el = byId(id);
+    if (!el || el.value === value) continue;
+    el.value = value;
+    // 置き場所の欄は「未保存」の印を付け直す(欄の `input` が付ける)
+    if (el.tagName === "INPUT") el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+}
+
+/** 移る前の確かめ。打ちかけがあれば訊く。 */
+function keepOrAsk() {
+  if (keeping || !dirtyFields().length) return true;
+  return confirm("保存していない置き場所(または選び直した音)があります。\n"
+                 + "このまま移ると、打った値は消えます。移りますか?");
+}
 
 function note(text, kind = "info") {
   const box = document.getElementById("access-note");
@@ -277,7 +331,7 @@ async function applyImport() {
     // その数が増えないままだと、取り込んだのに送る物が無いように見えます
     // ── 数を描いているのはサーバなので、描き直してもらいます
     toast(body.message, body.failed?.length ? "warn" : "ok");
-    refresh();
+    refreshKeeping();
   } catch (err) {
     // 422 は断り(読めない)。中身が返ってくるので、そのまま出す
     if (err.status === 422 && err.body) paintPlan(err.body);
@@ -1131,6 +1185,8 @@ function paintStamps() {
 }
 
 export function start() {
+  // 打ちかけの置き場所・音を残したまま、ほかの画面へ黙って移らない
+  beforeLeave(keepOrAsk);
   paintStamps();
   // 面(タブ)。並びも既定もサーバが決めたものを写すだけ
   attachAll();
@@ -1180,7 +1236,7 @@ export function start() {
         // **合言葉は画面に残さない。** 次に誰かが座ったときそのまま使える
         if (pw) pw.value = "";
         toast(body.message, "ok");
-        refresh();
+        refreshKeeping();
       } catch (err) { toastError(err); }
     });
   }
@@ -1190,7 +1246,7 @@ export function start() {
       try {
         const body = await api.post("/api/settings/admin", { enable: false });
         toast(body.message, "ok");
-        refresh();
+        refreshKeeping();
       } catch (err) { toastError(err); }
     });
   }
@@ -1226,7 +1282,7 @@ export function start() {
       // 覚えられなかったときは**黙って ok にしない** ── 次に起動すると戻る
       toast(body.message || `${lineLabel(line)} にしました`,
             body.remembered === false ? "warn" : "ok");
-      refresh();
+      refreshKeeping();
     } catch (err) { lineNote(err.message, "error"); }
   }
 
@@ -1250,7 +1306,7 @@ export function start() {
       const body = await api.post("/api/settings/access-rights", {});
       toast(body.message, body.problem ? "warn" : "ok");
       // 当てたらラインの欄ごと描き直す(いまのライン・ボタンの色)
-      if (body.applied) refresh();
+      if (body.applied) refreshKeeping();
       else if (box) {
         box.hidden = !body.problem;
         box.textContent = body.problem || "";
@@ -1287,7 +1343,7 @@ export function start() {
       const alerts = (reply.distribution?.warnings || [])
         .filter((w) => w.level === "alert");
       toast(reply.message || "済みました", alerts.length ? "warn" : "ok");
-      refresh();
+      refreshKeeping();
     } catch (err) {
       distNote(err.message, "error");
     }
@@ -1316,7 +1372,7 @@ export function start() {
       const body = await api.post("/api/settings/restore-shift", {});
       // 戻したぶんも「共有へ未送信」に積まれる。数を描き直してもらう
       toast(body.message, "ok");
-      refresh();
+      refreshKeeping();
     } catch (err) {
       dbNote(err.message, "error");
     }
@@ -1392,7 +1448,7 @@ export function start() {
       // 「共有へ未送信 1直ぶん」が減らないままでした ── 送り終えた
       // のに送っていないと書いてあるので、開き直すまで信じられません。
       // 数はサーバが描いているので、描き直してもらいます
-      refresh();
+      refreshKeeping();
     } catch (err) {
       if (err.status === 422 && err.body && err.body.reports) {
         showCheck(err.body);
@@ -1657,7 +1713,7 @@ export function start() {
       const body = await api.post("/api/settings/sync-shift", {});
       say(body.message, "ok");
       // 取り込んだ時刻をその場で見せる。**「入った」だけでは確かめられない**
-      refresh();
+      refreshKeeping();
     } catch (err) {
       say(err.message, "error");
     }
@@ -1794,7 +1850,7 @@ export function start() {
     try {
       const body = await api.post("/api/settings/paths/recheck", {});
       toast(body.message, body.problems?.length ? "warn" : "ok");
-      refresh();
+      refreshKeeping();
     } catch (err) { toastError(err); }
   });
 
@@ -1894,7 +1950,7 @@ export function start() {
       // **鳴らしてよい出来事を読み直す** ── 1分待たずに、いまの選び方で鳴る
       loadCues();
       // 保存できたら描き直す。「鳴らします/ありません」まで見せたい
-      refresh();
+      refreshKeeping();
     } catch (err) {
       soundNote(err.message, "error");
     }
@@ -1964,9 +2020,12 @@ export function start() {
         const body = await api.post("/api/settings/line-targets/import", {});
         toast(body.message, "ok");
         // 取り込んだ値をその場で見せる。**「入った」だけでは確かめられない**
-        refresh();
+        refreshKeeping();
       } catch (err) {
         say(err.message, "error");
       }
     });
+
+  // 描き直す前に打ちかけていた欄を戻す(`refreshKeeping`)
+  restoreKept();
 }
