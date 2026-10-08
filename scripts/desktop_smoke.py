@@ -12,7 +12,10 @@
     3. **どのプロセスもポートで待ち受けていない**(exe・5つの Python・WebView の子プロセス)
     4. ブラウザ版は起動しない(後から開いたほうが止まる): 統合ツールのブラウザ版と、
        各ツールのブラウザ版(tools/<ツール>/start_app.py)
-    5. exe を止めると Python も終わる(取り残さない)
+    5. **業務ツール統合ランチャーの入口**: 起動確認(`process_manager.py --check`、launcher_check.bat)が
+       「使える」と答え、終了の入口(`--launcher`、launcher_stop.bat)が窓に「閉じて」と頼む
+       (× と同じ流れ)と、exe が自分で終わる。そのあと起動確認は「動いていない」
+    6. exe が終わると Python も終わる(取り残さない)
 
 使い方:
     python scripts/desktop_smoke.py --exe src-tauri/target/release/AllTools.exe
@@ -184,6 +187,11 @@ def portal_log(work: Path) -> str:
                    for p in sorted((work / "portal" / "logs").glob("portal_*.log")))
 
 
+def shell_log_tail(work: Path) -> str:
+    path = work / "portal" / "logs" / "desktop_shell.log"
+    return ("--- 外枠の記録\n" + path.read_text(encoding="utf-8", errors="replace")[-3000:]) if path.is_file() else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", required=True)
@@ -271,10 +279,39 @@ def main() -> int:
             result("統合ツールの窓" in said, f"{title}のブラウザ版は起動しません"
                    + ("" if "統合ツールの窓" in said else f": {said[-300:]}"))
 
-        # ---- 5: exe を止めると Python も終わる ----
+        # ---- 5: ランチャーの入口(起動確認・終了。窓の × と同じ流れで閉じる) ----
+        def entry(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run([sys.executable, str(ROOT / "process_manager.py"), *args],
+                                  env=env, cwd=str(ROOT), capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=60)
+
+        def last_line(done: subprocess.CompletedProcess) -> str:
+            lines = [line for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+            return lines[-1] if lines else ""
+
+        checked = entry("--check")
+        result(checked.returncode == 0,
+               f"ランチャーの起動確認: 使える(終了コード {checked.returncode}: {last_line(checked)})")
         others = [pid for pid in tree if pid != app.pid]
-        app.terminate()
-        app.wait(timeout=30)
+        began = time.monotonic()
+        stopped = entry("--launcher")
+        try:
+            app.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        closed = app.poll() is not None
+        result(stopped.returncode == 0 and closed,
+               f"ランチャーの終了の入口で窓が閉じました({time.monotonic() - began:.1f}秒・終了コード "
+               f"{stopped.returncode}: {last_line(stopped)}・exe の終了コード {app.poll()})")
+        if closed:
+            after = entry("--check")
+            result(after.returncode == 1, f"閉じたあとの起動確認: 動いていない(終了コード {after.returncode})")
+
+        # ---- 6: exe が終わると Python も終わる ----
+        if app.poll() is None:
+            print(shell_log_tail(work), flush=True)
+            app.terminate()
+            app.wait(timeout=30)
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline and any(alive(p) for p in others):
             time.sleep(0.5)

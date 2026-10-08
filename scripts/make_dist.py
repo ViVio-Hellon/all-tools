@@ -18,6 +18,7 @@ r"""統合ツール一式の配布用フォルダを作る
       統合ツール.exe          デスクトップ版(GitHub Actions の成果物 AllTools-windows の
                               AllTools.exe。一式の直下に置いてあれば、この名前で入れる)
       Start.vbs / start.bat / stop.bat   ブラウザ版(予備)
+      launcher_check.bat / launcher_stop.bat   業務ツール統合ランチャーの入口
       bridge.py start_app.py process_manager.py requirements.txt README.md
       config\ portal\ docs\ scripts\
       tools\<ツール>\         各ツール。**そのツールの make_dist が配るもの**を、そのツールの
@@ -49,6 +50,8 @@ ROOT = Path(__file__).resolve().parent.parent
 INCLUDE: tuple[str, ...] = (
     "README.md", "requirements.txt",
     "Start.vbs", "start.bat", "stop.bat",
+    # 業務ツール統合ランチャーの入口(起動確認・終了。docs/ランチャー連携.md)
+    "launcher_check.bat", "launcher_stop.bat",
     "start_app.py", "process_manager.py",
     # デスクトップ版(統合ツール.exe)の入口。ポートを使わない(標準入出力)
     "bridge.py",

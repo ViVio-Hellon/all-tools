@@ -25,21 +25,23 @@ if errorlevel 1 (
     goto :failed
 )
 
+rem  戻り値: 0 = 止めた / 1 = デスクトップ版が動いている(止めない) / 2 = 止めなかった
+rem  (実行中の処理・画面で「閉じない」など) / 3 = Python が見つからない
 python process_manager.py %*
-if errorlevel 1 (
+set "code=%errorlevel%"
+if not "%code%"=="0" (
     echo.
     echo 止められなかったものがあります。上のメッセージを確認してください。
     echo 実行中の処理があるときは、中断してよければ次を実行してください:
     echo     stop.bat --force
     echo.
-    goto :failed
+    pause
 )
 popd
-endlocal
-exit /b 0
+endlocal & exit /b %code%
 
 :failed
 pause
 popd
 endlocal
-exit /b 1
+exit /b 3

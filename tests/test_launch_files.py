@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LAUNCHERS = ("Start.vbs", "start.bat", "stop.bat")
+LAUNCHERS = ("Start.vbs", "start.bat", "stop.bat", "launcher_check.bat", "launcher_stop.bat")
 
 
 class EncodingTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class EncodingTests(unittest.TestCase):
                 self.assertFalse(data.startswith(b"\xef\xbb\xbf"), "BOM を付けない")
 
     def test_batはchcpより前がASCIIだけ(self) -> None:
-        for name in ("start.bat", "stop.bat"):
+        for name in ("start.bat", "stop.bat", "launcher_check.bat", "launcher_stop.bat"):
             with self.subTest(name=name):
                 data = (ROOT / name).read_bytes()
                 head, sep, _rest = data.partition(b"chcp 932")
@@ -55,6 +55,23 @@ class ContentTests(unittest.TestCase):
         self.assertIn('cmd = "pythonw " & Chr(34) & script & Chr(34)', text)
         self.assertIn("shell.Run cmd, 0, False", text)
         self.assertIn("統合ツール.exe", text, "ふだんは exe を使うと書く")
+
+    def test_ランチャーの入口(self) -> None:
+        """業務ツール統合ランチャー 1.7 の入口。繰り返し・隠れて呼ばれるので pause を置かない。"""
+        check = self.text("launcher_check.bat")
+        stop = self.text("launcher_stop.bat")
+        self.assertIn("python process_manager.py --check", check)
+        self.assertIn("python process_manager.py --launcher %*", stop, "--force を渡す")
+        for text in (check, stop):
+            self.assertNotRegex(text, r"(?mi)^\s*pause\b")
+            self.assertIn('endlocal & exit /b %code%', text, "終了コードをそのまま返す")
+
+    def test_stop_batは戻り値をそのまま返す(self) -> None:
+        """0 止めた / 1 デスクトップ版 / 2 止めなかった / 3 Python が無い(docs/ランチャー連携.md)。"""
+        text = self.text("stop.bat")
+        self.assertIn('set "code=%errorlevel%"', text)
+        self.assertIn("endlocal & exit /b %code%", text)
+        self.assertIn("exit /b 3", text)
 
     def test_呼ぶファイルがある(self) -> None:
         self.assertIn("python start_app.py --check", self.text("start.bat"))
