@@ -17,6 +17,12 @@
     const root = document.documentElement;
     let last = '';
     let pending = 0;
+    // **行き来の歯止め。** 段が短いあいだに何度も入れ替わるのは、はかり方が揺れている印。
+    // そのときは詰めた側(収まる側)に決めて、しばらく変えない(画面が揺れ続けるよりよい)
+    const FLIP_WINDOW_MS = 2000;
+    const FLIP_LIMIT = 4;
+    let flips = [];
+    let heldUntil = 0;
 
     const height = () => document.body.getBoundingClientRect().height;
 
@@ -64,9 +70,20 @@
 
     function fit() {
         pending = 0;
+        const now = performance.now();
+        if (now < heldUntil) return;                    // 歯止め中(窓の大きさが変われば外す)
         const mode = decide();
         root.dataset.fit = mode;
         if (mode === last) return;
+        flips = flips.filter((t) => now - t < FLIP_WINDOW_MS).concat(now);
+        if (flips.length > FLIP_LIMIT && mode === 'as-is' && last && last !== 'narrow') {
+            // 揺れている。詰めた見た目のほうに戻して止める
+            root.classList.add('fit-compact');
+            root.dataset.fit = last;
+            heldUntil = now + FLIP_WINDOW_MS;
+            flips = [];
+            return;
+        }
         last = mode;
         // 3D は自分では枠の大きさの変化に気づかない(窓の resize だけを見ている)
         for (const viewer of [window.coilViewer, window.plateViewer]) {
@@ -82,7 +99,7 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         fit();
-        window.addEventListener('resize', later);
+        window.addEventListener('resize', () => { heldUntil = 0; flips = []; later(); });
         window.addEventListener('load', later);
         document.addEventListener('shape-shown', later);
         // タブ・形状の切替は、それぞれの処理が済んでから(ここまで泡が上がってくる)はかる

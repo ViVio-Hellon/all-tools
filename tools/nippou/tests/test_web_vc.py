@@ -395,6 +395,15 @@ class CoilTests(VcCase):
         self.assertRegex(css, r"\.model-container \{\s*flex: 1 1 auto;")
         self.assertRegex(css, r"\.chart-container \{\s*position: relative;\s*height: 150px;")
         self.assertIn("@media print", css)
+        # はかるあいだは動き(transition 0.3s)を止める。動いている途中の高さをはかると
+        # 「そのまま」と「詰める」を行き来し続けた(コイル・平板の切替で画面が揺れた)
+        self.assertRegex(
+            css, r"html\.fit-measure \*::after \{\s*transition: none !important;")
+        # 念のための歯止め: 短いあいだに段が何度も替わったら詰めた側で止める。
+        # 窓の大きさが変わったら外す
+        self.assertIn("const FLIP_LIMIT = 4;", js)
+        self.assertIn("if (now < heldUntil) return;", js)
+        self.assertIn("heldUntil = 0; flips = []; later();", js)
         # 外のページも動かさない: 枠の高さは作業面の残りちょうど
         vc = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
         self.assertIn("function fitFrame()", vc)

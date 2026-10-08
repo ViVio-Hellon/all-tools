@@ -123,6 +123,17 @@ html.fit-measure body {
     overflow: visible !important;
 }
 
+/* **はかるあいだは動き(transition)を止める。** カード・入力欄は余白が 0.3 秒かけて変わる
+   (`--transition: all 0.3s`)。動いている途中の高さをはかると、詰めた見た目から戻した直後は
+   実際より低く出て、「そのまま」と「詰める」を行き来し続けた(画面が揺れて読めない)。
+   止めると値は行き先の値になり、はかり終えて外しても動きは始まらない */
+html.fit-measure,
+html.fit-measure *,
+html.fit-measure *::before,
+html.fit-measure *::after {
+    transition: none !important;
+}
+
 html.fit-measure .container,
 html.fit-measure .shape-section,
 html.fit-measure .tab-container,
