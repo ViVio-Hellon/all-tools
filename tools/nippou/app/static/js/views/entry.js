@@ -279,7 +279,75 @@ function advance(el) {
   // **自動で進んだ時刻を覚える。** 2桁打って進んだ直後に、押し癖の Enter が
   // 来ると1つ飛ばしてしまうので、その1回だけ見送ります(`moveByEnter`)
   target.dataset.autoArrived = String(Date.now());
+  revealStop(target);
   target.focus();
+}
+
+/* ================================================================
+   作業停止①〜⑤ ── **表には1組ずつ出す**(v4.24.0)
+
+     作業停止を5つまで入力できるようにしたい / 入力欄を広げすぎないように
+
+   10欄を横に並べると表が横に流れるので、見出しの ①〜⑤ で出す組を
+   切り替えます(`table.grid[data-stop-show]` と CSS)。隠れている組の欄も
+   表の中にあり、集めて保存します。
+
+   ・打って次の組へ進む(3桁で自動・Enter)と、その組を出す(`revealStop`)
+   ・記号を空のまま Enter を押したら、残りの組は飛ばして枚数へ
+   ・右の「停止」の欄に、どの組に入っているか(押すとその組へ)と合計の分
+   ================================================================ */
+const STOP_SLOTS = [["S", "TH"], ["SS", "THS"], ["STH", "THT"], ["S4", "TH4"], ["S5", "TH5"]];
+const STOP_SLOT_OF = Object.fromEntries(
+  STOP_SLOTS.flatMap((pair, i) => pair.map((family) => [family, i + 1])));
+const STOP_CODES = new Set(STOP_SLOTS.map(([code]) => code));
+
+function gridTable() { return document.querySelector("table.grid"); }
+
+function showStopSlot(no) {
+  const table = gridTable();
+  if (!table || !no) return;
+  table.dataset.stopShow = String(no);
+  for (const btn of table.querySelectorAll("[data-stop-to]")) {
+    btn.setAttribute("aria-pressed", String(Number(btn.dataset.stopTo) === no));
+  }
+  paintStopSums();
+}
+
+/** その欄の組が隠れていれば出す(隠れた欄には焦点が入らない) */
+function revealStop(el) {
+  const no = STOP_SLOT_OF[el?.dataset?.family || ""];
+  const table = gridTable();
+  if (no && table && table.dataset.stopShow !== String(no)) showStopSlot(no);
+}
+
+/** 行ごとの「停止」の欄(どの組に入っているか・合計の分)と、見出しの印 */
+function paintStopSums() {
+  const table = gridTable();
+  if (!table) return;
+  const shown = Number(table.dataset.stopShow || 1);
+  const used = new Set();
+  for (const cell of table.querySelectorAll("[data-stopsum-row]")) {
+    const row = cell.dataset.stopsumRow;
+    let minutes = 0;
+    const parts = [];
+    STOP_SLOTS.forEach(([code, time], i) => {
+      const c = (document.getElementById(`${code}${row}`)?.value || "").trim();
+      const t = (document.getElementById(`${time}${row}`)?.value || "").trim();
+      if (!c && !t) return;
+      used.add(i + 1);
+      const n = Number(t);
+      if (t && !Number.isNaN(n)) minutes += n;
+      const mark = "①②③④⑤"[i];
+      parts.push(`<button type="button" class="stopsum__b${i + 1 === shown ? " is-shown" : ""}"`
+        + ` data-stop-jump="${i + 1}" data-row="${row}" tabindex="-1"`
+        + ` title="作業停止${mark}: ${c || "(記号なし)"} ${t ? `${t}分` : ""}">${mark}</button>`);
+    });
+    cell.innerHTML = parts.length
+      ? parts.join("") + `<span class="stopsum__min">${minutes ? `${minutes}分` : ""}</span>` : "";
+  }
+  for (const btn of table.querySelectorAll("[data-stop-to]")) {
+    btn.classList.toggle("has-stop", used.has(Number(btn.dataset.stopTo)));
+  }
 }
 
 /* ================================================================
@@ -310,11 +378,15 @@ function moveByEnter(el, back) {
     return false;
   }
   let target = el;
+  // **停止の記号を空のまま Enter → 残りの組は飛ばす**(5組を毎回くぐらせない)
+  const skipStops = !back && STOP_CODES.has(el.dataset.family || "") && !el.value;
   // 打てない欄は飛ばす。**ぐるぐる回らないよう上限を置く**
   for (let i = 0; i < 40; i += 1) {
     target = enterStep(target, back);
     if (!target) return false;
+    if (skipStops && STOP_SLOT_OF[target.dataset.family || ""]) continue;
     if (!target.disabled && !target.readOnly) {
+      revealStop(target);
       target.focus();
       // Tab で入ったときと同じく中身を選ぶ(打てば置き換わる)
       if (target.tagName === "INPUT") target.select();
@@ -518,6 +590,7 @@ function paint(view, { forceRow = 0, since = null } = {}) {
     const next = view.checks?.[el.dataset.check];
     if (next !== undefined) el.checked = next;
   }
+  paintStopSums();
   const lead = document.getElementById("page-lead");
   if (lead && view.page) {
     lead.textContent = `第${view.page}ページ / 全${view.page_count || 1}ページ`;
@@ -1886,6 +1959,25 @@ async function keepTyped() {
 
 export function start() {
   beforeLeave(keepTyped);
+  // 作業停止①〜⑤の切り替え(見出しの ①〜⑤・行の「停止」の欄)
+  document.addEventListener("click", (ev) => {
+    const to = ev.target.closest?.("[data-stop-to]");
+    if (to) { showStopSlot(Number(to.dataset.stopTo)); return; }
+    const jump = ev.target.closest?.("[data-stop-jump]");
+    if (jump) {
+      const no = Number(jump.dataset.stopJump);
+      showStopSlot(no);
+      document.getElementById(`${STOP_SLOTS[no - 1][0]}${jump.dataset.row}`)?.focus();
+    }
+  }, { signal: pageSignal() });
+  document.addEventListener("focusin", (ev) => revealStop(ev.target),
+                            { capture: true, signal: pageSignal() });
+  for (const name of ["input", "change"]) {
+    document.addEventListener(name, (ev) => {
+      if (STOP_SLOT_OF[ev.target?.dataset?.family || ""]) paintStopSums();
+    }, { signal: pageSignal() });
+  }
+  paintStopSums();
   // **どの欄でも、打ったら数える。** 打てる字に決まりのある欄(LOT・時刻)だけ
   // 数えていて、材・寸法のような自由な欄は「打っていない」扱いだった
   // (閉じる前に置かず、途中まで打った「A110」が残った)

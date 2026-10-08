@@ -77,3 +77,16 @@ def push_statements_odbc(accdb_path: Path, statements: list[str]) -> ScriptResul
         return ScriptResult(
             success=False, err_desc=str(exc),
             error=AccessBridgeError(ErrorKind.UNKNOWN, None, str(exc)))
+
+
+def add_columns_odbc(accdb_path: Path, statements: list[str]) -> int:
+    """列を足す `ALTER TABLE` を1文ずつ。**もう有る列で断られても続ける**(足した数を返す)。"""
+    added = 0
+    with access_odbc.connect(accdb_path) as conn:
+        for stmt in statements:
+            try:
+                conn.execute(stmt)
+                added += 1
+            except access_odbc.AccessError:
+                continue
+    return added

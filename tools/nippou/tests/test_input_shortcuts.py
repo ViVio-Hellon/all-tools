@@ -144,7 +144,8 @@ class ShiftEndTests(unittest.TestCase):
 # ----------------------------------------------------------------------
 class EnterTests(unittest.TestCase):
     ORDER = ["LOT", "ZAI", "SIZ", "KEN", "KZ", "KH", "SZ", "SH", "HIT", "AI", "MAI", "TUT",
-             "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT", "CON", "WEI", "UNI"]
+             "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT", "S4", "TH4", "S5", "TH5",
+             "CON", "WEI", "UNI"]
 
     def setUp(self) -> None:
         self.t = sc.enter_targets(self.ORDER)
@@ -157,8 +158,9 @@ class EnterTests(unittest.TestCase):
         self.assertEqual(self.t["ET"].next_family, "S")
 
     def test_行の最後の次は次の行のロット(self) -> None:
-        self.assertEqual((self.t["THT"].next_family, self.t["THT"].next_row), ("LOT", 1))
-        self.assertEqual((self.t["LOT"].prev_family, self.t["LOT"].prev_row), ("THT", -1))
+        self.assertEqual((self.t["THT"].next_family, self.t["THT"].next_row), ("S4", 0))
+        self.assertEqual((self.t["TH5"].next_family, self.t["TH5"].next_row), ("LOT", 1))
+        self.assertEqual((self.t["LOT"].prev_family, self.t["LOT"].prev_row), ("TH5", -1))
 
     def test_打つ順に無い欄は右の次の欄へ(self) -> None:
         self.assertEqual((self.t["AI"].next_family, self.t["AI"].prev_family), ("MAI", "HIT"))
@@ -166,7 +168,7 @@ class EnterTests(unittest.TestCase):
             with self.subTest(family=family):
                 self.assertEqual((self.t[family].next_family, self.t[family].next_row),
                                  ("LOT", 1))
-                self.assertEqual(self.t[family].prev_family, "THT")
+                self.assertEqual(self.t[family].prev_family, "TH5")
 
     def test_画面の列ぜんぶに行き先がある(self) -> None:
         from nippou.presenters import entry as presenter
@@ -179,9 +181,9 @@ class EnterTests(unittest.TestCase):
             self.assertIn(t.prev_family, editable)
 
     def test_属性の形(self) -> None:
-        attrs = sc.enter_attributes(self.t["THT"])
+        attrs = sc.enter_attributes(self.t["TH5"])
         self.assertEqual(attrs, {"data-enter-next": "LOT", "data-enter-next-row": "1",
-                                 "data-enter-prev": "STH", "data-enter-prev-row": "0"})
+                                 "data-enter-prev": "S5", "data-enter-prev-row": "0"})
         self.assertEqual(sc.enter_attributes(None), {})
 
 

@@ -58,6 +58,10 @@ class Column:
     #: 現場が口にするのも、引き先(`LS4LOT` / `SIKALOT`)の列名も
     #: `LOTNO` でした。紙とCSVは動かさず、画面だけ合わせます。
     screen_label: str = ""
+    #: 紙(xlsx・VBA)に**無い**欄(作業停止④⑤ v4.24.0)。紙は③までなので、
+    #: 印刷は使っているページだけ③の右に足し、CSVは**いちばん後ろ**へ足します
+    #: (前からある列の位置を動かさない ── 列の位置で読んでいる表を壊さない)
+    added: bool = False
 
     @property
     def field(self) -> str:
@@ -98,6 +102,10 @@ COLUMNS: tuple[Column, ...] = (
     Column("THS", "時間(分)", "作業停止②", 52, "num"),
     Column("STH", "記号", "作業停止③", 92, "select"),
     Column("THT", "時間(分)", "作業停止③", 52, "num"),
+    Column("S4", "記号", "作業停止④", 92, "select", added=True),
+    Column("TH4", "時間(分)", "作業停止④", 52, "num", added=True),
+    Column("S5", "記号", "作業停止⑤", 92, "select", added=True),
+    Column("TH5", "時間(分)", "作業停止⑤", 52, "num", added=True),
     Column("CON", "枚数", "実績合計", 60, "num"),
     Column("WEI", "重量", "実績合計", 72, "num"),
     # ここから先は紙に載らない(印刷範囲の外)
@@ -112,7 +120,15 @@ COLUMNS: tuple[Column, ...] = (
 
 #: 紙に載る列だけ。印刷用HTMLはこちらを使う
 PRINT_COLUMNS: tuple[Column, ...] = tuple(
+    c for c in COLUMNS if not c.outside_print and not c.added)
+
+#: 紙に無い欄(④⑤)も入れた並び。**そのページで④⑤を使っているときだけ**刷る
+PRINT_COLUMNS_WITH_ADDED: tuple[Column, ...] = tuple(
     c for c in COLUMNS if not c.outside_print)
+
+#: 紙(xlsx・VBA)からある欄と、あとから足した欄
+PAPER_COLUMNS: tuple[Column, ...] = tuple(c for c in COLUMNS if not c.added)
+ADDED_COLUMNS: tuple[Column, ...] = tuple(c for c in COLUMNS if c.added)
 
 # ----------------------------------------------------------------------
 # 印刷範囲の**さらに外**にある列 (紙の AN〜AS)

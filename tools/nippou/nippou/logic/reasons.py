@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
+from ..constants import STOP_CODE_FAMILIES
+
 #: まとめるときの区切り。**読点ではなく「 / 」**にするのは、理由そのものに
 #: 読点が入るため ── 「点検表を差し替え、その後清掃」を切らない
 SEPARATOR = " / "
@@ -85,14 +87,14 @@ def split(text: str) -> dict[int, str]:
 def needs_reason(row_values: dict[str, str], other_codes: Iterable[str]) -> bool:
     """その行が理由を書く行か(停止理由で「その他」を選んでいるか)。
 
-    見るのは**3つの停止記号すべて**です ── 作業停止①②③のどれで
+    見るのは**停止記号すべて**です ── 作業停止①〜⑤のどれで
     「その他」を選んでも、書きたいことは同じ1つです。
     """
     codes = {c for c in other_codes if c}
     if not codes:
         return False
     return any((row_values.get(family) or "").strip() in codes
-               for family in ("S", "SS", "STH"))
+               for family in STOP_CODE_FAMILIES)
 
 
 def missing(by_row: dict[int, str], needed: Iterable[int]) -> list[int]:

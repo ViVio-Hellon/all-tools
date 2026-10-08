@@ -74,10 +74,12 @@ class AdvanceTests(unittest.TestCase):
                 self.assertEqual(input_rules.rule(family).advance_at, 3)
 
     def test_最後の欄からは飛ばない(self) -> None:
-        """``MoveText`` は THT のとき SetFocus しない。"""
-        rule = input_rules.rule("THT")
+        """``MoveText`` は最後の停止時間(VBA は THT、v4.24.0 からは TH5)で SetFocus しない。"""
+        rule = input_rules.rule("TH5")
         self.assertIsNone(rule.next_family)
         self.assertFalse(rule.advances)
+        # ③の時間を3桁打てば④の記号へ(①→②→③と同じ)
+        self.assertEqual(input_rules.rule("THT").next_family, "S4")
 
     def test_自由入力の欄は飛ばない(self) -> None:
         """VBA の既定 ``Mcount = 20`` は「飛ばない」の意味。"""

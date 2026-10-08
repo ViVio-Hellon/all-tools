@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Iterable, Optional
 
+from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord, HeaderRecord
 from .aggregation import (
     MINUTES_PER_DAY,
@@ -45,9 +46,8 @@ from .aggregation import (
 from .numeric import is_numeric, to_float
 from .shift import parse_business_date
 
-#: 停止3組の (記号の列, 時間の列)。紙の作業停止①②③
-STOP_PAIRS: tuple[tuple[str, str], ...] = (("s", "th"), ("ss", "ths"),
-                                           ("sth", "tht"))
+#: 停止の組の (記号の列, 時間の列)。紙の作業停止①②③と、画面だけの④⑤
+STOP_PAIRS: tuple[tuple[str, str], ...] = STOP_FIELD_PAIRS
 
 #: ロット別集計の鍵。**この5つが揃って1つの単位**
 KEY_FIELDS: tuple[str, ...] = ("lot_no", "purpose_code", "purpose_name",
@@ -170,6 +170,7 @@ def has_content(d: DetailRecord) -> bool:
     """その行に何か打ってあるか。**空の行は集計に並べません。**"""
     watched = ("lot", "zai", "siz", "ken", "kz", "kh", "sz", "sh", "hit", "ai",
                "mai", "tut", "vc", "et", "s", "th", "ss", "ths", "sth", "tht",
+               "s4", "th4", "s5", "th5",
                "con", "wei", "tim", "uni",
                "others1", "others2", "others3", "others4", "others5",
                "others6", "keisu")

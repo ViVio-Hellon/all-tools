@@ -34,7 +34,11 @@ class PaperOrderTests(unittest.TestCase):
             [c.family for c in layout.COLUMNS],
             ["LOT", "ZAI", "SIZ", "KEN", "KZ", "KH", "SZ", "SH", "HIT", "AI",
              "MAI", "TUT", "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT",
+             # 作業停止④⑤(v4.24.0)。紙には無く、画面と共有・集計だけ
+             "S4", "TH4", "S5", "TH5",
              "CON", "WEI", "TIM", "UNI"])
+        self.assertEqual([c.family for c in layout.PRINT_COLUMNS if c.family.startswith(("S", "T"))][-6:],
+                         ["S", "TH", "SS", "THS", "STH", "THT"], "紙(用紙)は③まで")
 
     def test_合紙が入っている(self) -> None:
         """K列(合紙)。**DBには前からあったのに、どこにも出ていなかった。**"""

@@ -185,3 +185,44 @@ conn.Close
 WScript.StdOut.WriteLine "OK:" & execCount
 WScript.Quit 0
 """
+
+
+def build_add_columns_script(accdb_path: str, statements: list[str]) -> str:
+    """列を足す `ALTER TABLE` を**1文ずつ、失敗しても続けて**流す。
+
+    作業停止④⑤(v4.24.0)の列を共有の Access の表へ足すためのもの。
+    もう足してある表では「同じ名前の列があります」で断られますが、
+    それは足し終えているということなので、気にせず次へ進みます。
+    日報を書く取引(`build_push_script`)とは分けます ── 取引の中で1文でも
+    断られると、その日報まで巻き戻ってしまうので。
+    """
+    conn_str = CONNECTION_TEMPLATE.format(path=accdb_path)
+    statement_lines = "\n".join(
+        f"Statements.Add {_vbs_str(stmt)}" for stmt in statements
+    )
+    return f"""
+Option Explicit
+
+Dim conn, Statements, stmt, added
+Set Statements = CreateObject("System.Collections.ArrayList")
+{statement_lines}
+
+Set conn = CreateObject("ADODB.Connection")
+On Error Resume Next
+conn.Open {_vbs_str(conn_str)}
+If Err.Number <> 0 Then
+    WScript.StdOut.WriteLine "ERRCODE=" & Err.Number & "|ERRDESC=" & Err.Description
+    WScript.Quit 1
+End If
+
+added = 0
+For Each stmt In Statements
+    Err.Clear
+    conn.Execute stmt
+    If Err.Number = 0 Then added = added + 1
+Next
+Err.Clear
+conn.Close
+WScript.StdOut.WriteLine "OK:" & added
+WScript.Quit 0
+"""

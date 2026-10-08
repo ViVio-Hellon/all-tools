@@ -847,6 +847,7 @@ def index():
         coefficient_auto=load_factor.counts_coefficient(line),
         reason_field=presenter.REASON_FIELD,
         stop_pairs=presenter.STOP_PAIRS,
+        stop_slot_of=presenter.STOP_SLOT_OF,
         row_count=constants.ROW_COUNT,
         lines=constants.LINE_NAMES,
         # **入力制限はサーバが決める**(`logic/input_rules.py`)。画面は

@@ -84,7 +84,7 @@ DETAIL_CHECKBOX_NAMES: tuple[str, ...] = tuple(f"CheckBox{i}" for i in (8, 9, 10
 # Fields NOT in NUMERIC_ONLY_FAMILIES keep whatever text the user typed;
 # fields IN it get blanked out if the current text is not numeric
 # (replicates ``If Not IsNumeric(...) Then .Controls(TEX & num) = ""``).
-# THT is the terminal family: it is never auto-focused away from.
+# TH5 (作業停止⑤の時間) is the terminal family: it is never auto-focused away from.
 # ---------------------------------------------------------------------------
 
 FOCUS_CHAIN: dict[str, tuple[str | None, int]] = {
@@ -106,18 +106,33 @@ FOCUS_CHAIN: dict[str, tuple[str | None, int]] = {
     "SS": ("THS", 20),
     "THS": ("STH", 3),
     "STH": ("THT", 20),
-    "THT": (None, 3),
+    "THT": ("S4", 3),
+    "S4": ("TH4", 20),
+    "TH4": ("S5", 3),
+    "S5": ("TH5", 20),
+    "TH5": (None, 3),
 }
+
+# 作業停止①〜⑤の (記号の欄, 時間の欄)。**停止の組はここだけで決める**
+# (④⑤は v4.24.0。紙と VBA は③まで)。小文字は DB の列名
+STOP_SLOTS: tuple[tuple[str, str], ...] = (
+    ("S", "TH"), ("SS", "THS"), ("STH", "THT"), ("S4", "TH4"), ("S5", "TH5"))
+STOP_FIELD_PAIRS: tuple[tuple[str, str], ...] = tuple(
+    (code.lower(), minutes.lower()) for code, minutes in STOP_SLOTS)
+STOP_CODE_FAMILIES: tuple[str, ...] = tuple(code for code, _ in STOP_SLOTS)
+STOP_TIME_FAMILIES: tuple[str, ...] = tuple(minutes for _, minutes in STOP_SLOTS)
 
 # Families whose text is force-cleared when not numeric (all families
 # *except* this text-like set, per MoveText's second Select Case).
-TEXT_LIKE_FAMILIES: frozenset[str] = frozenset({"LOT", "SIZ", "ZAI", "VC", "ET", "S", "SS", "STH"})
+TEXT_LIKE_FAMILIES: frozenset[str] = frozenset({"LOT", "SIZ", "ZAI", "VC", "ET", "S", "SS", "STH",
+                                                "S4", "S5"})
 
 # Field families highlighted/reset together by Point_Change, in the row
 # entry grid (one instance per row 1..12).
 ROW_FIELD_FAMILIES: tuple[str, ...] = (
     "LOT", "ZAI", "SIZ", "KEN", "KZ", "KH", "SZ", "SH", "HIT",
     "MAI", "TUT", "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT",
+    "S4", "TH4", "S5", "TH5",
     "CON", "WEI",
 )
 

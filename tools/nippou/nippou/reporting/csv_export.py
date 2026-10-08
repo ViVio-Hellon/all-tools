@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import layout
+from ..constants import STOP_SLOTS
 from ..db.models import PackingReport
 from ..db.repository import NippouRepository
 from ..logic.aggregation import (
@@ -116,12 +117,16 @@ _HEADER_FIELDS: tuple[tuple[str, str], ...] = (
 DETAIL_FIELDNAMES: list[str] = [
     *_KEY_FIELDS,
     "係数処理ﾛｯﾄ数",
-    *[layout.csv_header(c) for c in layout.COLUMNS],
+    *[layout.csv_header(c) for c in layout.PAPER_COLUMNS],
     *[layout.csv_header(c) for c in layout.EXTRA_COLUMNS],
     *[label for _, label in _HEADER_FIELDS],
     # 紙にも共有の日報管理にも欄が無い、この端末だけの控え。
     # 月別の書き出しでは**最後の写し**になるので、ここにも残す
     "引当番号",
+    # 作業停止④⑤(v4.24.0)。**いちばん後ろへ足す** ── 前からある列の位置を
+    # 動かさない(列の位置で読んでいる表・マクロを壊さない)。取り込みは
+    # 見出しの名前で探すので、どこにあっても読める
+    *[layout.csv_header(c) for c in layout.ADDED_COLUMNS],
 ]
 
 #: 紙の欄(`layout.COLUMNS` の family) → 残した集計(`LotRow`)の属性。
@@ -156,9 +161,8 @@ _EXTRA_LOT_FIELDS: dict[str, str] = {
 #: 時・分の欄。**2桁に詰め直します** ── 紙は "08" で、集計は 8 です
 _CLOCK_FIELDS = frozenset({"KZ", "KH", "SZ", "SH"})
 
-#: 作業停止①②③の欄。(記号, 時間) の組を紙の並びで
-_STOP_CELLS: tuple[tuple[str, str], ...] = (
-    ("S", "TH"), ("SS", "THS"), ("STH", "THT"))
+#: 作業停止①〜⑤の欄。(記号, 時間) の組を紙の並びで(④⑤は紙に無い)
+_STOP_CELLS: tuple[tuple[str, str], ...] = STOP_SLOTS
 
 
 def _text(value: object) -> str:
@@ -279,8 +283,8 @@ def write_daily_aggregate_csv(
 STOP_KIND_TOTAL = "直の合計"
 STOP_KIND_ONE = "1件ずつ"
 
-#: 紙の作業停止①②③
-STOP_SLOT_LABELS = {1: "作業停止①", 2: "作業停止②", 3: "作業停止③"}
+#: 作業停止①〜⑤(紙は③まで。④⑤は v4.24.0)
+STOP_SLOT_LABELS = {n: f"作業停止{'①②③④⑤'[n - 1]}" for n in range(1, 6)}
 
 STOP_FIELDNAMES = [
     "日付", "ライン", "直", "区分", "分類", "記号", "内訳",

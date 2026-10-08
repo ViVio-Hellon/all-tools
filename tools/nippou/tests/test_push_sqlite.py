@@ -87,9 +87,10 @@ class TableTests(unittest.TestCase):
     def test_明細の列はVBAのまま(self) -> None:
         cols = sqlite_backend.DETAIL_COLUMNS
         self.assertEqual(cols[:5], ("報告日", "ライン", "直", "ページ", "行番号"))
-        self.assertEqual(cols[-1], "係数")
-        # LOT〜UNI の24項目 + Others1-6 + 係数 + キー5
-        self.assertEqual(len(cols), 36)
+        # VBA の並び(LOT〜UNI の24項目 + Others1-6 + 係数 + キー5)はそのまま
+        self.assertEqual(cols[35], "係数")
+        # 作業停止④⑤(v4.24.0)は**後ろに足す**(前からある表へ足しても並びが同じ)
+        self.assertEqual(cols[36:], ("S4", "TH4", "S5", "TH5"))
 
     def test_主キーはキー4つと行番号(self) -> None:
         self.assertEqual(sqlite_backend.HEADER_KEY, ("報告日", "ライン", "直", "ページ"))

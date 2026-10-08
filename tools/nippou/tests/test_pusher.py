@@ -82,6 +82,9 @@ class PushPendingResilienceTests(unittest.TestCase):
             """1回目の呼び出しでだけ想定外の例外を投げるダミーrunner。"""
 
             def run(self, script_text: str) -> ScriptResult:
+                # 作業停止④⑤の列を足す台本(v4.24.0)は数えない(日報の送信とは別)
+                if "ALTER TABLE" in script_text:
+                    return ScriptResult(success=True)
                 call_count["n"] += 1
                 if call_count["n"] == 1:
                     raise RuntimeError("想定外の異常（例: ファイルシステムの一時的な不調）")

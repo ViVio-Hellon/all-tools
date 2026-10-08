@@ -42,6 +42,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
 
+from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord
 from .numeric import is_numeric, to_float
 from .work_time import elapsed_minutes, shift_minutes
@@ -86,8 +87,8 @@ REST_STOP_CODE = "0"
 #: 日勤の残業終わり。VBA `Last_Confi` が定時の代わりに認めていた2つ
 DAY_SHIFT_OVERTIME_ENDS: tuple[str, ...] = ("18:00", "19:00")
 
-#: 停止の記号が入る欄と、その時間の欄(紙の P:Q / R:S / T:U)
-STOP_PAIRS: tuple[tuple[str, str], ...] = (("s", "th"), ("ss", "ths"), ("sth", "tht"))
+#: 停止の記号が入る欄と、その時間の欄(紙の P:Q / R:S / T:U。④⑤は紙に無い)
+STOP_PAIRS: tuple[tuple[str, str], ...] = STOP_FIELD_PAIRS
 
 
 @dataclass(frozen=True)
@@ -353,8 +354,7 @@ def check_negative_time(details: Sequence[DetailRecord]) -> list[Finding]:
     """
     out: list[Finding] = []
     for d in _sorted(details):
-        stops = [(d.th or "").strip(), (d.ths or "").strip(),
-                 (d.tht or "").strip()]
+        stops = [(getattr(d, minutes) or "").strip() for _code, minutes in STOP_PAIRS]
         if not any(stops):
             continue
         parts = [(d.kz or "").strip(), (d.kh or "").strip(),

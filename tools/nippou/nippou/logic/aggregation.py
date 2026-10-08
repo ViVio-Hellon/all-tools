@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord, HeaderRecord
 from .numeric import is_numeric, to_float
 from .shift import SHIFT_NAMES, parse_business_date
@@ -119,7 +120,7 @@ class ShiftAggregate:
         return self.weight_ton / hours
 
 
-_STOP_PAIRS = (("s", "th"), ("ss", "ths"), ("sth", "tht"))
+_STOP_PAIRS = STOP_FIELD_PAIRS
 
 
 def aggregate_shift(header: HeaderRecord, details: list[DetailRecord]) -> ShiftAggregate:

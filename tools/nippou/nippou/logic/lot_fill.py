@@ -58,7 +58,8 @@ COIL_SPLIT_LINES: frozenset[str] = COIL_LINES
 # **LOT 自身は消しません。** 打ったばかりの番号を消すことになります
 CLEARED_FAMILIES: tuple[str, ...] = (
     "ZAI", "SIZ", "KEN", "SZ", "SH", "HIT", "MAI", "TUT", "VC",
-    "S", "TH", "SS", "THS", "STH", "THT", "CON", "WEI", "ET", "TIM", "UNI",
+    "S", "TH", "SS", "THS", "STH", "THT", "S4", "TH4", "S5", "TH5",
+    "CON", "WEI", "ET", "TIM", "UNI",
 )
 
 # 断りの種類。**文言から推し量らない**

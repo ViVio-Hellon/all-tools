@@ -59,6 +59,11 @@ DETAIL_FIELDS: tuple[str, ...] = (
     "others1", "others2", "others3", "others4", "others5", "others6", "keisu",
 )
 
+#: あとから増えた欄(作業停止④⑤ v4.24.0)。**入っているときだけ数える** ──
+#: 空でも数えると、前からあるページの指紋がぜんぶ変わり、送り済みの日報が
+#: 一斉に「未送信」へ戻ってしまう
+ADDED_DETAIL_FIELDS: tuple[str, ...] = ("s4", "th4", "s5", "th5")
+
 #: 指紋の長さ。SHA-256 の頭128ビット ── 手元のDBの中で見分けるだけなので
 #: 64文字は要りません(取り違えは 2^-64 の側)
 _LENGTH = 32
@@ -90,6 +95,9 @@ def page_fingerprint(header: Any, details: Sequence[Any]) -> str:
                      key=lambda d: int(getattr(d, "row_no", 0) or 0))
     for detail in ordered:
         values = _row_values(detail, DETAIL_FIELDS)
+        added = _row_values(detail, ADDED_DETAIL_FIELDS)
+        if any(added):
+            values += added
         if not any(values):
             continue                       # 空の行は共有から見て無いのと同じ
         rows.append([text(getattr(detail, "row_no", ""))] + values)

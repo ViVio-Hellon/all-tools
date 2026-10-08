@@ -12,6 +12,7 @@ from dataclasses import field as dc_field
 DETAIL_FAMILIES = (
     "lot", "zai", "siz", "ken", "kz", "kh", "sz", "sh", "hit", "ai",
     "mai", "tut", "vc", "et", "s", "th", "ss", "ths", "sth", "tht",
+    "s4", "th4", "s5", "th5",
     "con", "wei", "tim", "uni",
 )
 
@@ -187,6 +188,12 @@ class DetailRecord:
     ths: str = ""
     sth: str = ""
     tht: str = ""
+    # 作業停止④⑤(v4.24.0)。**紙(xlsx)と VBA には欄が無い**(③まで)。
+    # 打つ画面と、手元・共有の日報と、集計に入ります
+    s4: str = ""
+    th4: str = ""
+    s5: str = ""
+    th5: str = ""
     con: str = ""
     wei: str = ""
     tim: str = ""

@@ -61,6 +61,9 @@ DETAIL_COLUMNS: tuple[str, ...] = (
     "MAI", "TUT", "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT",
     "CON", "WEI", "TIM", "UNI",
     "Others1", "Others2", "Others3", "Others4", "Others5", "Others6", "係数",
+    # 作業停止④⑤(v4.24.0)。**後ろに足す** ── 前からある表には
+    # `ensure_tables` が列を継ぎ足す(足すと表の最後に付くので、並びも同じ)
+    "S4", "TH4", "S5", "TH5",
 )
 
 # ------------------------------------------------------------------
@@ -133,6 +136,22 @@ def ensure_tables(conn: sqlite3.Connection, header_table: str,
     """表が無ければ作る(VBA ``NippouDB_EnsureTables`` 相当)。"""
     conn.execute(_create_sql(header_table, HEADER_COLUMNS, HEADER_KEY))
     conn.execute(_create_sql(detail_table, DETAIL_COLUMNS, DETAIL_KEY))
+    add_missing_columns(conn, detail_table, DETAIL_COLUMNS)
+
+
+def add_missing_columns(conn: sqlite3.Connection, table: str,
+                        columns: tuple[str, ...]) -> list[str]:
+    """前からある表に、あとから増えた列を足す(`CREATE TABLE IF NOT EXISTS` は足さない)。
+
+    作業停止④⑤(v4.24.0)を足したとき、共有の表は③までの列で作られて
+    いました。足さないと INSERT が「列がありません」で断られ、共有へ保存
+    できなくなります。入っている行には触れません(足した列は空)。
+    """
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({quote(table)})")}
+    added = [c for c in columns if c not in have]
+    for column in added:
+        conn.execute(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)}")
+    return added
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -165,7 +184,7 @@ def _detail_values(header: HeaderRecord, d: DetailRecord) -> tuple[Any, ...]:
             d.mai, d.tut, d.vc, d.et, d.s, d.th, d.ss, d.ths, d.sth, d.tht,
             d.con, d.wei, d.tim, d.uni,
             d.others1, d.others2, d.others3, d.others4, d.others5, d.others6,
-            d.keisu)
+            d.keisu, d.s4, d.th4, d.s5, d.th5)
 
 
 def _marks(columns: tuple[str, ...]) -> str:

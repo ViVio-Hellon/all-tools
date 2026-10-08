@@ -426,6 +426,39 @@ table.grid thead th.stop--handling{
 }
 
 /* ------------------------------------------------------------------
+   作業停止は1組ずつ出す(v4.24.0)
+
+   ①〜⑤の10欄を横に並べると表が横に流れるので、`table.grid` の
+   `data-stop-show` の組だけ出す。隠れている組の欄も表の中にあり、保存も
+   集める(`[data-family]`)。見出しの ①〜⑤ で切り替え、右の「停止」の欄に
+   どの組に入っているかと合計の分を出す(`entry.js` の `paintStopSums`)。
+   ------------------------------------------------------------------ */
+table.grid[data-stop-show="1"] [data-stop-slot]:not([data-stop-slot="1"]),
+table.grid[data-stop-show="2"] [data-stop-slot]:not([data-stop-slot="2"]),
+table.grid[data-stop-show="3"] [data-stop-slot]:not([data-stop-slot="3"]),
+table.grid[data-stop-show="4"] [data-stop-slot]:not([data-stop-slot="4"]),
+table.grid[data-stop-show="5"] [data-stop-slot]:not([data-stop-slot="5"]){ display:none; }
+table.grid thead th.stop-head{ white-space:nowrap; padding:2px 4px; }
+.stop-head__t{ margin-right:4px; }
+.stopsw{ display:inline-flex; gap:2px; vertical-align:middle; }
+.stopsw__b{
+  min-width:22px; height:22px; padding:0 2px; border-radius:6px;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  font:inherit; font-size:13px; line-height:1; cursor:pointer;
+}
+.stopsw__b[aria-pressed="true"]{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:700; box-shadow:inset 0 0 0 1px var(--accent); }
+.stopsw__b.has-stop:not([aria-pressed="true"]){ border-color:var(--accent); font-weight:700; }
+table.grid th.stopsum-h{ min-width:64px; }
+td.stopsum{ white-space:nowrap; font-size:12px; text-align:left; padding:0 4px; }
+.stopsum__b{
+  min-width:20px; height:20px; padding:0 2px; margin-right:1px; border-radius:5px;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  font:inherit; font-size:12px; line-height:1; cursor:pointer;
+}
+.stopsum__b.is-shown{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent); font-weight:700; }
+.stopsum__min{ color:var(--faint); margin-left:2px; }
+
+/* ------------------------------------------------------------------
    紙に載らない列(作業時間・単重)
 
    印刷範囲の外(X列・Y列)に置かれている計算結果。**入力する列と

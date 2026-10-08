@@ -59,7 +59,7 @@ class CloseTests(unittest.TestCase):
         entry = read("views/entry.js")
         start = entry[entry.index("export function start()"):]
         self.assertIn('"[data-row][data-family], [data-header], [data-check]")) touched(el)',
-                      start[:900])
+                      start[:2400])
 
     def test_保存は1本ずつ_中身は送る瞬間に集める(self) -> None:
         """古い自動保存が、新しい保存のあとに着いて上書きしていた。"""

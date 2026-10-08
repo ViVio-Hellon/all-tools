@@ -60,7 +60,7 @@ def move_text(
     if len(text) != required_len:
         return MoveTextResult(cleared=cleared, new_text=text)
 
-    if family == "THT" or next_family is None:
+    if family == "TH5" or next_family is None:
         return MoveTextResult(cleared=cleared, new_text=text)
 
     return MoveTextResult(cleared=cleared, new_text=text, focused=field_name(next_family, row))

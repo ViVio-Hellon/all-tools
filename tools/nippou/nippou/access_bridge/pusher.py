@@ -118,7 +118,8 @@ def build_detail_statements(header: HeaderRecord, details: list[DetailRecord]) -
         "[LOT],[ZAI],[SIZ],[KEN],[KZ],[KH],[SZ],[SH],[HIT],[AI],"
         "[MAI],[TUT],[VC],[ET],[S],[TH],[SS],[THS],[STH],[THT],"
         "[CON],[WEI],[TIM],[UNI],"
-        "[Others1],[Others2],[Others3],[Others4],[Others5],[Others6],[係数]"
+        "[Others1],[Others2],[Others3],[Others4],[Others5],[Others6],[係数],"
+        "[S4],[TH4],[S5],[TH5]"
     )
     for d in details:
         values = ",".join(
@@ -129,6 +130,7 @@ def build_detail_statements(header: HeaderRecord, details: list[DetailRecord]) -
                 _lit(d.ss), _lit(d.ths), _lit(d.sth), _lit(d.tht), _lit(d.con), _lit(d.wei), _lit(d.tim), _lit(d.uni),
                 _lit(d.others1), _lit(d.others2), _lit(d.others3), _lit(d.others4), _lit(d.others5), _lit(d.others6),
                 _lit(d.keisu),
+                _lit(d.s4), _lit(d.th4), _lit(d.s5), _lit(d.th5),
             ]
         )
         statements.append(f"INSERT INTO [{detail_table_name(header.line)}] ({columns}) VALUES ({values})")
@@ -344,6 +346,41 @@ def _push_summaries_one_by_one(repo: NippouRepository, accdb_path: Path,
     return sent
 
 
+#: あとから増えた明細の列(Access の表に無ければ足す)。作業停止④⑤(v4.24.0)
+ADDED_DETAIL_COLUMNS: tuple[str, ...] = ("S4", "TH4", "S5", "TH5")
+#: このプロセスで列を足し終えた(書き先, 表)。**1つの表には1回だけ**流す
+_columns_ensured: set[tuple[str, str]] = set()
+
+
+def add_columns_statements(table: str) -> list[str]:
+    return [f"ALTER TABLE [{table}] ADD COLUMN [{c}] TEXT(255)" for c in ADDED_DETAIL_COLUMNS]
+
+
+def _ensure_access_columns(accdb_path: Path, line: str,
+                           runner: Optional[ScriptRunner]) -> None:
+    """共有の Access の明細表に、作業停止④⑤の列を足す(もう有れば何もしない)。
+
+    足さないと、日報の INSERT が「列がありません」で断られ、共有へ保存
+    できなくなります。失敗しても日報の送信は続けます(断られた理由が
+    そちらで出るので)。
+    """
+    table = detail_table_name(line)
+    key = (str(accdb_path), table)
+    if key in _columns_ensured:
+        return
+    statements = add_columns_statements(table)
+    try:
+        if SETTINGS.access_backend == "odbc":
+            from .odbc_backend import add_columns_odbc
+            add_columns_odbc(accdb_path, statements)
+        else:
+            script = script_gen.build_add_columns_script(str(accdb_path), statements)
+            (runner or ScriptRunner()).run(script)
+        _columns_ensured.add(key)
+    except Exception:  # noqa: BLE001 - 日報の送信は続ける
+        _logger.exception("Access の表に作業停止④⑤の列を足せませんでした table=%s", table)
+
+
 def _push_one(
     repo: NippouRepository,
     accdb_path: Path,
@@ -371,10 +408,12 @@ def _push_one(
             header_table_name(header.line), detail_table_name(header.line))
     elif SETTINGS.access_backend == "odbc":
         from .odbc_backend import push_statements_odbc
+        _ensure_access_columns(accdb_path, header.line, runner)
         statements = (build_header_statements(header)
                       + build_detail_statements(header, details))
         result = push_statements_odbc(accdb_path, statements)
     else:
+        _ensure_access_columns(accdb_path, header.line, runner)
         statements = (build_header_statements(header)
                       + build_detail_statements(header, details))
         result = run_with_retry(

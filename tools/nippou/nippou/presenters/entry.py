@@ -37,7 +37,7 @@ column_groups = layout.column_groups
 # カタカナ=突発・待ち / アルファベット=ハンドリング)ので、
 # **打ち間違えると別の分類に入ったまま集計まで通ります。**
 # 選ばせれば、その間違いは起きません。
-STOP_CODE_FAMILIES: tuple[str, ...] = ("S", "SS", "STH")
+STOP_CODE_FAMILIES: tuple[str, ...] = constants.STOP_CODE_FAMILIES
 
 
 def stop_choices() -> list[dict[str, Any]]:
@@ -108,7 +108,15 @@ STOP_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("S", "TH", "loss"),
     ("SS", "THS", "sudden"),
     ("STH", "THT", "handling"),
+    ("S4", "TH4", "loss"),
+    ("S5", "TH5", "sudden"),
 )
+
+#: 作業停止の何組目か(1〜5)。**表には1組だけ出して、①〜⑤で切り替える**
+#: (`entry.html` の `data-stop-slot`)── 5組を横に並べると表が横に流れる
+STOP_SLOT_OF: dict[str, int] = {
+    family: no
+    for no, pair in enumerate(constants.STOP_SLOTS, start=1) for family in pair}
 
 # 画面が扱う全ファミリ(UNI/TIM を含む)
 ALL_FAMILIES: tuple[str, ...] = tuple(c.family for c in COLUMNS)
@@ -314,7 +322,7 @@ def recalculate(state: GridState, *, package_calc: bool,
         1. 実績合計 枚数 = 個装単位 枚数 × 梱包単位 包数  (`Weight計算`)
         2. 単重         = 実績合計 重量 ÷ 実績合計 枚数   (`単重計算`)
         3. 実績合計 重量 = 実績合計 枚数 × 単重           (`Weight計算`)
-        4. 作業時間     = 終了 − 開始 − 停止①②③        (`時間計算`)
+        4. 作業時間     = 終了 − 開始 − 停止①〜⑤      (`時間計算`)
 
     **枚数を先に決めるのが肝です。** 2 も 3 も枚数を使うので、古い枚数の
     まま走らせると、単重を消してしまったり重量が出なかったりします。

@@ -624,7 +624,11 @@
 </div>
 
 <div class="grid-wrap">
-  <table class="grid">
+  {# **作業停止は1組ずつ出す**(v4.24.0)。①〜⑤を横に並べると表が横に流れて
+     打ちにくくなるので、見出しの ①〜⑤ で出す組を切り替える(全部の欄は
+     表の中にあり、隠れている組も保存されます)。右の「停止」の欄に、どの組に
+     入っているかと合計の分が出ます #}
+  <table class="grid" data-stop-show="1">
     <thead>
       {# 上段 ── 紙の5行目(梱包作業時間・梱包数量・作業停止①②③ …)。
          同じ見出しが続くぶんを結合する #}
@@ -636,7 +640,20 @@
           {% set cls = [] %}
           {% for a, b, tone in stop_pairs %}{% if col.family in (a, b) %}{% set _ = cls.append("stop--" ~ tone) %}{% endif %}{% endfor %}
           {% if col.outside_print %}{% set _ = cls.append("outside") %}{% endif %}
-          {% if group %}
+          {% set slot = stop_slot_of.get(col.family) %}
+          {% if group and slot %}
+          <th class="{{ cls|join(' ') }} stop-head" colspan="{{ span }}" data-stop-slot="{{ slot }}">
+            <span class="stop-head__t">作業停止</span>
+            <span class="stopsw" role="group" aria-label="出す組">
+              {% for n in range(1, 6) %}<button type="button" class="stopsw__b" data-stop-to="{{ n }}"
+                title="作業停止{{ '①②③④⑤'[n - 1] }}を出す"
+                aria-pressed="{{ 'true' if n == slot else 'false' }}">{{ '①②③④⑤'[n - 1] }}</button>{% endfor %}
+            </span>
+          </th>
+          {% if col.family == 'S5' %}
+          <th class="stopsum-h" rowspan="2" data-hint="どの組に停止が入っているか(押すとその組を出す)と、停止の合計(分)">停止</th>
+          {% endif %}
+          {% elif group %}
           <th class="{{ cls|join(' ') }}" colspan="{{ span }}">{{ group }}</th>
           {% else %}
           {# 上段の見出しが無い列は、ここが唯一の見出し。
@@ -658,6 +675,7 @@
            紙とCSVは `label` のまま ── 紙は現物で、CSVの列名は取り込みが
            探す名前なので、こちらから変えられません #}
         <th class="{{ cls|join(' ') }}" data-hint="{{ input_hint(col.family) }}"
+            {% if stop_slot_of.get(col.family) %}data-stop-slot="{{ stop_slot_of.get(col.family) }}"{% endif %}
             style="min-width:{{ col.width }}px">{{ col.screen_name }}</th>
         {% endif %}
         {% endfor %}
@@ -680,7 +698,7 @@
         {% set value = view.rows[row|string][col.family] %}
         {% set td_class = [('outside' if col.outside_print else ''),
                            ('g-cell' if col.family == 'SIZ' else '')]|select|join(' ') %}
-        <td{% if td_class %} class="{{ td_class }}"{% endif %}>
+        <td{% if td_class %} class="{{ td_class }}"{% endif %}{% if stop_slot_of.get(col.family) %} data-stop-slot="{{ stop_slot_of.get(col.family) }}"{% endif %}>
           {% if col.kind == 'select' and col.family in stop_code_families and stop_choices %}
           {# 停止理由の記号は選ばせる。打つと文字の種類で分類が変わり、
              間違いが集計まで通ってしまう(CheckCharType) #}
@@ -756,6 +774,11 @@
           >{{ gm.text if gm else 'G' }}</span>
           {% endif %}
         </td>
+        {% if col.family == 'TH5' %}
+        {# どの組に停止が入っているか・停止の合計。**中身は画面が数える**
+           (`entry.js` の `paintStopSums`) ── 打つたびに変わるので #}
+        <td class="stopsum" data-stopsum-row="{{ row }}"></td>
+        {% endif %}
         {% endfor %}
         {# ---- 紙にも表にも出ない欄を、行に持たせておく ----
 

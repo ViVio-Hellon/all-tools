@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS daily_detail (
     row_no      INTEGER NOT NULL,
     lot TEXT, zai TEXT, siz TEXT, ken TEXT, kz TEXT, kh TEXT, sz TEXT, sh TEXT,
     hit TEXT, ai TEXT, mai TEXT, tut TEXT, vc TEXT, et TEXT, s TEXT, th TEXT,
-    ss TEXT, ths TEXT, sth TEXT, tht TEXT, con TEXT, wei TEXT, tim TEXT, uni TEXT,
+    ss TEXT, ths TEXT, sth TEXT, tht TEXT, s4 TEXT, th4 TEXT, s5 TEXT, th5 TEXT,
+    con TEXT, wei TEXT, tim TEXT, uni TEXT,
     others1 TEXT, others2 TEXT, others3 TEXT, others4 TEXT, others5 TEXT, others6 TEXT,
     keisu TEXT,
     -- その行の理由。**行ごとに持ちます。**
@@ -375,6 +376,11 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("daily_detail", "hiki_no", "TEXT"),
     ("daily_detail", "box_course", "TEXT"),       # v4.17.0 Gコースの印
     ("daily_detail", "reason", "TEXT"),
+    # 作業停止④⑤(v4.24.0)
+    ("daily_detail", "s4", "TEXT"),
+    ("daily_detail", "th4", "TEXT"),
+    ("daily_detail", "s5", "TEXT"),
+    ("daily_detail", "th5", "TEXT"),
     # 指紋。**空のまま足します** ── すでに送ってあるページは
     # `synced_hash` が空なので、次の保存で1度だけ未送信に戻ります。
     # そこで送れば指紋が揃い、以後は同じ中身なら立ちません

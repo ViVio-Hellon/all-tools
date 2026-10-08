@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ..constants import STOP_TIME_FAMILIES
 from .numeric import is_numeric, to_float
 from .shift import normalize_hhmm
 
@@ -179,7 +180,7 @@ def compute(rows: dict[int, dict[str, str]], *,
         1. 全行の時・分の範囲を見る(1つでも駄目なら何も計算しない)
         2. 開始・終了が4つとも埋まっている行だけ、差分を出す
         3. 直の規定時間を超えていないか / 同時刻でないかを見る
-        4. 停止時間①②③を引く。マイナスなら断る
+        4. 停止時間①〜⑤を引く(④⑤は v4.24.0)。マイナスなら断る
 
     `limit_minutes` が 0 のときは上限チェックを飛ばします。
     """
@@ -216,7 +217,7 @@ def compute(rows: dict[int, dict[str, str]], *,
     # 作業時間が無ければ 0 から引いてマイナスになる ── それも断りの対象
     for row in sorted(rows):
         values = rows[row]
-        stops = [(values.get(f) or "").strip() for f in ("TH", "THS", "THT")]
+        stops = [(values.get(f) or "").strip() for f in STOP_TIME_FAMILIES]
         if not any(stops):
             continue
         minutes = times.get(row, 0)
@@ -269,7 +270,7 @@ def problems(rows: dict[int, dict[str, str]], *,
         kh = (values.get("KH") or "").strip()
         sz = (values.get("SZ") or "").strip()
         sh = (values.get("SH") or "").strip()
-        stops = [(values.get(f) or "").strip() for f in ("TH", "THS", "THT")]
+        stops = [(values.get(f) or "").strip() for f in STOP_TIME_FAMILIES]
 
         minutes = 0
         if kz and kh and sz and sh:

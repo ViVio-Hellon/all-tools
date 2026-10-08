@@ -74,7 +74,7 @@ class InputRule:
     #: 打ち込める上限。飛ぶ長さと同じにする ── 飛んだあとに戻って
     #: 3 文字目を足せてしまうと、「2桁」の約束が崩れる
     max_length: Optional[int]
-    #: 次の欄(飛び先)。終端の THT は None
+    #: 次の欄(飛び先)。終端の TH5(作業停止⑤の時間)は None
     next_family: Optional[str]
     #: 小文字を大文字へ直すか
     uppercase: bool

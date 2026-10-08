@@ -145,15 +145,17 @@ class NippouRepository:
                                 report_date, line, shift, page, row_no,
                                 lot, zai, siz, ken, kz, kh, sz, sh, hit, ai,
                                 mai, tut, vc, et, s, th, ss, ths, sth, tht,
+                                s4, th4, s5, th5,
                                 con, wei, tim, uni,
                                 others1, others2, others3, others4, others5, others6, keisu,
                                 reason, hiki_no, box_course
-                            ) VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?, ?,?,?)
+                            ) VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?, ?,?,?)
                             """,
                             (
                                 header.report_date, header.line, header.shift, header.page, d.row_no,
                                 d.lot, d.zai, d.siz, d.ken, d.kz, d.kh, d.sz, d.sh, d.hit, d.ai,
                                 d.mai, d.tut, d.vc, d.et, d.s, d.th, d.ss, d.ths, d.sth, d.tht,
+                                d.s4, d.th4, d.s5, d.th5,
                                 d.con, d.wei, d.tim, d.uni,
                                 d.others1, d.others2, d.others3, d.others4, d.others5, d.others6, d.keisu,
                                 d.reason, d.hiki_no, d.box_course,
@@ -824,7 +826,7 @@ class NippouRepository:
         self.conn.commit()
 
     def recent_stop_codes(self, line: str, pages: int = 60) -> list[str]:
-        """そのラインで**最近保存したページ**の停止記号(①②③)を、新しい順に。
+        """そのラインで**最近保存したページ**の停止記号(①〜⑤)を、新しい順に。
 
         日報入力の停止記号の一覧に「よく使う」を出すため(v4.7.0
         `logic/input_shortcuts.frequent_codes`)。報告日は「2026年8月3日」の
@@ -832,14 +834,15 @@ class NippouRepository:
         ぶんに入りますが、記号の癖を見るには十分です。
         """
         rows = self.conn.execute(
-            "SELECT d.s, d.ss, d.sth FROM daily_detail d"
+            "SELECT d.s, d.ss, d.sth, d.s4, d.s5 FROM daily_detail d"
             " JOIN (SELECT report_date, line, shift, page, saved_at FROM daily_header"
             "       WHERE line=? ORDER BY saved_at DESC LIMIT ?) h"
             "   ON d.report_date=h.report_date AND d.line=h.line"
             "  AND d.shift=h.shift AND d.page=h.page"
             " ORDER BY h.saved_at DESC, d.page, d.row_no",
             (line, max(1, int(pages)))).fetchall()
-        return [str(code).strip() for r in rows for code in (r["s"], r["ss"], r["sth"])
+        return [str(code).strip() for r in rows
+                for code in (r["s"], r["ss"], r["sth"], r["s4"], r["s5"])
                 if code and str(code).strip()]
 
     def shift_workers(self, report_date: str, line: str, shift: str) -> list[str]:

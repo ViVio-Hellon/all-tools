@@ -321,7 +321,11 @@ def _sheet_html(
     **`<html>` は付けません。** 直ぶんをまとめて1つの窓に出せるように、
     1枚ぶんを部品として切り出してあります。
     """
-    columns = layout.PRINT_COLUMNS
+    # 作業停止④⑤は紙(用紙)に無い欄。**そのページで使っているときだけ**③の右に足す
+    # (使っていないページは今までと同じ幅の紙のまま)
+    uses_added = any((getattr(d, c.field, "") or "").strip()
+                     for d in details for c in layout.ADDED_COLUMNS)
+    columns = layout.PRINT_COLUMNS_WITH_ADDED if uses_added else layout.PRINT_COLUMNS
     head_html = _head_html(header)
 
     # 上段 ── 結合される見出しだけ colspan を持ち、単独の列は2段ぶん高い
