@@ -828,10 +828,14 @@ class Exporter:
     META_UNDELIVERED_EVENTS_SINCE = "undelivered_events_since"
 
     def unsent(self) -> int:
-        """まだ共有へ届いていないもの(看板の状態・コメント・出来事)の数。手元の SQLite だけを見る。"""
+        """**送り直せば減る**もの(看板の状態・コメント・出来事)の数。手元の SQLite だけを見る。
+
+        諦めた行(要確認)は数えない。以前は数えていたので、諦めた行があるあいだ、見張りが
+        5 秒ごとに書き戻しを回し続けた(送り直しても減らない)。
+        """
         try:
-            return (self.store.pending_count() + self.store.unsent_comment_count()
-                    + self.store.unsent_event_count())
+            left = self.store.unsent()
+            return left.retryable_items + left.comments + left.events
         except Exception:  # noqa: BLE001 - 数えられないときは送り直しを急がない
             return 0
 
@@ -882,11 +886,18 @@ class Exporter:
         手元の数を数えるだけで、共有フォルダへは**残りがあるときだけ**大きさを見に行く。
         """
         while not self._retry_stop.wait(self.RETRY_SEC):
-            if not self.unsent():
+            try:
+                left = self.store.unsent()
+            except Exception:  # noqa: BLE001 - 数えられないときは周期に任せる
+                continue
+            if not (left.to_shared_db() or left.to_history()):
                 continue
             if time.monotonic() - self._last_run < self.RETRY_SEC:
                 continue                      # いま送ったばかり(押した直後など)
-            if self.gateway.exists():
+            # 送り先が見えたときだけ。**出来事の送り先は看板履歴のファイル**(共有DBではない)
+            history = self.history_gateway or self.gateway
+            if ((left.to_shared_db() and self.gateway.exists())
+                    or (left.to_history() and history.exists())):
                 self.retries += 1
                 self._task.request_now()
 

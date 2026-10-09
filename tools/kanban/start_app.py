@@ -919,38 +919,18 @@ def _relevant_lines(mode: str, line: str) -> list[str]:
 def _busy_reason(store) -> str:
     """いま止めてはいけない理由。空文字なら止めてよい。
 
-    **数えるのは「まだ送る見込みのある」ぶんだけ。** 諦めた行(共有DB側から
-    消された等で :data:`~kanban.db.store.MAX_SYNC_ATTEMPTS` 回失敗した行)まで
-    数えると、待っても永久に減らないので**二度と終われなくなります** ──
-    タブを閉じてもアプリが残り、次の起動が「すでに起動しています」で止まる。
-    諦めた行は「要確認」として画面に出るので、見えなくなるわけではありません。
+    **数えるのは「待てば減る」ものだけ**(:meth:`kanban.db.store.Unsent.busy_reason`)。
+    諦めた行(共有DB側から消された等で何度も失敗した行)や、置き場所が見えないまま
+    何日も経った出来事まで数えると、待っても永久に減らないので**二度と終われなくなる**
+    ── タブを閉じてもアプリが残り、次の起動が「すでに起動しています」で止まる。
+    諦めた行は「要確認」として画面に出るので、見えなくなるわけではない。
+    コメントと出来事も待つ(以前は看板の状態だけを数えていて、書いたコメントが共有へ
+    届く前に止まり、相手には次にこの端末を開くまで届かなかった)。
     """
     try:
-        pending = store.retryable_pending_count()
-        comments = store.unsent_comment_count()
-        events = store.unsent_event_count(within_hours=UNSENT_EVENT_WAIT_HOURS)
+        return store.unsent().busy_reason()
     except Exception:  # noqa: BLE001 - 判定できないなら止めてよい
         return ""
-    # **コメントと出来事も待つ。** 以前は看板の状態だけを数えていたので、書いた
-    # コメントが共有へ届く前に「終了」・自動終了で止まり、相手には次にこの端末を
-    # 開くまで届かなかった(画面にも出ていなかった)
-    parts = []
-    if pending:
-        parts.append(f"未反映の操作が {pending} 件")
-    if comments:
-        parts.append(f"送っていないコメントが {comments} 件")
-    if events:
-        parts.append(f"看板履歴へ送っていない記録が {events} 件")
-    if parts:
-        return f"共有DBへ{'・'.join(parts)}あります"
-    return ""
-
-
-#: 出来事(看板履歴)を待つのは、この時間内に積んだものだけ。看板履歴は看板マスタとは
-#: 別のファイルで、置き場所が見えないまま何日も経った記録を待っても減らない ──
-#: 待ち続けると二度と終われなくなる(:meth:`kanban.db.store.Store.retryable_pending_count`
-#: と同じ理由)。古い記録は次に開いたときに送る
-UNSENT_EVENT_WAIT_HOURS = 24
 
 
 def _shutdown(store, importer, exporter) -> None:

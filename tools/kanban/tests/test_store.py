@@ -491,6 +491,75 @@ class SyncBookkeepingTest(StoreTestBase):
         self.assertEqual(start_app._busy_reason(self.store), "")
 
 
+class UnsentOneCountTest(StoreTestBase):
+    """「まだ届いていない」の数え方は Store.unsent の 1 か所(止める判断・送り直しの見張り・帯)。
+
+    以前は止める判断は諦めた行を外し、送り直しの見張りは数えていたので、諦めた行があるあいだ
+    見張りが 5 秒ごとに書き戻しを回し続けた。
+    """
+
+    def _exporter(self, shared_exists=True, history_exists=True):
+        from unittest import mock
+
+        from kanban.db.sync import Exporter
+
+        gateway = mock.Mock(exists=mock.Mock(return_value=shared_exists))
+        history = mock.Mock(exists=mock.Mock(return_value=history_exists))
+        exporter = Exporter(self.store, gateway, interval_sec=60, history_gateway=history)
+        exporter._task = mock.Mock()
+        exporter.RETRY_SEC = 0.01
+        return exporter
+
+    def _run_retry_once(self, exporter):
+        import threading
+
+        calls = []
+        stop = exporter._retry_stop
+        real_wait = stop.wait
+
+        def wait_once(timeout=None):
+            if calls:
+                return True
+            calls.append(1)
+            return real_wait(0)
+
+        stop.wait = wait_once
+        exporter._last_run = 0.0
+        exporter._retry_loop()
+        return exporter._task.request_now.call_count
+
+    def test_諦めた行だけなら送り直さない(self):
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        self.store.mark_events_sent([e["id"] for e in self.store.unsent_events()])
+        self.store.mark_comments_sent([c["id"] for c in self.store.unsent_comments()])
+        for _ in range(5):
+            self.store.mark_items_failed([("LVC", "1")], "対象行なし")
+        left = self.store.unsent()
+        self.assertEqual((left.items, left.retryable_items), (1, 0))
+        exporter = self._exporter()
+        self.assertEqual(exporter.unsent(), 0, "諦めた行を送り直しに数えている")
+        self.assertEqual(self._run_retry_once(exporter), 0, "諦めた行のために送り直した")
+
+    def test_出来事は看板履歴が見えたら送り直す(self):
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        self.store.mark_items_synced([("LVC", "1", self.store.item("LVC", "1").rev)])
+        self.store.mark_comments_sent([c["id"] for c in self.store.unsent_comments()])
+        self.assertTrue(self.store.unsent().to_history())
+        # 共有DBは見えないが看板履歴は見える → 送る(以前は共有DBしか見ていなかった)
+        self.assertEqual(self._run_retry_once(self._exporter(shared_exists=False)), 1)
+        self.assertEqual(self._run_retry_once(self._exporter(history_exists=False)), 0)
+
+    def test_数え方の内訳(self):
+        self.store.apply_transition("LVC", "1", models.order_button_changes, operation="order")
+        self.store.add_comment("LVC", "1", "現場", "急ぎです")
+        left = self.store.unsent()
+        self.assertEqual(left.items, self.store.pending_count())
+        self.assertEqual(left.retryable_items, self.store.retryable_pending_count())
+        self.assertEqual(left.comments, self.store.unsent_comment_count())
+        self.assertEqual(left.events, self.store.unsent_event_count())
+        self.assertTrue(left.worth_waiting())
+
+
 class LockTest(StoreTestBase):
     def test_lock_is_exclusive_between_hosts(self):
         other = Store(self.store.path, host_name="PC-OTHER")

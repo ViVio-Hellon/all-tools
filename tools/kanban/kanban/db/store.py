@@ -28,6 +28,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
@@ -167,6 +168,46 @@ class LockTimeout(Exception):
 #: :mod:`dbkit.sqlite_toolkit` の実装をそのまま使う。
 is_lock_error = sqlite_toolkit.is_lock_error
 
+
+
+#: 出来事(看板履歴)を止める前に待つのは、この時間内に積んだものだけ。看板履歴は看板マスタとは
+#: 別のファイルで、置き場所が見えないまま何日も経った記録を待っても減らない ── 待ち続けると
+#: 二度と終われなくなる(:meth:`Store.retryable_pending_count` と同じ理由)。古い記録は次に開いたときに送る
+UNSENT_EVENT_WAIT_HOURS = 24
+
+
+@dataclass(frozen=True)
+class Unsent:
+    """まだ共有へ届いていないものの数(:meth:`Store.unsent`)。**どれを数えるかはここで決める。**"""
+
+    items: int              #: 看板の状態の未反映(諦めた行も含む。画面の「未反映」)
+    retryable_items: int    #: そのうち、まだ送る見込みのあるもの(諦めた行を除く)
+    comments: int           #: 送っていないコメント
+    events: int             #: 送っていない出来事(看板履歴)
+    recent_events: int      #: そのうち :data:`UNSENT_EVENT_WAIT_HOURS` 以内に積んだもの
+
+    def worth_waiting(self) -> bool:
+        """止める前に待つ価値があるか(待てば減るものだけ)。"""
+        return bool(self.retryable_items or self.comments or self.recent_events)
+
+    def to_shared_db(self) -> bool:
+        """看板マスタ(共有DB)へ送り直すものがあるか(諦めた行は送り直しても減らない)。"""
+        return bool(self.retryable_items or self.comments)
+
+    def to_history(self) -> bool:
+        """看板履歴へ送り直すものがあるか。"""
+        return bool(self.events)
+
+    def busy_reason(self) -> str:
+        """止めてはいけない理由。空なら止めてよい。"""
+        parts = []
+        if self.retryable_items:
+            parts.append(f"未反映の操作が {self.retryable_items} 件")
+        if self.comments:
+            parts.append(f"送っていないコメントが {self.comments} 件")
+        if self.recent_events:
+            parts.append(f"看板履歴へ送っていない記録が {self.recent_events} 件")
+        return f"共有DBへ{'・'.join(parts)}あります" if parts else ""
 
 class Store:
     """SQLite データストア。
@@ -1221,6 +1262,26 @@ class Store:
             "SELECT mgmt_no FROM kanban_item WHERE line = ? AND dirty = 1", (line,),
         ).fetchall()
         return any(keys.same(r[0], mgmt_no) for r in rows)
+
+    def unsent(self, *, recent_event_hours: float = UNSENT_EVENT_WAIT_HOURS) -> "Unsent":
+        """まだ共有へ届いていないものを**まとめて 1 回で数える**(:class:`Unsent`)。
+
+        「止めてよいか」「送り直すか」「届いていないと出すか」がそれぞれ別の数え方を
+        していて、諦めた行(要確認)を数えるかどうかが場所ごとに違った ── 止める判断は
+        諦めた行を外していたのに、送り直しの見張りは数えていたので、諦めた行がある
+        あいだ 5 秒ごとに書き戻しを回し続けた。どれを数えるかは :class:`Unsent` が決める。
+        """
+        since = (datetime.now() - timedelta(hours=recent_event_hours)).strftime("%Y/%m/%d %H:%M:%S")
+        conn = self.connection
+        items, retryable = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN sync_attempts < ? THEN 1 ELSE 0 END), 0)"
+            " FROM kanban_item WHERE dirty = 1", (MAX_SYNC_ATTEMPTS,)).fetchone()
+        events, recent = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN at >= ? THEN 1 ELSE 0 END), 0)"
+            " FROM kanban_event WHERE sent = 0", (since,)).fetchone()
+        comments = conn.execute("SELECT COUNT(*) FROM kanban_comment WHERE sent = 0").fetchone()[0]
+        return Unsent(items=int(items), retryable_items=int(retryable), comments=int(comments),
+                      events=int(events), recent_events=int(recent))
 
     def pending_count(self) -> int:
         """共有DBへ届いていない行の数。**諦めた行も含みます。**
