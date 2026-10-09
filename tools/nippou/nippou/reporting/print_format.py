@@ -114,6 +114,11 @@ th { background: #eee; }
   body { font-size: 11px; }
   th, td { padding: 1px 2px; }
   .sheet { break-inside: avoid; }
+  /* **明細の見出しは折り返してよい。** 22列の表は紙の幅いっぱいで、見出しを1行に
+     固めると、字の幅が広い書体(現場の Windows の Meiryo UI)では表が紙の右へはみ出し、
+     右の端から 4.1mm まで刷っていました(5mm を割る。Windows の CI の画面の試験で
+     見つかった)。見出しが折り返せれば表は幅に収まり、いつもの書体では何も変わりません */
+  .sheet > table th { white-space: normal; }
 }
 """ + paper.TOOLBAR_CSS + paper.page_css("A4 landscape", ".sheet")   # 梱包実績日報表は横長の紙
 

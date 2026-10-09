@@ -202,6 +202,14 @@ class PrintedEdgeTests(unittest.TestCase):
     def test_日報の紙(self) -> None:
         self.check(daily_html(pages=3), ".sheet", 3)
 
+    def test_日報の紙_字の幅が広い書体でも(self) -> None:
+        """現場の Windows の書体(Meiryo UI)は字の幅が広く、22列の表が紙の右へはみ出して
+        右の端から 4.1mm まで刷っていた(Windows の CI で見つかった)。Linux でも同じことが
+        起きるよう字の間を広げて確かめる。"""
+        wide = daily_html(pages=3).replace(
+            "</style>", "* { letter-spacing: 0.08em !important; }</style>", 1)
+        self.check(wide, ".sheet", 3)
+
 
 if __name__ == "__main__":
     unittest.main()
