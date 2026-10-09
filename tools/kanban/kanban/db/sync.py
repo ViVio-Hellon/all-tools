@@ -391,22 +391,14 @@ def _key_value(value: Any, category: str) -> Any:
 
 def _missing_row_reason(gateway: SharedDb, table: str, key_column: str, mgmt_no: str) -> str:
     """送り先の行が見つからない理由。**行が無い**のか、**番号の書き方が違う**のか。"""
-    import unicodedata
-
-    def norm(v: Any) -> str:
-        text = unicodedata.normalize("NFKC", "" if v is None else str(v)).strip()
-        try:
-            f = float(text)
-            return str(int(f)) if f.is_integer() else text
-        except ValueError:
-            return text
+    from .. import keys
 
     try:
-        keys = [r["k"] for r in gateway.select(
+        found = [r["k"] for r in gateway.select(
             f"SELECT {_quote(key_column)} AS k FROM {_quote(table)}")]
     except Exception:  # noqa: BLE001 - 理由が分からなくても失敗の記録はする
         return "対象行なし"
-    near = [k for k in keys if norm(k) == norm(mgmt_no)]
+    near = [k for k in found if keys.same(k, mgmt_no)]
     if near:
         return (f"対象行なし: 共有DBの {table} では{key_column}が「{near[0]}」と書かれていて"
                 f"(文字の種類・空白・型の違い)、この端末の「{mgmt_no}」と一致しません")

@@ -35,5 +35,37 @@ class KeysTest(unittest.TestCase):
                 self.assertTrue(master._has_key([{"管理番号": value}], "管理番号", "1"))
 
 
+class HasUnsentTest(unittest.TestCase):
+    """マスタで看板を消す前の「未送信があるか」も同じそろえ方で見る。
+
+    以前は「そのまま」と「整数にした文字」の 2 通りだけを探していたので、手元に '１' で
+    入っている看板の未送信を見落とし、消せてしまった(押した発注が捨てられる)。
+    """
+
+    def test_書き方が違っても未送信を見つける(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from kanban.db.store import DEFAULT_COLUMN_MAP, Store
+
+        folder = Path(tempfile.mkdtemp(prefix="kanban_keys_"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        store = Store(str(folder / "kanban.sqlite3"), host_name="PC")
+        self.addCleanup(store.close)
+        store.ensure_schema()
+        store.import_line(
+            line="LVC", table_name="看板_LVC", key_column="管理番号", key_category="TEXT",
+            column_map=dict(DEFAULT_COLUMN_MAP),
+            categories={name: "TEXT" for name in DEFAULT_COLUMN_MAP.values()},
+            rows=[{"mgmt_no": "１", "material": "外装紙", "size": "A"}], source_path="x.sqlite3")
+        store.connection.execute("UPDATE kanban_item SET dirty = 1 WHERE line = 'LVC'")
+        store.connection.commit()
+        for asked in ("1", "1.0", " 1 ", "１"):
+            with self.subTest(asked=asked):
+                self.assertTrue(store.has_unsent("LVC", asked))
+        self.assertFalse(store.has_unsent("LVC", "2"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1212,19 +1212,15 @@ class Store:
         マスタ管理で看板を消す前に見る(:func:`kanban.presenters.master.delete_row`)。
         消すと送り先が無くなり、押した発注が**どこにも届かないまま捨てられる**。
         """
-        keys = {str(mgmt_no).strip()}
-        try:
-            number = float(str(mgmt_no).strip())
-            if number.is_integer():
-                keys.add(str(int(number)))
-        except ValueError:
-            pass
-        marks = ", ".join("?" for _ in keys)
-        row = self.connection.execute(
-            f"SELECT 1 FROM kanban_item WHERE line = ? AND mgmt_no IN ({marks}) AND dirty = 1 LIMIT 1",
-            (line, *keys),
-        ).fetchone()
-        return row is not None
+        # **管理番号のそろえ方(kanban.keys)で比べる。** 以前は「そのままの文字」と
+        # 「整数にした文字」の 2 通りだけを SQL で探していたので、手元に '1.0' や '１' で
+        # 入っている看板の未送信を見落とし、消せてしまった(送った発注が捨てられる)
+        from .. import keys
+
+        rows = self.connection.execute(
+            "SELECT mgmt_no FROM kanban_item WHERE line = ? AND dirty = 1", (line,),
+        ).fetchall()
+        return any(keys.same(r[0], mgmt_no) for r in rows)
 
     def pending_count(self) -> int:
         """共有DBへ届いていない行の数。**諦めた行も含みます。**
