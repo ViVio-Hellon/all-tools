@@ -404,11 +404,12 @@ def sync_now():
         return _refuse("not_configured",
                        "取り込み元が見つかりません。"
                        "設定画面の「参照パス」でフォルダを指定してください。")
-    if service.is_busy():
+    # 走っている同期があれば、それが終わったあとにもう 1 回回るのを待つ。以前は
+    # 「同期中か」を見てから同期を頼むまでの間に背景の同期が始まると、頼みが黙って
+    # 捨てられ、同期していないのに「同期しました」と答えた
+    if not service.run_now(receive=True):
         return _refuse("busy", "いま同期しています。少し待ってからお試しください。",
                        status=409)
-
-    service.sync_now(receive=True)
     status = presenter.sync_dict()
     message = "同期しました" if not status["offline"] else f"送れませんでした: {status['message']}"
     payload = _ok(message)

@@ -27,6 +27,7 @@ Web 版に窓は無く、画面はいつでも開き直される。同期を画�
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from typing import Optional
@@ -41,6 +42,10 @@ log = get_logger("sync_service")
 # 同期が走っているあいだ、``/api/shutdown`` と ``idle_exit`` に見せる名前。
 # 「実行中の処理があります」の一覧に出る
 BUSY_LABEL = "取り込み元との同期"
+
+
+#: 「いま同期」が、走っている背景の同期と続けて回す 1 回を待つ上限(秒)
+NOW_WAIT_SEC = 60.0
 
 
 class SyncService:
@@ -136,11 +141,12 @@ class SyncService:
 
     def is_busy(self) -> bool:
         """いま同期中か。``/api/shutdown`` と ``idle_exit`` が使う。"""
-        return self._running
+        with self._lock:
+            return self._running
 
     def busy_labels(self) -> list[str]:
         """実行中の処理の名前。止める前の確認に出す(基盤仕様書 2.8)。"""
-        return [BUSY_LABEL] if self._running else []
+        return [BUSY_LABEL] if self.is_busy() else []
 
     # ------------------------------------------------------------------
     # 状態
@@ -151,7 +157,11 @@ class SyncService:
         送信待ちの件数だけは毎回数え直す。前回の同期のあとに入力が
         あった場合、状態だけを持ち回すと古い件数を出してしまう。
         """
-        status = self._status
+        # **写しを返す。** 以前は持っている状態そのものを書き換えていたので、同期の最中に
+        # 画面が状態を見に来ると、同期が「前の状態」として覚えたものまで変わり、
+        # 変わり目の記録(_note_change)が狂っていた
+        with self._lock:
+            status = dataclasses.replace(self._status)
         status.pending = self._pending_count()
         if not self.configured:
             status.state = SyncState.DISABLED
@@ -206,14 +216,35 @@ class SyncService:
         画面が押した直後に結果を見せたいときだけ使う。定期実行は
         ``request()`` のほうを通す。
         """
+        self.run_now(receive=receive)
+        return self.status()
+
+    def run_now(self, *, receive: bool = True, wait_sec: float = NOW_WAIT_SEC) -> bool:
+        """その場で同期する。**頼んだあとに 1 回回り終えたら** ``True``。
+
+        背景の同期がもう走っていたら、終わったあとにもう 1 回回す約束(``_rerun``)を
+        残して、それが終わるまで待つ。以前は走っていれば何もせずに返したので、
+        「いま同期」が背景の同期と重なると、同期していないのに「同期しました」と答えた。
+        ``wait_sec`` を過ぎても終わらなければ ``False``(画面は「同期中」と出す)。
+        """
         if not self._ensure():
-            return self.status()
+            return False
         with self._lock:
             if self._running:
-                return self.status()
-            self._running = True
-        self._run_once(receive)
-        return self.status()
+                self._rerun = bool(self._rerun) or receive
+                waiting = True
+            else:
+                self._running = True
+                waiting = False
+        if not waiting:
+            self._run_once(receive)
+            return True
+        deadline = time.monotonic() + max(0.0, wait_sec)
+        while self.is_busy():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        return True
 
     def _run_once(self, receive: bool) -> None:
         """1回回す。走っているあいだに頼まれていれば、続けてもう1回。"""
@@ -234,19 +265,22 @@ class SyncService:
         # 要求の番号(``r=``)のままにする ── 押した操作とつながるように
         token = (logging_utils.set_trace("s=" + logging_utils.new_id())
                  if logging_utils.current_trace() == "-" else None)
-        before = self._status
+        with self._lock:
+            before = dataclasses.replace(self._status)
+        after = before
         try:
             if auto is None:
                 return
-            status = auto.sync_once(receive=receive)
-            self._status = status
-            self._last_error = status.message if status.state is SyncState.OFFLINE else ""
+            after = auto.sync_once(receive=receive)
+            self._last_error = after.message if after.state is SyncState.OFFLINE else ""
         except Exception as exc:                  # noqa: BLE001 - 画面を止めない
             log.exception("同期中に想定外のエラー")
-            self._status = SyncStatus(state=SyncState.OFFLINE, message=str(exc))
+            after = SyncStatus(state=SyncState.OFFLINE, message=str(exc))
             self._last_error = str(exc)
         finally:
-            _note_change(before, self._status)
+            with self._lock:
+                self._status = after
+            _note_change(before, after)
             if token is not None:
                 logging_utils.reset_trace(token)
 
