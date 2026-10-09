@@ -30,6 +30,7 @@ VBA は次のどれかで **その場で止めて、何も計算しませんで�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Optional
 
 from ..constants import STOP_TIME_FAMILIES
@@ -128,6 +129,27 @@ def elapsed_minutes(kz: str, kh: str, sz: str, sh: str) -> int:
     return minutes
 
 
+def stop_minutes(text: str) -> Decimal:
+    """停止の分を**打ったとおりの数**で。空や数でなければ 0。
+
+    以前は `int()` で切り捨てていたので、停止 2.5 分が 2 分として引かれ、作業時間が
+    0.5 分多くなっていました(VBA の `Val()` は小数のまま引く)。2 進の float で引くと
+    60 − 0.1 − 0.2 が 59.699999… になるので、10 進(Decimal)で引きます。
+    """
+    text = (text or "").strip()
+    if not is_numeric(text):
+        return Decimal(0)
+    return Decimal(repr(to_float(text)))
+
+
+def minutes_text(minutes: Decimal | int | float) -> str:
+    """分を欄に書く字にする。整数なら "58"、小数なら "57.5"(余計な 0 を付けない)。"""
+    value = Decimal(str(minutes))
+    if value == value.to_integral_value():
+        return str(int(value))
+    return format(value.normalize(), "f")
+
+
 def shift_minutes(start: str, end: str) -> int:
     """直の長さ(分)。VBA ``CalcShiftMinutes``。
 
@@ -188,7 +210,7 @@ def compute(rows: dict[int, dict[str, str]], *,
     if problem is not None:
         return TimeResult(problem=problem)
 
-    times: dict[int, str] = {}
+    times: dict[int, Decimal] = {}
     for row in sorted(rows):
         values = rows[row]
         kz = (values.get("KZ") or "").strip()
@@ -211,7 +233,7 @@ def compute(rows: dict[int, dict[str, str]], *,
                 row, REFUSE_SAME_TIME,
                 f"{row}行目の時間入力が正しくありません。"
                 "開始時間と終了時間が同じになっています。"))
-        times[row] = minutes
+        times[row] = Decimal(minutes)
 
     # 作業停止分を引く。**停止だけ入っている行も通る**(VBA と同じ)ので、
     # 作業時間が無ければ 0 から引いてマイナスになる ── それも断りの対象
@@ -220,10 +242,8 @@ def compute(rows: dict[int, dict[str, str]], *,
         stops = [(values.get(f) or "").strip() for f in STOP_TIME_FAMILIES]
         if not any(stops):
             continue
-        minutes = times.get(row, 0)
-        for text in stops:
-            if is_numeric(text):
-                minutes -= int(to_float(text))
+        minutes = times.get(row, Decimal(0))
+        minutes -= sum(stop_minutes(text) for text in stops)
         if minutes < 0:
             return TimeResult(problem=TimeProblem(
                 row, REFUSE_NEGATIVE,
@@ -231,7 +251,7 @@ def compute(rows: dict[int, dict[str, str]], *,
                 "停止時間が作業時間を超えていないか確かめてください。"))
         times[row] = minutes
 
-    return TimeResult(times={r: str(m) for r, m in times.items()})
+    return TimeResult(times={r: minutes_text(m) for r, m in times.items()})
 
 
 def problems(rows: dict[int, dict[str, str]], *,
@@ -289,10 +309,7 @@ def problems(rows: dict[int, dict[str, str]], *,
                 continue
 
         if any(stops):
-            for text in stops:
-                if is_numeric(text):
-                    minutes -= int(to_float(text))
-            if minutes < 0:
+            if minutes - sum(stop_minutes(text) for text in stops) < 0:
                 found.append(TimeProblem(
                     row, REFUSE_NEGATIVE,
                     f"{row}行目：作業時間がマイナスです。"

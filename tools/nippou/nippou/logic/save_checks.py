@@ -40,12 +40,12 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord
 from .numeric import is_numeric, to_float
-from .work_time import elapsed_minutes, shift_minutes
+from .work_time import elapsed_minutes, minutes_text, shift_minutes, stop_minutes
 
 #: 断りの種類。**文言から推し量らない**(`logic/work_time.py` と同じ約束)
 PACK_OVER = "pack_over"           # Number_Count
@@ -147,6 +147,11 @@ def normalize(value: str) -> str:
 
 def _int(text: str) -> int:
     return int(to_float(text)) if is_numeric(text) else 0
+
+
+def _plain(value: Any) -> int | float:
+    """10 進で足した分を、整数なら int・小数なら float で返す。"""
+    return int(value) if value == int(value) else float(value)
 
 
 def _sorted(details: Iterable[DetailRecord]) -> list[DetailRecord]:
@@ -362,10 +367,7 @@ def check_negative_time(details: Sequence[DetailRecord]) -> list[Finding]:
         minutes = 0
         if all(parts) and all(is_numeric(p) for p in parts):
             minutes = elapsed_minutes(*parts)
-        for text in stops:
-            if is_numeric(text):
-                minutes -= _int(text)
-        if minutes < 0:
+        if minutes - sum(stop_minutes(text) for text in stops) < 0:
             out.append(Finding(
                 NEGATIVE_TIME,
                 f"{d.row_no}行目：作業時間がマイナスです",
@@ -378,14 +380,16 @@ def check_negative_time(details: Sequence[DetailRecord]) -> list[Finding]:
 # ======================================================================
 # Last_Confi 後半 ── 休憩は足りているか
 # ======================================================================
-def break_minutes(details: Sequence[DetailRecord]) -> int:
-    """休憩として入っている分の合計。停止の記号が「0」のものだけ。"""
-    total = 0
-    for d in details:
-        for code_field, minutes_field in STOP_PAIRS:
-            if normalize(getattr(d, code_field) or "") == REST_STOP_CODE:
-                total += _int(getattr(d, minutes_field))
-    return total
+def break_minutes(details: Sequence[DetailRecord]) -> int | float:
+    """休憩として入っている分の合計。停止の記号が「0」のものだけ。
+
+    小数の分も切り捨てずに足します(30.5 + 29.5 を 59 分と数えて断っていた)。
+    """
+    total = sum(stop_minutes(getattr(d, minutes_field))
+                for d in details
+                for code_field, minutes_field in STOP_PAIRS
+                if normalize(getattr(d, code_field) or "") == REST_STOP_CODE)
+    return _plain(total)
 
 
 def is_all_stop_shift(details: Sequence[DetailRecord]) -> bool:
@@ -426,7 +430,7 @@ def check_break(details: Sequence[DetailRecord], *, day_work: bool,
         return []
     return [Finding(
         SHORT_BREAK,
-        f"{total}分しか休憩の入力がありません。{required}分必要です",
+        f"{minutes_text(total)}分しか休憩の入力がありません。{required}分必要です",
         "休憩は停止の記号「0」で入れます。"
         "設備移動などで本当に取れていないときは、そのまま保存もできます",
         field="S", skippable=True)]
@@ -445,13 +449,14 @@ def check_total_work(details: Sequence[DetailRecord], shift: str,
     """
     if available_minutes <= 0:
         return []
-    total = sum(_int(d.tim) for d in details)
+    # 作業時間は停止を小数のまま引いた数(57.5 など)。切り捨てて足さない
+    total = sum(stop_minutes(d.tim) for d in details)
     if total <= available_minutes:
         return []
     return [Finding(
         OVER_SHIFT_TOTAL,
         f"{shift}の作業可能時間（{available_minutes}分）を超えています。"
-        f"合計 {total}分 / 超過 {total - available_minutes}分",
+        f"合計 {minutes_text(total)}分 / 超過 {minutes_text(total - available_minutes)}分",
         _over_shift_how(details),
         field="TIM")]
 
@@ -472,10 +477,10 @@ def _over_shift_how(details: Sequence[DetailRecord]) -> str:
     そこで、ページごとの合計と、長い行を上から並べます ── 目の前の
     ページの話なのか、別のページの話なのかが、読めば分かります。
     """
-    per_page: dict[int, int] = {}
-    rows: list[tuple[int, int, int]] = []
+    per_page: dict[int, Any] = {}
+    rows: list[tuple[Any, int, int]] = []
     for d in details:
-        minutes = _int(d.tim)
+        minutes = stop_minutes(d.tim)
         if minutes <= 0:
             continue
         per_page[d.page] = per_page.get(d.page, 0) + minutes
@@ -485,9 +490,9 @@ def _over_shift_how(details: Sequence[DetailRecord]) -> str:
         return ("行のどれかで開始・終了が違っています。"
                 "別の直の行が紛れていないかも見てください")
 
-    pages = "、".join(f"{page}ページ {minutes}分"
+    pages = "、".join(f"{page}ページ {minutes_text(minutes)}分"
                      for page, minutes in sorted(per_page.items()))
-    longest = "、".join(f"{page}ページ {row}行目 {minutes}分"
+    longest = "、".join(f"{page}ページ {row}行目 {minutes_text(minutes)}分"
                        for minutes, page, row in sorted(rows, reverse=True)[:3])
     # **画面にそのまま出る字です。** 飾り(アスタリスク)は書きません
     head = f"ページごとの合計は {pages} です"

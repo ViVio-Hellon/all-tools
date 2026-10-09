@@ -123,6 +123,33 @@ class ComputeTests(unittest.TestCase):
             "TH": "20", "THS": "10", "THT": "5"}))
         self.assertEqual(result.times[1], "85")     # 120 - 35
 
+    def test_停止の小数は切り捨てずに引く(self) -> None:
+        """停止 2.5 分を 2 分として引くと、作業時間が 0.5 分多くなる(VBA の Val は小数のまま)。"""
+        result = work_time.compute(rows(r1={
+            "KZ": "07", "KH": "00", "SZ": "08", "SH": "00", "TH": "2.5"}))
+        self.assertEqual(result.times[1], "57.5")
+
+    def test_小数を足し引きしても半端な数にならない(self) -> None:
+        """2 進で引くと 60 − 0.1 − 0.2 が 59.699999… になる。"""
+        result = work_time.compute(rows(r1={
+            "KZ": "07", "KH": "00", "SZ": "08", "SH": "00",
+            "TH": "0.1", "THS": "0.2"}))
+        self.assertEqual(result.times[1], "59.7")
+
+    def test_小数を引いて整数になれば整数で書く(self) -> None:
+        result = work_time.compute(rows(r1={
+            "KZ": "07", "KH": "00", "SZ": "08", "SH": "00",
+            "TH": "2.5", "THS": "7.5"}))
+        self.assertEqual(result.times[1], "50")
+
+    def test_小数の停止でマイナスになれば断る(self) -> None:
+        """60 − 60.5。切り捨てると 0 になって通っていた。"""
+        found = work_time.problems(rows(r1={
+            "KZ": "07", "KH": "00", "SZ": "08", "SH": "00", "TH": "60.5"}))
+        self.assertEqual([p.reason for p in found], [work_time.REFUSE_NEGATIVE])
+        self.assertFalse(work_time.compute(rows(r1={
+            "KZ": "07", "KH": "00", "SZ": "08", "SH": "00", "TH": "60.5"})).ok)
+
     def test_停止が空なら引かない(self) -> None:
         result = work_time.compute(rows(r1={
             "KZ": "07", "KH": "00", "SZ": "09", "SH": "00", "TH": ""}))

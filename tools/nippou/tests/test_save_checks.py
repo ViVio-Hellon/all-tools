@@ -190,6 +190,14 @@ class BreakTests(unittest.TestCase):
         self.assertEqual(save_checks.check_break(
             [row(1)], day_work=True), [])
 
+    def test_休憩の小数も切り捨てずに足す(self) -> None:
+        """30.5 + 29.5 = 60。切り捨てると 59 分と数えて断っていた。"""
+        self.assertEqual(save_checks.check_break(
+            [row(1, s="0", th="30.5"), row(2, s="0", th="29.5")],
+            day_work=False), [])
+        found = save_checks.check_break([row(1, s="0", th="59.5")], day_work=False)
+        self.assertIn("59.5分", found[0].message)
+
     def test_記号が0の停止だけ数える(self) -> None:
         self.assertEqual(save_checks.break_minutes(
             [row(1, s="0", th="30", ss="イ", ths="90")]), 30)
@@ -211,6 +219,18 @@ class TotalWorkTests(unittest.TestCase):
     def test_ちょうどは通す(self) -> None:
         self.assertEqual(save_checks.check_total_work(
             [row(1, tim="480")], "1直", 480), [])
+
+    def test_小数の作業時間も切り捨てずに足す(self) -> None:
+        """240.5 + 240 = 480.5 は 480 分の直を超える(切り捨てると 480 で通っていた)。"""
+        found = save_checks.check_total_work(
+            [row(1, tim="240.5"), row(2, tim="240")], "1直", 480)
+        self.assertEqual([f.code for f in found], [save_checks.OVER_SHIFT_TOTAL])
+        self.assertIn("合計 480.5分 / 超過 0.5分", found[0].message)
+
+    def test_停止の小数でマイナスになれば挙げる(self) -> None:
+        found = save_checks.check_negative_time([row(
+            1, kz="07", kh="00", sz="08", sh="00", th="60.5")])
+        self.assertEqual([f.code for f in found], [save_checks.NEGATIVE_TIME])
 
     def test_長さが分からなければ見ない(self) -> None:
         self.assertEqual(save_checks.check_total_work(
