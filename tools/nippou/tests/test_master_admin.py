@@ -269,6 +269,22 @@ class MasterEditTests(WebTestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("整数", res.get_json()["error"]["message"])
 
+    def test_整数の列に小数を入れたら切り捨てずに断る(self) -> None:
+        """2.5 を黙って 2 にして書くと、入れた数と違う数が DB に残る。"""
+        self.unlock()
+        res = self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1",
+            "key": 1, "values": {"管理番号": "2.5"}})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("小数は入れられません", res.get_json()["error"]["message"])
+
+    def test_整数の列は2_0なら2で書く(self) -> None:
+        self.unlock()
+        res = self.post("/api/master/row/save", {
+            "file": "transmission", "table": "作業停止時間内訳_1",
+            "key": 1, "values": {"管理番号": "2.0"}})
+        self.assertEqual(res.status_code, 200)
+
     def test_無い表は404(self) -> None:
         self.unlock()
         res = self.post("/api/master/row/add", {

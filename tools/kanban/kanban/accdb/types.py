@@ -127,6 +127,8 @@ class Column:
     is_variable: bool = False
     is_auto_number: bool = False
     is_fixed_width: bool = False
+    scale: int = 0
+    """十進型(Decimal)の小数点の位置。ほかの型では 0。"""
 
     @property
     def type_name(self) -> str:

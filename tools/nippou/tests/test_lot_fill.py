@@ -78,6 +78,11 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(lot_fill.format_siz(130.0, 1529.0, 3054.0),
                          "130.000×1529.0×3054.0")
 
+    def test_寸法の端数はVBAと同じく0_5を切り上げる(self) -> None:
+        """Python の書式指定では 1528.25 → 1528.2、0.0625 → 0.062 になる。"""
+        self.assertEqual(lot_fill.format_siz(0.0625, 1528.25, 3053.75),
+                         "0.063×1528.3×3053.8")
+
     def test_機側とNS1で丈0ならコイル(self) -> None:
         for line in ("機側", "NS1"):
             with self.subTest(line=line):

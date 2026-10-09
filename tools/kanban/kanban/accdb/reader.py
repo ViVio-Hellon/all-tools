@@ -357,6 +357,8 @@ class AccdbReader:
                     "flags": entry[fmt.col_flags],
                     "fixed_offset": _u16(entry, fmt.col_fixed_offset),
                     "length": _u16(entry, fmt.col_length),
+                    # 十進型の小数点の位置(Jet4 の列定義の 12 バイト目。Jet3 に十進型は無い)
+                    "scale": entry[12] if fmt.is_jet4 and len(entry) > 12 else 0,
                 }
             )
             offset += fmt.size_column_header
@@ -388,6 +390,7 @@ class AccdbReader:
                     is_variable=not (flags & _COL_FLAG_FIXED),
                     is_auto_number=bool(flags & _COL_FLAG_AUTO_NUMBER),
                     is_fixed_width=bool(flags & _COL_FLAG_FIXED),
+                    scale=raw["scale"],
                 )
             )
 
@@ -629,7 +632,7 @@ class AccdbReader:
         if t == T.LONG or t == T.COMPLEX:
             return _i32(raw, 0)
         if t == T.FLOAT:
-            return struct.unpack_from("<f", raw, 0)[0]
+            return _decode_single(raw)
         if t == T.DOUBLE:
             return struct.unpack_from("<d", raw, 0)[0]
         if t == T.MONEY:
@@ -643,7 +646,7 @@ class AccdbReader:
         if t == T.REPID:
             return str(_format_guid(raw))
         if t == T.NUMERIC:
-            return _decode_numeric(raw)
+            return _decode_numeric(raw, col.scale)
         return raw
 
     def _convert_variable(self, col: T.Column, raw: bytes) -> Any:
@@ -737,15 +740,40 @@ def _format_guid(raw: bytes) -> str:
     return f"{{{a:08X}-{b:04X}-{c:04X}-{tail[:4].upper()}-{tail[4:].upper()}}}"
 
 
-def _decode_numeric(raw: bytes) -> float | None:
-    """DECIMAL/NUMERIC(17 バイト) を float へ変換する。"""
+def _decode_single(raw: bytes) -> float:
+    """単精度(Single・4 バイト)を、**Access が見せるのと同じ数**にする。
+
+    そのまま Python の float にすると 2.9 が 2.9000000953674316 になり、その値で sqlite3 へ
+    書いていた(Access で 2.9 と見えている値が別の数になる)。同じ 4 バイトに戻るいちばん短い
+    10 進の書き方(最大 9 桁)にそろえる。
+    """
+    value = struct.unpack_from("<f", raw, 0)[0]
+    if value != value or value in (float("inf"), float("-inf")):
+        return value
+    for digits in range(1, 10):
+        text = f"{value:.{digits}g}"
+        if struct.unpack("<f", struct.pack("<f", float(text)))[0] == value:
+            return float(text)
+    return value
+
+
+def _decode_numeric(raw: bytes, scale: int = 0) -> float | int | None:
+    """十進型(Decimal・17 バイト)を数にする。
+
+    並び: 先頭 1 バイトが符号(0 以外で負)、続く 16 バイトが 4 バイトずつの整数 4 つ
+    (それぞれは小さい側から、4 つは大きい桁から)。**小数点の位置(scale)は列の定義にある**
+    (行の 2 バイト目ではない)。Jackcess・access_parser と同じ読み方。以前は scale を行の
+    2 バイト目から取り、整数も違う位置から読んでいたので、2971.5 が桁違いの数になっていた。
+    """
     if len(raw) < 17:
         return None
-    negative = bool(raw[0] & 0x80)
-    scale = raw[1] if len(raw) > 1 else 0
-    magnitude = int.from_bytes(raw[4:17][::-1], "big", signed=False)
-    value = magnitude / (10 ** scale) if scale else float(magnitude)
-    return -value if negative else value
+    from decimal import Decimal
+
+    sign, n1, n2, n3, n4 = struct.unpack_from("<BIIII", raw, 0)
+    number = Decimal((n1 << 96) | (n2 << 64) | (n3 << 32) | n4).scaleb(-int(scale or 0))
+    if sign:
+        number = -number
+    return int(number) if not scale else float(number)
 
 
 def read_table(path: str, table_name: str) -> T.Table:

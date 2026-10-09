@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import etc_marks, g_course
-from .numeric import is_numeric, to_float
+from .numeric import format_fixed, is_numeric, to_float
 from .pack_note import PackNote
 
 # ロット番号は7桁そろってから引く(VBA `If Len(...) <> 7 Then Exit Sub`)。
@@ -113,11 +113,13 @@ def format_siz(thickness: float, width: float, length: float,
         厚 … 0.000  /  幅・丈 … 0.0
 
     LS・NS1 で丈が 0 のときだけ「ｺｲﾙ」と書きます。紙の実物は
-    「20.000×1528.0×3053.0」。
+    「20.000×1528.0×3053.0」。端数は VBA と同じく 0.5 を切り上げます
+    (Python の書式指定だと 1528.25 が 1528.2 になってしまう)。
     """
+    size = f"{format_fixed(thickness, 3)}×{format_fixed(width, 1)}"
     if line in COIL_LINES and not length:
-        return f"{thickness:.3f}×{width:.1f}×ｺｲﾙ"
-    return f"{thickness:.3f}×{width:.1f}×{length:.1f}"
+        return f"{size}×ｺｲﾙ"
+    return f"{size}×{format_fixed(length, 1)}"
 
 
 def sheet_count(value) -> str:

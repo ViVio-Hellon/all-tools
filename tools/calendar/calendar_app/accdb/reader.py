@@ -85,6 +85,7 @@ _COL_ENTRY_SIZE = 25
 _COL_TYPE = 0
 _COL_NUM = 5
 _COL_VAR_OFFSET = 7
+_COL_SCALE = 12   # 十進型の小数点の位置(11 が精度)
 _COL_FLAGS = 15
 _COL_FIXED_OFFSET = 21
 _COL_SIZE = 23
@@ -192,18 +193,40 @@ def _decode_datetime(raw: bytes) -> _dt.datetime | None:
     return value
 
 
-def _decode_numeric(raw: bytes) -> float | None:
-    """NUMERIC(17 バイト) を float として復元する。"""
+def _decode_single(raw: bytes) -> float:
+    """単精度(Single・4 バイト)を、**Access が見せるのと同じ数**にする。
+
+    そのまま Python の float にすると 2.9 が 2.9000000953674316 になり、その値で sqlite3 へ
+    書いていた(Access で 2.9 と見えている値が別の数になる)。同じ 4 バイトに戻るいちばん短い
+    10 進の書き方(最大 9 桁)にそろえる。
+    """
+    value = struct.unpack_from("<f", raw, 0)[0]
+    if value != value or value in (float("inf"), float("-inf")):
+        return value
+    for digits in range(1, 10):
+        text = f"{value:.{digits}g}"
+        if struct.unpack("<f", struct.pack("<f", float(text)))[0] == value:
+            return float(text)
+    return value
+
+
+def _decode_numeric(raw: bytes, scale: int = 0) -> float | int | None:
+    """十進型(Decimal・17 バイト)を数にする。
+
+    並び: 先頭 1 バイトが符号(0 以外で負)、続く 16 バイトが 4 バイトずつの整数 4 つ
+    (それぞれは小さい側から、4 つは大きい桁から)。**小数点の位置(scale)は列の定義にある**
+    (行の 2 バイト目ではない)。Jackcess・access_parser と同じ読み方。以前は scale を行の
+    2 バイト目から取り、整数も違う位置から読んでいたので、2971.5 が桁違いの数になっていた。
+    """
     if len(raw) < 17:
         return None
-    sign = -1 if raw[0] & 0x80 else 1
-    scale = raw[1]
-    # 12 バイトのリトルエンディアン整数 (4 バイト x 3 ワードの並びを考慮)
-    lo = int.from_bytes(raw[5:9], "little")
-    mid = int.from_bytes(raw[9:13], "little")
-    hi = int.from_bytes(raw[13:17], "little")
-    value = lo | (mid << 32) | (hi << 64)
-    return sign * value / (10**scale) if scale else sign * float(value)
+    from decimal import Decimal
+
+    sign, n1, n2, n3, n4 = struct.unpack_from("<BIIII", raw, 0)
+    number = Decimal((n1 << 96) | (n2 << 64) | (n3 << 32) | n4).scaleb(-int(scale or 0))
+    if sign:
+        number = -number
+    return int(number) if not scale else float(number)
 
 
 @dataclass
@@ -217,6 +240,8 @@ class Column:
     fixed: bool
     fixed_offset: int
     var_index: int
+    scale: int = 0
+    """十進型(Decimal)の小数点の位置(列定義の 12 バイト目)。ほかの型では 0。"""
 
     @property
     def type_name(self) -> str:
@@ -399,6 +424,7 @@ class AccdbReader:
                     fixed=bool(flags & _COL_FLAG_FIXED),
                     fixed_offset=_u16(b, off + _COL_FIXED_OFFSET),
                     var_index=_u16(b, off + _COL_VAR_OFFSET),
+                    scale=_u8(b, off + _COL_SCALE),
                 )
             )
 
@@ -680,7 +706,7 @@ class AccdbReader:
         if t == TYPE_LONGINT or t == TYPE_COMPLEX:
             return _i32(data, 0)
         if t == TYPE_FLOAT:
-            return struct.unpack_from("<f", data, 0)[0]
+            return _decode_single(data)
         if t == TYPE_DOUBLE:
             return struct.unpack_from("<d", data, 0)[0]
         if t == TYPE_MONEY:
@@ -688,7 +714,7 @@ class AccdbReader:
         if t == TYPE_DATETIME:
             return _decode_datetime(data)
         if t == TYPE_NUMERIC:
-            return _decode_numeric(data)
+            return _decode_numeric(data, col.scale)
         if t == TYPE_REPID:
             return str(_format_guid(data))
         return data

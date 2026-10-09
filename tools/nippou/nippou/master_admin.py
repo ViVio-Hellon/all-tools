@@ -829,9 +829,14 @@ def _clean(path: Path, table: str, values: dict[str, Any], *,
             continue
         if column.kind == "int":
             try:
-                out[column.name] = int(float(raw))
+                number = float(raw)
             except ValueError:
                 return {}, f"「{column.name}」は{KIND_LABEL['int']}で入れてください。"
+            if not number.is_integer():
+                # 黙って切り捨てると入れた数と違う数が DB に入る
+                return {}, (f"「{column.name}」は整数で入れてください"
+                            "(小数は入れられません)。")
+            out[column.name] = int(number)
         elif column.kind == "real":
             try:
                 out[column.name] = float(raw)
