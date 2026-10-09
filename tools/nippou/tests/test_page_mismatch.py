@@ -255,6 +255,21 @@ class PageMismatchTests(WebTestCase):
         fresh["opened"]["loaded"] = awake_clock.now() + 1
         self.assertTrue(self.post("/api/entry/save", fresh).get_json()["saved"])
 
+    def test_画面の外から書いたページへ古い画面からは書かない_取り込みなど(self) -> None:
+        """CSV の取り込み・直の付け替えも、全停と同じく古い画面に上書きさせない(page_writer)。"""
+        from nippou import awake_clock
+        from nippou.services import page_writer
+
+        day, line, shift = self.now()
+        drawn = awake_clock.now()
+        self.save_pages([1])
+        header, details = self.repo().load(day, line, shift, 1)
+        page_writer.save_page(self.repo(), header, details, by_screen=False)   # 取り込みが書き直した
+        body = self.body(1, draft=True)
+        body["opened"]["loaded"] = drawn
+        got = self.post("/api/entry/save", body).get_json()
+        self.assertFalse(got["saved"], "取り込んだページを古い画面の中身で戻した")
+
     def test_全停入力は書いたページを覚える(self) -> None:
         from app.routes import entry
 

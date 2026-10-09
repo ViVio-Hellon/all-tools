@@ -29,6 +29,7 @@ from .. import constants
 from ..db.models import DetailRecord, HeaderRecord
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
+from . import page_writer
 
 log = get_logger("services.reshift")
 
@@ -168,15 +169,16 @@ def plan(repo: NippouRepository, *, skip_dates: tuple[str, ...] = ()) -> list[Fi
 def _rewrite(repo: NippouRepository, day: str, line: str, shift: str,
              header: HeaderRecord, rows: list[DetailRecord], synced: bool) -> None:
     """その直を、`rows` を12行ずつ組んだページで置き換える。"""
+    # 画面の外から書き換える(開いたままの古い画面に、前の中身で書き戻させない。page_writer)
     for page in repo.saved_pages(day, line, shift):
-        repo.delete_page(day, line, shift, page)
+        page_writer.delete_page(repo, day, line, shift, page)
     size = constants.ROW_COUNT
     for index in range(0, len(rows), size):
         page = index // size + 1
         head = replace(header, report_date=day, line=line, shift=shift, page=page)
         chunk = [replace(d, report_date=day, line=line, shift=shift, page=page,
                          row_no=i + 1) for i, d in enumerate(rows[index:index + size])]
-        repo.save(head, chunk)
+        page_writer.save_page(repo, head, chunk, by_screen=False)
         if synced:
             repo.mark_synced((day, line, shift, page))
 

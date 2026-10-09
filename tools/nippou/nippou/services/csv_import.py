@@ -40,6 +40,7 @@ from typing import Optional
 
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
+from . import page_writer
 from ..logic import csv_import
 from ..logic.csv_import import Page, Parsed
 from ..logic import line_names
@@ -439,7 +440,8 @@ def apply(repo: NippouRepository, path: Path, *, line: str = "",
     for page, target in zip(found.parsed.pages, found.targets):
         job_progress.step(label=page.label)
         try:
-            repo.save(page.header, page.details)
+            # 画面の外から書く(開いたままの古い画面に書き戻させない。page_writer)
+            page_writer.save_page(repo, page.header, page.details, by_screen=False)
             if mark_synced:
                 # **共有へは送らない。** 古いぶんは VBA の時代に入っている
                 repo.mark_synced(page.key)
@@ -456,7 +458,7 @@ def apply(repo: NippouRepository, path: Path, *, line: str = "",
     # 前の取り込みで増えていたページを消す(その直は今度のページで足りる)
     for key in found.stale:
         try:
-            if repo.delete_page(*key):
+            if page_writer.delete_page(repo, *key):
                 result.removed += 1
                 touched.add(key[:3])
         except Exception as exc:                  # noqa: BLE001 - 1ページで止めない

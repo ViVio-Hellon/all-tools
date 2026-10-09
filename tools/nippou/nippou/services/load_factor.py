@@ -32,6 +32,7 @@ from typing import Optional
 from ..db.models import DetailRecord, HeaderRecord
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
+from . import page_writer
 from ..logic import load_factor
 from ..logic.load_factor import Result
 from ..logic.shift import parse_business_date
@@ -151,7 +152,9 @@ def recalculate(repo: NippouRepository, report_date: str, line: str,
         header.lot_count = result.totals.lot_count_text
         if result.coefficient:                    # AIM は係数Lot数を打った値のまま
             header.coefficient_lot_count = result.totals.coefficient_text
-        repo.save(header, details)
+        # 保存の続きで計算し直すだけ(係数・合計)。印は付けない ── 付けると保存した画面
+        # 自身が「画面の外から書き直された」と断られる
+        page_writer.save_page(repo, header, details, by_screen=True)
         written += 1
 
     if written:

@@ -37,6 +37,7 @@ from nippou.logic import (
 from nippou.logic.shift import (ShiftCalculator, ShiftTimes, calculator_from_master,
                                 parse_business_date, usable_pair)
 from nippou.presenters import entry as presenter
+from nippou.services import page_writer
 from nippou.presenters import settings as settings_view
 from nippou.services import lot_lookup
 from nippou.services.nippou_service import (NippouService,
@@ -457,16 +458,9 @@ PAGE_MOVED_SKIP = "画面のページと書き先が違うので保存しませ�
 #: 「古い画面」を見分けられません ── 閉じる間際の送信が、打ちかけの空の行を
 #: 全停の行の上へ書いていました。**その画面を描いた時刻より後に、画面の
 #: 外から書かれたページ**へは、その画面からは書かせません。
-_WRITTEN_ASIDE: dict[tuple, float] = {}
-
-
-def note_written_aside(key: tuple) -> None:
-    """画面の12行を通さずにページを書いた(全停入力など)。`screen_mismatch` が見ます。"""
-    from nippou import awake_clock
-
-    _WRITTEN_ASIDE[tuple(key)] = awake_clock.now()
-    while len(_WRITTEN_ASIDE) > 64:               # 覚えるのは最近のぶんだけ
-        del _WRITTEN_ASIDE[next(iter(_WRITTEN_ASIDE))]
+# 画面の外から書いたページの印は services/page_writer の 1 か所(書く経路がみなそこを通る)
+_WRITTEN_ASIDE = page_writer._WRITTEN_ASIDE
+note_written_aside = page_writer.note_written_aside
 
 
 def screen_mismatch(ctx, calc, payload: dict, target=None) -> Optional[dict]:
@@ -530,14 +524,14 @@ def screen_mismatch(ctx, calc, payload: dict, target=None) -> Optional[dict]:
         return found
     # 同じページでも、**この画面を描いたあとに画面の外から書かれていれば**古い
     # (全停入力。`note_written_aside`)。描いた時刻を名乗らない画面は比べない
-    written = _WRITTEN_ASIDE.get((report_date, line, shift, page))
+    written = page_writer.written_aside_at((report_date, line, shift, page))
     try:
         loaded = float(raw.get("loaded")) if raw.get("loaded") not in (None, "") else None
     except (TypeError, ValueError):
         loaded = None
     if written is not None and loaded is not None and loaded < written:
         found["message"] = (
-            f"{now} は、この画面を開いたあとに全停入力などで書き直されています。"
+            f"{now} は、この画面を開いたあとに全停入力・取り込みなどで書き直されています。"
             "上書きしないよう、保存しませんでした。画面を読み直してください")
         return found
     return None
@@ -1548,7 +1542,7 @@ def save():
         return jsonify(body), 422
 
     try:
-        get_repo().save(header, details)
+        page_writer.save_page(get_repo(), header, details, by_screen=True)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("保存に失敗しました key=%s", header.key())
         body = _view(state, ctx, calc, key=key, problem=problem)
@@ -2250,7 +2244,7 @@ def new_page():
         return jsonify(body), 422
 
     try:
-        get_repo().save(header, details)
+        page_writer.save_page(get_repo(), header, details, by_screen=True)
         # 次のページを空で作る。**作らないと `latest_page` が動かない**ので、
         # 画面はいまのページを開いたままになる
         next_page = get_repo().latest_page(report_date, line, shift) + 1
@@ -2259,7 +2253,7 @@ def new_page():
         # 作業者と昼稼働は引き継ぐ。**同じ直の続き**なので、選び直させない
         empty_header.worker = header.worker
         empty_header.day_shift = header.day_shift
-        get_repo().save(empty_header, empty_details)
+        page_writer.save_page(get_repo(), empty_header, empty_details, by_screen=True)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("新しいページを作れませんでした key=%s", header.key())
         return jsonify(error_body(

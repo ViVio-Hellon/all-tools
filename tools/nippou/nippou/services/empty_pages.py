@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
+from . import page_writer
 from ..logic import empty_pages as logic
 from ..logic import line_names
 
@@ -68,7 +69,7 @@ def remove(repo: NippouRepository, report_date: str, line: str, shift: str,
                        "消せません(手元だけ消すと、どちらが本当か"
                        "分からなくなります)")
 
-    if not repo.delete_page(report_date, line, shift, page):
+    if not page_writer.delete_page(repo, report_date, line, shift, page):
         return False, f"{key_text} は見つかりません(もう消えています)"
 
     # 集計も作り直します ── 消した紙のぶんが残っていると、グラフと

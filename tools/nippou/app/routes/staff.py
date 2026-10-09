@@ -299,17 +299,16 @@ def execute():
     header, details = presenter.to_records(
         state, report_date, ctx.line, shift, next_page)
 
+    # **画面の12行を通さずに書く。** このあと古い画面から届く打ちかけ(閉じる
+    # 間際の送信など)が、全停の行を空の行で上書きしないように印を付ける(v4.24.0。
+    # 印は services/page_writer が付ける ── 書く経路がみなそこを通る)
+    from nippou.services import page_writer
+
     try:
-        get_repo().save(header, details)
+        page_writer.save_page(get_repo(), header, details, by_screen=False)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("全停入力の保存に失敗しました")
         return jsonify(error_body("save_failed", f"保存に失敗しました: {exc}")), 500
-
-    # **画面の12行を通さずに書いた。** このあと古い画面から届く打ちかけ(閉じる
-    # 間際の送信など)が、全停の行を空の行で上書きしないように(v4.24.0)
-    from .entry import note_written_aside
-
-    note_written_aside((report_date, ctx.line, shift, next_page))
     log.info("all stop executed shift=%s line=%s reason=%s page=%s",
              shift, ctx.line, label, next_page)
     return jsonify({

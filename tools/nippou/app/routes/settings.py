@@ -420,7 +420,9 @@ def _save_recalled(ctx, calc, payload) -> bool:
         header, details = entry_presenter.to_records(
             state, ctx.recall.report_date, ctx.recall.line,
             ctx.recall.shift, ctx.recall.page)
-        get_repo().save(header, details)
+        from nippou.services import page_writer
+
+        page_writer.save_page(get_repo(), header, details, by_screen=True)   # 呼出中の画面そのもの
         return True
     except Exception:                             # noqa: BLE001 - 戻れなくしない
         log.exception("戻る前の保存に失敗しました key=%s", ctx.recall)
