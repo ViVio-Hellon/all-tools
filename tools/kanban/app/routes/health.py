@@ -187,10 +187,16 @@ def shutdown():
     reason = _busy_reason()
     if reason and not force:
         log.info("処理中のため停止しません: %s", reason)
+        # 4 ツール共通の答え方(reason・running・message)。統合ツールの窓は running を
+        # 確認に出す(tests/test_tool_contracts.py)。busy・error は前からの画面
+        # (app.js の「終了」)のために残す
         return (
             jsonify(
                 {
                     "stopped": False,
+                    "reason": "busy",
+                    "running": [reason],
+                    "message": reason,
                     "busy": reason,
                     "error": {"code": "busy", "message": reason},
                 }
@@ -206,14 +212,17 @@ def shutdown():
 
     if _shutdown_hook is None:
         log.warning("停止の手段が登録されていません")
+        # ほかの 3 ツールと同じ 501(止める手段がこのプロセスに無い。こわれたのではない)
         return (
             jsonify(
                 {
                     "stopped": False,
+                    "reason": "no_hook",
+                    "message": "このプロセスは停止操作に対応していません",
                     "error": {"code": "no_hook", "message": "停止できませんでした"},
                 }
             ),
-            500,
+            501,
         )
 
     log.info("停止要求を受け付けました (force=%s)", force)
