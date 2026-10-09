@@ -56,10 +56,33 @@ _MAX_TEXT = 4000
 
 
 def new_ref(now: Optional[datetime] = None) -> str:
-    """問い合わせ番号。`月日-時分-4文字`(電話で読み上げやすく、日時で探せる)。"""
+    """問い合わせ番号。`月日-時分-4文字`(電話で読み上げやすく、日時で探せる)。
+
+    **同じ1分の中で同じ番号を2度出さない。** 番号は要求ごとに振る(画面の見張りの
+    問い合わせを含む)ので、1分に数百件出ることがあり、くじの4文字だけでは重なる
+    (300件で約5%)。重なると別々の出来事が同じ番号で記録に並び、問い合わせで
+    取り違える。出した番号をその1分のあいだ覚えておき、重なったら引き直す
+    (日報管理ツールの ``new_id`` と同じ直し方)。
+    """
     now = now or datetime.now()
-    tail = "".join(random.choice(_ALPHABET) for _ in range(4))
-    return f"{now:%m%d-%H%M}-{tail}"
+    head = f"{now:%m%d-%H%M}-"
+    minute = f"{now:%m%d%H%M}"
+    with _ISSUED_LOCK:
+        if _ISSUED.get("minute") != minute:
+            _ISSUED.clear()
+            _ISSUED["minute"] = minute
+        used = _ISSUED.setdefault("refs", set())
+        for _ in range(64):
+            candidate = head + "".join(random.choice(_ALPHABET) for _ in range(4))
+            if candidate not in used:
+                break
+        used.add(candidate)
+    return candidate
+
+
+#: この1分に出した問い合わせ番号(``new_ref``)。分が替われば捨てる
+_ISSUED: dict = {}
+_ISSUED_LOCK = threading.Lock()
 
 
 def _clip(value: Any) -> Any:

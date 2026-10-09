@@ -10,10 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import shutil
+import time
 import unittest
 from datetime import date, datetime, timedelta
+from unittest import mock
 
 from tests.helpers import temp_dir
 
@@ -168,6 +171,14 @@ class EventLogTest(_Base):
         ref = event_log.new_ref(datetime(2026, 10, 1, 15, 2))
         self.assertRegex(ref, r"^1001-1502-[2-9A-HJKMNP-Z]{4}$")
 
+    def test_同じ1分に問い合わせ番号を重ねない(self) -> None:
+        """番号は要求ごとに振るので 1 分に数百件出る。くじの 4 文字だけでは重なる。"""
+        at = datetime(2026, 10, 1, 15, 2)
+        rng = random.Random(1)
+        with mock.patch.object(event_log.random, "choice", side_effect=lambda seq: seq[rng.randrange(3)]):
+            refs = [event_log.new_ref(at) for _ in range(60)]   # 3文字種でわざと重なりやすく
+        self.assertEqual(len(set(refs)), len(refs), "同じ番号を2度出した")
+
     def test_1行に1つの出来事を残し_なぜの段と確かめることを添える(self) -> None:
         ref = event_log.record("print.item", event_log.NG, code="PRINT_FAILED", message="印刷に失敗しました。",
                                detail="0x800A03EC プリンターが見つかりません", target="点検表A", printer="P1")
@@ -240,6 +251,28 @@ class LogApiTest(_Base):
 
     def post(self, path, json=None):
         return self.client.post(path, json=json or {}, headers={"X-Tool-Token": "t", "X-Screen-Id": "s1"})
+
+    def test_検索の終わりは記録を書いてから出す(self) -> None:
+        """「終わった」を先に出すと、待つ側が記録より先に進む(印刷で直した不具合と同じ形)。"""
+        from app.services import inspection_service
+
+        written = []
+        real = inspection_service.event_log.record
+
+        def slow(kind, *args, **kw):
+            if kind == "scan":
+                time.sleep(0.3)
+                written.append(kind)
+            return real(kind, *args, **kw)
+
+        with mock.patch.object(inspection_service.event_log, "record", side_effect=slow):
+            self.assertTrue(self.biz.inspection.start_scan("test", supersede=True))
+            deadline = time.monotonic() + 10
+            while self.biz.inspection.status()["state"] != "done" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(self.biz.inspection.status()["state"], "done")
+            self.assertEqual(written, ["scan"], "「終わった」を記録より先に出した")
+            self.biz.inspection.wait(10)
 
     def test_断りには問い合わせ番号が付き_ログから引ける(self) -> None:
         res = self.post("/api/preview", {"id": "no-such-item"})

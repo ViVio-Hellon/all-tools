@@ -314,11 +314,15 @@ class InspectionService:
                 if self._stale(gen, root):
                     self.log.info("前のフォルダの検索が失敗しましたが、フォルダが変わったので調べ直します")
                     return None
-                self._status.update(state="error", message=f"フォルダ検索でエラーが発生しました: {exc}")
                 reason = self._status.get("reason", "")
             self.log.exception("フォルダ検索でエラーが発生しました")
             event_log.record("scan", event_log.NG, code="SCAN_FAILED", message="フォルダ検索でエラーが発生しました",
                              detail=f"{type(exc).__name__}: {exc}", folder=root, reason=reason)
+            # **記録を書いてから**「終わった」を出す(印刷で直した不具合と同じ形。
+            # 状態を先に出すと、待つ側が記録より先に進む)
+            with self._lock:
+                if gen == self._gen:
+                    self._status.update(state="error", message=f"フォルダ検索でエラーが発生しました: {exc}")
             return gen
         with self._lock:
             # **前のフォルダの一覧を入れない。** 調べているあいだにフォルダが
@@ -328,7 +332,7 @@ class InspectionService:
                 return None
             self._inventory = inventory
             self._from_cache = False
-            self._status.update(state="done", scanned=inventory.total_files, current="")
+            self._status.update(scanned=inventory.total_files, current="")
             reason = self._status.get("reason", "")
             # 控えに書くのも錠の中(書いているあいだに別のフォルダの結果が入れ替わらない)
             self._save_cache(inventory)
@@ -353,6 +357,11 @@ class InspectionService:
                           inventory.scan_ms, len(inventory.errors))
             for err in inventory.errors[:20]:
                 self.log.warning("フォルダ読取エラー: %s (%s)", err["path"], err["message"])
+        # **記録を書いてから**「終わった」を出す。以前は状態を先に出していたので、
+        # 状態を見に来た画面や試験が、記録より先に進むことがあった
+        with self._lock:
+            if gen == self._gen:
+                self._status.update(state="done")
         return gen
 
     def wait(self, timeout: float) -> bool:
