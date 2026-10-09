@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from pathlib import Path
 
 from kanban import config
 from kanban.accdb import reader, types
@@ -76,6 +77,41 @@ class TypeCategoryTest(unittest.TestCase):
         value = dt.datetime(2026, 1, 28, 13, 48)
         serial = types.datetime_to_serial(value)
         self.assertEqual(types.serial_to_datetime(serial), value)
+
+
+#: ライン管理カレンダーの試験に入っている**実物の** .accdb(匿名化済み)。
+#: 更新で別ページへ移った行(0x4000 / 0x8000)と削除済みの行(0xC000)を含む
+SAMPLE_ACCDB = Path(__file__).resolve().parents[2] / "calendar" / "tests" / "data" / "sample.accdb"
+
+
+@unittest.skipUnless(SAMPLE_ACCDB.exists(), f"実物のサンプルがありません: {SAMPLE_ACCDB}")
+class SampleFileTest(unittest.TestCase):
+    """**どの表も、テーブル定義の行数どおりに読める。**
+
+    以前は移動元(0x4000)の 4 バイトの行き先をたどり、移動先(0x8000)を飛ばしていた。
+    行き先が読めないと更新された行を黙って落とした(23 行の表を 18 行、2 行の表を 1 行)。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.db = reader.AccdbReader(str(SAMPLE_ACCDB))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.db.close()
+
+    def test_every_table_reads_as_many_rows_as_its_definition(self):
+        mismatches = []
+        for name in self.db.table_names(include_system=True):
+            tdef = self.db._table_def_by_name(name)
+            rows = list(self.db._iter_rows(tdef))
+            if len(rows) != tdef.num_rows:
+                mismatches.append((name, tdef.num_rows, len(rows)))
+        self.assertEqual(mismatches, [])
+
+    def test_moved_rows_are_read_once(self):
+        self.assertEqual(len(self.db.read_table("休み管理").rows), 2)
+        self.assertEqual(len(self.db.read_table("MSysAccessStorage").rows), 23)
 
 
 @unittest.skipUnless(ACCDB_PATH, "KANBAN_TEST_ACCDB が未設定のためスキップ")

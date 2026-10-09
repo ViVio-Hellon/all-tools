@@ -36,7 +36,14 @@ PAGE_USAGE_BITMAP = 0x05
 _JET3_SIGNATURE = b"Standard Jet DB"
 _ACE_SIGNATURE = b"Standard ACE DB"
 
-# 行オフセットの上位ビット(削除済み / 別ページ参照)
+# 行オフセットの上位ビット。**実物の .accdb で、テーブル定義の行数と突き合わせて決めた**
+# (tools/calendar/tests/data/sample.accdb。mdb-export とも一致):
+#   0x4000 だけ … 更新で別ページへ移った行の**移動元**。中身は 4 バイトの行き先だけ
+#   0x8000 だけ … その**移動先**(本物の行)。そのまま読む
+#   0xC000      … 削除済み
+# 以前は「0x8000 = 削除・0x4000 = 行き先をたどる」と読んでいた。行き先を書いた 4 バイトが
+# 読めないと、更新された行を黙って落とした(サンプルで 23 行の表を 18 行と読んだ)。
+# 移動先を直接読めば行き先のバイトに頼らない(ライン管理カレンダーの読み方と同じ)
 _ROW_DELETED = 0x8000
 _ROW_OVERFLOW = 0x4000
 _ROW_OFFSET_MASK = 0x1FFF
@@ -518,51 +525,17 @@ class AccdbReader:
             row_count = _u16(page, fmt.data_num_rows)
             for i in range(row_count):
                 raw_offset = _u16(page, offsets_base + i * 2)
-                if raw_offset & _ROW_DELETED:
-                    # 削除済み。更新で他ページへ移動した行の移動元も
-                    # このフラグが立つため、二重計上を防げる
-                    continue
                 if raw_offset & _ROW_OVERFLOW:
-                    row = self._read_overflow_row(tdef, page, raw_offset & _ROW_OFFSET_MASK)
-                else:
-                    row_start = raw_offset & _ROW_OFFSET_MASK
-                    row_end = self._row_end(page, i)
-                    if row_end <= row_start:
-                        continue
-                    row = self._parse_row(tdef, page, row_start, row_end - 1)
+                    # 削除済み(0xC000)か、別ページへ移った行の移動元(0x4000)。
+                    # 移動先(0x8000 だけ)をそのページで読むので、ここでは読まない
+                    continue
+                row_start = raw_offset & _ROW_OFFSET_MASK
+                row_end = self._row_end(page, i)
+                if row_end <= row_start:
+                    continue
+                row = self._parse_row(tdef, page, row_start, row_end - 1)
                 if row is not None:
                     yield row
-
-    def _read_overflow_row(
-        self, tdef: "_TableDef", page: bytes, pointer_offset: int
-    ) -> dict[str, Any] | None:
-        """移動済み行(オーバーフロー行)の実データを追跡して読む。
-
-        更新でページに収まらなくなった行は別ページへ移され、元のスロットには
-        ``[行番号 1byte][ページ番号 3byte]`` のポインタだけが残る。移動先の
-        スロットは削除済みフラグが立っているため、明示的に無視して読む。
-        """
-        try:
-            row_num = page[pointer_offset]
-            target_page_num = int.from_bytes(page[pointer_offset + 1 : pointer_offset + 4], "little")
-        except IndexError:
-            return None
-        if target_page_num == 0 or target_page_num >= self._page_count:
-            return None
-        target = self._page(target_page_num)
-        if target[0] != PAGE_DATA:
-            return None
-        fmt = self.fmt
-        row_count = _u16(target, fmt.data_num_rows)
-        if row_num >= row_count:
-            return None
-        offsets_base = fmt.data_num_rows + 2
-        raw = _u16(target, offsets_base + row_num * 2)
-        start = raw & _ROW_OFFSET_MASK
-        end = self._row_end(target, row_num)
-        if end <= start:
-            return None
-        return self._parse_row(tdef, target, start, end - 1)
 
     def _parse_row(
         self, tdef: "_TableDef", page: bytes, row_start: int, row_end: int
