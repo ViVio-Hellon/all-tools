@@ -125,6 +125,35 @@ def remove_lock() -> None:
         log.warning("ロックを消せませんでした: %s", exc)
 
 
+def release_lock() -> None:
+    """**自分が取ったロックだけ**を片付ける。
+
+    終わるときに無条件で消すと、入れ替えのときに困る ── 古いほうが終わる頃には
+    新しいほうがもうロックを取っているので、古いほうの後始末が新しいほうのロックを
+    消し、次の起動で「誰も居ない」と判定されて 2 つ目が立つ(日報・カレンダーで直した不具合)。
+    """
+    info = read_lock()
+    if info is None:
+        return
+    if info.pid != os.getpid():
+        log.info("自分のロックではないので残します (pid=%s)", info.pid)
+        return
+    remove_lock()
+
+
+def update_lock(info: LockInfo) -> None:
+    """取ったロックへ、決まったポートとトークンを書く。**自分のロックでなければ書かない。**
+
+    待ち受けの確認(最大 15 秒)のあいだに、古い起動の後始末や別の起動がロックを
+    差し替えていたら、上書きすると動いているほうの居場所が消える。
+    """
+    current = read_lock()
+    if current is not None and current.pid != os.getpid():
+        log.warning("自分のロックではないので書き換えません (pid=%s)", current.pid)
+        return
+    write_lock(info)
+
+
 # 起動中(まだポートが決まっていない)ロックの `port`
 STARTING_PORT = 0
 

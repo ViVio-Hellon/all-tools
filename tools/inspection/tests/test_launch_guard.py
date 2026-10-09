@@ -30,6 +30,29 @@ class LockTests(unittest.TestCase):
         self.assertEqual(info.pid, os.getpid())
         self.assertEqual(info.port, launch_guard.STARTING_PORT)
 
+    def test_終わるときは自分のロックだけ消す(self) -> None:
+        """入れ替えのとき、古いほうの後始末が新しいほうのロックを消さない(日報・カレンダーと同じ)。"""
+        other = launch_guard.build_lock_info(8733, "tok")
+        other.pid = os.getpid() + 1
+        launch_guard.write_lock(other)
+        launch_guard.release_lock()
+        self.assertIsNotNone(launch_guard.read_lock(), "他人のロックを消した")
+        launch_guard.remove_lock()
+        self.assertTrue(launch_guard.try_acquire())
+        launch_guard.release_lock()
+        self.assertIsNone(launch_guard.read_lock())
+
+    def test_ポートを書くのは自分のロックだけ(self) -> None:
+        other = launch_guard.build_lock_info(8734, "theirs")
+        other.pid = os.getpid() + 1
+        launch_guard.write_lock(other)
+        launch_guard.update_lock(launch_guard.build_lock_info(8733, "mine"))
+        self.assertEqual(launch_guard.read_lock().port, 8734, "他人のロックを書き換えた")
+        launch_guard.remove_lock()
+        self.assertTrue(launch_guard.try_acquire())
+        launch_guard.update_lock(launch_guard.build_lock_info(8733, "mine"))
+        self.assertEqual(launch_guard.read_lock().port, 8733)
+
     def test_ロックに生成時刻を残す(self) -> None:
         info = launch_guard.build_lock_info(8733, "tok")
         self.assertEqual(info.app_id, app_config.app_id())

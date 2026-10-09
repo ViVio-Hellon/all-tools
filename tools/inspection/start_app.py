@@ -352,7 +352,7 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
                 "サーバを起動できませんでした",
                 f"{check.hint}\n\nログ: {logging_utils.log_dir()}")
     except BaseException:
-        launch_guard.remove_lock()
+        launch_guard.release_lock()
         instance_guard.release_all()
         raise
     if not check.ok:
@@ -362,7 +362,7 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
         print(check.hint)
 
     # 待ち受けが始まってからロックを書く
-    launch_guard.write_lock(launch_guard.build_lock_info(port, srv.token))
+    launch_guard.update_lock(launch_guard.build_lock_info(port, srv.token))
 
     try:
         progress.step("ブラウザを開いています")
@@ -389,7 +389,7 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
         return 0
     finally:
         _shutdown_business(srv)
-        launch_guard.remove_lock()
+        launch_guard.release_lock()
         instance_guard.release_all()
         log().info("終了しました(稼働 %.0f秒)", time.monotonic() - _BOOT_AT)
 
@@ -421,7 +421,7 @@ def _hard_exit(srv) -> None:
     try:
         import launch_guard
         if not getattr(srv, "bridge", False):     # デスクトップ版はブラウザ版のロックを持たない
-            launch_guard.remove_lock()
+            launch_guard.release_lock()
     except Exception:                              # noqa: BLE001
         pass
     logging.shutdown()
