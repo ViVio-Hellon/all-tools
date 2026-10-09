@@ -297,6 +297,38 @@ class StaleAttributesTest(SharedDbTestBase):
         self.assertIn("直した", self.materials())
 
 
+class ForgetWhileCopyingTest(StaleAttributesTest):
+    """**「写し直せ」は、写している最中に言われても・別の接続が言っても消えない。**
+
+    以前は接続ごとの印(_recopy)を写し終えたところで下ろしていたので、取り込みが写している
+    最中にマスタで看板を足して「写し直せ」と言うと、その言葉が消え、共有フォルダが大きさ・
+    時刻を覚えて返すあいだ古い写しを使い続けた。マスタの画面は要求ごとに別の接続を作るので、
+    取り込みの接続には最初から届いていなかった。
+    """
+
+    def test_写している最中に言われたら_次は写し直す(self):
+        other = SharedDb(str(self.path), cache_dir=str(self.cache))    # マスタの画面の接続
+        real = self.db._copy_files
+        done = []
+
+        def copy_then_edit(source, target):
+            real(source, target)                  # 書く前の中身を写し終えた
+            if not done:
+                done.append(1)
+                self.write_keeping_attributes()   # その直後にマスタで直して
+                other.forget_copy()               # 「写し直せ」と言う
+
+        self.db._copy_files = copy_then_edit
+        self.assertNotIn("直した", self.materials())     # 写していた最中の 1 回は古くてよい
+        self.assertIn("直した", self.materials(), "写している最中の「写し直せ」が消えた")
+
+    def test_別の接続が言っても写し直す(self):
+        self.materials()
+        self.write_keeping_attributes()
+        SharedDb(str(self.path), cache_dir=str(self.cache)).forget_copy()
+        self.assertIn("直した", self.materials(), "別の接続の「写し直せ」が届かない")
+
+
 class WriteTest(SharedDbTestBase):
     def test_update_applies(self):
         stmt = build_update("看板_LVC", {"欲": "〇", "発送": ""}, "管理番号", 1)

@@ -34,6 +34,7 @@ Access をやめても、この 2 層は残します。操作のたびに共有�
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import sqlite3
 import itertools
@@ -132,8 +133,9 @@ class SharedDb:
         self._cache_dir = cache_dir
         self._copy_path: Path | None = None
         self._copy_stamp: tuple[int, int] | None = None
-        # 「次は必ず写し直す」(:meth:`forget_copy`)。ほかの接続が作った写しも使わない
-        self._recopy = False
+        # 写しを作り始めたときの「写し直せ」の世代(:meth:`forget_copy`)。いまの世代と
+        # 違えば、その写しは使わない
+        self._copy_gen = -1
         self.copies_made = 0
         """起動してから共有ファイルを丸ごと写した回数。
 
@@ -443,7 +445,12 @@ class SharedDb:
         取り込む」と言ったとき(マスタを直した直後を含む)は、これで写し直させる。
         """
         self._copy_stamp = None
-        self._recopy = True
+        _bump_generation(self.path)
+
+    @property
+    def _recopy(self) -> bool:
+        """次に読むとき写し直すか(いまの世代の写しを持っていない)。"""
+        return self._copy_stamp is None or self._copy_gen != _generation(self.path)
 
     def local_copy(self, *, force: bool = False) -> Path:
         """共有 DB を手元へ写して、その場所を返す。
@@ -460,28 +467,35 @@ class SharedDb:
         を写すのは同時に 1 つだけで、待っていた側は出来上がった写しを使う。
         """
         self._require_exists()
+        # **世代は写す前に読む。** 写している最中に「写し直せ」と言われたら(世代が進む)、
+        # この写しは古い世代のものとして残り、次に読むときに写し直す。以前は印(_recopy)を
+        # 写し終えたところで下ろしていたので、写している最中に言われた「写し直せ」が消え、
+        # マスタで足した看板が出ないまま古い写しを使い続けることがあった。印は接続ごとで、
+        # マスタの画面(要求ごとに別の接続)が言っても取り込みの接続には届かなかった ──
+        # 世代は**同じ共有DBを指す接続すべてで 1 つ**にした
+        gen = _generation(self.path)
         source = Path(self.path)
         stat = source.stat()
         stamp = (stat.st_size, stat.st_mtime_ns)
-        fresh = force or self._recopy
 
-        if not fresh and self._copy_stamp == stamp:
+        if not force and self._copy_stamp == stamp and self._copy_gen == gen:
             existing = self._copy_path
             if existing is not None and existing.exists():
                 return existing
 
         base = self._copy_target(source)
         with _copy_lock(base):
-            # 待っているあいだに、ほかの接続が同じ中身を写し終えていれば、それを使う
+            # 待っているあいだに、ほかの接続が同じ中身・同じ世代で写し終えていれば、それを使う
             done = _COPIES.get(str(base))
-            if not fresh and done is not None and done[0] == stamp and done[1].exists():
-                self._copy_stamp, self._copy_path = done
+            if (not force and done is not None and done[0] == stamp and done[2] == gen
+                    and done[1].exists()):
+                self._copy_stamp, self._copy_path, self._copy_gen = done
                 return done[1]
             # 時刻だけでは重なる(Windows の時計は刻みが粗い)ので、通し番号も付ける
             target = base.with_name(f"{base.stem}_{time.time_ns():x}_{next(_COPY_SERIAL)}{base.suffix}")
             path = self._make_copy(source, target, stamp)
-            _COPIES[str(base)] = (stamp, path)
-            self._recopy = False
+            self._copy_gen = gen
+            _COPIES[str(base)] = (stamp, path, gen)
             _sweep_copies(base, keep=path)
             return path
 
@@ -543,8 +557,26 @@ class SharedDb:
 # ------------------------------------------------------------------
 _COPY_GUARD = threading.Lock()
 _COPY_LOCKS: dict[str, threading.Lock] = {}
-#: 共有 DB ごとの、いちばん新しい写し ``{名前の元: ((大きさ, 更新時刻), 写し)}``
-_COPIES: dict[str, tuple[tuple[int, int], Path]] = {}
+#: 共有 DB ごとの、いちばん新しい写し ``{名前の元: ((大きさ, 更新時刻), 写し, 世代)}``
+_COPIES: dict[str, tuple[tuple[int, int], Path, int]] = {}
+#: 共有 DB ごとの「写し直せ」の世代(:meth:`SharedDb.forget_copy` で進む)。**同じ共有 DB を
+#: 指す接続すべてで 1 つ** ── どの接続が言っても、ほかの接続の古い写しも使わせない
+_GENERATIONS: dict[str, int] = {}
+
+
+def _generation_key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _generation(path: str) -> int:
+    with _COPY_GUARD:
+        return _GENERATIONS.get(_generation_key(path), 0)
+
+
+def _bump_generation(path: str) -> None:
+    with _COPY_GUARD:
+        key = _generation_key(path)
+        _GENERATIONS[key] = _GENERATIONS.get(key, 0) + 1
 _COPY_SERIAL = itertools.count(1)
 
 #: 古い写しを消すまでの時間(秒)。読んでいる最中の写しを消さないよう、読むのに
