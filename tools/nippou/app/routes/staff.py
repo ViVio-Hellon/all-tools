@@ -117,16 +117,10 @@ def reasons():
 
 
 def _parse_hhmm(text: str):
-    """`"22:50"` を `time` に。読めなければ None。"""
-    from datetime import time
+    """`"22:50"`(全角も)を `time` に。読めなければ None(`logic/shift.parse_hhmm`)。"""
+    from nippou.logic.shift import parse_hhmm
 
-    parts = str(text or "").split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        return time(int(parts[0]), int(parts[1]))
-    except (TypeError, ValueError):
-        return None
+    return parse_hhmm(text)
 
 
 def _reason_code_of(label: str) -> str:

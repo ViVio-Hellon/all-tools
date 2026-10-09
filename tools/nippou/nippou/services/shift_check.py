@@ -47,7 +47,7 @@ from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
 from ..logic import save_checks
 from ..logic.save_checks import Finding
-from ..logic.shift import DEFAULT_SHIFT_TIMES, usable_pair
+from ..logic.shift import bounds_text
 from ..logic.work_time import shift_limit
 from ..logic import line_names
 
@@ -135,24 +135,10 @@ def bounds_of(shift_times: dict[str, tuple[str, str]], shift: str
 
     出どころは伝送用ファイルの `時間用`(取り込み済みなら `shift_config`)。
     **取り込む前でも動かす**ため、無い直は `ShiftTimes` の既定に落とします
-    ── 時間マスタが無いことを理由に保存を止めない。
+    ── 時間マスタが無いことを理由に保存を止めない。読み方は
+    `logic/shift.times_from_master` の 1 か所(画面の直の計算機と同じ)。
     """
-    defaults = DEFAULT_SHIFT_TIMES
-    pairs: dict[str, tuple[str, str]] = {
-        "1直": (defaults.start1, defaults.end1),
-        "2直": (defaults.start2, defaults.end2),
-        "3直": (defaults.start3, defaults.end3),
-        "日勤": (defaults.start_day, defaults.end_day),
-    }
-    keys = {"1直": "1", "2直": "2", "3直": "3", "日勤": "昼"}
-    key = keys.get(shift, "")
-    start, end = pairs.get(shift, ("", ""))
-    # 片側でも欠けているか、時:分として読めなければ既定へ
-    # (`build_shift_calculator` と同じ決め方)
-    configured = usable_pair(shift_times.get(key)) if key else None
-    if configured:
-        return configured
-    return start, end
+    return bounds_text(shift_times, shift)
 
 
 def known_stop_codes() -> set[str]:

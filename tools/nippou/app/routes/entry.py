@@ -34,7 +34,7 @@ from nippou.logic import (
     pages,
     validation,
 )
-from nippou.logic.shift import (ShiftCalculator, ShiftTimes,
+from nippou.logic.shift import (ShiftCalculator, ShiftTimes, calculator_from_master,
                                 parse_business_date, usable_pair)
 from nippou.presenters import entry as presenter
 from nippou.presenters import settings as settings_view
@@ -53,42 +53,13 @@ bp = Blueprint("entry", __name__)
 # 共通の組み立て
 # ------------------------------------------------------------------
 def build_shift_calculator(raw: dict[str, tuple[str, str]]) -> ShiftCalculator:
-    """直の境界時刻。tkinter版 `ui/app.py:build_shift_calculator` と同じ。"""
-    defaults = ShiftTimes()
+    """直の境界時刻。tkinter版 `ui/app.py:build_shift_calculator` と同じ。
 
-    def pick(key: str, default_start: str, default_end: str) -> tuple[str, str]:
-        """**片側でも欠けていたら、両方とも既定に落とす。**
-
-        `raw.get(key, 既定)` だけだと、マスタに `("17:00", "")` のように
-        片側だけ入っていたときに終わりが空のまま通ります。すると:
-
-            全停入力  … 直の終わりが読めず、既定の 22:00 を書く
-            保存前チェック … `services/shift_check.bounds_of` は片側でも
-                             欠ければ既定に落とすので、別の値で見る
-
-        **同じ直の終わりを2通りに決めていました。** 全停で書いた終了が
-        チェックの定時と食い違い、「最終時間まで入力がないのでは？」が
-        出続けます ── 打った覚えのない行のことを言われるので、何を
-        直せばよいのか分かりません。
-
-        落とし方を `bounds_of` と揃えます。
-
-        **時:分として読めない値も欠けと同じ**です(`usable_pair`)。
-        マスタ管理で「7時」と打たれたまま通すと、この計算機を使う画面が
-        ぜんぶ例外で止まります。
-        """
-        found = usable_pair(raw.get(key))
-        if found:
-            return found
-        return default_start, default_end
-
-    s1, e1 = pick("1", defaults.start1, defaults.end1)
-    s2, e2 = pick("2", defaults.start2, defaults.end2)
-    s3, e3 = pick("3", defaults.start3, defaults.end3)
-    sd, ed = pick("昼", defaults.start_day, defaults.end_day)
-    return ShiftCalculator(ShiftTimes(
-        start1=s1, end1=e1, start2=s2, end2=e2,
-        start3=s3, end3=e3, start_day=sd, end_day=ed))
+    **読み方は `logic/shift.times_from_master` の 1 か所**(片側でも欠けていたら・時:分として
+    読めなければ両方とも既定に落とす)。保存前チェック・押した記録・過去日報の取り込み・
+    全停入力も同じ関数で読む ── 同じ直の終わりを 2 通りに決めていたことがある。
+    """
+    return calculator_from_master(raw)
 
 
 def current_calculator() -> ShiftCalculator:

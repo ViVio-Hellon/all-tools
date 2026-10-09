@@ -91,5 +91,39 @@ class ShiftEndAgreeTests(unittest.TestCase):
                     self.assertEqual(by_clock, push_log.shift_end(now.date(), DAY_SHIFT, raw))
 
 
+class MasterReadersAgreeTests(unittest.TestCase):
+    """時間マスタを読むところ(画面の計算機・保存前チェック・過去日報の取り込み・全停入力)が
+    **同じ読み方**をする(logic/shift.times_from_master)。以前は過去日報の取り込みが始まりだけを
+    独自に読んでいて、全角は控えに落ち、片側だけの値はそのまま使っていた。"""
+
+    def test_読む場所が同じ時刻を出す(self) -> None:
+        from app.routes import staff
+        from nippou.logic import nippou_sheet
+        from nippou.logic.shift import SHIFT_1, SHIFT_2, SHIFT_3, normalize_hhmm
+        from nippou.services.shift_check import bounds_of
+
+        for name, raw in list(MASTERS.items()) + [(k, v[0]) for k, v in KNOWN_GAPS.items()]:
+            calc = _calculator(raw)
+            starts = nippou_sheet.shift_starts(raw)
+            for shift in (SHIFT_1, SHIFT_2, SHIFT_3, DAY_SHIFT):
+                with self.subTest(master=name, shift=shift):
+                    start_t, end_t = calc.times.bounds(shift)
+                    start, end = bounds_of(raw, shift)
+                    self.assertEqual((start, end), (start_t.strftime("%H:%M"), end_t.strftime("%H:%M")))
+                    self.assertEqual(staff._parse_hhmm(start), start_t)
+                    if shift != DAY_SHIFT:
+                        self.assertEqual(starts[shift], start_t.hour * 60 + start_t.minute)
+
+    def test_全角と片側だけ(self) -> None:
+        from app.routes import staff
+        from nippou.logic import nippou_sheet
+
+        raw = {"1": ("０６:５０", "１５:００"), "2": ("14:50", "")}
+        starts = nippou_sheet.shift_starts(raw)
+        self.assertEqual(starts["1直"], 6 * 60 + 50, "全角を控えに落とした")
+        self.assertEqual(starts["2直"], 15 * 60, "片側だけの値を使った(ほかの画面は両方とも控えに落とす)")
+        self.assertEqual(staff._parse_hhmm("２２:５０").hour, 22)
+
+
 if __name__ == "__main__":
     unittest.main()

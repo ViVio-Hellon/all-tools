@@ -49,8 +49,10 @@ def reload(repo: NippouRepository) -> Optional[dict[str, tuple[str, str]]]:
 
 def describe(times: dict[str, tuple[str, str]]) -> str:
     """「1直 07:00〜15:00 / 2直 15:00〜22:50 …」。**直の順に並べる。**"""
-    names = {"1": "1直", "2": "2直", "3": "3直", "昼": "日勤"}
-    order = [k for k in ("1", "2", "3", "昼") if k in times]
+    from ..logic.shift import FORM_KEYS
+
+    names = dict(FORM_KEYS)                       # 鍵 → 直の名前(logic/shift の 1 か所)
+    order = [k for k in names if k in times]
     order += sorted(k for k in times if k not in names)
     return " / ".join(
         f"{names.get(k, k)} {times[k][0] or '(空)'}〜{times[k][1] or '(空)'}"

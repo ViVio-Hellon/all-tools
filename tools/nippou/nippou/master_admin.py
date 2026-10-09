@@ -1029,7 +1029,13 @@ SHIFT_KEY_COLUMN = "直"
 SHIFT_TIME_COLUMNS: tuple[str, ...] = ("開始", "終了")
 #: 読む側が引く直の鍵(`logic/shift`・`services/shift_check`)。
 #: これ以外の直は**どこからも読まれない**ので、打っても効きません
-SHIFT_KEYS: tuple[str, ...] = ("1", "2", "3", "昼")
+def _shift_keys() -> tuple[str, ...]:
+    from .logic.shift import FORM_KEYS
+
+    return tuple(key for key, _ in FORM_KEYS)
+
+
+SHIFT_KEYS: tuple[str, ...] = _shift_keys()      # logic/shift.FORM_KEYS の 1 か所から
 
 
 def is_access_table(table: str) -> bool:

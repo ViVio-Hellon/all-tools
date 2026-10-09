@@ -152,6 +152,56 @@ MASTER_KEYS: tuple[tuple[str, str], ...] = (("1", "1直"), ("2", "2直"),
 FORM_KEYS: tuple[tuple[str, str], ...] = MASTER_KEYS + (("昼", DAY_SHIFT),)
 
 
+#: 直の名前 → 時間マスタ(``shift_config``)の鍵。**ここ 1 か所で決める**
+#: (以前は shift_check・shift_times・master_admin にも同じ表があった)
+SHIFT_KEYS: dict[str, str] = {name: key for key, name in FORM_KEYS}
+
+
+def parse_hhmm(value: object) -> Optional[time]:
+    """``"22:50"``(全角も)を ``time`` に。読めなければ None(:func:`normalize_hhmm` と同じ読み方)。"""
+    text = normalize_hhmm(value)
+    if not text:
+        return None
+    hh, mm = text.split(":")
+    return time(int(hh), int(mm))
+
+
+def times_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftTimes":
+    """時間マスタ(``{"1": ("06:50", "15:00"), …}``)から直の境界。**読む側はみなここを通す。**
+
+    **片側でも欠けているか、時:分として読めなければ、その直は両方とも控えに落とす**
+    (:func:`usable_pair`)。以前は画面の固定・保存前チェック・押した記録・過去日報の取り込み・
+    全停入力がそれぞれ時間マスタを読んでいて、片側だけの値・全角の値の扱いが場所ごとに違い、
+    同じ直の終わりを画面ごとに違う時刻で見ることになった。
+    """
+    defaults = DEFAULT_SHIFT_TIMES
+    raw = raw or {}
+
+    def pick(key: str, default_start: str, default_end: str) -> tuple[str, str]:
+        found = usable_pair(raw.get(key))
+        return found if found else (default_start, default_end)
+
+    s1, e1 = pick("1", defaults.start1, defaults.end1)
+    s2, e2 = pick("2", defaults.start2, defaults.end2)
+    s3, e3 = pick("3", defaults.start3, defaults.end3)
+    sd, ed = pick("昼", defaults.start_day, defaults.end_day)
+    return ShiftTimes(start1=s1, end1=e1, start2=s2, end2=e2,
+                      start3=s3, end3=e3, start_day=sd, end_day=ed)
+
+
+def calculator_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftCalculator":
+    """時間マスタから直の計算機(:func:`times_from_master`)。"""
+    return ShiftCalculator(times_from_master(raw))
+
+
+def bounds_text(raw: Optional[dict[str, tuple[str, str]]], shift: str) -> tuple[str, str]:
+    """その直の ``("HH:MM", "HH:MM")``。知らない直なら ``("", "")``。"""
+    times = times_from_master(raw)
+    pairs = {SHIFT_1: (times.start1, times.end1), SHIFT_2: (times.start2, times.end2),
+             SHIFT_3: (times.start3, times.end3), DAY_SHIFT: (times.start_day, times.end_day)}
+    return pairs.get(shift, ("", ""))
+
+
 def missing_shift_times(raw: dict[str, tuple[str, str]]) -> list[str]:
     """**マスタから読めていない直**の名前。空なら3直ぶんとも本物。
 

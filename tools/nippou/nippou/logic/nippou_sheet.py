@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from .. import constants
 from ..db.models import DetailRecord, HeaderRecord
 from .csv_import import Page, Parsed, Problem
-from .shift import DEFAULT_SHIFT_TIMES, parse_business_date
+from .shift import parse_business_date, times_from_master
 
 #: 見出しの下、中身が並ぶ範囲
 FIRST_ROW, LAST_ROW = 8, 151
@@ -196,16 +196,13 @@ def _minutes(text: str) -> int | None:
 def shift_starts(times: dict | None = None) -> dict[str, int]:
     """直の始まり(分)。`times` は `shift_config` の形 ``{"2": ("15:00", "22:50"), …}``。
 
-    読めない直は控え(07:00 / 15:00 / 22:50)にします。
+    読めない直は控え(07:00 / 15:00 / 22:50)にします。**読み方は画面の直の計算機と同じ**
+    (`logic/shift.times_from_master`: 片側でも欠けていたら・時:分として読めなければ控え、
+    全角も読む)。以前は始まりだけを独自に読んでいて、全角は控えに落ち、片側だけの値は
+    そのまま使っていた ── 取り込みの直の区切りが画面と食い違う。
     """
-    fallback = {"1直": DEFAULT_SHIFT_TIMES.start1, "2直": DEFAULT_SHIFT_TIMES.start2,
-                "3直": DEFAULT_SHIFT_TIMES.start3}
-    out: dict[str, int] = {}
-    for shift, default in fallback.items():
-        given = (times or {}).get(shift[0])
-        value = _minutes(given[0]) if given else None
-        out[shift] = value if value is not None else _minutes(default)
-    return out
+    found = times_from_master(times)
+    return {"1直": _minutes(found.start1), "2直": _minutes(found.start2), "3直": _minutes(found.start3)}
 
 
 def _row_start(values: dict[str, str]) -> int | None:

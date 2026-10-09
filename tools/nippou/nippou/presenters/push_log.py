@@ -41,7 +41,7 @@ from typing import Any, Optional
 
 from ..logic.shift import parse_business_date
 from ..services import push_history
-from ..services.shift_check import bounds_of
+from ..logic.shift import calculator_from_master
 from .agg_admin import Table
 
 #: 直の並び・色・形。**色は直に付く**(並べ替えや絞り込みで塗り替えない)
@@ -90,17 +90,12 @@ def timing_of(minutes: Optional[int]) -> str:
 
 def shift_end(report_date: date, shift: str,
               shift_times: dict[str, tuple[str, str]]) -> Optional[datetime]:
-    """その直が終わる日時。**終わりが始まり以前なら翌日**(3直 22:50〜07:00)。"""
-    start, end = bounds_of(shift_times, shift)
-    try:
-        s_h, s_m = (int(x) for x in start.split(":"))
-        e_h, e_m = (int(x) for x in end.split(":"))
-    except (ValueError, AttributeError):
-        return None
-    ends = datetime.combine(report_date, datetime.min.time()).replace(hour=e_h, minute=e_m)
-    if (e_h, e_m) <= (s_h, s_m):
-        ends += timedelta(days=1)
-    return ends
+    """その直が終わる日時。**終わりが始まり以前なら翌日**(3直 22:50〜07:00)。
+
+    画面の固定と同じ `ShiftCalculator.shift_end_at`(時間マスタの読み方も同じ
+    `logic/shift.times_from_master`)。以前は同じ計算をここに書き写していた。
+    """
+    return calculator_from_master(shift_times).shift_end_at(shift, report_date)
 
 
 def minutes_after_end(row: dict, shift_times: dict[str, tuple[str, str]]
