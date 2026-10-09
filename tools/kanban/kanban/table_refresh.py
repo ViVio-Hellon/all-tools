@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import unicodedata
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -186,11 +187,23 @@ def _suspect_rows(table: SourceTable) -> int:
     return sum(1 for r in table.rows if any(isinstance(v, str) and "�" in v for v in r.values()))
 
 
+_INTEGRAL = re.compile(r"[+-]?\d+(?:\.0*)?")
+
+
 def _key(value: Any) -> str:
-    """管理番号をそろえる(Access は 1.0、共有DBは 1 のように型が違うことがある)。"""
+    """管理番号をそろえる(Access は 1.0、共有DBは 1 や '1.0' のように型・書き方が違うことがある)。
+
+    **文字で入っている '1.0' も 1 とみなす。** 共有DBの列が TEXT で Access が数値(Double)だと、
+    入れ替えで '1.0' と書かれる。これを 1 と突き合わせられないと、次の入れ替えで同じ看板を
+    「Access で足された看板」として足し、発注中の元の行も残して**表が倍になっていた**。
+    全角の数字も半角にそろえる。
+    """
     if isinstance(value, float) and value.is_integer():
         value = int(value)
-    return str(value if value is not None else "").strip()
+    text = unicodedata.normalize("NFKC", str(value if value is not None else "")).strip()
+    if _INTEGRAL.fullmatch(text):
+        text = str(int(float(text)))
+    return text
 
 
 # ------------------------------------------------------------------
@@ -419,7 +432,7 @@ def _preview_kanban(shared: SharedDb, src: SourceTable, dest_cols: list[str]) ->
     except SharedDbError:
         return ""
     key = config.COL_KEY
-    by_key = {_key(r.get(key)): r for r in current}
+    by_key = _by_key(current)
     compare = [c for c in src.columns if c in dest_cols and c not in STATE_COLUMNS]
     changed = added = 0
     for s in src.rows:
@@ -431,12 +444,16 @@ def _preview_kanban(shared: SharedDb, src: SourceTable, dest_cols: list[str]) ->
     src_keys = {_key(s.get(key)) for s in src.rows}
     gone = [r for k, r in by_key.items() if k not in src_keys]
     kept = sum(1 for r in gone if _active(r))
-    if not (changed or added or gone):
+    doubled = len(current) - len(by_key)
+    if not (changed or added or gone or doubled):
         return "Access と同じです(入れ替えても変わりません)"
     parts = [f"変わる {changed}", f"足す {added}", f"消す {len(gone) - kept}"]
     if kept:
         parts.append(f"残す(Access に無いが発注中など) {kept}")
-    return "看板: " + "・".join(parts) + " 枚"
+    text = "看板: " + "・".join(parts) + " 枚"
+    if doubled:
+        text += f"(共有DBで同じ管理番号が重なっている {doubled} 行を 1 行にまとめます)"
+    return text
 
 
 def _text(value: Any) -> str:
@@ -594,6 +611,19 @@ def _refresh_one(shared: SharedDb, src: SourceTable) -> tuple[int, int, str]:
     return before, after, note
 
 
+def _by_key(current: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """共有DBの看板を管理番号で引く。**同じ管理番号が重なっていたら 1 行にする**
+    (発注中・発送済み・注文中の行を優先し、同じなら後の行)。入れ替えのたびに重なりが
+    片付き、増えていかない。"""
+    out: dict[str, dict[str, Any]] = {}
+    for row in current:
+        k = _key(row.get(config.COL_KEY))
+        if k in out and _active(out[k]) and not _active(row):
+            continue
+        out[k] = row
+    return out
+
+
 def _active(row: dict[str, Any]) -> bool:
     """発注中・発送済み・注文中のどれか(消すと動いている発注を見失う)。"""
     on = config.MARK_ON
@@ -605,7 +635,8 @@ def _merge_kanban(src: SourceTable, current: list[dict[str, Any]], common: list[
                   dest_cols: list[str]) -> tuple[list[dict[str, Any]], str]:
     """看板の表: 資材・サイズなどは Access、状態はいまのまま。"""
     key = config.COL_KEY
-    by_key = {_key(r.get(key)): r for r in current}
+    by_key = _by_key(current)
+    doubled = len(current) - len(by_key)
     states = [c for c in STATE_COLUMNS if c in dest_cols]
     only_dest = [c for c in dest_cols if c not in common and c not in states]
     rows: list[dict[str, Any]] = []
@@ -615,11 +646,15 @@ def _merge_kanban(src: SourceTable, current: list[dict[str, Any]], common: list[
         now = by_key.get(k)
         row = {c: s.get(c) for c in common}
         if now is not None:
-            # 状態と、共有DBにだけある列は、いまの値を残す
+            # 状態と、共有DBにだけある列は、いまの値を残す。**管理番号もいまの書き方のまま**
+            # (TEXT の列へ Access の 1.0 を書くと '1.0' になり、端末の写しでは別の看板になる)
             for c in states + only_dest:
                 row[c] = now.get(c)
+            row[key] = now.get(key)
         else:
             added += 1
+            if isinstance(row.get(key), float) and row[key].is_integer():
+                row[key] = int(row[key])
             for c in states:
                 if c not in common:
                     row[c] = INITIAL_STATE[c]
@@ -629,6 +664,8 @@ def _merge_kanban(src: SourceTable, current: list[dict[str, Any]], common: list[
     dropped = sum(1 for k, r in by_key.items() if k not in src_keys and not _active(r))
     rows.extend({c: r.get(c) for c in dest_cols} for r in kept)
     parts = ["状態はいまのまま"]
+    if doubled:
+        parts.append(f"共有DBで同じ管理番号が重なっていた {doubled} 行を 1 行にまとめました")
     if added:
         parts.append(f"Access で足された看板 {added} 枚を足しました")
     if dropped:

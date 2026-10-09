@@ -1,7 +1,7 @@
 {
   "app_id": "nlm.kanban-system",
   "display_name": "資材発注看板システム",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "monitor_level": 2,
 
   "local_dir_name": "KanbanSystem",

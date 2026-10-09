@@ -300,5 +300,72 @@ class UploadTest(Fixture):
         self.assertIn(".accdb", why)
 
 
+class NoDuplicatesTest(Fixture):
+    """**入れ替えを何度しても行が増えない。**
+
+    別のツール(python-web-tools の「表を持ってくる」)で共有DBに同じ内容の行が溜まった。
+    看板では、共有DBの 管理番号 の列が TEXT で Access が数値(Double)だと、1 回目に
+    '1.0' と書かれ、2 回目にそれを 1 と突き合わせられず、同じ看板を足して元の行も
+    残す(発注中なので)── **表が倍になっていた**。
+    """
+
+    def text_keyed_shared(self, keys, states):
+        c = sqlite3.connect(str(self.shared_path))
+        c.execute("DROP TABLE [看板_LVC]")
+        c.execute("CREATE TABLE [看板_LVC] (" + ", ".join(f"[{k}] TEXT" for k in KANBAN_COLS) + ")")
+        for k, want in zip(keys, states):
+            c.execute(f"INSERT INTO [看板_LVC] VALUES ({', '.join('?' for _ in KANBAN_COLS)})",
+                      (k, "外装紙", "A", want, "" if want else "〇", "2026/10/01 08:00:00" if want else "",
+                       "", "", "〇", "", ""))
+        c.commit()
+        c.close()
+
+    def double_source(self, keys):
+        """Access の 管理番号 が Double(内蔵リーダーは float で返す)。"""
+        table = tr.SourceTable("看板_LVC", list(KANBAN_COLS), [
+            dict(zip(KANBAN_COLS, (float(k), "外装紙X", "A", "", "〇", "", "", "", "〇", "", ""))) for k in keys])
+        patcher = mock.patch.object(tr, "read_source", return_value={"看板_LVC": table})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_何度入れ替えても行が増えない(self):
+        for _ in range(5):
+            self.assertTrue(self.run_refresh(["看板_LVC", "資材一覧"]).ok)
+            tr._cache.clear()
+        self.assertEqual(len(self.rows("看板_LVC")), 4)
+        self.assertEqual(len(self.rows("資材一覧")), 2)
+
+    def test_TEXTの管理番号とAccessの数値でも倍にならない_書き方もそのまま(self):
+        self.text_keyed_shared(["1", "2", "3"], ["〇", "〇", ""])
+        self.double_source([1, 2, 3])
+        for _ in range(3):
+            self.assertTrue(self.run_refresh(["看板_LVC"]).ok)
+        rows = self.rows("看板_LVC")
+        self.assertEqual([r["管理番号"] for r in rows], ["1", "2", "3"], "'1.0' と書いた・倍になった")
+        self.assertEqual([r["欲"] for r in rows], ["〇", "〇", ""], "状態を消した")
+        self.assertEqual(rows[0]["資材"], "外装紙X")
+
+    def test_倍になってしまった表は次の入れ替えで1行に戻る_発注中の行を残す(self):
+        # 以前の版で倍になった姿: '1.0'(Access から足した・出していない)と '1.0'(元の・発注中)
+        self.text_keyed_shared(["1.0", "2.0", "1.0", "2.0"], ["", "", "〇", ""])
+        self.double_source([1, 2])
+        plan = tr.plan(str(self.src), self.shared)
+        lvc = next(c for c in plan.candidates if c.name == "看板_LVC")
+        self.assertIn("同じ管理番号が重なっている 2 行を 1 行にまとめます", lvc.preview)
+        result = self.run_refresh(["看板_LVC"])
+        self.assertTrue(result.ok, result.message)
+        rows = self.rows("看板_LVC")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["管理番号"]: r["欲"] for r in rows}, {"1.0": "〇", "2.0": ""},
+                         "重なりの片方(発注中)を消した")
+        self.assertTrue(any("重なっていた 2 行を 1 行にまとめました" in n for n in result.notes), result.notes)
+
+    def test_同じ看板を別の書き方で2行持つAccessは断る(self):
+        self.double_source([1])
+        table = tr.read_source(self.src)["看板_LVC"]
+        table.rows.append(dict(table.rows[0], 管理番号="１"))
+        self.assertIn("重なっています", tr.refresh_why("看板_LVC", table, list(KANBAN_COLS), 0))
+
+
 if __name__ == "__main__":
     unittest.main()
