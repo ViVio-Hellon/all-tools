@@ -637,9 +637,32 @@ class Settings:
                 for name in (stem, *OLDER_NAMES.get(stem, ()))]
 
     @property
+    def gw_coil_master_paths(self) -> list[Path]:
+        """コイルの割り数(`LS4LOT`)を探す順。機側・NS1 のときだけ読む。
+
+        **仕掛ロット・引当・受注と同じく 1つ目 → 2つ目**(v4.25.0)。最後に梱包資材マスタの
+        フォルダ(v4.24.0 までの置き場所)も見る ── 置き場所を移していない端末も読める。
+        """
+        paths = self._wip_paths(self.gw_coil_master_filename)
+        legacy = _pick_source(self.material_master_dir, self.gw_coil_master_filename)
+        if legacy not in paths:
+            paths.append(legacy)
+        return paths
+
+    @property
     def gw_coil_master_path(self) -> Path:
-        """コイルの割り数(`LS4LOT`)。機側・NS1 のときだけ読む。梱包資材マスタと同じフォルダ。"""
-        return _pick_source(self.material_master_dir, self.gw_coil_master_filename)
+        """コイルの割り数(`LS4LOT`)で、いま実際に読むファイル(画面に出す)。
+
+        探す順(`gw_coil_master_paths`)で最初に**あるもの**。どこにも無ければ1つ目。
+        """
+        paths = self.gw_coil_master_paths
+        for path in paths:
+            try:
+                if path.exists():
+                    return path
+            except OSError:
+                continue
+        return paths[0]
 
     @property
     def line_target_path(self) -> Path:

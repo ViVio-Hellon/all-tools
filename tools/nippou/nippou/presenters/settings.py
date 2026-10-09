@@ -48,14 +48,15 @@ PATH_FIELDS = (
      "ライン毎目標・停止内訳・VC計算マスタの既定の置き場所でもあります"),
     # 置き場所ごとに分ける(v4.16.0)。**空なら参照用マスタと同じフォルダ**
     (config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所",
-     "仕掛ロット(SIKALOT)・仕掛引当(SIKAHIKI)・仕掛受注(SIKAODR)があるフォルダ"
-     "(既定: 参照用マスタと同じフォルダ)"),
+     "仕掛ロット(SIKALOT)・仕掛引当(SIKAHIKI)・仕掛受注(SIKAODR)・コイル割り数(LS4LOT)が"
+     "あるフォルダ(既定: 参照用マスタと同じフォルダ)"),
     (config.KEY_WIP_DIR2, "仕掛ロット・引当・受注の置き場所(2つ目)",
-     "ロット番号から引くとき、1つ目に仕掛のファイルが無い・ファイルはあるが"
-     "そのロット(引当・受注)が無いときに、ここを見ます。空なら見ません"),
+     "ロット番号から引くとき、1つ目に仕掛のファイル(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT)が"
+     "無い・壊れている・ファイルはあるがそのロット(引当・受注)が無いときに、ここを見ます。"
+     "1つ目の SIKALOT に BOX最終実績の寸法が無いときは、ここの BOX設計の寸法を使います。空なら見ません"),
     (config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所",
-     "梱包資材マスタ と コイル割り数(LS4LOT)があるフォルダ"
-     "(既定: 参照用マスタと同じフォルダ)"),
+     "梱包資材マスタがあるフォルダ(既定: 参照用マスタと同じフォルダ)。"
+     "コイル割り数(LS4LOT)は、仕掛の置き場所(1つ目・2つ目)に無いときだけここを見ます"),
     (config.KEY_TRANSMISSION_DIR, "伝送用ファイルの置き場所",
      "伝送用ファイル(停止理由内訳・直の境界時刻)があるフォルダ"
      "(既定: 参照用マスタと同じフォルダ)"),
@@ -390,12 +391,13 @@ EXPECTED_FILES = {
         ("lot", "仕掛ロット", lambda: SETTINGS.gw_lot_master_path),
         ("hiki", "仕掛引当", lambda: SETTINGS.gw_hiki_master_path),
         ("order", "仕掛受注", lambda: SETTINGS.gw_order_master_path),
+        # v4.25.0 から仕掛と同じ置き場所(無ければ梱包資材マスタのフォルダも見る)
+        ("coil", "コイル割り数(LS4LOT)",
+         lambda: SETTINGS.gw_coil_master_path),
     ),
     config.KEY_MATERIAL_DIR: (
         ("material", "梱包資材マスタ",
          lambda: SETTINGS.gw_material_master_path),
-        ("coil", "コイル割り数(LS4LOT)",
-         lambda: SETTINGS.gw_coil_master_path),
     ),
     config.KEY_TRANSMISSION_DIR: (
         ("transmission", "伝送用ファイル",

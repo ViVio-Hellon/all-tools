@@ -76,6 +76,10 @@ class LotInfo:
     box_thickness_mm: float = 0.0
     box_width_mm: float = 0.0
     box_length_mm: float = 0.0
+    #: BOX の寸法をどこから取ったか(画面の一言に出す)。既定は BOX最終実績。
+    #: 1つ目の SIKALOT に BOX最終実績が無く、**2つ目の SIKALOT の BOX設計**を使ったら
+    #: `BOX_DESIGN_SECOND`(v4.25.0)
+    box_source: str = ""
 
     @property
     def box_course(self) -> str:
@@ -152,6 +156,17 @@ class OrderInfo:
 BOX_COURSES: tuple[str, ...] = g_course.COURSES
 
 
+#: BOX の寸法を2つ目の SIKALOT の BOX設計から取った印(`LotInfo.box_source`)
+BOX_DESIGN_SECOND = "BOX設計(2つ目)"
+BOX_DIMENSIONS: tuple[str, ...] = ("板厚", "板幅", "板丈")
+
+
+def _box_dims(row: dict, prefix: str) -> Optional[tuple[str, str, str]]:
+    """{prefix}_板厚・板幅・板丈。**3つとも空・0 なら None**(データが無い)。"""
+    values = tuple(str(row.get(f"{prefix}_{name}", "") or "").strip() for name in BOX_DIMENSIONS)
+    return values if any(_to_float(v) != 0 for v in values) else None  # type: ignore[return-value]
+
+
 def _box_final(row: dict, name: str) -> str:
     """BOX最終実績_{name}。空・0(列が無い古い写し・最終工程がまだ無い)なら BOX実績_{name}。
 
@@ -166,6 +181,12 @@ def _box_final(row: dict, name: str) -> str:
 
 def _search_wip(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunner],
                 label: str, keep=None) -> list[dict]:
+    """`_search_wip_at` の行だけ。"""
+    return _search_wip_at(paths, sql_filter, runner, label, keep)[0]
+
+
+def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunner],
+                   label: str, keep=None, first_no: int = 1) -> tuple[list[dict], int]:
     """仕掛のファイルを**1つ目 → 2つ目**の順に引く(v4.23.0)。最初に見つかった行を返す。
 
     次へ進むのは:
@@ -173,6 +194,10 @@ def _search_wip(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunne
       - ファイルはあるが、探すもの(ロット・引当・受注)が無い
     2つ目を決めていなければ1つ目だけ(これまでどおり)。`keep` は使える行だけに絞る
     (引当なら受注番号のある行)。絞って空なら「無い」とみなして次へ。
+
+    「読めない」には、壊れている・0 バイト・中に「仕掛」の表が無い、が入る(どれも
+    読む側が失敗を返す)。中身が空(表はあるが行が無い)は「無い」と同じで次へ。
+    返すのは (行, 何番目の置き場所で見つけたか)。見つからなければ ([], -1)。
     """
     failure: Optional[Exception] = None
     answered = False
@@ -181,24 +206,24 @@ def _search_wip(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunne
             result = import_table(path, SETTINGS.gw_shared_table_name,
                                   sql_filter=sql_filter, runner=runner)
         except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
-            _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + 1, path, exc)
+            _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + first_no, path, exc)
             failure = exc
             continue
         answered = True
         if not result.success:
             _logger.warning("%sに失敗しました(%dつ目 %s) error=%s",
-                            label, index + 1, path, result.error)
+                            label, index + first_no, path, result.error)
             continue
         rows = keep(result.rows) if keep else list(result.rows)
         if rows:
             if index > 0:
                 _logger.info("%s: 1つ目に無かったので %dつ目で見つけました(%s)",
                              label, index + 1, path)
-            return rows
+            return rows, index
     if failure is not None and not answered:
         # どの置き場所でも読めなかった。**「無い」とは言わない**(呼ぶ側が「読めません」と出す)
         raise failure
-    return []
+    return [], -1
 
 
 def _paths(master_path: Optional[Path], default: list[Path]) -> list[Path]:
@@ -215,12 +240,13 @@ def search_lot(
     （VBAの ``fL = False`` → "Text.データなし　手入力よろしく" 警告に相当、
     警告表示自体は呼び出し元のUI層が行う）。"""
     sql_filter = f"[ﾛｯﾄ番号]={script_gen.sql_literal(lot_no, 'TEXT')}"
-    rows = _search_wip(_paths(master_path, SETTINGS.gw_lot_master_paths), sql_filter,
-                       runner, f"LotNo検索 lot_no={lot_no}")
+    paths = _paths(master_path, SETTINGS.gw_lot_master_paths)
+    rows, found_at = _search_wip_at(paths, sql_filter, runner, f"LotNo検索 lot_no={lot_no}")
     if not rows:
         return None
 
     row = rows[0]
+    box, box_source = _box_size(row, found_at, paths, sql_filter, runner, lot_no)
     return LotInfo(
         lot_no=row.get("ﾛｯﾄ番号", ""),
         order_no=row.get("ｵｰﾀﾞｰ番号", ""),
@@ -239,10 +265,48 @@ def search_lot(
         box_sheets=_box_final(row, "枚本数"),
         interleaf_flag=row.get("梱包_合紙", ""),
         cast_no=row.get("鋳造番号", ""),
-        box_thickness_mm=_to_float(_box_final(row, "板厚")),
-        box_width_mm=_to_float(_box_final(row, "板幅")),
-        box_length_mm=_to_float(_box_final(row, "板丈")),
+        box_thickness_mm=_to_float(box[0]),
+        box_width_mm=_to_float(box[1]),
+        box_length_mm=_to_float(box[2]),
+        box_source=box_source,
     )
+
+
+def _box_size(row: dict, found_at: int, paths: list[Path], sql_filter: str,
+              runner: Optional[ScriptRunner], lot_no: str) -> tuple[tuple[str, str, str], str]:
+    """BOX の寸法(厚・幅・丈)と、どこから取ったか(v4.25.0)。
+
+        1つ目のSIKALOT でBOX最終実績_板厚・板幅・板丈のデータがなかった場合
+        2つ目で見るSIKALOTのBOX最終実績のかわりに BOX設計_板厚・板幅・板丈 をみる
+
+    1. 1つ目で見つけた行に BOX最終実績(3つのどれか)があれば、それ
+    2. 無ければ(1つ目に行が無かったときも)、**2つ目の SIKALOT の BOX設計**
+       (2つ目で見つけた行ならその行、1つ目で見つけたなら2つ目を同じロットで引く)
+    3. それも無ければ、見つけた行の BOX最終実績 → BOX実績(これまでどおり `_box_final`)
+    2つ目を決めていなければ 1 と 3 だけ(これまでどおり)。
+    """
+    if found_at == 0:
+        final = _box_dims(row, "BOX最終実績")
+        if final is not None:
+            return final, ""
+    design_row: Optional[dict] = None
+    if found_at > 0:
+        design_row = row
+    elif len(paths) > 1:
+        try:
+            second, _ = _search_wip_at(paths[1:], sql_filter, runner,
+                                       f"BOX設計の検索 lot_no={lot_no}", first_no=2)
+        except Exception as exc:                  # noqa: BLE001 - 寸法の補いが無いだけ
+            _logger.warning("2つ目の SIKALOT を読めませんでした(BOX設計) lot_no=%s: %s", lot_no, exc)
+            second = []
+        design_row = second[0] if second else None
+    if design_row is not None:
+        design = _box_dims(design_row, "BOX設計")
+        if design is not None:
+            _logger.info("BOX最終実績が無いので、2つ目の SIKALOT の BOX設計の寸法を使います lot_no=%s",
+                         lot_no)
+            return design, BOX_DESIGN_SECOND
+    return tuple(_box_final(row, name) for name in BOX_DIMENSIONS), ""  # type: ignore[return-value]
 
 
 def search_allocations(
@@ -343,27 +407,23 @@ def search_coil_split(
     **読めなくても例外にしません。** 縦横が空になるだけで、日報の入力
     そのものは続けられます(VBA も `GoTo skipCoilErr` で続けていました)。
     """
-    path = master_path or SETTINGS.gw_coil_master_path
     sql_filter = f"[ﾛｯﾄ番号]={script_gen.sql_literal(lot_no, 'TEXT')}"
+    # **仕掛ロット・引当・受注と同じく 1つ目 → 2つ目**(v4.25.0)。最後に梱包資材マスタの
+    # フォルダ(以前の置き場所)も見る
+    paths = _paths(master_path, SETTINGS.gw_coil_master_paths)
     try:
-        result = import_table(path, SETTINGS.gw_shared_table_name,
-                              sql_filter=sql_filter, runner=runner)
+        rows = _search_wip(paths, sql_filter, runner, f"コイル縦横 lot_no={lot_no}")
     except Exception:                             # noqa: BLE001 - 入力は止めない
         _logger.exception("LS4LOT を読めませんでした lot_no=%s", lot_no)
         return None
-
-    if not result.success or not result.rows:
-        if not result.success:
-            _logger.warning("コイル縦横の取得に失敗しました lot_no=%s error=%s",
-                            lot_no, result.error)
-        else:
-            # VBA も `DebugLog("LS4LOTヒットなし")` を残して続けていた
-            _logger.info("LS4LOT にヒットなし lot_no=%s", lot_no)
+    if not rows:
+        # VBA も `DebugLog("LS4LOTヒットなし")` を残して続けていた
+        _logger.info("LS4LOT にヒットなし lot_no=%s", lot_no)
         return None
 
     # VBA は**最後にあたった行**を採っていた(ループで上書き)。
     # 実データでは1ロット1行なので、どちらでも同じ
-    row = result.rows[-1]
+    row = rows[-1]
     return CoilSplit(
         lot_no=row.get("ﾛｯﾄ番号", ""),
         vertical=row.get("当工程設計_縦割数", ""),

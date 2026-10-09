@@ -57,7 +57,9 @@ class ReferenceDirTests(WebTestCase):
         self.assertEqual(res.status_code, 200, res.get_json())
         got = self.paths()
         self.assertEqual({got["lot"], got["hiki"], got["order"]}, {self.tmp / "wip"})
-        self.assertEqual({got["material"], got["coil"]}, {self.tmp / "material"})
+        self.assertEqual(got["material"], self.tmp / "material")
+        # LS4LOT は仕掛と同じ置き場所(v4.25.0)。どこにも無いときは仕掛の1つ目を出す
+        self.assertEqual(got["coil"], self.tmp / "wip")
         self.assertEqual({got["transmission"], got["stop"]}, {self.tmp / "transmission"})
 
     def test_1つだけ変えればほかは参照用マスタのまま(self) -> None:
@@ -86,7 +88,8 @@ class ReferenceDirTests(WebTestCase):
         c = self.config
         self.assertEqual((sources["lot"], sources["hiki"], sources["order"]),
                          (c.KEY_WIP_DIR,) * 3)
-        self.assertEqual((sources["material"], sources["coil"]), (c.KEY_MATERIAL_DIR,) * 2)
+        self.assertEqual(sources["material"], c.KEY_MATERIAL_DIR)
+        self.assertEqual(sources["coil"], c.KEY_WIP_DIR, "LS4LOT は仕掛と同じ置き場所(v4.25.0)")
         self.assertEqual(sources["transmission"], c.KEY_TRANSMISSION_DIR)
 
     def test_配布設定に入れられる(self) -> None:

@@ -38,6 +38,10 @@ ROW_FAMILY = "box_course"
 
 #: 行の控えで「製造の寸法のまま」を表す後ろ書き
 MADE_SUFFIX = "/製造"
+#: 行の控えで「2つ目の SIKALOT の BOX設計の寸法」を表す後ろ書き(v4.25.0)
+DESIGN_SUFFIX = "/設計"
+#: 既定の寸法の出どころ
+BOX_FINAL = "BOX最終実績"
 
 Size = tuple[float, float, float]
 
@@ -62,6 +66,9 @@ class GCourse:
     used_box: bool        # BOX最終実績の寸法にしたか
     box: Size             # BOX最終実績の寸法
     made: Size            # 製造の寸法
+    #: BOX の寸法の出どころ。1つ目に BOX最終実績が無く、2つ目の SIKALOT の BOX設計を
+    #: 使ったら「BOX設計(2つ目)」(`gw_master.BOX_DESIGN_SECOND`。v4.25.0)
+    source: str = BOX_FINAL
 
     @property
     def label(self) -> str:
@@ -75,31 +82,35 @@ class GCourse:
     @property
     def stored(self) -> str:
         """日報入力の行に控える値(`box_course`)。"""
-        return self.course if self.used_box else f"{self.course}{MADE_SUFFIX}"
+        if not self.used_box:
+            return f"{self.course}{MADE_SUFFIX}"
+        return self.course if self.source == BOX_FINAL else f"{self.course}{DESIGN_SUFFIX}"
 
     @property
     def message(self) -> str:
         """引いたときに出す一言。**製造の寸法も並べる**(SIKALOT と見比べられるように)。"""
         if self.used_box:
-            return (f"{self.label}のロットです。寸法は BOX最終実績 {size_text(self.box)}"
-                    f"(製造 {size_text(self.made)})")
+            return (f"{self.label}のロットです。寸法は {self.source} {size_text(self.box)}"
+                    f"(製造 {size_text(self.made)})"
+                    + ("" if self.source == BOX_FINAL
+                       else "。1つ目の SIKALOT に BOX最終実績が無いので、2つ目の BOX設計を使いました"))
         return (f"{self.label}のロットです。BOX最終実績の寸法が無いので、"
                 f"製造の寸法 {size_text(self.made)} のままです")
 
     def as_dict(self) -> dict[str, Any]:
         return {"course": self.course, "label": self.label, "used_box": self.used_box,
-                "box": size_text(self.box), "made": size_text(self.made),
+                "box": size_text(self.box), "made": size_text(self.made), "source": self.source,
                 "stored": self.stored, "message": self.message}
 
 
-def detect(course: str, *, made: Size, box: Size) -> Optional[GCourse]:
+def detect(course: str, *, made: Size, box: Size, source: str = "") -> Optional[GCourse]:
     """Gコースなら `GCourse`、ちがえば None。"""
     found = find_course(course)
     if not found:
         return None
     box = tuple(float(v or 0) for v in box)       # type: ignore[assignment]
     made = tuple(float(v or 0) for v in made)     # type: ignore[assignment]
-    return GCourse(course=found, used_box=any(box), box=box, made=made)
+    return GCourse(course=found, used_box=any(box), box=box, made=made, source=source or BOX_FINAL)
 
 
 def from_lot(lot: Any) -> Optional[GCourse]:
@@ -109,7 +120,8 @@ def from_lot(lot: Any) -> Optional[GCourse]:
         made=(getattr(lot, "thickness_mm", 0.0), getattr(lot, "width_mm", 0.0),
               getattr(lot, "length_mm", 0.0)),
         box=(getattr(lot, "box_thickness_mm", 0.0), getattr(lot, "box_width_mm", 0.0),
-             getattr(lot, "box_length_mm", 0.0)))
+             getattr(lot, "box_length_mm", 0.0)),
+        source=getattr(lot, "box_source", "") or "")
 
 
 def product_size(lot: Any) -> Size:
@@ -128,8 +140,10 @@ def row_mark(stored: str) -> Optional[dict[str, str]]:
     if not text:
         return None
     made = text.endswith(MADE_SUFFIX)
-    course = text[:-len(MADE_SUFFIX)] if made else text
+    design = text.endswith(DESIGN_SUFFIX)
+    course = text[:-len(MADE_SUFFIX)] if made else text[:-len(DESIGN_SUFFIX)] if design else text
     detail = ("BOX最終実績の寸法が無いので、製造の寸法のまま" if made
+              else "寸法は2つ目の SIKALOT の BOX設計(1つ目に BOX最終実績が無い)" if design
               else "寸法は BOX最終実績")
     return {"text": "G", "course": course,
             "title": f"Gコース({course})のロット ── {detail}"}
