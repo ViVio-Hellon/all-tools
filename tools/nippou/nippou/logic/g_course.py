@@ -47,8 +47,13 @@ Size = tuple[float, float, float]
 
 
 def find_course(course: str) -> str:
-    """設計_設備ｺｰｽ に含まれる Gコース(GCT / GFS / GSS)。無ければ空。"""
-    text = course or ""
+    """設計_設備ｺｰｽ に含まれる Gコース(GCT / GFS / GSS)。無ければ空。
+
+    全角(ＧＳＳ)・小文字で書かれていても当てる(上流の書き出しで揺れても見落とさない)。
+    """
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", course or "").upper()
     return next((c for c in COURSES if c in text), "")
 
 

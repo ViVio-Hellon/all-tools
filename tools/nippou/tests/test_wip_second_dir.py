@@ -47,6 +47,8 @@ class SecondWipDirTests(WebTestCase):
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
 
     def write(self, folder: Path, name: str, columns, rows) -> None:
+        if (folder / name).exists():
+            (folder / name).unlink()              # 同じ試験の中で作り直す
         conn = sqlite3.connect(str(folder / name))
         with conn:
             cols = ", ".join(f'"{c}"' for c in columns)
@@ -224,6 +226,42 @@ class SecondWipDirTests(WebTestCase):
         body = self.lookup()
         self.assertIn("20.000", body["rows"]["1"]["SIZ"], "BOX最終実績が無いので製造の寸法のまま")
         self.assertEqual(body["rows"]["1"]["box_course"], "GSS/製造")
+
+    # -- Gコース(設計_設備ｺｰｽに GFS・GCT・GSS)は BOX最終実績の寸法(v4.16.0/v4.17.0) --
+    def course_lot(self, course: str, *, final=("2.5", "1500", "3000")) -> None:
+        row = list(_lot("H5422S0"))
+        row[LOT_COLUMNS.index("設計_設備ｺｰｽ")] = course
+        self.write(self.first, "SIKALOT.sqlite3", self.BOX_COLUMNS,
+                   [tuple(row) + tuple(final) + ("", "", "")])
+        self.box_rest(self.first)
+
+    def test_GFS_GCT_GSS_のどれかなら製品寸法はBOX最終実績(self) -> None:
+        for course in ("JISN GFS", "GCT", "ﾌﾗﾂﾄ GSS ANF", "ｊｉｓ ＧＳＳ"):
+            with self.subTest(course):
+                self.course_lot(course)
+                self.use()
+                body = self.lookup()
+                self.assertIn("2.500", body["rows"]["1"]["SIZ"], body["rows"]["1"])
+                self.assertIn("1500", body["rows"]["1"]["SIZ"])
+
+    def test_Gコースでなければ製造の寸法のまま(self) -> None:
+        self.course_lot("JISNﾌﾗﾂﾄANF")
+        self.use()
+        body = self.lookup()
+        self.assertIn("20.000", body["rows"]["1"]["SIZ"])
+        self.assertEqual(body["rows"]["1"].get("box_course", ""), "")
+
+    def test_梱包資材重量計算も同じ寸法_2つ目のBOX設計も効く(self) -> None:
+        self.course_lot("GFS")
+        self.use()
+        size = self.post("/api/gw/lot", {"lot_no": "H5422S0"}).get_json()["size"]
+        self.assertEqual((size["thickness_mm"], size["width_mm"], size["length_mm"]), (2.5, 1500.0, 3000.0))
+        # 1つ目に BOX最終実績が無ければ、2つ目の BOX設計
+        self.box_lot(self.first)
+        self.box_lot(self.second, final=("7", "7", "7"), design=("1.5", "1200", "2400"))
+        body = self.post("/api/gw/lot", {"lot_no": "H5422S0"}).get_json()
+        self.assertEqual((body["size"]["thickness_mm"], body["size"]["width_mm"]), (1.5, 1200.0))
+        self.assertIn("BOX設計(2つ目)", body["g_course"]["message"])
 
     # -- LS4LOT も仕掛と同じく 1つ目 → 2つ目(v4.25.0) ---------------------
     LS4_COLUMNS = ("ﾛｯﾄ番号", "当工程設計_縦割数", "当工程設計_横割数")
