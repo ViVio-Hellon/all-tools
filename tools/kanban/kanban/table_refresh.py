@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from . import applog, config, keys
+from .domain import state
 from .db.shared import SharedDb, SharedDbError
 
 ACCESS_SUFFIXES = (".accdb", ".mdb")
@@ -56,13 +57,9 @@ REFUSE_NOTHING = "nothing"
 REFUSE_READ = "read_failed"
 REFUSE_WRITE_FAILED = "write_failed"
 
-#: 状態の列(:data:`kanban.presenters.master.STATE_COLUMNS` と同じ)
-STATE_COLUMNS = (
-    config.COL_WANT, config.COL_UNWANT, config.COL_ORDERED_AT, config.COL_SHIPPED,
-    config.COL_CONFIRMED_AT, config.COL_HOLD, config.COL_HOLD_AT,
-)
-#: Access に無い看板を足すときの状態(マスタ管理で足すときと同じ ── 発注していない)
-INITIAL_STATE = {c: "" for c in STATE_COLUMNS} | {config.COL_UNWANT: config.MARK_ON}
+#: 状態の列・新しい看板の状態(:mod:`kanban.domain.state` の 1 か所で決める)
+STATE_COLUMNS = state.STATE_COLUMNS
+INITIAL_STATE = state.INITIAL_STATE
 
 KEEPS_KANBAN_SHORT = "状態(赤・緑・注文中とその日時)はいまのまま残します"
 KEEPS_KANBAN = (
@@ -615,9 +612,7 @@ def _by_key(current: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 def _active(row: dict[str, Any]) -> bool:
     """発注中・発送済み・注文中のどれか(消すと動いている発注を見失う)。"""
-    on = config.MARK_ON
-    return any(str(row.get(c) or "").strip() == on
-               for c in (config.COL_WANT, config.COL_SHIPPED, config.COL_HOLD))
+    return state.is_active(row)
 
 
 def _merge_kanban(src: SourceTable, current: list[dict[str, Any]], common: list[str],

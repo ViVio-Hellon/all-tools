@@ -2178,9 +2178,11 @@ async function deleteRow(v, row) {
   const what = label ? `${v.key_column} ${key}(${label})` : `${v.key_column} ${key}`;
   // **いま動いている看板なら、そう言う。** 発注中の看板を消すと、倉庫からも
   // その発注が見えなくなる(黙って消えた発注になる)
-  const on = (c) => cellText(row[c]).trim() === '〇';
-  const busy = [on('欲') && '発注中', on('保留') && '注文中', on('発送') && '発送済み']
-    .filter(Boolean);
+  // 列と印はサーバが決めて渡す(kanban/domain/state.py)。JS に書き写すと片方だけ直る
+  const ks = v.kanban_state || { mark_on: null, active: [] };
+  const busy = ks.active
+    .filter((a) => cellText(row[a.column]).trim() === ks.mark_on)
+    .map((a) => a.label);
   const warnLine = busy.length
     ? `\n\n※この看板はいま「${busy.join('・')}」です。消すと倉庫からも見えなくなります。`
     : '';

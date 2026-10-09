@@ -42,7 +42,7 @@ from ..db.shared import (
     SharedDbError,
     _ident,
 )
-from ..domain import models
+from ..domain import models, state
 
 #: 「画面が見ていたキーを送ってこなかった」の印(``None`` は「キーが空の行」なので使えない)
 NO_KEY = object()
@@ -78,23 +78,13 @@ KANBAN_REQUIRED = (config.COL_MATERIAL, config.COL_SIZE)
 #: 「欲も不も〇」のような、ボタンでは作れない看板ができます。しかも各端末の
 #: 手元には未反映の操作が残っていることがあり、あとからそれが上書きします。
 #: 状態を変えたいときは、看板画面のボタンで操作してもらいます。
-STATE_COLUMNS = (
-    config.COL_WANT,
-    config.COL_UNWANT,
-    config.COL_ORDERED_AT,
-    config.COL_SHIPPED,
-    config.COL_CONFIRMED_AT,
-    config.COL_HOLD,
-    config.COL_HOLD_AT,
-)
+STATE_COLUMNS = state.STATE_COLUMNS          # kanban/domain/state.py(1 か所で決める)
 
-#: 看板を足すときの状態。**選ばせずに、これで固定します。**
+#: 看板を足すときの状態。**選ばせずに、これで固定します**(:data:`kanban.domain.state.INITIAL_STATE`)。
 #:
 #: 新しい看板は「まだ発注していない」= ``不 = 〇``、ほかは空から始まります
 #: (看板画面で発注を取り消したあとと同じ形)。
-KANBAN_INITIAL_STATE = {column: "" for column in STATE_COLUMNS} | {
-    config.COL_UNWANT: config.MARK_ON,
-}
+KANBAN_INITIAL_STATE = state.INITIAL_STATE
 
 #: 印の欄に入れてよい値(状態の列は上で読むだけにしたので、残るのは常設品)。
 #:
@@ -1070,17 +1060,13 @@ def _key_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-#: 動いている看板かを見る列(発注・発送・注文中)
-_BUSY_COLUMNS = (config.COL_WANT, config.COL_SHIPPED, config.COL_HOLD)
+#: 動いている看板かを見る列(発注・発送・注文中。:mod:`kanban.domain.state`)
+_BUSY_COLUMNS = state.ACTIVE_COLUMNS
 
 
 def _busy_state(row: dict[str, Any]) -> str:
     """発注中(赤)・発送済み(緑)・注文中(黄)のどれか。どれでもなければ空。"""
-    on = config.MARK_ON
-    names = [(config.COL_WANT, "発注中(赤)"), (config.COL_SHIPPED, "発送済み(緑)"),
-             (config.COL_HOLD, "注文中(黄)")]
-    found = [label for col, label in names if str(row.get(col) or "").strip() == on]
-    return "・".join(found)
+    return "・".join(state.active_labels(row, with_color=True))
 
 
 def _same_key(a: Any, b: Any) -> bool:
@@ -1177,4 +1163,6 @@ def _has_key(rows: list[dict[str, Any]], key_column: str, key_value: Any) -> boo
 def to_dict(view: MasterView) -> dict[str, Any]:
     data = asdict(view)
     data["page_size"] = PAGE_SIZE
+    # 消すときの「いま動いている看板です」の確かめに使う(JS に列名と印を書き写さない)
+    data["kanban_state"] = state.for_screen()
     return data
