@@ -5,8 +5,10 @@
 `UFdaily` の操作順)と同じ。番号は装飾ではなく、順序が実在するから
 振っている。
 
-日報ツールにモード(権限で画面が変わる仕組み)は無い。ラインの選択は
-日報入力画面の中で行い、どのラインでも出せる画面は同じ。
+ラインの選択は日報入力画面の中で行い、どのラインでも出せる画面は同じ。
+ただし**アクセス権限の表に `mode:fullaccess` が無い PC は、左のタブを
+1・2・3・5・8 だけ**にする(v4.25.0。`LIMITED_NAV`)。番号は元のまま出す
+(説明書・電話での「4番の記録を見る」と食い違わないように)。
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ class NavItem:
     label: str
     url: str
     note: str = ""                  # 名前の下に出す一行。何をする画面か
+    no: int = 0                     # レールの番号(1〜8。絞っても元の番号のまま)
     badge: str = ""
     badge_kind: str = "todo"        # "todo" | "done" | "alert"
     ready: bool = True              # まだ作っていない画面は False
@@ -58,6 +61,12 @@ NAV: tuple[tuple[str, str, str, str], ...] = (
     ("settings", "設定・管理者", "/settings", "共有へ保存する・環境を整える"),
 )
 
+# mode:fullaccess の無い PC に出すタブ(v4.25.0):
+#   1 日報入力 / 2 梱包資材重量計算 / 3 VC長さ計算 / 5 集計・グラフ / 8 設定・管理者
+# 4 記録を見る・6 集計管理・7 標準作業時間 はレールに出さない(画面そのものは消さない ──
+# 日報入力の「前の直を呼び出す」などの道からは今までどおり開ける)
+LIMITED_NAV = frozenset({"entry", "gw", "vc", "graph", "settings"})
+
 # もう作った画面。ここに挙がっていないものは「準備中」ページを出す。
 #
 # 【なぜ空振りさせないのか】
@@ -84,14 +93,27 @@ def nav_items(badges: Optional[dict[str, tuple[str, str]]] = None) -> list[NavIt
     """
     badges = badges or {}
     items = []
-    for key, label, url, note in NAV:
+    every = _all_tabs()
+    for no, (key, label, url, note) in enumerate(NAV, 1):
+        if not every and key not in LIMITED_NAV:
+            continue
         ready = key in READY_SCREENS
         badge, kind = badges.get(key, ("", "todo"))
         if not ready and not badge:
             badge, kind = "準備中", "todo"
-        items.append(NavItem(key=key, label=label, url=url, note=note,
+        items.append(NavItem(key=key, label=label, url=url, note=note, no=no,
                              badge=badge, badge_kind=kind, ready=ready))
     return items
+
+
+def _all_tabs() -> bool:
+    """左のタブを全部出すか(アクセス権限の mode:fullaccess。読めなければ全部)。"""
+    try:
+        from nippou.services import access_rights
+
+        return access_rights.all_tabs()
+    except Exception:                             # noqa: BLE001 - レールは必ず出す
+        return True
 
 
 def pending_items() -> list[NavItem]:

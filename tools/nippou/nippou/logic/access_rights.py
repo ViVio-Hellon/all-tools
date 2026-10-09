@@ -31,6 +31,8 @@ v4.12.0 は「どれかの欄がログイン名**か**PC名と同じ行」とし
 【権限の読み方】
 
     Administrator   … 管理者(どのラインの控えも、記録を見るで見て直せる)
+    mode:fullaccess … 左のタブを全部(1〜8)出す(v4.25.0)。無い PC は 1・2・3・5・8 だけ
+                      (`app/shell.LIMITED_NAV`)。Administrator も全部出す
     ライン名         … このPCのライン。**正規の呼び名だけ**(`logic/line_names` の定義の表:
                        L-1・LVC・HVC・機側・NS1・AIM・トット・バランサー・中板)。
                        `L1`(VBA の名前)・`l-1` のような正規でない書き方は読まない(v4.12.2)。
@@ -77,6 +79,8 @@ TABLE_NAME = "アクセス権限"
 RIGHTS_COLUMN = "権限"
 #: 管理者の印
 ADMINISTRATOR = "Administrator"
+#: 左のタブを全部(1〜8)出す印(v4.25.0)。無い PC は 1・2・3・5・8 だけ
+FULL_ACCESS = "mode:fullaccess"
 
 #: ログインIDの列・PC名の列・有効の列として読む名前(`fold` した形)
 LOGIN_COLUMNS = frozenset({"ログインid", "ログイン名", "ログオンid", "ユーザーid", "ユーザー名",
@@ -104,6 +108,11 @@ def line_of(value: object, lines: Iterable[str] = constants.LINE_NAMES) -> Optio
 
 def is_administrator(value: object) -> bool:
     return fold(value) == fold(ADMINISTRATOR)
+
+
+def is_full_access(value: object) -> bool:
+    """`mode:fullaccess`(全角の「：」・大文字小文字・前後の空白は問わない)。"""
+    return fold(value).replace(" ", "") == fold(FULL_ACCESS)
 
 
 def tokens(value: object) -> list[str]:
@@ -186,6 +195,8 @@ class Decision:
     """表から決まったこと。"""
 
     admin: bool = False
+    #: このPCの行に mode:fullaccess がある(左のタブを全部出す。v4.25.0)
+    full_access: bool = False
     #: 決まったライン(決められなければ None)
     line: Optional[str] = None
     #: 中板のラインNO = 設備番号(1〜7。ほかのラインは空)
@@ -223,6 +234,8 @@ class Decision:
             parts = [f"ライン {self.line_text()}"] if self.line else []
             if self.admin:
                 parts.append(ADMINISTRATOR)
+            if self.full_access:
+                parts.append(FULL_ACCESS)
             text = "・".join(parts) if parts else "ラインの指定なし"
         if self.rows and self.ignored:
             text += f"(読まなかった権限: {'・'.join(self.ignored)})"
@@ -271,6 +284,7 @@ def decide(rows: Iterable[Mapping[str, object]], identity: Identity,
 
     matched: list[RightsRow] = []
     admin = False
+    full_access = False
     found: list[tuple[str, str]] = []             # (コード, ラインNO)
     ignored: list[str] = []
     notes: list[str] = []                         # 読めたが決められない(中板にラインNO が無い など)
@@ -285,6 +299,9 @@ def decide(rows: Iterable[Mapping[str, object]], identity: Identity,
         for token in tokens(rights):
             if is_administrator(token):
                 admin = True
+                continue
+            if is_full_access(token):
+                full_access = True
                 continue
             reading = line_names.read(token)
             if reading.code and reading.code in lines:
@@ -313,8 +330,8 @@ def decide(rows: Iterable[Mapping[str, object]], identity: Identity,
                    "どちらか分からないので、ラインは自動では決めません")
     elif not found and notes:
         problem = "・".join(notes) + "(ラインは決めません)"
-    return Decision(admin=admin, line=line, number=number, lines=shown, rows=tuple(matched),
-                    ignored=tuple(ignored), problem=problem)
+    return Decision(admin=admin, full_access=full_access, line=line, number=number, lines=shown,
+                    rows=tuple(matched), ignored=tuple(ignored), problem=problem)
 
 
 @dataclass(frozen=True)

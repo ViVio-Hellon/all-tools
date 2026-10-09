@@ -169,7 +169,8 @@
         {# 2行。名前だけでは「全停」が何をする画面か押すまで分からない。
            説明はサーバが持つ(`shell.NavItem.note`) #}
         <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>
-          <span class="n" aria-hidden="true">{{ loop.index }}</span>
+          {# 番号は元の番号(1〜8)。mode:fullaccess の無い PC は 1・2・3・5・8 だけ(`shell.LIMITED_NAV`) #}
+          <span class="n" aria-hidden="true">{{ item.no or loop.index }}</span>
           <span class="rail__text">
             <b class="label">{{ item.label }}</b>
             {% if item.note %}<small>{{ item.note }}</small>{% endif %}

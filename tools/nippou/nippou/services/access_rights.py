@@ -92,7 +92,8 @@ class Status:
     def as_dict(self) -> dict[str, Any]:
         d = self.decision
         return {
-            "admin": d.admin, "line": d.line or "", "number": d.number, "lines": list(d.lines),
+            "admin": d.admin, "full_access": d.full_access, "all_tabs": all_tabs(self),
+            "line": d.line or "", "number": d.number, "lines": list(d.lines),
             "rows": [r.describe() for r in d.rows], "ignored": list(d.ignored),
             "identity": self.identity.describe(), "source": self.source,
             "problem": self.problem or d.problem, "summary": self.summary(),
@@ -129,6 +130,25 @@ def gate_reason() -> str:
 def is_administrator() -> bool:
     """このPCが表で Administrator か(読めていなければ False)。"""
     return bool(_status and _status.admin)
+
+
+def all_tabs(status: Optional["Status"] = None) -> bool:
+    """左のタブを全部(1〜8)出すか(v4.25.0)。
+
+        マスタ：アクセス権限の追加 mode:fullaccess
+        mode:fullaccessであれば現状の通り1～8まで全表示
+        mode:fullaccessがついていない場合 1,2,3,5,8だけの表示
+
+    このPCの行に `mode:fullaccess`(か Administrator)があれば全部。**表を読めた
+    のに無ければ 1・2・3・5・8 だけ**(このPCの行が無いときも)。
+
+    表が無い・読めない・まだ読んでいないときは**これまでどおり全部出す** ── 共有に
+    届かない日に、管理の人の画面から「記録を見る」などが消えないように。
+    """
+    status = status if status is not None else _status
+    if status is None or status.checked == 0:
+        return True
+    return status.decision.full_access or status.decision.admin
 
 
 def reset() -> None:

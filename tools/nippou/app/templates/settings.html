@@ -1468,10 +1468,16 @@ LVC,119
           {% if acc.source %}── 読んだ表: {{ acc.source }}{% endif %}
           {% if acc.rows %}── 当たった行: {{ acc.rows | join("、") }}{% endif %}
         </p>
+        {# 左のタブ(v4.25.0)。mode:fullaccess(か Administrator)の行があれば 1〜8 全部 #}
+        <p class="lead access__detail" id="access-tabs">
+          左のタブ: {% if acc.all_tabs %}<b>1〜8 全部</b>{% if not acc.checked %}(アクセス権限の表を読めない・まだ読んでいないので、これまでどおり全部){% endif %}
+          {% else %}<b>1・2・3・5・8 だけ</b>(このPCの行に <code>mode:fullaccess</code> がありません){% endif %}
+        </p>
         <p class="lead access__detail">
           読むのは<b>ログインIDとPC名がこのPCと同じ行</b>(有効が0の行は読みません)。
           「権限」が正規のライン名(下の表)ならこの端末のラインに、<b>Administrator</b> なら
-          どのラインの記録も「記録を見る」で見て直せます。それ以外の字は読みません。
+          どのラインの記録も「記録を見る」で見て直せます。<b>mode:fullaccess</b> なら左のタブを
+          1〜8 全部出します(無い PC は 1・2・3・5・8 だけ。Administrator も全部)。それ以外の字は読みません。
           ラインは<b>表の値が変わったときだけ</b>当てるので、管理者モードで変えたラインは
           表を書き換えるまでそのままです。
         </p>
