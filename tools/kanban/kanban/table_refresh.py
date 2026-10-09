@@ -32,14 +32,13 @@ from __future__ import annotations
 
 import re
 import shutil
-import unicodedata
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from . import applog, config
+from . import applog, config, keys
 from .db.shared import SharedDb, SharedDbError
 
 ACCESS_SUFFIXES = (".accdb", ".mdb")
@@ -187,23 +186,13 @@ def _suspect_rows(table: SourceTable) -> int:
     return sum(1 for r in table.rows if any(isinstance(v, str) and "�" in v for v in r.values()))
 
 
-_INTEGRAL = re.compile(r"[+-]?\d+(?:\.0*)?")
-
-
 def _key(value: Any) -> str:
-    """管理番号をそろえる(Access は 1.0、共有DBは 1 や '1.0' のように型・書き方が違うことがある)。
+    """管理番号をそろえる(:func:`kanban.keys.normalize`)。
 
-    **文字で入っている '1.0' も 1 とみなす。** 共有DBの列が TEXT で Access が数値(Double)だと、
-    入れ替えで '1.0' と書かれる。これを 1 と突き合わせられないと、次の入れ替えで同じ看板を
-    「Access で足された看板」として足し、発注中の元の行も残して**表が倍になっていた**。
-    全角の数字も半角にそろえる。
+    共有DBの列が TEXT で Access が数値(Double)だと、入れ替えで '1.0' と書かれる。これを 1 と
+    突き合わせられないと、次の入れ替えで同じ看板を足し、発注中の元の行も残して表が倍になった。
     """
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    text = unicodedata.normalize("NFKC", str(value if value is not None else "")).strip()
-    if _INTEGRAL.fullmatch(text):
-        text = str(int(float(text)))
-    return text
+    return keys.normalize(value)
 
 
 # ------------------------------------------------------------------

@@ -33,7 +33,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
-from .. import access_control, applog, config
+from .. import access_control, applog, config, keys
 from ..db.shared import (
     CATEGORY_DATE,
     CATEGORY_NUMBER,
@@ -1084,15 +1084,8 @@ def _busy_state(row: dict[str, Any]) -> str:
 
 
 def _same_key(a: Any, b: Any) -> bool:
-    """キーの値が同じか。**文字にしてから比べる**(DB の ``1`` と画面の ``"1"``、``1.0``)。"""
-    left = "" if a is None else str(a).strip()
-    right = "" if b is None else str(b).strip()
-    if left == right:
-        return True
-    try:
-        return float(left) == float(right)
-    except ValueError:
-        return False
+    """キーの値が同じか(DB の ``1`` と画面の ``"1"``、``1.0``、全角)。:mod:`kanban.keys` に任せる。"""
+    return keys.same(a, b)
 
 
 def _where_row(
@@ -1173,13 +1166,12 @@ def _gate(
 def _has_key(rows: list[dict[str, Any]], key_column: str, key_value: Any) -> bool:
     """そのキーの行があるか。
 
-    **文字にしてから比べます。** 共有 DB の ``管理番号`` は NUMERIC 宣言
-    ですが、Access から変換した値には数値で入っているものと文字で入って
-    いるものが混ざり得ます。型のまま比べると、画面から来た ``"5"`` が
-    DB の ``5`` と別物になり、重複を見逃します。
+    **管理番号のそろえ方(:mod:`kanban.keys`)で比べます。** 共有 DB の ``管理番号`` には
+    数値で入っているもの・文字で入っているもの(``'5.0'`` など)が混ざり得ます。文字の
+    完全一致で比べていたころは、画面から来た ``"5"`` と DB の ``'5.0'`` を別物とみなし、
+    同じ看板をもう 1 行足せました(中身の入れ替えで表が倍になったのと同じ形)。
     """
-    want = str(key_value).strip()
-    return any(str(r.get(key_column, "")).strip() == want for r in rows)
+    return any(keys.same(r.get(key_column), key_value) for r in rows)
 
 
 def to_dict(view: MasterView) -> dict[str, Any]:

@@ -1242,6 +1242,21 @@ class MasterWriteRouteTest(RouteTestBase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json["error"]["code"], "duplicate_key")
 
+    def test_duplicate_key_written_another_way_is_refused(self):
+        """共有DBに ``'５'``(全角・文字)で入っている看板へ ``"5"`` を足させない(kanban.keys)。
+
+        文字の完全一致で比べていたころは別物とみなし、同じ看板がもう 1 行入った。
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(str(self.shared))
+        conn.execute(f"INSERT INTO [{self.TABLE}] ([管理番号], [資材]) VALUES ('５', '外装紙')")
+        conn.commit()
+        conn.close()
+        res = self.add({"管理番号": "5", "資材": "x", "サイズ": "サイズ5"})
+        self.assertEqual(res.status_code, 400, res.json)
+        self.assertEqual(res.json["error"]["code"], "duplicate_key")
+
     def test_deletes_a_row(self):
         res = self.post(
             "/api/master/delete",
