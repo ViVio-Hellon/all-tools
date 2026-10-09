@@ -1,7 +1,7 @@
 {
   "app_id": "nlm.line-calendar",
   "display_name": "ライン管理カレンダー",
-  "version": "4.1.1",
+  "version": "4.1.2",
   "monitor_level": 1,
 
   "local_dir_name": "LineCalendar",
