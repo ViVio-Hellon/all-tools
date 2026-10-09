@@ -124,6 +124,23 @@ class PrintJobTest(unittest.TestCase):
         self.wait_done()
         self.assertEqual(self.service.busy_labels(), [])
 
+    def test_still_busy_until_results_are_recorded(self):
+        """終わった直後(状態は完了・結果の記録はまだ)に「空いた」と言わない。
+        CI で wait_idle の後に print.item・print.end が欠けたことがある。"""
+        original = self.service._record_end
+        recorded = []
+
+        def slow_record_end(job, paths, **kw):
+            time.sleep(0.3)
+            original(job, paths, **kw)
+            recorded.append(job.job_id)
+
+        self.service._record_end = slow_record_end
+        self.service.start([self.ids["A"].id], "1")
+        self.assertTrue(self.service.wait_idle(10))
+        self.assertEqual(len(recorded), 1, "記録を書き終えるまで待つ")
+        self.assertEqual(self.service.busy_labels(), [])
+
     def test_preview_is_blocked_while_printing(self):
         from app.services.excel_service import ExcelError
         self.excel.backend.print_delay = 0.3

@@ -97,6 +97,13 @@ class PrintService:
         return self.status()
 
     def _run(self, job: PrintJob, paths: List[str]) -> None:
+        try:
+            self._print(job, paths)
+        finally:
+            with self._lock:
+                job.recording = False
+
+    def _print(self, job: PrintJob, paths: List[str]) -> None:
         def on_event(kind: str, index: int, ok: bool = False) -> None:
             with self._lock:
                 item = job.items[index - 1]
@@ -209,8 +216,10 @@ class PrintService:
         return ["印刷"] if self.is_busy() else []
 
     def is_busy(self) -> bool:
+        """印刷中か。終わっても1件ずつの結果と全体の結果を記録し終えるまでは「処理中」とみなす
+        (止める前・`wait_idle` の後に記録が欠けない)。"""
         with self._lock:
-            return self._job is not None and self._job.state in ACTIVE_STATES
+            return self._job is not None and (self._job.state in ACTIVE_STATES or self._job.recording)
 
     def wait_idle(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout

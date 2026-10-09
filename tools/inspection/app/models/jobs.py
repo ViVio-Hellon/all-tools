@@ -46,6 +46,7 @@ class PrintJob:
     printer: str = ""
     screen_id: str = ""       # 始めた画面(同じPCで2つの画面から使うとき、誰の印刷かを示す)
     ref: str = ""             # 問い合わせ番号(印刷を受け付けた要求の番号。ログから引ける)
+    recording: bool = True    # 結果を記録し終えるまで True(終わった直後に止める・待つ側が記録より先に進まない)
     log: List[str] = field(default_factory=list)
 
     @property
