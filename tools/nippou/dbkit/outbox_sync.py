@@ -109,7 +109,15 @@ class WriteBackResult:
 # 同期記録テーブル
 # ------------------------------------------------------------------
 def ensure_sync_table(conn: sqlite3.Connection) -> None:
-    """同期済みを覚えておく表。無ければ作る。全テーブル共通で1つだけ持つ。"""
+    """同期済みを覚えておく表。無ければ作る。全テーブル共通で1つだけ持つ。
+
+    **呼んだ側のトランザクションを勝手に閉じない。** 取り込みは
+    ``BEGIN IMMEDIATE`` を取ってから「送信待ちが0件か」をここ経由で
+    数え直す(``importer.import_source``)。ここが ``commit()`` すると
+    その錠がほどけ、数え直した直後に入った登録を総入れ替えで消してしまう
+    (「打った行が消えることがありました」── とんでもない話である)。
+    """
+    owned = not conn.in_transaction
     conn.execute(
         f"CREATE TABLE IF NOT EXISTS [{SYNC_LOG_TABLE}] ("
         " テーブル名 TEXT NOT NULL,"
@@ -126,7 +134,8 @@ def ensure_sync_table(conn: sqlite3.Connection) -> None:
                      f" 状態 TEXT NOT NULL DEFAULT '{SYNC_DONE}'")
     if "送信ID" not in columns:
         conn.execute(f"ALTER TABLE [{SYNC_LOG_TABLE}] ADD COLUMN 送信ID TEXT")
-    conn.commit()
+    if owned:
+        conn.commit()
 
 
 def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec) -> list[sqlite3.Row]:

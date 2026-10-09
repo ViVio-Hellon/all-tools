@@ -341,6 +341,29 @@ class OutboxSyncTests(unittest.TestCase):
         self.assertEqual(remaining, {})
 
 
+class EnsureSyncTableTransactionTests(unittest.TestCase):
+    """**呼んだ側のトランザクションを勝手に閉じない**(ライン管理カレンダーで直した不具合)。
+
+    取り込みが ``BEGIN IMMEDIATE`` を取ってから送信待ちを数え直す途中でここが commit すると、
+    錠がほどけ、数え直した直後に入った登録を総入れ替えで消してしまった。
+    """
+
+    def test_開いているトランザクションを閉じない(self) -> None:
+        conn = sqlite3.connect(":memory:", isolation_level=None)
+        conn.execute("CREATE TABLE t (a)")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO t VALUES (1)")
+        outbox_sync.ensure_sync_table(conn)
+        self.assertTrue(conn.in_transaction, "呼んだ側の錠をほどいた")
+        conn.execute("ROLLBACK")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM t").fetchone()[0], 0)
+
+    def test_自分で始めたときは確定する(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        outbox_sync.ensure_sync_table(conn)
+        self.assertFalse(conn.in_transaction)
+
+
 class _FakeAccessConnection:
     """`AccessConnection`の代わり(Windows実機なしでwrite_backを検証する)。
 

@@ -62,6 +62,15 @@ class ManualTests(unittest.TestCase):
                 self.assertIn('href="manual.css"', text)
                 self.assertRegex(text, r'<html lang="ja" data-theme="light">')
 
+    def test_READMEの版の表もツールの版と合う(self) -> None:
+        """版を上げても README の表が古いまま残っていた(4.23.0 / 3.1.0 / 4.0.0 / 2.0.0)。"""
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        catalog = catalog_mod.load()
+        for tool in catalog.tools:
+            with self.subTest(tool=tool.id):
+                self.assertRegex(readme, rf"\| {re.escape(tool.name)} \| {re.escape(tool.version())} \|",
+                                 "README の版の表がツールの版と違います")
+
     def test_一覧と上の並びから全部の説明書へ行ける(self) -> None:
         for name, (path, _) in pages().items():
             with self.subTest(name=name):
