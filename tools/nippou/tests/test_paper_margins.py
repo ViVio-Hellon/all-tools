@@ -19,7 +19,6 @@
 """
 from __future__ import annotations
 
-import glob
 import re
 import sys
 import unittest
@@ -118,21 +117,7 @@ class RuleTests(unittest.TestCase):
         self.assertLess(text.index('class="toolbar"'), text.index('<div class="paper">'))
 
 
-def _chromium():
-    """Chromium を立てる。無ければ None(その試験は飛ばす)。"""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return None, None
-    pw = sync_playwright().start()
-    for path in [None] + sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-        try:
-            return pw, (pw.chromium.launch(executable_path=path) if path
-                        else pw.chromium.launch())
-        except Exception:                          # noqa: BLE001 - 次を試す
-            continue
-    pw.stop()
-    return None, None
+from tests._browser import chromium_or_skip  # noqa: E402
 
 
 _MEASURE = """(selector) => {
@@ -172,9 +157,7 @@ class PrintedEdgeTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.pw, cls.browser = _chromium()
-        if cls.browser is None:
-            raise unittest.SkipTest("Chromium(Playwright)がありません")
+        cls.pw, cls.browser = chromium_or_skip()
 
     @classmethod
     def tearDownClass(cls) -> None:

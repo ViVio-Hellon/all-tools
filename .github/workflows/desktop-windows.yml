@@ -26,9 +26,9 @@ jobs:
       matrix:
         part:
           - { name: 入口, dir: ".", args: "-s tests -t ." }
-          - { name: 日報, dir: "tools/nippou", args: "-s tests" }
+          - { name: 日報, dir: "tools/nippou", args: "-s tests", browser: "1" }
           - { name: 看板, dir: "tools/kanban", args: "-s tests" }
-          - { name: カレンダー, dir: "tools/calendar", args: "-s tests -t ." }
+          - { name: カレンダー, dir: "tools/calendar", args: "-s tests -t .", browser: "1" }
           - { name: 点検表, dir: "tools/inspection", args: "-s tests -t ." }
     name: Python の試験(${{ matrix.part.name }})
     steps:
@@ -41,10 +41,20 @@ jobs:
       - name: Python の部品を入れる
         run: python -m pip install -r requirements.txt
 
+      # 画面の試験(本物の Chromium で印刷の余白・複数タブ・振り返りの収まり)。
+      # 試験の道具なので requirements.txt には入れない(ラインPCには入れない)
+      - name: 画面の試験の道具を入れる
+        if: ${{ matrix.part.browser == '1' }}
+        run: |
+          python -m pip install playwright==1.49.1
+          python -m playwright install chromium
+
       - name: Python の試験
         working-directory: ${{ matrix.part.dir }}
         env:
           PYTHONIOENCODING: utf-8
+          # 画面の試験を飛ばしたまま緑にしない(道具を入れたジョブだけ)
+          ALLTOOLS_REQUIRE_BROWSER: ${{ matrix.part.browser }}
         run: python -m unittest discover ${{ matrix.part.args }}
 
   build:

@@ -27,7 +27,6 @@
 """
 from __future__ import annotations
 
-import glob
 import sys
 import time
 import unittest
@@ -36,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HEADERS, WebTestCase  # noqa: E402
+from tests._browser import chromium_or_skip  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -275,20 +275,6 @@ class WiringTests(unittest.TestCase):
 # ----------------------------------------------------------------------
 # 本物のブラウザ
 # ----------------------------------------------------------------------
-def _chromium():
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return None, None
-    pw = sync_playwright().start()
-    for path in [None] + sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-        try:
-            return pw, (pw.chromium.launch(executable_path=path) if path
-                        else pw.chromium.launch())
-        except Exception:                          # noqa: BLE001 - 次を試す
-            continue
-    pw.stop()
-    return None, None
 
 
 class BrowserTests(WebTestCase):
@@ -301,9 +287,7 @@ class BrowserTests(WebTestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.pw, cls.browser = _chromium()
-        if cls.browser is None:
-            raise unittest.SkipTest("Chromium(Playwright)がありません")
+        cls.pw, cls.browser = chromium_or_skip()
 
     @classmethod
     def tearDownClass(cls) -> None:

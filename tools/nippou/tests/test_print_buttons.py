@@ -41,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nippou.db.models import DetailRecord, HeaderRecord  # noqa: E402
 from nippou.reporting import gw_print, paper, print_format  # noqa: E402
 from tests._web import WebTestCase  # noqa: E402
-from tests.test_paper_margins import _chromium, daily_html, gw_html  # noqa: E402
+from tests._browser import chromium_or_skip  # noqa: E402
+from tests.test_paper_margins import daily_html, gw_html  # noqa: E402
 
 BUTTON = f'<button type="button" onclick="window.print()">{paper.PRINT_LABEL}</button>'
 KEY = dict(report_date="2026年8月3日", line="L-1", shift="1直")
@@ -147,9 +148,7 @@ class BrowserTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.pw, cls.browser = _chromium()
-        if cls.browser is None:
-            raise unittest.SkipTest("Chromium(Playwright)がありません")
+        cls.pw, cls.browser = chromium_or_skip()
 
     @classmethod
     def tearDownClass(cls) -> None:

@@ -97,7 +97,14 @@ class LayoutTests(unittest.TestCase):
         self.assertLess(6 * printing.ROW_MM + 20, room)   # 20 = 見出し・曜日・フッター
 
 
-@unittest.skipUnless(Path(CHROME).exists(), "Chromium が無いため省略")
+def _skip_or_fail(reason: str) -> None:
+    """無ければ飛ばす。**CI(``ALLTOOLS_REQUIRE_BROWSER=1``)では失敗にする**
+    (飛ばしたまま緑になり、画面の試験が CI で一度も動いていなかった)。"""
+    if os.environ.get("ALLTOOLS_REQUIRE_BROWSER") == "1":
+        raise RuntimeError(f"{reason}。CI では画面の試験を飛ばしません")
+    raise unittest.SkipTest(reason)
+
+
 class BrowserTests(unittest.TestCase):
     """Chromium で PDF に出して確かめる。"""
 
@@ -106,9 +113,15 @@ class BrowserTests(unittest.TestCase):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:                       # pragma: no cover
-            raise unittest.SkipTest("playwright が無いため省略")
+            _skip_or_fail("playwright が無いため省略")
         cls._pw = sync_playwright().start()
-        cls._browser = cls._pw.chromium.launch(executable_path=CHROME)
+        try:
+            # 決まった場所に Chromium があればそれ、無ければ playwright が入れたもの(Windows の CI)
+            cls._browser = (cls._pw.chromium.launch(executable_path=CHROME) if Path(CHROME).exists()
+                            else cls._pw.chromium.launch())
+        except Exception as exc:                  # noqa: BLE001
+            cls._pw.stop()
+            _skip_or_fail(f"Chromium を立てられないため省略({exc})")
         cls._tmp = tempfile.TemporaryDirectory()
 
     @classmethod
