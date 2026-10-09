@@ -163,6 +163,43 @@ class ShiftFormTests(_Transmission):
         self.assertEqual(res.status_code, 200)
 
 
+class ShiftGapTests(_Transmission):
+    """**時間マスタは隙間なく登録させる**(現場: 隙間は無い。重なりは構わない)。
+
+    隙間があると、隙間の時刻の「直の終わり」を催促・自動確定と画面の固定とで別に決めてしまう
+    (tests/test_shift_end_agree.py の KNOWN_GAPS)。登録の時点で作らせない。
+    """
+
+    def test_隙間ができる直しは断る(self) -> None:
+        res = self.save("1", {"直": "1", "開始": "07:00", "終了": "14:30"})
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertIn("隙間", res.get_json()["error"]["message"])
+        self.assertEqual(self.shift_rows()["1"], ("07:00", "15:00"), "断ったのに書いた")
+
+    def test_日をまたぐ隙間も断る(self) -> None:
+        res = self.save("3", {"直": "3", "開始": "22:50", "終了": "06:30"})
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertIn("3直の終わり 06:30 と 1直の始まり 07:00", res.get_json()["error"]["message"])
+
+    def test_重なりは構わない(self) -> None:
+        res = self.save("2", {"直": "2", "開始": "14:50", "終了": "22:50"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_日勤は並びに入らない(self) -> None:
+        res = self.save("昼", {"直": "昼", "開始": "09:00", "終了": "16:00"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_隙間のある時間マスタは帯で知らせる(self) -> None:
+        from nippou.logic import shift
+
+        note = shift.shift_times_note({"1": ("07:00", "15:00"), "2": ("15:30", "22:50"),
+                                       "3": ("22:50", "07:00")})
+        self.assertIn("隙間", note)
+        self.assertIn("1直の終わり 15:00 と 2直の始まり 15:30", note)
+        self.assertEqual(shift.shift_times_note({"1": ("06:50", "15:00"), "2": ("14:50", "22:50"),
+                                                 "3": ("22:50", "07:00")}), "")
+
+
 class ShiftTakesEffectTests(_Transmission):
     """2. 時間用を直したら、**直の時間にすぐ効く。**"""
 

@@ -235,6 +235,37 @@ def malformed_shift_times(raw: dict[str, tuple[str, str]]) -> list[str]:
     return bad
 
 
+#: 1直 → 2直 → 3直 → 1直 と並ぶ直(日勤は 1直・2直の代わりに置く直なので並びに入らない)
+_CHAIN: tuple[tuple[str, str], ...] = (("1", SHIFT_1), ("2", SHIFT_2), ("3", SHIFT_3))
+
+
+def shift_gaps(raw: Optional[dict[str, tuple[str, str]]]) -> list[str]:
+    """**直と直の間の隙間。** 無ければ空。
+
+    時間マスタは隙間なく登録する決まり(現場: 隙間は無い。隙間があると、隙間の時刻の
+    「直の終わり」を催促・自動確定と画面の固定とで別に決めてしまう)。**重なりは構わない**
+    (1直 〜15:00・2直 14:50〜 のように、引き継ぎで重ねるのがいまの現場の形)。
+
+    隣どうしの直(1→2・2→3・3→1)で、前の直の終わりから次の直の始まりまでが、
+    重なりより隙間のほうが短く読めるとき(06:30 → 07:00 は 30 分の隙間、
+    15:00 → 14:50 は 10 分の重なり)を隙間とする。両方とも読める直どうしだけを見る。
+    """
+    raw = raw or {}
+    out: list[str] = []
+    for index, (key, name) in enumerate(_CHAIN):
+        next_key, next_name = _CHAIN[(index + 1) % len(_CHAIN)]
+        before, after = usable_pair(raw.get(key)), usable_pair(raw.get(next_key))
+        if not (before and after):
+            continue
+        end, start = parse_hhmm(before[1]), parse_hhmm(after[0])
+        end_min, start_min = end.hour * 60 + end.minute, start.hour * 60 + start.minute
+        gap = (start_min - end_min) % (24 * 60)
+        overlap = (end_min - start_min) % (24 * 60)
+        if gap and gap < overlap:
+            out.append(f"{name}の終わり {before[1]} と {next_name}の始まり {after[0]} の間({gap}分)")
+    return out
+
+
 def shift_times_note(raw: dict[str, tuple[str, str]]) -> str:
     """控えで動いているなら、そう言う文。本物なら空。
 
@@ -256,6 +287,11 @@ def shift_times_note(raw: dict[str, tuple[str, str]]) -> str:
         return (f"直の時刻が 時:分 の形になっていません({'・'.join(malformed)})。"
                 "その直は控えの時刻で動いています ── 設定・管理者 →「マスタ」"
                 "→「表を見る / 直す」の 時間用 を 07:00 の形に直してください。")
+    gaps = shift_gaps(raw)
+    if gaps:
+        return (f"直と直の間に隙間があります({'、'.join(gaps)})。隙間の時刻は直の決め方が"
+                "画面ごとに食い違います ── 設定・管理者 →「マスタ」→「表を見る / 直す」の"
+                " 時間用 を、隙間が無いように直してください(重なりは構いません)。")
     missing = missing_shift_times(raw)
     if not missing:
         return ""

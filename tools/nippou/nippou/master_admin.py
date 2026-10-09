@@ -1150,7 +1150,45 @@ def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
         if other_key == key and other["r"] != row_key:
             return (f"直「{key}」の行はもうあります。同じ直が2行あると、"
                     "後の行だけが効きます ── その行のほうを直してください。")
-    return ""
+    return _shift_gap_problem(src, table, clean, row_key=row_key)
+
+
+def _shift_gap_problem(src: source_db.SourceConnection, table: str, clean: dict[str, Any],
+                       *, row_key: Optional[int]) -> str:
+    """**直と直の間に隙間ができる登録は断る**(重なりは構わない)。
+
+    隙間があると、隙間の時刻の「直の終わり」を催促・自動確定と画面の固定とで別に決めて
+    しまう。現場の時間マスタに隙間は無いので、登録の時点で隙間を作らせない
+    (`logic/shift.shift_gaps`)。**書いたあとの表**(この行を入れ替えた姿)で確かめる。
+    """
+    from .logic import shift as shift_logic
+
+    quoted = source_db.quote_identifier
+    columns = (SHIFT_KEY_COLUMN, *SHIFT_TIME_COLUMNS)
+    try:
+        rows = src.query(
+            f"SELECT rowid AS r, {', '.join(f'{quoted(c)} AS c{i}' for i, c in enumerate(columns))}"
+            f" FROM {quoted(table)}")
+    except Exception:                             # noqa: BLE001 - 列が無い表は見ない
+        return ""
+    after: dict[str, tuple[str, str]] = {}
+    seen_self = False
+    for row in rows:
+        values = {c: row[f"c{i}"] for i, c in enumerate(columns)}
+        if row_key is not None and row["r"] == row_key:
+            values.update({c: clean[c] for c in columns if c in clean})
+            seen_self = True
+        key = unicodedata.normalize("NFKC", str(values[SHIFT_KEY_COLUMN] or "")).strip()
+        after[key] = (str(values[SHIFT_TIME_COLUMNS[0]] or ""), str(values[SHIFT_TIME_COLUMNS[1]] or ""))
+    if not seen_self and SHIFT_KEY_COLUMN in clean:  # 足す行
+        after[clean[SHIFT_KEY_COLUMN]] = (str(clean.get(SHIFT_TIME_COLUMNS[0]) or ""),
+                                          str(clean.get(SHIFT_TIME_COLUMNS[1]) or ""))
+    gaps = shift_logic.shift_gaps(after)
+    if not gaps:
+        return ""
+    return (f"直と直の間に隙間ができます({'、'.join(gaps)})。時間マスタは隙間が無いように"
+            "登録してください(重なりは構いません)。時刻をずらすときは、先に広げて(重ねて)から"
+            "狭めてください。")
 
 
 def _vc_problem(src: source_db.SourceConnection, table: str, clean: dict[str, Any],
