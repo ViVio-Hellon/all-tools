@@ -136,6 +136,74 @@ def remove_lock(mode: str) -> None:
         log.warning("ロックを消せませんでした: %s", exc)
 
 
+def claim_lock(info: LockInfo) -> bool:
+    r"""**まだ誰も立てていなければ**印を立てる。立てられたら ``True``。
+
+    以前は「調べる → ポートを取る → 待ち受けを始める → 印を書く」の順で、
+    調べてから印を書くまでに 1 秒以上空いていた。その間にもう一度起動すると
+    (バッチを 2 回押す・ショートカットを連打する)、2 つとも「印が無い」を見て
+    先へ進み、``pick_port`` が塞がったポートを避けて**隣の番号へずれる**ので、
+    8741 と 8742 で静かに 2 つ動く(日報管理ツールで実際に起きた。同じ直し方)。
+
+    そこで**ポートを取る前に**印を立てる。作るのと「無いことを確かめる」のを
+    ``O_CREAT | O_EXCL`` の 1 回にまとめるので、同時に来ても立てられるのは 1 つだけ。
+    ポートはまだ決まっていないので 0 で立て、決まってから :func:`update_lock` で書き足す。
+    """
+    path = lock_path(info.mode)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(asdict(info), ensure_ascii=False, indent=2)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        log.info("印はすでに立っています: %s", path)
+        return False
+    except OSError as exc:  # noqa: BLE001
+        # 印を立てられないことを理由に起動そのものを止めない
+        # (二重起動より、一度も起動できないことのほうが困る)
+        log.warning("印を立てられませんでした (%s): %s。続行します", path, exc)
+        return True
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+    except OSError as exc:  # noqa: BLE001
+        log.warning("印の中身を書けませんでした: %s", exc)
+    log.info("印を立てました: %s (pid=%s)", path, info.pid)
+    return True
+
+
+def update_lock(mode: str, **changes) -> LockInfo | None:
+    """自分が立てた印に、あとから決まったこと(ポート・トークン・URL)を書く。
+
+    **自分の印でなければ触らない。** 上書きすると、動いているほうの居場所が消える。
+    """
+    info = read_lock(mode)
+    if info is None:
+        return None
+    if info.pid != os.getpid():
+        log.warning("自分の印ではないので書き換えません (pid=%s)", info.pid)
+        return info
+    for key, value in changes.items():
+        setattr(info, key, value)
+    write_lock(info)
+    return info
+
+
+def release_lock(mode: str) -> None:
+    """**自分が立てた印だけ**を片付ける。
+
+    終わるときに無条件で消すと、入れ替えのときに困る ── 古いほうが終わる頃には
+    新しいほうがもう印を立てているので、古いほうの後始末が新しいほうの印を消し、
+    次の起動で「誰も居ない」と判定されて 2 つ目が立つ(日報・カレンダーで直した不具合)。
+    """
+    info = read_lock(mode)
+    if info is None:
+        return
+    if info.pid != os.getpid():
+        log.info("自分の印ではないので残します: %s (pid=%s)", mode, info.pid)
+        return
+    remove_lock(mode)
+
+
 # ------------------------------------------------------------------
 # プロセスの生死
 # ------------------------------------------------------------------
@@ -332,6 +400,11 @@ def check_existing(mode: str) -> GuardResult:
     """
     mine = app_config.version()
     for other in _live_instances():
+        if other.starting:
+            return GuardResult(
+                False, url=other.info.url, existing=other.info,
+                reason="ほぼ同時に起動されたもう 1 つが起動の途中です",
+            )
         if other.mode != mode:
             # モードを変えたあとの起動。**古いモードを終わらせて入れ替える**
             return _replace(
@@ -351,6 +424,17 @@ def check_existing(mode: str) -> GuardResult:
             False, url=other.info.url, existing=other.info,
             reason="同じアプリが起動中",
         )
+    running = find_running()
+    if running:
+        found_mode, port, health = running[0]
+        url = f"http://{app_config.host()}:{port}/"
+        log.warning("印はありませんが、%d 個が待ち受けています: %s",
+                    len(running), [(m, p) for m, p, _ in running])
+        return GuardResult(
+            False, url=url,
+            reason=(f"印はありませんが、{config.mode_display_name(found_mode)}が"
+                    f"ポート {port} で動いていました(pid={health.get('pid', '?')})"),
+        )
     return GuardResult(True, reason="動いているものは無い")
 
 
@@ -361,6 +445,52 @@ class _Live:
     mode: str
     info: LockInfo
     version: str
+    #: 印は立っているがまだ待ち受けていない(ポートを取る前の印)
+    starting: bool = False
+
+
+#: 起動の途中の印(ポート 0)を、答えるようになるまで待つ上限(秒)
+STARTUP_GRACE_SEC = 45.0
+POLL_INTERVAL_SEC = 0.3
+
+
+def _wait_until_answers(mode: str, info: LockInfo) -> dict | None:
+    """ポートを取る前の印なら、答えるようになるまで**猶予の残りぶんだけ**待つ。
+
+    相手の起動が終われば合流でき、押した人には「押したら画面が出た」ようにしか見えない。
+    猶予を過ぎた印は待たない(待っても答えない)。
+    """
+    left = STARTUP_GRACE_SEC - (time.time() - info.started_at)
+    deadline = time.monotonic() + max(0.0, left)
+    while True:
+        fresh = read_lock(mode)
+        if fresh is None or fresh.pid != info.pid or not is_process_alive(info.pid):
+            return None
+        if fresh.port:
+            health = probe_health(fresh.port)
+            if is_our_app(health, mode):
+                return health
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(POLL_INTERVAL_SEC)
+
+
+def find_running() -> list[tuple[str, int, dict]]:
+    """**印を当てにせず、ポートを叩いて自分を探す** ``[(mode, port, health)]``。
+
+    印が無い(消えた・書く前に落ちた)のに自分が待ち受けていると、``pick_port`` は
+    「塞がっているのは別のアプリ」と読んで隣の番号へずれ、2 つ目が静かに立つ
+    (日報管理ツールの ``find_running`` と同じ直し方)。
+    """
+    found: list[tuple[str, int, dict]] = []
+    for mode in app_config.MODE_KEYS:
+        for port in app_config.port_candidates(mode):
+            if is_port_free(port):
+                continue
+            health = probe_health(port, timeout=0.6)
+            if is_our_app(health, mode):
+                found.append((mode, port, health or {}))
+    return found
 
 
 def _live_instances() -> list[_Live]:
@@ -377,6 +507,17 @@ def _live_instances() -> list[_Live]:
         if not is_process_alive(info.pid):
             log.info("死んだロックを掃除します: %s (pid=%s は不在)", other, info.pid)
             remove_lock(other)
+            continue
+        if not info.port:
+            # **ポートを取る前に立てた印**(:func:`claim_lock`)。相手は起動の途中なので、
+            # 答えないのを「別人」と読んで消さない ── 消すと 2 つ立つ
+            health = _wait_until_answers(other, info)
+            if health is None:
+                log.info("%s は起動の途中です (pid=%s)。二重に立てないため合流します", other, info.pid)
+                live.append(_Live(other, info, "", starting=True))
+                continue
+            info = read_lock(other) or info
+            live.append(_Live(other, info, str(health.get("version", ""))))
             continue
         health = probe_health(info.port)
         if not is_our_app(health, other):

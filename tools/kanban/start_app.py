@@ -295,8 +295,23 @@ def main(argv: list[str] | None = None) -> int:
         store.close()
         return 0
 
+    # --- 起動することを、ポートより先に名乗る ---------------------------
+    # 以前は待ち受けを始めてから印を書いていた。判定からそこまで 1 秒以上あり、
+    # その間にもう一度起動すると 2 つとも「誰も居ない」を見て進み、pick_port が
+    # 隣の番号へずれて静かに 2 つ動く(日報管理ツールで実際に起きた。同じ直し方)。
+    # 名乗れなかった = ほんの一瞬先に誰かが名乗った、なのでもう一度判定して合流する
+    if not launch_guard.claim_lock(launch_guard.build_lock_info(mode, 0)):
+        again = launch_guard.check_existing(mode)
+        log.info("ほぼ同時にもう 1 つ起動されました。先の 1 つへ合流します: %s", again.reason)
+        if again.url and not args.no_browser:
+            _open_browser(again.url)
+        print(f"すでに起動しています({again.reason or 'ほぼ同時に起動されたもう 1 つ'})。")
+        store.close()
+        return 0
+
     port = args.port or launch_guard.pick_port(mode)
     if port is None:
+        launch_guard.release_lock(mode)
         message = (
             f"使えるポートがありません(候補 {app_config.port_candidates(mode)})。\n"
             "他のアプリが使っていないか確認してください。"
@@ -563,12 +578,15 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     import server
 
     srv = server.AppServer(mode, port)
+    # 先に立てた印(main の claim_lock)へ、決まったポートとトークンを書き足す。
+    # **ここで初めて stop.bat と次の起動が声を掛けられるようになる**
     lock = launch_guard.build_lock_info(mode, port, srv.token)
-    launch_guard.write_lock(lock)
+    if launch_guard.update_lock(mode, port=lock.port, url=lock.url, token=lock.token) is None:
+        launch_guard.write_lock(lock)          # 名乗らずに来た(試験から直に呼んだ)
     # 印を書いてから、デスクトップ版をもう一度見る(調べてから印を書くまでの
     # 間に統合ツールの窓で看板が開いていたら、こちらが止まる)
     if launch_guard.desktop_running():
-        launch_guard.remove_lock(mode)
+        launch_guard.release_lock(mode)
         message = f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}"
         log.info("起動しません: %s", message)
         print(message)
@@ -583,7 +601,7 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     if not check.ok:
         log.error("待ち受けを確認できませんでした")
         print("サーバを起動できませんでした。\n" + check.hint, file=sys.stderr)
-        launch_guard.remove_lock(mode)
+        launch_guard.release_lock(mode)
         store.close()
         return 3
 
@@ -598,7 +616,8 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     code = _serve(args, cfg, store, mode, line, root, srv, thread,
                   grant=grant, access_notice=access_notice,
                   watch_idle=(not args.no_browser) or under_portal)
-    launch_guard.remove_lock(mode)
+    # **自分の印だけ**を片付ける(入れ替えのとき、新しいほうの印を消さない)
+    launch_guard.release_lock(mode)
     from kanban import trace
 
     trace.write("startup", "終了")

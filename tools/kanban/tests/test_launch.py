@@ -253,6 +253,90 @@ class LaunchGuardTest(unittest.TestCase):
         self.assertTrue(result.should_start)
         self.assertIsNone(launch_guard.read_lock(config.MODE_SITE))
 
+    # -- ポートより先に名乗る(日報管理ツールで実際に 2 つ立った不具合と同じ直し方) --
+    def test_claim_is_taken_only_once(self):
+        """``O_CREAT | O_EXCL`` で名乗る。2 回目は立てられない。"""
+        import launch_guard
+
+        self.assertTrue(launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0)))
+        self.assertFalse(launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0)))
+
+    def test_claims_from_many_processes_at_once_let_only_one_through(self):
+        """**同時に 8 つ起動しても名乗れるのは 1 つだけ**(バッチの連打)。"""
+        import subprocess
+        import sys
+
+        code = ("import sys, launch_guard; from kanban import config;"
+                "print(launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0)))")
+        env = dict(os.environ, PYTHONPATH=str(APP_ROOT))
+        procs = [subprocess.Popen([sys.executable, "-c", code], cwd=str(APP_ROOT), env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                 for _ in range(8)]
+        answers = [p.communicate(timeout=60)[0].strip().splitlines()[-1] for p in procs]
+        self.assertEqual(answers.count("True"), 1, answers)
+
+    def test_port_is_written_into_the_claim_only_by_its_owner(self):
+        import launch_guard
+
+        launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0))
+        launch_guard.update_lock(config.MODE_SITE, port=8741, token="tok")
+        self.assertEqual(launch_guard.read_lock(config.MODE_SITE).port, 8741)
+        other = launch_guard.build_lock_info(config.MODE_SITE, 8742)
+        other.pid = os.getpid() + 1
+        launch_guard.write_lock(other)
+        launch_guard.update_lock(config.MODE_SITE, port=9999)
+        self.assertEqual(launch_guard.read_lock(config.MODE_SITE).port, 8742, "他人の印を書き換えた")
+
+    def test_release_leaves_someone_elses_lock(self):
+        """**自分の印だけ**消す。入れ替えのとき、古いほうが新しいほうの印を消さない。"""
+        import launch_guard
+
+        other = launch_guard.build_lock_info(config.MODE_SITE, 8741)
+        other.pid = os.getpid() + 1
+        launch_guard.write_lock(other)
+        launch_guard.release_lock(config.MODE_SITE)
+        self.assertIsNotNone(launch_guard.read_lock(config.MODE_SITE), "他人の印を消した")
+        mine = launch_guard.build_lock_info(config.MODE_SITE, 8741)
+        launch_guard.write_lock(mine)
+        launch_guard.release_lock(config.MODE_SITE)
+        self.assertIsNone(launch_guard.read_lock(config.MODE_SITE))
+
+    def test_a_claim_still_starting_is_joined_not_removed(self):
+        """ポート 0 の印(起動の途中)を「別人」と読んで消すと 2 つ立つ。消さずに合流する。"""
+        import launch_guard
+        from unittest import mock
+
+        launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0))
+        with mock.patch.object(launch_guard, "STARTUP_GRACE_SEC", 0.3):
+            result = launch_guard.check_existing(config.MODE_SITE)
+        self.assertFalse(result.should_start)
+        self.assertIn("起動の途中", result.reason)
+        self.assertIsNotNone(launch_guard.read_lock(config.MODE_SITE), "起動の途中の印を消した")
+
+    def test_a_claim_that_starts_answering_is_joined(self):
+        import launch_guard
+        from unittest import mock
+
+        launch_guard.claim_lock(launch_guard.build_lock_info(config.MODE_SITE, 0))
+        launch_guard.update_lock(config.MODE_SITE, port=8741, url="http://127.0.0.1:8741/")
+        info = launch_guard.read_lock(config.MODE_SITE)
+        info.port = 0                       # 読んだときはまだ 0 だった
+        health = {"app_id": app_config.app_id(), "mode": config.MODE_SITE, "version": app_config.version()}
+        with mock.patch.object(launch_guard, "probe_health", return_value=health):
+            self.assertEqual(launch_guard._wait_until_answers(config.MODE_SITE, info), health)
+
+    def test_ourselves_answering_without_a_lock_is_joined(self):
+        """印が無くても、自分がポートで答えていれば起動しない(pick_port が隣へずれて 2 つ目が立つ)。"""
+        import launch_guard
+        from unittest import mock
+
+        health = {"app_id": app_config.app_id(), "mode": config.MODE_SITE, "pid": 1234}
+        with mock.patch.object(launch_guard, "find_running",
+                               return_value=[(config.MODE_SITE, 8741, health)]):
+            result = launch_guard.check_existing(config.MODE_SITE)
+        self.assertFalse(result.should_start)
+        self.assertIn("8741", result.url)
+
     def test_is_our_app_checks_id_and_mode(self):
         """app_id を見ないと、同じポートの別アプリを自分だと誤認する。"""
         import launch_guard
