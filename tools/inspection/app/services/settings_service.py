@@ -154,7 +154,7 @@ class SettingsService:
     def dark_mode(self) -> bool:
         with self._lock:
             value = self._data.get("dark_mode")
-        # 既定はライト(統合ツールの4ツールでそろえる。VBA版の既定はダークだった)
+        # 既定はライト(日報複合ツールの4ツールでそろえる。VBA版の既定はダークだった)
         return False if value is None else bool(value)
 
     def to_dict(self) -> Dict[str, Any]:

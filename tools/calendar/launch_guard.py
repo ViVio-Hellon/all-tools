@@ -203,7 +203,7 @@ def _unlock_file(fd: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# デスクトップ版(統合ツールの窓)との取り合い
+# デスクトップ版(日報複合ツールの窓)との取り合い
 # ---------------------------------------------------------------------------
 #: デスクトップ版として動いている Python が握る錠(``start_app.start_bridge``)。
 #: ブラウザ版は ``instance.lock``(``StartupLock``)を動いているあいだ握り続ける。
@@ -259,7 +259,7 @@ def _held_by_other(path: Path) -> bool:
 
 
 def desktop_running() -> bool:
-    """デスクトップ版(統合ツールの窓の「カレンダー」)がこの PC で動いているか。"""
+    """デスクトップ版(日報複合ツールの窓の「カレンダー」)がこの PC で動いているか。"""
     if _desktop_lock is not None:
         return True
     return _held_by_other(desktop_lock_path())

@@ -286,7 +286,7 @@ function signal(path) {
     const url = `${path}?t=${encodeURIComponent(window.APP.token)}`;
     const body = JSON.stringify({ tab: tabId });
     const queued = navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }));
-    // デスクトップ版(統合ツールの窓)の中では、離れるページの `sendBeacon` が
+    // デスクトップ版(日報複合ツールの窓)の中では、離れるページの `sendBeacon` が
     // 届かないことがある(看板のデスクトップ版で実際に起きた)。送れなかったとき・
     // 窓の中のときは、`keepalive` 付きの送り直しも出す(受ける側は2回来ても同じ)
     if (!queued || window.__TAURI__) {

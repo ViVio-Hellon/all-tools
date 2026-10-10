@@ -59,12 +59,12 @@ class MakeDistTest(unittest.TestCase):
         self.assertTrue(any("取り込み間隔" in line for line in lines), lines)
 
     def test_desktop_is_the_integrated_window(self):
-        """看板だけの exe は無い。デスクトップ版は統合ツールの窓で使うと書く(bridge.py は入る)。"""
+        """看板だけの exe は無い。デスクトップ版は日報複合ツールの窓で使うと書く(bridge.py は入る)。"""
         out, lines = self.make_dist.build(self.dir / "out")
-        self.assertTrue((out / "bridge.py").is_file(), "統合ツールの外枠が子として起動する")
+        self.assertTrue((out / "bridge.py").is_file(), "日報複合ツールの外枠が子として起動する")
         self.assertFalse(list(out.glob("*.exe")))
         self.assertFalse((out / "src-tauri").exists())
-        self.assertTrue(any("統合ツール" in line for line in lines), lines)
+        self.assertTrue(any("日報複合ツール" in line for line in lines), lines)
         self.assertIn("Start.vbs", (out / "配布メモ.txt").read_text(encoding="utf-8-sig"))
 
     def test_no_settings_leaves_the_bundle_out(self):

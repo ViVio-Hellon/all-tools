@@ -84,12 +84,12 @@ class MakeDistTests(unittest.TestCase):
         dev_only = {"tests", ".gitignore", ".gitattributes"}
         self.assertEqual(set(make_dist.INCLUDE), tracked - dev_only)
 
-    def test_デスクトップ版は統合ツールの窓と書く(self) -> None:
-        """カレンダーだけの exe は無い。bridge.py は入る(統合ツールの外枠が子として起動する)。"""
+    def test_デスクトップ版は日報複合ツールの窓と書く(self) -> None:
+        """カレンダーだけの exe は無い。bridge.py は入る(日報複合ツールの外枠が子として起動する)。"""
         out, lines = make_dist.build(self.out, with_settings=False)
         self.assertTrue((out / "bridge.py").exists())
         self.assertFalse(list(out.glob("*.exe")))
-        self.assertIn("統合ツール", "\n".join(lines))
+        self.assertIn("日報複合ツール", "\n".join(lines))
         memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
         self.assertIn("Start.vbs", memo)
         self.assertFalse((out / "src-tauri").exists())

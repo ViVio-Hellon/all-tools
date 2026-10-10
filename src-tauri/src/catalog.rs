@@ -164,7 +164,7 @@ impl Catalog {
         }
         Ok(Catalog {
             app_id: text_of("app_id", "nlm.all-tools"),
-            name: text_of("display_name", "統合ツール"),
+            name: text_of("display_name", "日報複合ツール"),
             version: text_of("version", "0.0.0"),
             portal,
             tools,
@@ -228,7 +228,7 @@ mod tests {
                 ]}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("config").join("app.json"), r#"{"display_name": "統合ツール", "version": "1.2.3"}"#).unwrap();
+        std::fs::write(dir.join("config").join("app.json"), r#"{"display_name": "日報複合ツール", "version": "1.2.3"}"#).unwrap();
         dir
     }
 
@@ -236,7 +236,7 @@ mod tests {
     fn 読み込み_既定を埋める() {
         let root = sample();
         let c = Catalog::load(&root).unwrap();
-        assert_eq!(c.name, "統合ツール");
+        assert_eq!(c.name, "日報複合ツール");
         assert_eq!(c.version, "1.2.3");
         assert_eq!(c.portal.dir, root);
         assert_eq!(c.portal.token_env(), "ALLTOOLS_TOKEN");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""デスクトップ版(統合ツール.exe)を本当に起動して確かめる(GitHub Actions の Windows でも流す)
+"""デスクトップ版(日報複合ツール.exe)を本当に起動して確かめる(GitHub Actions の Windows でも流す)
 
 確かめること:
     1. 大きなタブの画面が入口の Python から届き、画面の JS が動く
@@ -10,7 +10,7 @@
           (ツールの画面に差し込んだ台本が、大きなタブの画面へ知らせた証拠。
            外枠(Rust)→ ツールの Python → 外枠 → 枠 → 大きなタブの画面 → 入口の Python が1周した)
     3. **どのプロセスもポートで待ち受けていない**(exe・5つの Python・WebView の子プロセス)
-    4. ブラウザ版は起動しない(後から開いたほうが止まる): 統合ツールのブラウザ版と、
+    4. ブラウザ版は起動しない(後から開いたほうが止まる): 日報複合ツールのブラウザ版と、
        各ツールのブラウザ版(tools/<ツール>/start_app.py)
     5. **業務ツール統合ランチャーの入口**: 起動確認(`process_manager.py --check`、launcher_check.bat)が
        「使える」と答え、終了の入口(`--launcher`、launcher_stop.bat)が窓に「閉じて」と頼む
@@ -269,15 +269,15 @@ def main() -> int:
                               env=env, cwd=str(ROOT), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=120)
         result(done.returncode != 0 and "デスクトップ版" in done.stdout + done.stderr,
-               "統合ツールのブラウザ版は起動しません(デスクトップ版が動いている)")
+               "日報複合ツールのブラウザ版は起動しません(デスクトップ版が動いている)")
         for tool, title in TABS.items():
             tool_dir = ROOT / "tools" / tool
             done = subprocess.run([sys.executable, str(tool_dir / "start_app.py"), "--no-browser"],
                                   env=env, cwd=str(tool_dir), capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=120)
             said = done.stdout + done.stderr
-            result("統合ツールの窓" in said, f"{title}のブラウザ版は起動しません"
-                   + ("" if "統合ツールの窓" in said else f": {said[-300:]}"))
+            result("日報複合ツールの窓" in said, f"{title}のブラウザ版は起動しません"
+                   + ("" if "日報複合ツールの窓" in said else f": {said[-300:]}"))
 
         # ---- 5: ランチャーの入口(起動確認・終了。窓の × と同じ流れで閉じる) ----
         def entry(*args: str) -> subprocess.CompletedProcess:
@@ -295,7 +295,7 @@ def main() -> int:
         if checked.returncode != 0 and WINDOWS:
             sys.path.insert(0, str(ROOT))
             from portal import desktop_window, instance_guard
-            print("--- 統合ツールの exe の窓(窓, 題名, 持ち主がいるか, 見えているか):",
+            print("--- 日報複合ツールの exe の窓(窓, 題名, 持ち主がいるか, 見えているか):",
                   desktop_window.exe_windows(instance_guard.DESKTOP_EXES), flush=True)
         others = [pid for pid in tree if pid != app.pid]
         began = time.monotonic()

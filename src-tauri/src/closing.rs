@@ -78,7 +78,7 @@ fn confirm_busy(shell: &Arc<Shell>, app: &AppHandle, head: &str, busy: &[(String
     for (title, reason) in busy {
         text.push_str(&format!("・{title}: {}\n", reason.replace('\n', " ")));
     }
-    text.push_str("\nそれでも統合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
+    text.push_str("\nそれでも日報複合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
     let mut dialog = app
         .dialog()
         .message(text)

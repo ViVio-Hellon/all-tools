@@ -248,18 +248,18 @@ class BridgeProcessTests(unittest.TestCase):
         self.assertEqual(self.proc.wait(timeout=20), 0, "\n".join(self.err[-30:]))
 
 
-# 統合ツールの一式(このツールは `tools/inspection/` にある)
+# 日報複合ツールの一式(このツールは `tools/inspection/` にある)
 INTEGRATED = ROOT.parent.parent
 
 
 class IntegratedShellTest(unittest.TestCase):
-    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が揃っているか。"""
+    """日報複合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が揃っているか。"""
 
     def entry(self) -> dict:
         tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
         return next(t for t in tools["tools"] if t["id"] == "inspection")
 
-    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+    def test_日報複合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
         from core import app_config
         entry = self.entry()
         self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())
@@ -283,8 +283,8 @@ class IntegratedShellTest(unittest.TestCase):
                 (Path(tmp) / "AllTools.exe").write_bytes(b"")
                 self.assertEqual(instance_guard.desktop_exe(), str(Path(tmp) / "AllTools.exe"))
                 # 日本語の名前の exe があれば、そちら(配るときの名前)
-                (Path(tmp) / "統合ツール.exe").write_bytes(b"")
-                self.assertEqual(instance_guard.desktop_exe(), str(Path(tmp) / "統合ツール.exe"))
+                (Path(tmp) / "日報複合ツール.exe").write_bytes(b"")
+                self.assertEqual(instance_guard.desktop_exe(), str(Path(tmp) / "日報複合ツール.exe"))
 
 
 class BridgeGuardTest(unittest.TestCase):

@@ -42,16 +42,16 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
     "process_manager.py",
-    # デスクトップ版(統合ツールの窓)の入口(統合ツールの外枠が子として起動する)
+    # デスクトップ版(日報複合ツールの窓)の入口(日報複合ツールの外枠が子として起動する)
     "bridge.py",
     "app", "calendar_app", "config", "docs", "tools",
 )
 
-# デスクトップ版は**統合ツールの窓**で使う(カレンダーだけの exe は無い)。
-# 統合ツールごと配るときは、一式のフォルダの ``scripts\make_dist.bat`` を使う
-INTEGRATED_NOTE = ("デスクトップ版は統合ツール(統合ツール.exe)の窓の「カレンダー」のタブで使います。"
-                   "この配布はカレンダーだけのブラウザ版です。統合ツールごと配るときは、"
-                   "統合ツールのフォルダの scripts\\make_dist.bat を使ってください")
+# デスクトップ版は**日報複合ツールの窓**で使う(カレンダーだけの exe は無い)。
+# 日報複合ツールごと配るときは、一式のフォルダの ``scripts\make_dist.bat`` を使う
+INTEGRATED_NOTE = ("デスクトップ版は日報複合ツール(日報複合ツール.exe)の窓の「カレンダー」のタブで使います。"
+                   "この配布はカレンダーだけのブラウザ版です。日報複合ツールごと配るときは、"
+                   "日報複合ツールのフォルダの scripts\\make_dist.bat を使ってください")
 
 # 中にあっても写さないもの(名前で見る。フォルダならその下ごと)
 EXCLUDE_NAMES: tuple[str, ...] = (

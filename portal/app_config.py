@@ -1,4 +1,4 @@
-"""統合ツール固有の値(`config/app.json`)と、置き場所の決め方
+"""日報複合ツール固有の値(`config/app.json`)と、置き場所の決め方
 
 置き場所は**外枠(Rust)の `src-tauri/src/places.rs` と同じ決め方**にする ── ずれると、
 外枠が案内するログの場所と、ここが書いている場所が食い違う。
@@ -24,7 +24,7 @@ CONFIG_PATH = Path(os.environ.get("ALLTOOLS_APP_CONFIG", str(APP_ROOT / "config"
 
 _DEFAULTS: dict[str, Any] = {
     "app_id": "nlm.all-tools",
-    "display_name": "統合ツール",
+    "display_name": "日報複合ツール",
     "version": "0.0.0",
     "local_dir_name": "AllTools",
     "server": {"host": "127.0.0.1", "port": 8700, "port_retry": 9},
@@ -132,7 +132,7 @@ def ensure_local_dirs() -> Path:
 
 
 def is_desktop() -> bool:
-    """統合ツールの窓(外枠)から起こされたか。"""
+    """日報複合ツールの窓(外枠)から起こされたか。"""
     return os.environ.get("ALLTOOLS_SHELL", "") == "1"
 
 

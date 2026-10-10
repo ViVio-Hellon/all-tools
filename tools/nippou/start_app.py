@@ -228,10 +228,10 @@ def start(*, open_browser: bool = True) -> int:
 
     log_environment()
 
-    # --- デスクトップ版(統合ツールの窓)が動いていれば、こちらが止まる ---
+    # --- デスクトップ版(日報複合ツールの窓)が動いていれば、こちらが止まる ---
     #
     # 同じ手元の SQLite と設定を、2つのプロセスが書きに行かないため。
-    # **後から開いたほうが止まる**(統合ツールの決まり。docs/統合_事前確認.md)
+    # **後から開いたほうが止まる**(日報複合ツールの決まり。docs/統合_事前確認.md)
     if launch_guard.desktop_running():
         log().warning("デスクトップ版が動いているので、ブラウザ版は起動しません")
         raise StartupError(DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
@@ -259,7 +259,7 @@ def start(*, open_browser: bool = True) -> int:
         return _join_or_explain(launch_guard.check_existing(),
                                 open_browser=open_browser)
     # 名乗ってから、デスクトップ版をもう一度見る(調べてから名乗るまでの間に
-    # 統合ツールの窓で日報が開いていたら、こちらが止まる。デスクトップ版は
+    # 日報複合ツールの窓で日報が開いていたら、こちらが止まる。デスクトップ版は
     # 自分の錠を取ってからこの印を見るので、少なくとも一方が相手に気づく)
     if launch_guard.desktop_running():
         launch_guard.release_lock()
@@ -340,10 +340,10 @@ def start(*, open_browser: bool = True) -> int:
         log().info("終了しました")
 
 
-# デスクトップ版(統合ツール)とブラウザ版は同時に動かさない。断るときの文言
-DESKTOP_RUNNING_MESSAGE = "日報管理ツールはデスクトップ版(統合ツールの窓)で動いています"
-DESKTOP_RUNNING_HINT = ("統合ツールの窓の「日報」のタブをお使いください。"
-                        "ブラウザ版で開くときは、統合ツールの窓を閉じてからにしてください。")
+# デスクトップ版(日報複合ツール)とブラウザ版は同時に動かさない。断るときの文言
+DESKTOP_RUNNING_MESSAGE = "日報管理ツールはデスクトップ版(日報複合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("日報複合ツールの窓の「日報」のタブをお使いください。"
+                        "ブラウザ版で開くときは、日報複合ツールの窓を閉じてからにしてください。")
 BROWSER_RUNNING_MESSAGE = "日報管理ツールのブラウザ版が動いています"
 BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
                         "ブラウザの画面の「終了」で閉じてから、このタブの「もう一度開く」を押してください。")
@@ -352,7 +352,7 @@ BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には�
 def start_bridge(*, token: str = "", server_factory) -> int:
     """デスクトップ版の起動(`bridge.py` から)。**ポートもロックも使わない。**
 
-    多重起動の防止・窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのは
+    多重起動の防止・窓・終了は外枠(日報複合ツールの Rust/Tauri)が持つ。ここでするのは
     ブラウザ版と同じ「待機画面 → 本体を組み立てる → 重い初期化」だけで、その中身
     (`_initialize`)は共有する ── 2本持つと片方だけ直すことになる。
 

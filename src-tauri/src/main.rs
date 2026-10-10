@@ -1,4 +1,4 @@
-//! 統合ツール デスクトップ版の外枠(`統合ツール.exe` / `AllTools.exe`)
+//! 日報複合ツール デスクトップ版の外枠(`日報複合ツール.exe` / `AllTools.exe`)
 //!
 //! 日報管理ツール・資材発注看板システム・ライン管理カレンダー・点検表 選択・印刷を、
 //! **1つの窓に大きなタブで並べる。中は分けたまま**(ツールごとに別の Python)。
@@ -52,7 +52,7 @@ fn main() {
         Err(reason) => {
             places::shell_log(&root, &format!("一式を読めません: {reason}"));
             show_fatal_and_exit(&format!(
-                "統合ツールの一式を読めません。\n\n{reason}\n\n統合ツール.exe は、一式のフォルダ(config\\tools.json と bridge.py がある所)の直下に置いてください。"
+                "日報複合ツールの一式を読めません。\n\n{reason}\n\n日報複合ツール.exe は、一式のフォルダ(config\\tools.json と bridge.py がある所)の直下に置いてください。"
             ));
         }
     };
@@ -242,7 +242,7 @@ fn show_fatal_and_exit(message: &str) -> ! {
     #[cfg(windows)]
     {
         let text: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
-        let title: Vec<u16> = "統合ツール".encode_utf16().chain(std::iter::once(0)).collect();
+        let title: Vec<u16> = "日報複合ツール".encode_utf16().chain(std::iter::once(0)).collect();
         #[link(name = "user32")]
         extern "system" {
             fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;

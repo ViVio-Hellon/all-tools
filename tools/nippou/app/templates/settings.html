@@ -1610,7 +1610,7 @@ LVC,119
         {% if dist.exists and dist.legacy %}前の版の置き場所(<code>{{ dist.source }}</code>)を読んでいます。
           下で書き出すと「配布設定」フォルダが勝ちます。
         {% elif dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成
-        {% elif dist.where %}まだありません。下で書き出すと、統合ツールの一式の中の「tools\nippou\配布設定」にできます。
+        {% elif dist.where %}まだありません。下で書き出すと、日報複合ツールの一式の中の「tools\nippou\配布設定」にできます。
         {% else %}まだありません。下で書き出すと、起動用の Start.vbs と同じフォルダに「配布設定」フォルダができます。{% endif %}
       </p>
       {% if dist.where and dist.exists %}<p class="lead" id="dist-where">{{ dist.where }}</p>{% endif %}
@@ -1626,7 +1626,7 @@ LVC,119
       </table>
       {% endif %}
       <p class="lead">置き場所: <code id="dist-path">{{ dist.path }}</code>
-        {% if dist.where %}── 統合ツールの一式の中(日報のフォルダ)です。配るときは一式の
+        {% if dist.where %}── 日報複合ツールの一式の中(日報のフォルダ)です。配るときは一式の
         <code>scripts\make_dist.bat</code> がまとめます。
         {% else %}── 起動用の {{ dist.launchers | join(" / ") }} と同じフォルダです。{% endif %}
         <strong>配布先に関わるものはすべてこのフォルダ</strong>に入ります

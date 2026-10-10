@@ -44,7 +44,7 @@ class LeaveTests(unittest.TestCase):
 
 
 class CloseTests(unittest.TestCase):
-    """統合ツールの窓の × ・「終了」でも打ちかけを置く(外枠が頼んでくる)。"""
+    """日報複合ツールの窓の × ・「終了」でも打ちかけを置く(外枠が頼んでくる)。"""
 
     def test_外枠の頼みに答える(self) -> None:
         app = read("app.js")

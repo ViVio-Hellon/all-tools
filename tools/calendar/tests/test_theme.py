@@ -107,7 +107,7 @@ class SettingTests(unittest.TestCase):
                         user_settings.THEME_AUTO)
 
     def test_既定はライト(self) -> None:
-        """統合ツールの4ツールで既定をそろえる(以前は自動 = Windows の設定に合わせていた)。"""
+        """日報複合ツールの4ツールで既定をそろえる(以前は自動 = Windows の設定に合わせていた)。"""
         user_settings.set_value(user_settings.KEY_THEME, "")
         self.assertEqual(user_settings.get_theme(), "light")
 

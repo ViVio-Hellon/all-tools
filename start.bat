@@ -8,9 +8,9 @@ rem  into a literal backslash or at-sign under a different code page.
 rem  tests/test_launch_files.py enforces the encoding and this ordering.
 chcp 932 >nul 2>&1
 rem ===================================================================
-rem  統合ツール ブラウザ版(予備)診断起動
+rem  日報複合ツール ブラウザ版(予備)診断起動
 rem
-rem  普段は 統合ツール.exe(デスクトップ版)、exe が使えないときは
+rem  普段は 日報複合ツール.exe(デスクトップ版)、exe が使えないときは
 rem  Start.vbs を使ってください。こちらは「起動しないとき」に原因を
 rem  見るためのもので、コンソールを開いたまま経過を表示します。
 rem
@@ -27,7 +27,7 @@ pushd "%~dp0" || (
     pause
     exit /b 1
 )
-title 統合ツール - 診断起動 (この窓は閉じないでください)
+title 日報複合ツール - 診断起動 (この窓は閉じないでください)
 
 python --version >nul 2>&1
 if errorlevel 1 (

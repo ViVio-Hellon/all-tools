@@ -1,8 +1,8 @@
-"""統合ツール一式の配布用フォルダ(`scripts/make_dist.py`)
+"""日報複合ツール一式の配布用フォルダ(`scripts/make_dist.py`)
 
 - 配るものだけを写す(tests・src-tauri・__pycache__・.git は入れない)
 - 各ツールは、そのツールの make_dist の決まりのまま `tools\\<ツール>\\` へ
-- デスクトップ版の exe は、あれば 統合ツール.exe の名前で直下に入れる
+- デスクトップ版の exe は、あれば 日報複合ツール.exe の名前で直下に入れる
 - 直下に何かを足したら、配るかどうかを決めさせる(一覧と食い違えば落ちる)
 """
 from __future__ import annotations

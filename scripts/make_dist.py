@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-r"""統合ツール一式の配布用フォルダを作る
+r"""日報複合ツール一式の配布用フォルダを作る
 
 【なぜ要るのか】
 配るときに手でフォルダをコピーすると、**配ってはいけないもの**が紛れます
 (tests\・__pycache__・.git・src-tauri\target\(数 GB)・端末ごとの設定)。
 このスクリプトは**配るものだけ**を新しいフォルダへ写します。
 
-    python scripts\make_dist.py                     # 一式の隣に「統合ツール_VERx.y.z」
+    python scripts\make_dist.py                     # 一式の隣に「日報複合ツール_VERx.y.z」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
     python scripts\make_dist.py --zip               # zip も作る
     python scripts\make_dist.py --no-settings       # 配布設定(大設定・各ツール)を入れない
@@ -14,8 +14,8 @@ r"""統合ツール一式の配布用フォルダを作る
 
 【中身】
 
-    統合ツール_VERx.y.z\
-      統合ツール.exe          デスクトップ版(GitHub Actions の成果物 AllTools-windows の
+    日報複合ツール_VERx.y.z\
+      日報複合ツール.exe          デスクトップ版(GitHub Actions の成果物 AllTools-windows の
                               AllTools.exe。一式の直下に置いてあれば、この名前で入れる)
       Start.vbs / start.bat / stop.bat   ブラウザ版(予備)
       launcher_check.bat / launcher_stop.bat   業務ツール統合ランチャーの入口
@@ -53,7 +53,7 @@ INCLUDE: tuple[str, ...] = (
     # 業務ツール統合ランチャーの入口(起動確認・終了。docs/ランチャー連携.md)
     "launcher_check.bat", "launcher_stop.bat",
     "start_app.py", "process_manager.py",
-    # デスクトップ版(統合ツール.exe)の入口。ポートを使わない(標準入出力)
+    # デスクトップ版(日報複合ツール.exe)の入口。ポートを使わない(標準入出力)
     "bridge.py",
     "config", "portal", "docs", "scripts",
 )
@@ -76,11 +76,12 @@ EXCLUDE_NAMES: tuple[str, ...] = (
 FORBIDDEN: tuple[str, ...] = ("tests", ".git", "src-tauri", "data", "logs")
 
 #: デスクトップ版の exe。配るときの名前と、探す場所(先に見つかったもの)
-EXE_NAME = "統合ツール.exe"
+EXE_NAME = "日報複合ツール.exe"
 EXE_CANDIDATES: tuple[str, ...] = (
-    "統合ツール.exe",
+    "日報複合ツール.exe",
     "AllTools.exe",
     "src-tauri/target/release/AllTools.exe",
+    "統合ツール.exe",           # 名前を変える前の exe(入れるときは 日報複合ツール.exe にする)
 )
 
 #: ツールの make_dist(そのツールが配るもの・配ってはいけないもの・配布設定の決まりを持つ)。
@@ -118,7 +119,7 @@ def version(root: Path = ROOT) -> str:
 
 
 def display_name(root: Path = ROOT) -> str:
-    return str(_app(root).get("display_name", "統合ツール"))
+    return str(_app(root).get("display_name", "日報複合ツール"))
 
 
 def _tool_version(tool_dir: Path) -> str:
@@ -134,7 +135,10 @@ def _portal_settings_lines(folder: Path) -> list[str]:
     labels = {"shared_db_dir": "共有の DB のフォルダ", "shared_db_name": "共有の DB のファイル名",
               "admin_password": "管理者パスワード"}
     try:
-        data = json.loads((folder / "統合ツール.json").read_text(encoding="utf-8-sig"))
+        path = folder / "日報複合ツール.json"
+        if not path.is_file():
+            path = folder / "統合ツール.json"        # 名前を変える前に書き出したもの
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return [labels.get(k, k) for k in (data.get("settings") or {})] or ["(中身がありません)"]
     except (OSError, ValueError):
         return ["(読めません)"]
@@ -201,11 +205,11 @@ def _build_tool(tool: dict, out: Path, *, with_settings: bool, root: Path) -> li
         finally:
             sys.path[:] = saved_path
             _forget_modules(before)
-        # ツールの配布メモは、ツールだけを配るときのもの。統合ツールでは一式の配布メモにまとめる
+        # ツールの配布メモは、ツールだけを配るときのもの。日報複合ツールでは一式の配布メモにまとめる
         (out / "配布メモ.txt").unlink(missing_ok=True)
         keep = [line for line in lines
                 if not line.startswith(("配布用フォルダを作りました", "版:", "ファイル数", "zip も作りました"))
-                and "統合ツールごと配るときは" not in line]
+                and "日報複合ツールごと配るときは" not in line]
         return [f"[{title}] VER{_tool_version(tool_dir)}"] + [f"  {line}" for line in keep]
 
     # make_dist を持たないツール: 一覧のとおりに写す
@@ -241,7 +245,7 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
     """
     out = out.resolve()
     if _inside(out, root):
-        raise SystemExit(f"統合ツールのフォルダの中には作れません: {out}\n"
+        raise SystemExit(f"日報複合ツールのフォルダの中には作れません: {out}\n"
                          "(次に作るとき、前に作ったものまで写してしまいます)")
     if out.exists() and any(out.iterdir()):
         if not force:
@@ -344,8 +348,8 @@ def default_out(root: Path = ROOT) -> Path:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="統合ツール一式の配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「統合ツール_VER版」)")
+    parser = argparse.ArgumentParser(description="日報複合ツール一式の配布用フォルダを作る")
+    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「日報複合ツール_VER版」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(大設定の 配布設定 と、各ツールの tools\\<ツール>\\配布設定)を入れない")
     parser.add_argument("--force", action="store_true",

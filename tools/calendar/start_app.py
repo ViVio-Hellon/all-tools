@@ -291,7 +291,7 @@ def start(*, open_browser: bool = True) -> int:
         if joined is not None:
             return joined
     try:
-        # デスクトップ版(統合ツールの窓)が動いていれば、こちらが止まる。
+        # デスクトップ版(日報複合ツールの窓)が動いていれば、こちらが止まる。
         # **入口を取ってから**確かめる(デスクトップ版は自分の錠を取ってから
         # この入口を見る。同時に開いても、少なくとも一方が相手に気づく)
         if launch_guard.desktop_running():
@@ -474,9 +474,9 @@ def _hard_exit() -> None:
     os._exit(0)
 
 
-DESKTOP_RUNNING_MESSAGE = "ライン管理カレンダーはデスクトップ版(統合ツールの窓)で動いています"
-DESKTOP_RUNNING_HINT = ("統合ツールの窓の「カレンダー」のタブをお使いください。"
-                        "ブラウザ版で開くときは、統合ツールの窓を閉じてからにしてください。")
+DESKTOP_RUNNING_MESSAGE = "ライン管理カレンダーはデスクトップ版(日報複合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("日報複合ツールの窓の「カレンダー」のタブをお使いください。"
+                        "ブラウザ版で開くときは、日報複合ツールの窓を閉じてからにしてください。")
 BROWSER_RUNNING_MESSAGE = "ライン管理カレンダーのブラウザ版が動いています"
 BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
                         "ブラウザの画面の「終了」(または stop.bat)で閉じてから、"
@@ -486,7 +486,7 @@ BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には�
 def start_bridge(*, token: str = "", server_factory) -> int:
     """デスクトップ版の起動(``bridge.py`` から)。**ポートを使わない。**
 
-    窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのは
+    窓・終了は外枠(日報複合ツールの Rust/Tauri)が持つ。ここでするのは
     ブラウザ版と同じ「待機画面 → 本体を組み立てる → 重い初期化」だけで、
     その中身(``_initialize``)は共有する ── 2本持つと片方だけ直すことになる。
 

@@ -187,7 +187,7 @@ def shutdown():
     reason = _busy_reason()
     if reason and not force:
         log.info("処理中のため停止しません: %s", reason)
-        # 4 ツール共通の答え方(reason・running・message)。統合ツールの窓は running を
+        # 4 ツール共通の答え方(reason・running・message)。日報複合ツールの窓は running を
         # 確認に出す(tests/test_tool_contracts.py)。busy・error は前からの画面
         # (app.js の「終了」)のために残す
         return (
@@ -204,7 +204,7 @@ def shutdown():
             409,
         )
 
-    # `check` は**訊くだけ**(止めない)。統合ツールの外枠が、窓の × で全ツールに
+    # `check` は**訊くだけ**(止めない)。日報複合ツールの外枠が、窓の × で全ツールに
     # 「終わってよいか」を先に訊いてから、まとめて止めるために使う。1つでも
     # 処理の途中なら、ほかのツールも止めずに確認を出す(先に止めてしまわない)
     if body.get("check"):

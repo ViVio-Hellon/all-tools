@@ -1,11 +1,11 @@
-# 統合ツール — 実行に必要な追加パッケージ
+# 日報複合ツール — 実行に必要な追加パッケージ
 #
 # 各ツール(tools/<名前>/requirements.txt)と同じ2つだけ。入口も各ツールも、
 # 画面は Flask + HTML/CSS/JS。フロント側のビルド工程(npm / webpack)は持たない。
 #
 #   pip install -r requirements.txt
 #
-# デスクトップ版(統合ツール.exe)は待ち受けないので waitress は使わない(Flask だけ)。
+# デスクトップ版(日報複合ツール.exe)は待ち受けないので waitress は使わない(Flask だけ)。
 # waitress はブラウザ版(予備。Start.vbs)のため。
 #
 # 共有の DB(タブ表示権限)は標準ライブラリの sqlite3 で読み書きする。

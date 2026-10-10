@@ -17,7 +17,7 @@ use crate::bridge::{self, Bridge, Phase, Spec};
 use crate::catalog::{Catalog, Tool};
 
 /// 外枠の exe の名前(案内に出す)
-pub const EXE_LABEL: &str = "統合ツール.exe(AllTools.exe)";
+pub const EXE_LABEL: &str = "日報複合ツール.exe(AllTools.exe)";
 
 /// 大きなタブの画面が「待っています」(本人に訊いている・ツールの画面の返事を待っている)と
 /// 言ってきたあと、「済んだ」を待つ上限。来なければ**閉じない**(画面が固まった)。

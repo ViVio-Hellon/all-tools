@@ -23,7 +23,7 @@ async function call(method, path, payload) {
   try {
     res = await fetch(path, init);
   } catch (err) {
-    throw new ApiError(0, "offline", "統合ツールの処理に届きません。開き直してください。");
+    throw new ApiError(0, "offline", "日報複合ツールの処理に届きません。開き直してください。");
   }
   let body = {};
   try { body = await res.json(); } catch (err) { /* JSON でなければ空 */ }

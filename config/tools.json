@@ -3,7 +3,7 @@
   "portal": {
     "id": "portal",
     "title": "大設定",
-    "name": "統合ツール",
+    "name": "日報複合ツール",
     "dir": ".",
     "scheme": "portal",
     "env_prefix": "ALLTOOLS",

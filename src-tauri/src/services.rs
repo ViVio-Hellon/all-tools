@@ -122,7 +122,7 @@ pub async fn tool_invoke(
             shell.restart_tool(&tool.id, true)?;
             Ok(Value::Null)
         }
-        other => Err(format!("この頼みごとは統合ツールでは使えません: {other}")),
+        other => Err(format!("この頼みごとは日報複合ツールでは使えません: {other}")),
     }
 }
 
@@ -147,7 +147,7 @@ pub async fn tool_invoke_raw(
             let start = header("x-save-dir");
             save_bytes(&app, &webview, &name, &start, data.clone()).await.map(|p| json!(p))
         }
-        other => Err(format!("この頼みごとは統合ツールでは使えません: {other}({})", tool.title)),
+        other => Err(format!("この頼みごとは日報複合ツールでは使えません: {other}({})", tool.title)),
     }
 }
 

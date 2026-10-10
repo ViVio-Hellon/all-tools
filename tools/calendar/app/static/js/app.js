@@ -21,7 +21,7 @@ import * as sync from "./sync.js";
 import * as theme from "./theme.js";
 import { toast, toastError } from "./toast.js";
 
-// 統合ツールの外枠へ「閉じる前の頼みはこの画面が自分で受ける」と知らせる
+// 日報複合ツールの外枠へ「閉じる前の頼みはこの画面が自分で受ける」と知らせる
 // (外枠の代わりの受け手は、これが無い画面のときだけ働く)
 window.__alltoolsHandlesClose = true;
 
@@ -52,7 +52,7 @@ document.addEventListener("app:client-error", (event) => {
 });
 
 /* ------------------------------------------------------------------
-   統合ツールの窓の × ・「終了」の前
+   日報複合ツールの窓の × ・「終了」の前
 
    外枠(大きなタブの画面)は、Python に「終わってよいか」を訊く前に、
    各ツールの画面へ `alltools:before-close` を送ってくる。以前は答えて
@@ -111,10 +111,10 @@ if (quit) {
   quit.addEventListener("click", async () => {
     // 保存していない入力があれば、先にそれを訊く(終了すると消える)
     if (!await leave.mayClose({ remember: false })) return;
-    // デスクトップ版は統合ツールの窓の中で動く。終えると、ほかのツールのタブも閉じる
+    // デスクトップ版は日報複合ツールの窓の中で動く。終えると、ほかのツールのタブも閉じる
     if (!await confirm("終了しますか?",
                        isDesktop
-                         ? "統合ツールを終了します(ほかのツールのタブもまとめて閉じます)。"
+                         ? "日報複合ツールを終了します(ほかのツールのタブもまとめて閉じます)。"
                          : "このアプリを終了します。\n"
                            + "続けて使う場合は、もう一度 Start.vbs から起動してください。",
                        { okLabel: "終了する", danger: true })) return;

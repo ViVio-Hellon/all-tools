@@ -93,7 +93,7 @@ class PageTests(WebTestCase):
         script = page.index('localStorage.getItem("nippou.theme")')
         self.assertLess(script, page.index("css/tokens.css"))
         self.assertIn("document.documentElement.dataset.theme = theme", page)
-        # 選ぶまではライト(統合ツールの4ツールでそろえる。OS のダークには付いていかない)
+        # 選ぶまではライト(日報複合ツールの4ツールでそろえる。OS のダークには付いていかない)
         self.assertIn('data-theme="light"', page[:page.index("<head>")])
 
     def test_早見表の別窓は帯が無いが_選んだ背景は効く(self) -> None:

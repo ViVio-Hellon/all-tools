@@ -256,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- デスクトップ版が動いていないか -----------------------------------
     # 同じ端末の手元の SQLite と共有DBへ、2 つのプロセスが書きに行かないようにする。
-    # デスクトップ版(統合ツールの窓の「看板」)は OS のファイルロックを握っている
+    # デスクトップ版(日報複合ツールの窓の「看板」)は OS のファイルロックを握っている
     # (``start_bridge`` → ``launch_guard.hold_desktop_lock``)
     import launch_guard
 
@@ -325,9 +325,9 @@ def main(argv: list[str] | None = None) -> int:
                 grant=grant, access_notice=access_notice)
 
 
-DESKTOP_RUNNING_MESSAGE = "資材発注看板システムはデスクトップ版(統合ツールの窓)で動いています"
-DESKTOP_RUNNING_HINT = ("統合ツールの窓の「看板」のタブをお使いください"
-                        "(ブラウザ版は開きません。開くときは統合ツールの窓を閉じてから)。")
+DESKTOP_RUNNING_MESSAGE = "資材発注看板システムはデスクトップ版(日報複合ツールの窓)で動いています"
+DESKTOP_RUNNING_HINT = ("日報複合ツールの窓の「看板」のタブをお使いください"
+                        "(ブラウザ版は開きません。開くときは日報複合ツールの窓を閉じてから)。")
 BROWSER_RUNNING_MESSAGE = "資材発注看板システムのブラウザ版が動いています"
 BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には使えません。"
                         "ブラウザの画面の「終了」(または stop.bat)で閉じてから、"
@@ -337,7 +337,7 @@ BROWSER_RUNNING_HINT = ("ブラウザ版とデスクトップ版は同時には�
 def start_bridge(argv: list[str] | None = None, *, token: str = "", server_factory) -> int:
     """デスクトップ版の起動(``bridge.py`` から)。**ポートも印のファイルも使わない。**
 
-    窓・終了は外枠(統合ツールの Rust/Tauri)が持つ。ここでするのはブラウザ版と
+    窓・終了は外枠(日報複合ツールの Rust/Tauri)が持つ。ここでするのはブラウザ版と
     同じ「設定・権限・モードを決める → 待機画面 → 本体を組み立てる → 取り込み」だけで、
     その中身(:func:`_prepare` と :func:`_serve`)はブラウザ版と共有する ──
     2 本持つと片方だけ直すことになる。
@@ -584,7 +584,7 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     if launch_guard.update_lock(mode, port=lock.port, url=lock.url, token=lock.token) is None:
         launch_guard.write_lock(lock)          # 名乗らずに来た(試験から直に呼んだ)
     # 印を書いてから、デスクトップ版をもう一度見る(調べてから印を書くまでの
-    # 間に統合ツールの窓で看板が開いていたら、こちらが止まる)
+    # 間に日報複合ツールの窓で看板が開いていたら、こちらが止まる)
     if launch_guard.desktop_running():
         launch_guard.release_lock(mode)
         message = f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}"
@@ -610,7 +610,7 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     print(f"起動しました: {srv.url}")
     log.info("ブラウザを開きました: %s", srv.url)
 
-    # 統合ツールのブラウザ版(予備)が起こしたときは、ブラウザを開かないが
+    # 日報複合ツールのブラウザ版(予備)が起こしたときは、ブラウザを開かないが
     # 心拍の見張りは立てる(大きなタブの枠が消えたら終わる。入口が先に落ちても残らない)
     under_portal = os.environ.get("ALLTOOLS_PORTAL", "") == "1"
     code = _serve(args, cfg, store, mode, line, root, srv, thread,

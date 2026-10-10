@@ -1,6 +1,6 @@
 """デスクトップ版の入口(``bridge.py``)── ポートを使わずに画面を返す
 
-外枠(統合ツールの Rust/Tauri)は ``bridge.py`` を子として起動し、標準入出力で
+外枠(日報複合ツールの Rust/Tauri)は ``bridge.py`` を子として起動し、標準入出力で
 要求を渡す。ここでは外枠の代わりをして、次を確かめる:
 
 - やりとりの形(見出し1行 + 本文)が往復で崩れない(日本語・バイナリ・大きい本文)
@@ -256,7 +256,7 @@ class BridgeProcessTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/entry/state", token=False)[0]["status"], 401)
         self.assertEqual(self.request("GET", "/api/entry/state", host="evil.example")[0]["status"], 400)
 
-        # 訊くだけなら止まらない(統合ツールの外枠が先に全ツールへ訊く)
+        # 訊くだけなら止まらない(日報複合ツールの外枠が先に全ツールへ訊く)
         head, body = self.post_json("/api/shutdown", {"check": True})
         self.assertEqual(head["status"], 200, body)
         self.assertEqual(json.loads(body), {"stopped": False, "can_stop": True})
@@ -363,7 +363,7 @@ class DesktopLockTests(unittest.TestCase):
         with self.assertRaises(start_app.StartupError) as caught:
             start_app.start(open_browser=False)
         self.assertIn("デスクトップ版", str(caught.exception))
-        self.assertIn("統合ツール", caught.exception.hint)
+        self.assertIn("日報複合ツール", caught.exception.hint)
 
     def test_デスクトップ版の起動はブラウザ版が居れば止まる(self) -> None:
         import start_app
@@ -382,18 +382,18 @@ class DesktopLockTests(unittest.TestCase):
         self.assertFalse(guard.desktop_running(), "止まったほうは錠を握らない")
 
 
-# 統合ツールの一式(このツールは `tools/nippou/` にある)
+# 日報複合ツールの一式(このツールは `tools/nippou/` にある)
 INTEGRATED = ROOT.parent.parent
 
 
 class IntegratedShellTests(unittest.TestCase):
-    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+    """日報複合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
 
     def entry(self) -> dict:
         tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
         return next(t for t in tools["tools"] if t["id"] == "nippou")
 
-    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+    def test_日報複合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
         """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
         entry = self.entry()
         self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())

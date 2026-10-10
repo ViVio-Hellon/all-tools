@@ -161,20 +161,20 @@ export function portalState(kind, text = "") {
   if (kind === "lost") {
     box.hidden = false;
     box.className = "msg msg--warn portal-state";
-    box.textContent = "統合ツールの入口の処理(Python)が止まったので、起こし直しています。"
+    box.textContent = "日報複合ツールの入口の処理(Python)が止まったので、起こし直しています。"
       + "各タブの画面はそのままです(読み直していません)。この画面の打ちかけも残っています。";
   } else if (kind === "back") {
     box.hidden = false;
     box.className = "msg msg--info portal-state";
-    box.textContent = "統合ツールの入口の処理(Python)を起こし直しました。管理者の鍵は掛かり直しています。"
+    box.textContent = "日報複合ツールの入口の処理(Python)を起こし直しました。管理者の鍵は掛かり直しています。"
       + "打ちかけの値はそのまま残してあります。";
     refresh().catch(() => {});
   } else if (kind === "down") {
     box.hidden = false;
     box.className = "msg msg--warn portal-state";
-    box.textContent = "統合ツールの入口の処理(Python)を起こし直せませんでした。"
+    box.textContent = "日報複合ツールの入口の処理(Python)を起こし直せませんでした。"
       + (text ? `(${text})` : "") + "各タブの画面はそのまま使えますが、大設定は使えません。"
-      + "「もう一度開く」で起こし直すか、打ちかけを保存してから統合ツールを開き直してください。";
+      + "「もう一度開く」で起こし直すか、打ちかけを保存してから日報複合ツールを開き直してください。";
     if (ctx.desktop && ctx.invoke) {
       const again = document.createElement("button");
       again.type = "button";
@@ -554,7 +554,7 @@ function paintApp() {
   dl.replaceChildren();
   const rows = [
     ["名前", `${a.name} VER${a.version}`],
-    ["動かし方", ctx.desktop ? "デスクトップ版(統合ツール.exe)" : "ブラウザ版(予備。Start.vbs)"],
+    ["動かし方", ctx.desktop ? "デスクトップ版(日報複合ツール.exe)" : "ブラウザ版(予備。Start.vbs)"],
     ["一式の場所", a.root],
     ["手元の領域", a.local],
     ["ログ", a.logs],

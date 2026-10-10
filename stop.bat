@@ -3,11 +3,11 @@ rem  --- keep this file in CP932 (Shift-JIS) with CRLF line endings ---
 rem  Keep everything above the chcp line ASCII; see start.bat for why.
 chcp 932 >nul 2>&1
 rem ===================================================================
-rem  統合ツール ブラウザ版(予備)停止
+rem  日報複合ツール ブラウザ版(予備)停止
 rem
 rem  ブラウザ版の入口と、入口が起こした各ツールのブラウザ版を止めます。
 rem  同じPCで動く他の Python アプリは影響を受けません。
-rem  デスクトップ版(統合ツール.exe)は止めません(窓の「終了」で閉じてください)。
+rem  デスクトップ版(日報複合ツール.exe)は止めません(窓の「終了」で閉じてください)。
 rem ===================================================================
 setlocal
 
@@ -17,7 +17,7 @@ pushd "%~dp0" || (
     pause
     exit /b 1
 )
-title 統合ツール - 停止
+title 日報複合ツール - 停止
 
 python --version >nul 2>&1
 if errorlevel 1 (

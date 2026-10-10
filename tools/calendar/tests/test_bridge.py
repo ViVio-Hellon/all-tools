@@ -10,7 +10,7 @@
 - 「終了」で ``quit`` を知らせ、標準入力を閉じればプロセスが終わる
 - **未送信を抱えたまま終わらない**(終わる前に送り切る。送れなければ覚える)
 - 起動できないときは理由(``fatal``)を外枠へ渡す
-- 統合ツールの外枠と Python で、宛先と環境変数の名前が食い違わない
+- 日報複合ツールの外枠と Python で、宛先と環境変数の名前が食い違わない
 - ブラウザ版とは同時に動かさない(後から開いたほうが止まる)
 """
 from __future__ import annotations
@@ -399,18 +399,18 @@ class FatalTests(unittest.TestCase):
         self.assertIn("hint", event)
 
 
-# 統合ツールの一式(このツールは ``tools/calendar/`` にある)
+# 日報複合ツールの一式(このツールは ``tools/calendar/`` にある)
 INTEGRATED = ROOT.parent.parent
 
 
 class IntegratedShellTests(unittest.TestCase):
-    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+    """日報複合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
 
     def entry(self) -> dict:
         tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
         return next(t for t in tools["tools"] if t["id"] == "calendar")
 
-    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+    def test_日報複合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
         """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
         from calendar_app import app_config
         entry = self.entry()
@@ -428,7 +428,7 @@ class IntegratedShellTests(unittest.TestCase):
 
 
 class DesktopGuardTests(unittest.TestCase):
-    """ブラウザ版とデスクトップ版(統合ツールの窓)を同時に動かさない。後から開いたほうが止まる。"""
+    """ブラウザ版とデスクトップ版(日報複合ツールの窓)を同時に動かさない。後から開いたほうが止まる。"""
 
     def setUp(self) -> None:
         import launch_guard
@@ -453,7 +453,7 @@ class DesktopGuardTests(unittest.TestCase):
         self.assertTrue(self.guard.hold_desktop_lock(wait_sec=0))
         with self.assertRaises(start_app.StartupError) as ctx:
             start_app.start(open_browser=False)
-        self.assertIn("統合ツールの窓", str(ctx.exception))
+        self.assertIn("日報複合ツールの窓", str(ctx.exception))
         self.assertFalse(self.guard.browser_running(), "入口(instance.lock)は放してある")
 
     def test_ブラウザ版が動いていればデスクトップ版は起動しない(self) -> None:

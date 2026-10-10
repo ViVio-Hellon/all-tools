@@ -1,7 +1,7 @@
 ' ===================================================================
-'  統合ツール ブラウザ版(予備)起動
+'  日報複合ツール ブラウザ版(予備)起動
 '
-'  **ふだんは 統合ツール.exe(デスクトップ版)を使ってください。**
+'  **ふだんは 日報複合ツール.exe(デスクトップ版)を使ってください。**
 '  こちらは exe が使えないときの予備です。コンソールを出さずに起動し、
 '  画面はブラウザに出ます(大きなタブで 日報・看板・カレンダー・点検表・大設定)。
 '  起動しないときは start.bat を使うと原因が表示されます。
@@ -14,7 +14,7 @@
 ' ===================================================================
 Option Explicit
 
-Const APP_NAME = "統合ツール"
+Const APP_NAME = "日報複合ツール"
 
 Dim shell, fso, here, script, cmd
 Set shell = CreateObject("WScript.Shell")
@@ -28,7 +28,7 @@ script = fso.BuildPath(here, "start_app.py")
 If Not fso.FileExists(script) Then
     MsgBox "start_app.py が見つかりません。" & vbCrLf & vbCrLf & _
            "探した場所: " & script & vbCrLf & vbCrLf & _
-           "このファイルは、統合ツール一式が入ったフォルダの中から" & vbCrLf & _
+           "このファイルは、日報複合ツール一式が入ったフォルダの中から" & vbCrLf & _
            "実行してください(ショートカットを作るのは大丈夫です)。", _
            vbCritical, APP_NAME
     WScript.Quit 1

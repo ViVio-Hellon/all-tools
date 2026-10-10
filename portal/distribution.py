@@ -3,9 +3,9 @@
 作りは各ツール・python-web-tools の配布設定と同じ。
 
 【流れ】
-    1. 1台で統合ツールを開き、大設定で鍵を開けて、置き場所・管理者パスワードを決める
+    1. 1台で日報複合ツールを開き、大設定で鍵を開けて、置き場所・管理者パスワードを決める
     2. 大設定の「配布設定を書き出す」→ 一式のフォルダの直下(Start.vbs と同じ階層)に
-       `配布設定\\` ができる(`統合ツール.json`・`はじめに読む.txt`)
+       `配布設定\\` ができる(`日報複合ツール.json`・`はじめに読む.txt`)
     3. `scripts\\make_dist.bat` で配布用フォルダを作る(この `配布設定\\` も入る)
     4. 配った先は**起動のたびに** `配布設定\\` を見て、**その端末に無い項目だけ**埋める
        (端末で直した値が戻されることはない。揃えたいときは「読み込み直す」)
@@ -30,7 +30,9 @@ from .logging_utils import get_logger
 
 log = get_logger("distribution")
 
-FILE_NAME = "統合ツール.json"
+FILE_NAME = "日報複合ツール.json"
+#: 名前を変える前(1.3.x まで)に書き出した配布設定。読むだけ(次に書き出すと新しい名前になる)
+OLD_FILE_NAMES: tuple[str, ...] = ("統合ツール.json",)
 README_NAME = "はじめに読む.txt"
 FORMAT = 1
 
@@ -93,6 +95,8 @@ def _show(key: str, value: Any) -> str:
 def read() -> Optional[Bundle]:
     """置いてある配布設定。無い・読めない・形が違うなら None。"""
     path = file_path()
+    if not path.is_file():
+        path = next((p for p in (directory() / name for name in OLD_FILE_NAMES) if p.is_file()), path)
     if not path.is_file():
         return None
     try:

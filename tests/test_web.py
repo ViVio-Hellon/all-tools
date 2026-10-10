@@ -465,7 +465,7 @@ class CloseAskTests(Base):
         self.assertEqual(body["app_id"], "nlm.all-tools")
         self.assertTrue(body["ready"])
         self.assertEqual(Path(body["app_root"]), Path(web.PORTAL_DIR).parent)
-        self.assertEqual(body["display_name"], "統合ツール")
+        self.assertEqual(body["display_name"], "日報複合ツール")
 
 
 class ClientLogTests(Base):

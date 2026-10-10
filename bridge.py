@@ -1,6 +1,6 @@
-"""統合ツールの入口(大きなタブの画面・大設定)── デスクトップ版の入口。**ポートを使わない**
+"""日報複合ツールの入口(大きなタブの画面・大設定)── デスクトップ版の入口。**ポートを使わない**
 
-外枠(`統合ツール.exe` = Rust/Tauri、`src-tauri/`)がこのプロセスを子として起動し、
+外枠(`日報複合ツール.exe` = Rust/Tauri、`src-tauri/`)がこのプロセスを子として起動し、
 `portal://localhost/`(Windows は `http://portal.localhost/`)で受けた要求を**標準入出力**で
 渡す。ソケットは1つも開かない。各ツールも同じ形で、ツールごとに別の Python が動く
 (`tools/<名前>/bridge.py`)。
@@ -107,7 +107,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             except Exception:                     # noqa: BLE001
                 pass
 
-    log.info("外枠からの要求を受け付けます(ポートは使いません): 統合ツール %s", app_config.version())
+    log.info("外枠からの要求を受け付けます(ポートは使いません): 日報複合ツール %s", app_config.version())
     writer.event("started")
     try:
         while True:

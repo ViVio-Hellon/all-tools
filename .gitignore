@@ -9,7 +9,7 @@ Thumbs.db
 .idea/
 .claude/settings.local.json
 
-# 統合ツールのローカル実行領域・作るもの(リポジトリ直下だけ。tools/ の下は各ツールの .gitignore が決める)
+# 日報複合ツールのローカル実行領域・作るもの(リポジトリ直下だけ。tools/ の下は各ツールの .gitignore が決める)
 /logs/
 /data/*.sqlite3
 /data/*.sqlite3-journal
@@ -26,4 +26,5 @@ src-tauri/target/
 src-tauri/gen/
 # GitHub Actions から取ってきて直下に置いた exe(配布のときに make_dist が入れる)
 /AllTools.exe
+/日報複合ツール.exe
 /統合ツール.exe

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""統合ツールのブラウザ版(予備)の起動開始点
+"""日報複合ツールのブラウザ版(予備)の起動開始点
 
     Start.vbs(通常)/ start.bat(診断)
         └─ start_app.py            ← ここ
@@ -10,7 +10,7 @@
              └─ ブラウザを開く      (大きなタブの画面)
 
 各ツールは、大きなタブを開いたときに、そのツールのブラウザ版を起こす(`portal/browser_tools.py`)。
-**デスクトップ版(`統合ツール.exe`)が本来の入口。** ブラウザ版は exe が使えないときの予備。
+**デスクトップ版(`日報複合ツール.exe`)が本来の入口。** ブラウザ版は exe が使えないときの予備。
 ブラウザ版とデスクトップ版は同時に動かない(後から開いたほうが止まる)。
 
 使い方:
@@ -51,7 +51,7 @@ WAKE_GAP_SEC = 30
 
 LOCK_NAME = "portal.lock"
 
-DESKTOP_RUNNING = "統合ツールはデスクトップ版(統合ツール.exe の窓)で動いています"
+DESKTOP_RUNNING = "日報複合ツールはデスクトップ版(日報複合ツール.exe の窓)で動いています"
 DESKTOP_HINT = ("開いている窓をお使いください。ブラウザ版で開くときは、"
                 "窓の「終了」で閉じてからにしてください。")
 
@@ -210,7 +210,7 @@ def start(*, open_browser: bool = True) -> int:
             else:
                 print(f"もう動いています: {lock['url']}")
             return 0
-        raise StartupError("統合ツールのブラウザ版がもう動いています",
+        raise StartupError("日報複合ツールのブラウザ版がもう動いています",
                            "開いているブラウザのタブをお使いください。")
 
     host = app_config.host()
@@ -297,13 +297,13 @@ def report_failure(error: StartupError, *, open_browser: bool) -> None:
     if os.name == "nt" and open_browser:
         try:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, text, "統合ツール", 0x40)
+            ctypes.windll.user32.MessageBoxW(None, text, "日報複合ツール", 0x40)
         except Exception:                         # noqa: BLE001
             pass
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="統合ツールのブラウザ版(予備)を起動する")
+    parser = argparse.ArgumentParser(description="日報複合ツールのブラウザ版(予備)を起動する")
     parser.add_argument("--no-browser", action="store_true", help="ブラウザを開かない(検証用)")
     parser.add_argument("--check", action="store_true", help="実行環境の確認だけして終わる(診断用)")
     args = parser.parse_args(argv)

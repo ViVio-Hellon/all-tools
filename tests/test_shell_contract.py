@@ -128,6 +128,9 @@ class VersionTests(unittest.TestCase):
         cargo = (ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
         self.assertRegex(cargo, r'(?m)^name = "AllTools"$')
         self.assertIn("AllTools.exe", instance_guard.DESKTOP_EXES)
+        self.assertIn("日報複合ツール.exe", instance_guard.DESKTOP_EXES)
+        self.assertEqual(instance_guard.DESKTOP_EXES[0], "日報複合ツール.exe", "配るときの名前が先")
+        # 名前を変える前(1.3.x まで)に配った exe が置いたままでも、デスクトップ版として見つける
         self.assertIn("統合ツール.exe", instance_guard.DESKTOP_EXES)
 
 

@@ -359,18 +359,18 @@ class DesktopLockTests(unittest.TestCase):
         self.assertEqual(done.stdout.strip().splitlines()[-1], "False", done.stderr[-500:])
 
 
-# 統合ツールの一式(このツールは ``tools/kanban/`` にある)
+# 日報複合ツールの一式(このツールは ``tools/kanban/`` にある)
 INTEGRATED = ROOT.parent.parent
 
 
 class IntegratedShellTests(unittest.TestCase):
-    """統合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
+    """日報複合ツールの外枠(Rust/Tauri)・入口と、名前・置き場所が食い違わない。"""
 
     def entry(self) -> dict:
         tools = json.loads((INTEGRATED / "config" / "tools.json").read_text(encoding="utf-8"))
         return next(t for t in tools["tools"] if t["id"] == "kanban")
 
-    def test_統合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
+    def test_日報複合ツールの一覧に載っていて_置き場所と環境変数の頭が揃っている(self) -> None:
         """外枠が渡す名前と Python が読む名前がずれると、黙って既定で動く。"""
         entry = self.entry()
         self.assertEqual((INTEGRATED / entry["dir"]).resolve(), ROOT.resolve())

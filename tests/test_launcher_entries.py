@@ -99,19 +99,19 @@ class LauncherStopTests(unittest.TestCase):
 
 class DesktopWindowTests(unittest.TestCase):
     def test_大きなタブの窓だけを選ぶ(self) -> None:
-        """題名は画面に合わせて「統合ツール — 日報」と変わる(CI で「統合ツール VER…」では見つからなかった)。
+        """題名は画面に合わせて「日報複合ツール — 日報」と変わる(CI で「日報複合ツール VER…」では見つからなかった)。
         確認の窓(持ち主がいる)・別窓(題名はツールの名前)・見えない窓には頼まない。"""
-        windows = [(1, "統合ツール — 日報", False, True),
-                   (2, "統合ツール", True, True),            # 終了の確認(大きなタブの窓が持ち主)
+        windows = [(1, "日報複合ツール — 日報", False, True),
+                   (2, "日報複合ツール", True, True),            # 終了の確認(大きなタブの窓が持ち主)
                    (3, "日報管理ツール — 印刷", False, True),  # 別窓
-                   (4, "統合ツール", False, False)]          # 見えない
+                   (4, "日報複合ツール", False, False)]          # 見えない
         with mock.patch("os.name", "nt"), \
                 mock.patch.object(desktop_window, "exe_windows", return_value=windows):
-            self.assertEqual(desktop_window.main_windows(instance_guard.DESKTOP_EXES, "統合ツール"), [1])
+            self.assertEqual(desktop_window.main_windows(instance_guard.DESKTOP_EXES, "日報複合ツール"), [1])
 
     def test_Windows以外は確かめられない(self) -> None:
         with mock.patch("os.name", "posix"):
-            self.assertIsNone(desktop_window.main_windows(instance_guard.DESKTOP_EXES, "統合ツール VER"))
+            self.assertIsNone(desktop_window.main_windows(instance_guard.DESKTOP_EXES, "日報複合ツール VER"))
             self.assertEqual(desktop_window.ask_to_close([1]), 0)
 
 

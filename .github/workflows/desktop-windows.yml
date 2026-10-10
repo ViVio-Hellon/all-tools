@@ -1,8 +1,8 @@
-# 統合ツールのデスクトップ版(Windows)を作って確かめる
+# 日報複合ツールのデスクトップ版(Windows)を作って確かめる
 #
 # 作るもの: AllTools.exe(成果物 "AllTools-windows" から取れる)。
 # 配るときは、一式のフォルダの直下(bridge.py・config と同じ所)に置いてから
-# scripts\make_dist.bat を流す(「統合ツール.exe」の名前で入る)。
+# scripts\make_dist.bat を流す(「日報複合ツール.exe」の名前で入る)。
 #
 # 確かめること:
 #   - 入口(portal)と4つのツールの Python の試験(Windows の上で。標準入出力のやりとり・

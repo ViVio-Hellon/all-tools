@@ -111,7 +111,7 @@ class PageTests(WebTestBase):
                        'id="settings-dialog"', 'id="offline"', 'id="quit"', "模擬モード"):
             self.assertIn(marker, body)
         self.assertIn(TOKEN, body)
-        self.assertIn('data-theme="light"', body, "既定はライト(統合ツールの4ツールでそろえる)")
+        self.assertIn('data-theme="light"', body, "既定はライト(日報複合ツールの4ツールでそろえる)")
         self.assertIn("css/inspection.css?v=", body, "静的ファイルに版が付いていない")
 
     def test_版がどこでも読める(self) -> None:

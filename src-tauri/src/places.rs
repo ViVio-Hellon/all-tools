@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// 統合ツール一式のフォルダ(`config/tools.json` と `bridge.py` がある所)。
+/// 日報複合ツール一式のフォルダ(`config/tools.json` と `bridge.py` がある所)。
 ///
 /// 配るときは exe をフォルダの直下に置く。開発中は `src-tauri/target/...` から
 /// 動くので、上へたどって探す。`ALLTOOLS_ROOT` で指定もできる。
@@ -68,7 +68,7 @@ pub fn local_root_for(env: &str, name: &str) -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local").join("share").join(name)
 }
 
-/// 統合ツールの手元の領域
+/// 日報複合ツールの手元の領域
 pub fn local_root(root: &Path) -> PathBuf {
     local_root_for("ALLTOOLS_LOCAL_DIR", &local_dir_name(root, "AllTools"))
 }
@@ -103,7 +103,7 @@ pub fn shell_log_for(spec: &crate::bridge::Spec, text: &str) {
     }
 }
 
-/// 外枠の記録(`<統合ツールの手元の領域>\logs\desktop_shell.log`)。
+/// 外枠の記録(`<日報複合ツールの手元の領域>\logs\desktop_shell.log`)。
 ///
 /// **Python が書けないことだけを書く**: Python が見つからない・起動できない・
 /// 知らせずに落ちた(最後の出力)・同時起動を止めた。後から「なぜ起動しなかったか」を

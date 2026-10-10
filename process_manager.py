@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""統合ツールのブラウザ版を止める(`stop.bat` から)・ランチャーの入口
+"""日報複合ツールのブラウザ版を止める(`stop.bat` から)・ランチャーの入口
 
     python process_manager.py            ブラウザ版(入口と各ツール)に終わってもらう
     python process_manager.py --force    処理の途中でも止める
@@ -7,7 +7,7 @@
     python process_manager.py --check    起動確認(launcher_check.bat)。0 使える / 2 準備中 / 1 動いていない
     python process_manager.py --launcher 終了の入口(launcher_stop.bat)。デスクトップ版も閉じる
 
-`stop.bat` は**デスクトップ版(統合ツール.exe の窓)を止めない。** 窓の × か「終了」で閉じる
+`stop.bat` は**デスクトップ版(日報複合ツール.exe の窓)を止めない。** 窓の × か「終了」で閉じる
 (閉じるときに全ツールの「終わってよいか」を訊くため)。動いていれば窓を前に出す。
 
 業務ツール統合ランチャーの終了の入口(`--launcher`)は、デスクトップ版なら**窓に「閉じて」と
@@ -34,7 +34,7 @@ ASKING_WAIT_SEC = 15.0
 # 終了の入口: デスクトップ版の窓が閉じるのを待つ上限(秒)。ランチャーは入口を 20 秒で見切る
 DESKTOP_CLOSE_WAIT_SEC = 16.0
 
-DESKTOP_MESSAGE = ("デスクトップ版(統合ツール.exe の窓)が動いています。"
+DESKTOP_MESSAGE = ("デスクトップ版(日報複合ツール.exe の窓)が動いています。"
                    "窓の × か「終了」で閉じてください(stop.bat では止めません)。")
 
 
@@ -47,7 +47,7 @@ def describe() -> list[str]:
     lines = []
     kind = instance_guard.running()
     if kind == instance_guard.DESKTOP:
-        lines.append("[稼働] デスクトップ版(統合ツール.exe)")
+        lines.append("[稼働] デスクトップ版(日報複合ツール.exe)")
     lock = start_app.read_lock()
     if kind == instance_guard.BROWSER and lock:
         lines.append(f"[稼働] ブラウザ版の入口 pid={lock.get('pid')} {lock.get('url')}")
@@ -131,7 +131,7 @@ CHECK_READY, CHECK_STOPPED, CHECK_STARTING = 0, 1, 2
 def _desktop_windows() -> Optional[list[int]]:
     from portal import app_config, desktop_window, instance_guard
 
-    # 大きなタブの窓の題名は「統合ツール」「統合ツール — 日報」(画面の題名に合わせて変わる)
+    # 大きなタブの窓の題名は「日報複合ツール」「日報複合ツール — 日報」(画面の題名に合わせて変わる)
     return desktop_window.main_windows(instance_guard.DESKTOP_EXES, app_config.display_name())
 
 
@@ -196,13 +196,13 @@ def launcher_stop(*, force: bool = False) -> int:
         while time.monotonic() < deadline and instance_guard.running() == instance_guard.DESKTOP:
             time.sleep(0.3)
         if instance_guard.running() != instance_guard.DESKTOP:
-            print("統合ツールの窓を閉じました")
+            print("日報複合ツールの窓を閉じました")
             return 0
-        print("統合ツールの窓で、閉じてよいかの確認をしています(窓を見て答えてください)")
+        print("日報複合ツールの窓で、閉じてよいかの確認をしています(窓を見て答えてください)")
         return 1
     code = stop(force=force, hints=False)
     if code == 0:
-        print("統合ツールを終了しました")
+        print("日報複合ツールを終了しました")
     return 0 if code == 0 else 1
 
 

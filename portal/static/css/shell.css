@@ -1,11 +1,11 @@
 /*
-  shell.css — 統合ツールの大きなタブの画面と大設定
+  shell.css — 日報複合ツールの大きなタブの画面と大設定
 
   色・文字の大きさは python-web-tools(梱包資材総合ツール)の tokens.css にそろえる
   (現場は両方を使う。同じ意味の色は同じにする)。
     :root                        … ライト(既定)
     prefers-color-scheme: dark   … OS がダークで、明示の指定が無いとき(画面は data-theme="light"
-                                   を付けているので、既定はライト。統合ツールの4ツールでそろえる)
+                                   を付けているので、既定はライト。日報複合ツールの4ツールでそろえる)
 */
 :root{
   --ground:#f3f6f8; --surface:#ffffff; --sunken:#f1f6f8; --raised:#e9f1f4;

@@ -50,9 +50,9 @@ from .logging_utils import get_logger
 log = get_logger("distribution")
 
 def integrated_where(folder) -> str:
-    """統合ツールの一式の中(`<一式>\\tools\\<ツール>\\配布設定`)なら、置き場所と配り方の一言。違えば空。
+    """日報複合ツールの一式の中(`<一式>\\tools\\<ツール>\\配布設定`)なら、置き場所と配り方の一言。違えば空。
 
-    統合ツールでは、各ツールの配布設定は**そのツールのフォルダの中**にできます(一式の直下ではない)。
+    日報複合ツールでは、各ツールの配布設定は**そのツールのフォルダの中**にできます(一式の直下ではない)。
     単品のころの「起動用のファイルと同じフォルダ」と書くと、一式の直下を探して見つからない。
     """
     from pathlib import Path as _Path
@@ -62,7 +62,7 @@ def integrated_where(folder) -> str:
     root = tool_dir.parent.parent
     if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
         return ""
-    return (f"統合ツールの一式の中の「tools\\{tool_dir.name}\\{folder.name}」に入っています({folder})。"
+    return (f"日報複合ツールの一式の中の「tools\\{tool_dir.name}\\{folder.name}」に入っています({folder})。"
             "配るときは一式の scripts\\make_dist.bat を実行してください"
             "(大設定と各ツールの配布設定がまとめて入ります。大設定の「配布設定」に一覧があります)。")
 

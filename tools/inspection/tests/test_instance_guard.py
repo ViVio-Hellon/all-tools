@@ -3,7 +3,7 @@
 どちらを後から開いても、後から開いたほうが止まる。同じ種類なら今までどおり
 (ブラウザ版はつなぐ・デスクトップ版は窓を前に出す)。錠は OS の名前付きの錠
 (Windows は名前付きミューテックス、ここ(Linux)はファイルロック)。
-デスクトップ版の錠は、統合ツールの窓の「点検表」の Python(`start_app.start_bridge`)が握る。
+デスクトップ版の錠は、日報複合ツールの窓の「点検表」の Python(`start_app.start_bridge`)が握る。
 """
 from __future__ import annotations
 

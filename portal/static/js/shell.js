@@ -6,7 +6,7 @@
     (打ちかけ・開いている画面がそのまま。隠すだけ)
   ・最初のタブが出たら、ほかのタブのツールも順に裏で起こしておく(切り替えを待たせない)
 
-  デスクトップ版(統合ツールの窓)では、さらに:
+  デスクトップ版(日報複合ツールの窓)では、さらに:
   ・各ツールの画面からの頼みごと(別窓・保存・フォルダの選択・立て直し)を外枠(Rust)へ
     取り次ぐ(`postMessage` → `__TAURI_INTERNALS__.invoke`)。**送り元の枠と宛先を確かめる**
   ・各ツールの Python の状態(起動中・停止)をタブの印に出す
@@ -339,7 +339,7 @@ function select(id) {
     showPanel(id);
   }
   const title = id === SETTINGS ? "大設定" : TOOLS.get(id)?.title;
-  document.title = `${S.name || "統合ツール"} — ${title}`;
+  document.title = `${S.name || "日報複合ツール"} — ${title}`;
   try { localStorage.setItem(LAST_KEY, id); } catch (err) { /* 残せなくても困らない */ }
 }
 
@@ -412,7 +412,7 @@ async function followTabs() {
   }
   if (fresh.length) {
     toast(`${fresh.map((id) => TOOLS.get(id).title).join("、")} のタブは、この端末では出さない設定になりました。`
-      + "次に統合ツールを開いたときに消えます。", "ok", 9000);
+      + "次に日報複合ツールを開いたときに消えます。", "ok", 9000);
   }
   settingsView.decisionChanged(body.decision);
 }
@@ -779,12 +779,12 @@ window.__shell = {
   portalLost() {
     report("error", "入口の処理(Python)が止まりました。起こし直します(画面は読み直しません)");
     settingsView.portalState("lost");
-    toast("統合ツールの入口の処理が止まりました。起こし直しています(各タブの画面はそのままです)。", "ng", 9000);
+    toast("日報複合ツールの入口の処理が止まりました。起こし直しています(各タブの画面はそのままです)。", "ng", 9000);
   },
   portalBack() {
     settingsView.portalState("back");
     report("info", "入口の処理(Python)を起こし直しました");
-    toast("統合ツールの入口の処理を起こし直しました。");
+    toast("日報複合ツールの入口の処理を起こし直しました。");
   },
   portalDown(text) {
     settingsView.portalState("down", String(text || ""));

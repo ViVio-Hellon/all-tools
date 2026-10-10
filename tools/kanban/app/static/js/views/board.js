@@ -438,7 +438,7 @@ function saveOpenDraft() {
 }
 
 /**
- * 画面を離れるとき(窓を閉じる・再読込・こちらの都合の読み直し・統合ツールの窓を閉じる)に
+ * 画面を離れるとき(窓を閉じる・再読込・こちらの都合の読み直し・日報複合ツールの窓を閉じる)に
  * 書きかけを置き、残っていれば訊く。
  */
 function wireLeaving() {
@@ -454,7 +454,7 @@ function wireLeaving() {
     ev.preventDefault();
     ev.returnValue = '';
   });
-  // 統合ツールの窓の×・終了(外枠が先に頼んでくる)。すぐ「受けた」を返し、書きかけを
+  // 日報複合ツールの窓の×・終了(外枠が先に頼んでくる)。すぐ「受けた」を返し、書きかけを
   // 置いて、残っていれば閉じてよいかを訊いてから「済んだ」を返す(日報と同じ約束)
   window.__alltoolsHandlesClose = true;
   window.addEventListener('message', (event) => {

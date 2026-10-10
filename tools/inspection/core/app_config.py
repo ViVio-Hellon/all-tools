@@ -240,17 +240,17 @@ def local_root() -> Path:
     return Path.home() / ".local" / "share" / name
 
 
-# デスクトップ版(統合ツールの窓)で、外枠がこのツールへ要求を渡すときのホスト名。
-# 統合ツールの外枠(`../../src-tauri/src/relay.rs` の `TOOL_HOST`)と揃える
+# デスクトップ版(日報複合ツールの窓)で、外枠がこのツールへ要求を渡すときのホスト名。
+# 日報複合ツールの外枠(`../../src-tauri/src/relay.rs` の `TOOL_HOST`)と揃える
 # (画面の宛先は `inspection://localhost/`、Windows は `http://inspection.localhost/`。
 # 外枠が単体のデスクトップ版のときと同じ `app.localhost` に読み替えて渡す)
 BRIDGE_HOSTS = ("app.localhost", "localhost")
 
 
-#: ブラウザ版(予備)で、この画面を**枠の中に出してよい**相手。統合ツールの
+#: ブラウザ版(予備)で、この画面を**枠の中に出してよい**相手。日報複合ツールの
 #: 大きなタブ(入口のページ。この PC の 127.0.0.1 の別の番号)から出すため。
 #: ほかのサイトからは出させない(クリックの乗っ取り対策。`X-Frame-Options` の代わり)。
-#: デスクトップ版(統合ツールの窓)では、外枠がこの見出しを外して渡す
+#: デスクトップ版(日報複合ツールの窓)では、外枠がこの見出しを外して渡す
 FRAME_ANCESTORS = "frame-ancestors 'self' http://127.0.0.1:* http://localhost:*"
 
 

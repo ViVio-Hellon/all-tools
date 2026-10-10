@@ -88,6 +88,14 @@ class DistributionTests(unittest.TestCase):
         self.assertTrue(admin_password.verify("abcd"))
         self.assertIsNone(user_settings.get("知らない鍵"), "知らない鍵は捨てる")
 
+    def test_名前を変える前に書き出した配布設定も読む(self) -> None:
+        """1.3.x までは「統合ツール.json」。配った先の 配布設定\ を作り直さなくても効く。"""
+        DIST.mkdir(parents=True)
+        (DIST / "統合ツール.json").write_text(json.dumps({
+            "format": distribution.FORMAT, "settings": {"shared_db_name": "古い名前.sqlite3"}}),
+            encoding="utf-8")
+        self.assertEqual(distribution.apply_on_start().applied, ["共有の DB のファイル名"])
+
     def test_形の違うものは読まない(self) -> None:
         DIST.mkdir(parents=True)
         distribution.file_path().write_text('{"format": 99, "settings": {"shared_db_dir": "x"}}', encoding="utf-8")
@@ -177,7 +185,7 @@ class MakeDistTests(unittest.TestCase):
         spec.loader.exec_module(make_dist)
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            (folder / "統合ツール.json").write_text(json.dumps({
+            (folder / "日報複合ツール.json").write_text(json.dumps({
                 "format": 1, "settings": {"shared_db_dir": r"\\srv\x", "admin_password": "pbkdf2$1$a$b"}}),
                 encoding="utf-8")
             self.assertEqual(make_dist._portal_settings_lines(folder),

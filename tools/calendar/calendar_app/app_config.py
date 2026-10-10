@@ -201,8 +201,8 @@ def host() -> str:
     return str(load()["server"]["host"])
 
 
-# デスクトップ版(統合ツールの窓)で、外枠がこのツールへ要求を渡すときのホスト名。
-# 統合ツールの外枠(``../../src-tauri/src/relay.rs`` の ``TOOL_HOST``)と揃える
+# デスクトップ版(日報複合ツールの窓)で、外枠がこのツールへ要求を渡すときのホスト名。
+# 日報複合ツールの外枠(``../../src-tauri/src/relay.rs`` の ``TOOL_HOST``)と揃える
 # (画面の宛先は ``calendar://localhost/``、Windows は ``http://calendar.localhost/``。
 # 外枠が単体のデスクトップ版のときと同じ ``app.localhost`` に読み替えて渡す)
 BRIDGE_HOSTS = ("app.localhost", "localhost")

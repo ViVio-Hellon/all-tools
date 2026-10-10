@@ -1,7 +1,7 @@
 """ブラウザ版とデスクトップ版を同時に動かさない(どちらを後から開いても止まる)
 
 ブラウザ版(`Start.vbs` / `start.bat` → `start_app.py`)とデスクトップ版
-(`統合ツール.exe` = Rust/Tauri の外枠、`src-tauri/src/instance.rs`)は、同じ4ツールの
+(`日報複合ツール.exe` = Rust/Tauri の外枠、`src-tauri/src/instance.rs`)は、同じ4ツールの
 同じ手元のデータ・同じ共有の DB を扱う。両方が動くと、二重の書き戻し・設定の
 書き合いが起きる。**後から開いたほうが止まる。**
 
@@ -40,8 +40,9 @@ DESKTOP = "desktop"
 KINDS = (BROWSER, DESKTOP)
 LABELS = {BROWSER: "ブラウザ版", DESKTOP: "デスクトップ版"}
 
-#: デスクトップ版の exe の名前(一式のフォルダの直下に置く。配るときの名前が先)
-DESKTOP_EXES = ("統合ツール.exe", "AllTools.exe")
+#: デスクトップ版の exe の名前(一式のフォルダの直下に置く。配るときの名前が先)。
+#: 「統合ツール.exe」は 1.4.0 で名前を変える前に配ったもの(置いたままの PC でも見つける)
+DESKTOP_EXES = ("日報複合ツール.exe", "AllTools.exe", "統合ツール.exe")
 
 
 def base_name() -> str:

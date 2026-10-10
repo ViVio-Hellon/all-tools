@@ -168,9 +168,9 @@ class CloseAsk:
 
 
 close_ask = CloseAsk()
-ASKING_MESSAGE = ("開いている統合ツールの画面に、打ちかけを置いてから閉じるよう頼みました。"
+ASKING_MESSAGE = ("開いている日報複合ツールの画面に、打ちかけを置いてから閉じるよう頼みました。"
                   "置けたら自分で終わります(画面に確認が出ていれば答えてください)")
-REFUSED_MESSAGE = "統合ツールの画面で「閉じない」が選ばれました(保存していない入力があります)"
+REFUSED_MESSAGE = "日報複合ツールの画面で「閉じない」が選ばれました(保存していない入力があります)"
 
 
 def set_shutdown_hook(hook: Optional[Callable[[], None]]) -> None:
@@ -222,7 +222,7 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             return None
         supplied = request.headers.get("X-Tool-Token") or request.args.get("t", "")
         if not secrets.compare_digest(supplied.encode("utf-8"), app.config["TOKEN"].encode("utf-8")):
-            return _error("bad_token", "この画面は無効になりました。統合ツールを開き直してください", 401)
+            return _error("bad_token", "この画面は無効になりました。日報複合ツールを開き直してください", 401)
         return None
 
     @app.after_request

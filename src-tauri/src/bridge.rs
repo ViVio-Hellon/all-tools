@@ -277,7 +277,7 @@ impl Bridge {
             self.fail(
                 format!("bridge.py が見つかりません: {}", script.display()),
                 format!(
-                    "{} は、統合ツール一式が入ったフォルダ(config/tools.json がある所)の直下に置いてください\
+                    "{} は、日報複合ツール一式が入ったフォルダ(config/tools.json がある所)の直下に置いてください\
                      (ショートカットを作るのは大丈夫です)。",
                     self.spec.exe_label
                 ),
@@ -737,7 +737,7 @@ while True:
         assert_eq!(v["path"], "/api/mode");
         assert_eq!(v["body"], "{\"mode\":\"warehouse\"}");
         assert_eq!(v["token"], "合言葉", "外枠が合言葉を付ける");
-        assert_eq!(v["shell"], "1", "統合ツールの中で動いていることを渡す");
+        assert_eq!(v["shell"], "1", "日報複合ツールの中で動いていることを渡す");
 
         bridge.mark_restarting();
         bridge.finish_restart();

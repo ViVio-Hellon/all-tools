@@ -54,7 +54,7 @@ class ContentTests(unittest.TestCase):
         self.assertIn('fso.BuildPath(here, "start_app.py")', text)
         self.assertIn('cmd = "pythonw " & Chr(34) & script & Chr(34)', text)
         self.assertIn("shell.Run cmd, 0, False", text)
-        self.assertIn("統合ツール.exe", text, "ふだんは exe を使うと書く")
+        self.assertIn("日報複合ツール.exe", text, "ふだんは exe を使うと書く")
 
     def test_ランチャーの入口(self) -> None:
         """業務ツール統合ランチャー 1.7 の入口。繰り返し・隠れて呼ばれるので pause を置かない。"""
