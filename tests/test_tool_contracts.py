@@ -184,3 +184,36 @@ class ToolContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+#: 画面の色の既定を受ける台本と、描く前に当てるひな形(ツールごと)
+THEME_FILES = {
+    "nippou": ("app/static/js/theme.js", "app/templates/base.html"),
+    "kanban": ("app/static/js/theme.js", "app/templates/base.html"),
+    "calendar": ("app/static/js/theme.js", "app/templates/base.html"),
+    "inspection": ("app/static/js/inspection.js", "app/templates/base.html"),
+}
+
+
+class ThemeDefaultTests(unittest.TestCase):
+    """大設定の「画面の色の既定」を、4 ツールが同じ合図で受ける(`portal/static/js/shell.js` の sendTheme)。
+
+    1 つのツールだけ受け忘れると、そのタブだけ色が揃わない。
+    """
+
+    def test_大きなタブの画面は枠を開くたびと変えたときに渡す(self) -> None:
+        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
+        self.assertIn('{ type: "alltools:theme", theme: themeDefault }', shell)
+        self.assertIn("sendTheme(id);", shell, "枠の load のたびに渡す")
+        self.assertIn('window.addEventListener("alltools:theme-default"', shell, "大設定で変えたらその場で渡す")
+
+    def test_4ツールとも受けて覚え_自分で選んでいなければ従う(self) -> None:
+        for tool, (script, template) in THEME_FILES.items():
+            with self.subTest(tool=tool):
+                js = (TOOLS / tool / script).read_text(encoding="utf-8")
+                html = (TOOLS / tool / template).read_text(encoding="utf-8")
+                key = f"{tool}.theme_default"
+                self.assertIn('"alltools:theme"' if '"alltools:theme"' in js else "'alltools:theme'", js)
+                self.assertIn("window.parent", js, "大きなタブの画面からの合図だけ受ける")
+                self.assertIn(key, js, "受けた既定を覚える(次は描く前に当てる)")
+                self.assertIn(key, html, "描く前に当てる")

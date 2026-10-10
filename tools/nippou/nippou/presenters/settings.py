@@ -1052,6 +1052,7 @@ def to_dict() -> dict[str, Any]:
         "tabs": [vars(t) for t in TABS],
         "default_tab": DEFAULT_TAB,
         "tab_badges": tab_badges(paths, files),
+        "tab_problems": tab_problems(paths, files),
     }
 
 
@@ -1074,6 +1075,20 @@ def tab_badges(paths: list[PathView], files: list[FileView],
             counted[item[0]] += 1
     return {key: {"level": "ng", "text": f"{n}件"}
             for key, n in counted.items() if n}
+
+
+def tab_problems(paths: list[PathView], files: list[FileView],
+                 ) -> dict[str, list[str]]:
+    """面ごとの困りごと(文言)。**見出しの「n件」の中身を、その面の上に並べる。**
+
+    参照設定の面は、画面に出していない欄(共有の日報管理のファイル名など)の困りごとも
+    数えます。数だけ出して中身を見せないと「何もないのに 1件」になっていました。
+    """
+    out: dict[str, list[str]] = {}
+    for tab, text in _problem_items(paths, files):
+        if tab:
+            out.setdefault(tab, []).append(text)
+    return out
 
 
 def tab_views(*, admin: bool) -> list[dict[str, Any]]:
@@ -1488,6 +1503,10 @@ def _problem_items(paths: list[PathView], files: list[FileView],
     for view in paths:
         if view.key in OPTIONAL_PATH_KEYS:
             # 無くても動く欄。**赤い印を出さない**(理由は定義のところ)
+            continue
+        if view.off:
+            # 空なら使わない欄を空にしてある(仕掛の2つ目など)。使っていないものは
+            # 困りごとではない ── 数えていたので、何も無いのに参照設定に「1件」と出ていた
             continue
         if not view.exists:
             # 「見つかりません」だけでは**何が**見つからないのかが

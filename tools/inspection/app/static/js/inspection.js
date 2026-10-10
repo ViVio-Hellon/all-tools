@@ -555,9 +555,28 @@ function paintThemeButton() {
   const dark = document.documentElement.dataset.theme === "dark";
   $("btn-theme").textContent = dark ? "ライト" : "ダーク";
 }
+/** この端末で明暗を選んだか。選んでいなければ日報複合ツールの大設定の既定に従う */
+let themeChosen = Boolean(window.APP && window.APP.themeChosen);
+const SHELL_DEFAULT_KEY = "inspection.theme_default";
+
+/** 日報複合ツールの大きなタブの画面から「画面の色の既定」が届く(大設定で変えたとき・枠を開くたび) */
+function listenShellTheme() {
+  if (window.parent === window) return;
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (event.source !== window.parent) return;
+    if (!data || data.type !== "alltools:theme" || (data.theme !== "light" && data.theme !== "dark")) return;
+    try { localStorage.setItem(SHELL_DEFAULT_KEY, data.theme); } catch (err) { /* この画面のあいだは効く */ }
+    if (themeChosen) return;
+    document.documentElement.dataset.theme = data.theme;
+    paintThemeButton();
+  });
+}
+
 async function toggleTheme() {
   const dark = document.documentElement.dataset.theme !== "dark";
   document.documentElement.dataset.theme = dark ? "dark" : "light";
+  themeChosen = true;
   paintThemeButton();
   try { await api.post("/api/settings", { dark_mode: dark }); } catch (err) { toastError(err); }
 }
@@ -570,6 +589,7 @@ export function init() {
   state.activeCat = view.cat || null;
   state.activeSub = view.sub || null;
   paintThemeButton();
+  listenShellTheme();
 
   $("btn-refresh").addEventListener("click", refresh);
   $("btn-theme").addEventListener("click", toggleTheme);

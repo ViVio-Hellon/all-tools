@@ -173,11 +173,19 @@ def _find_table(path: Path) -> Optional[str]:
     return logic.TABLE_NAME                       # Access は名前で取りに行く
 
 
-def read() -> tuple[list[dict[str, str]], str, str]:
-    """(行, どこから読んだか, 読めなかった理由)。"""
+def read(me: Optional[logic.Identity] = None) -> tuple[list[dict[str, str]], str, str]:
+    """(行, どこから読んだか, 読めなかった理由)。
+
+    **このPCの行がある表を先に選ぶ。** 前は最初に見つかった表(伝送用ファイル)だけを
+    読んでいたので、梱包資材マスタの表にこのPCの行を足しても、伝送用ファイルにも
+    「アクセス権限」があると読まれず、mode:fullaccess が効きませんでした。
+    どの表にもこのPCの行が無ければ、これまでどおり最初に読めた表を使います。
+    """
     from ..access_bridge.importer import import_table
 
+    me = me or identity()
     looked: list[str] = []
+    first: Optional[tuple[list[dict[str, str]], str, str]] = None
     for _, label, path_of in CANDIDATES:
         try:
             path = Path(path_of())
@@ -191,8 +199,14 @@ def read() -> tuple[list[dict[str, str]], str, str]:
             continue
         result = import_table(path, table)
         if result.success:
-            return list(result.rows), f"{label} の {table}", ""
+            found = (list(result.rows), f"{label} の {table}", "")
+            if found[0] and logic.decide(found[0], me).found_row:
+                return found
+            first = first or found
+            continue
         log.info("アクセス権限を読めませんでした(%s): %s", label, result.error)
+    if first is not None:
+        return first
     where = "・".join(looked) if looked else "マスタのファイル"
     return [], "", f"{where} に「{logic.TABLE_NAME}」の表がありません(または読めません)"
 
@@ -202,7 +216,7 @@ def load() -> Status:
     global _status
     me = identity()
     try:
-        rows, source, problem = read()
+        rows, source, problem = read(me)
     except Exception as exc:                      # noqa: BLE001 - 読めなくても動く
         log.exception("アクセス権限の読み込みで予期しないエラー")
         rows, source, problem = [], "", f"アクセス権限を読めませんでした: {exc}"

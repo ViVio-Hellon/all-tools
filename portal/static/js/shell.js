@@ -203,6 +203,7 @@ function ensureFrame(id) {
     iframe.src = entry.url;
     iframe.addEventListener("load", () => {
       entry.loaded = true;
+      sendTheme(id);
       // ブラウザ版は台本が入らないので、ここで残す(デスクトップ版はツールの画面が知らせてくる)
       if (!desktop && !entry.reported) {
         entry.reported = true;
@@ -507,6 +508,23 @@ function postToFrame(id, message) {
   const entry = frames.get(id);
   try { entry.iframe.contentWindow.postMessage(message, originOf(id)); } catch (err) { /* 枠が先に消えた */ }
 }
+
+/*
+  画面の色の既定(大設定)。大きなタブの画面に当て、4ツールの枠へ渡す。ツールは**自分で
+  選んでいなければ**それで塗る(選んでいればそちらのまま)。枠の画面が移るたびに渡し直す
+  (枠の `load`)── ツールは受けた既定を覚え、次に開くときは描く前に当てる。
+*/
+let themeDefault = S.themeDefault === "dark" ? "dark" : "light";
+
+function sendTheme(id) {
+  if (originOf(id)) postToFrame(id, { type: "alltools:theme", theme: themeDefault });
+}
+
+window.addEventListener("alltools:theme-default", (event) => {
+  themeDefault = event.detail === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = themeDefault;
+  for (const [id, entry] of frames) if (entry.iframe && entry.loaded) sendTheme(id);
+});
 
 function fileDrag(info) {
   if (!info || typeof info.kind !== "string") return;
@@ -973,7 +991,23 @@ function heartbeat() {
   const beat = () => api.post("/api/alive", { page: PAGE_ID }).catch(() => {});
   beat();
   every(beat, 20000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
+  // 裏に回る瞬間に「隠れます」と言う(`sendBeacon` は凍らされる直前でも届く)。裏のあいだは
+  // 心拍が間引かれたり止まったりするが、入口はそれで終わらない。表に戻ったらすぐ心拍
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { beat(); return; }
+    const hidden = new Blob([JSON.stringify({ page: PAGE_ID, hidden: true })], { type: "application/json" });
+    if (!(navigator.sendBeacon && navigator.sendBeacon("/api/alive", hidden))) {
+      api.post("/api/alive", { page: PAGE_ID, hidden: true }).catch(() => {});
+    }
+  });
+  window.addEventListener("resume", beat);
+  // タブごと凍らされる直前(Chrome・Edge)。裏に回ったときと同じ合図を送る
+  document.addEventListener("freeze", () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/alive", new Blob([JSON.stringify({ page: PAGE_ID, hidden: true })],
+                                                  { type: "application/json" }));
+    }
+  });
   window.addEventListener("pageshow", beat);
   // 閉じた(ランチャーが画面を閉じた・タブを閉じた)。入口が居ない画面に頼んで待たないように
   window.addEventListener("pagehide", (event) => {

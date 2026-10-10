@@ -283,6 +283,35 @@ class SettingsTests(Base):
         self.assertNotIn("abcd", stored)
 
 
+class ThemeDefaultTests(Base):
+    """大設定の「画面の色の既定」。この端末だけ・鍵は要らない。4ツールへは画面が渡す。"""
+
+    shell = PageTests.shell
+
+    def setUp(self) -> None:
+        super().setUp()
+        user_settings.update({user_settings.KEY_THEME_DEFAULT: None})
+        self.addCleanup(user_settings.update, {user_settings.KEY_THEME_DEFAULT: None})
+
+    def test_既定はライト(self) -> None:
+        self.assertEqual(self.shell()["themeDefault"], "light")
+        self.assertEqual(self.get("/api/settings").get_json()["theme_default"], "light")
+
+    def test_ダークにすると画面と大設定に出る_鍵は要らない(self) -> None:
+        res = self.post("/api/settings/theme", {"theme": "dark"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["theme_default"], "dark")
+        self.assertEqual(self.shell()["themeDefault"], "dark")
+        html = self.get("/", token=False).get_data(as_text=True)
+        self.assertIn('data-theme="dark"', html, "大きなタブの画面も描く前から暗い")
+        self.assertIn('data-theme-default="dark"', html, "大設定に選ぶボタンがある")
+
+    def test_知らない値は断る(self) -> None:
+        res = self.post("/api/settings/theme", {"theme": "auto"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self.shell()["themeDefault"], "light")
+
+
 class ShutdownTests(Base):
     def tearDown(self) -> None:
         web.set_shutdown_hook(None)
@@ -466,6 +495,32 @@ class CloseAskTests(Base):
         self.assertTrue(body["ready"])
         self.assertEqual(Path(body["app_root"]), Path(web.PORTAL_DIR).parent)
         self.assertEqual(body["display_name"], "日報複合ツール")
+
+
+class BackgroundPageTests(Base):
+    """裏に回った画面(タブを切り替えた・Edge のスリープ中のタブ)では、心拍が途切れても終わらない。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        web._background.clear()
+        web._left.clear()
+        self.addCleanup(web._background.clear)
+        self.addCleanup(web._left.clear)
+
+    def test_隠れますと言った画面があるあいだは裏にいる_表に戻れば見張りを再開(self) -> None:
+        self.post("/api/alive", {"page": "A"}, token=False)
+        self.assertFalse(web.in_background())
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.assertTrue(web.in_background())
+        self.post("/api/alive", {"page": "A"}, token=False)
+        self.assertFalse(web.in_background())
+
+    def test_閉じたら裏にも居ない_遅れて届いた隠れますで戻さない(self) -> None:
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.post("/api/alive", {"page": "A", "leaving": True}, token=False)
+        self.assertFalse(web.in_background(), "×で閉じたら終わる")
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.assertFalse(web.in_background(), "閉じる間際の「隠れます」で終わらなくならない")
 
 
 class ClientLogTests(Base):

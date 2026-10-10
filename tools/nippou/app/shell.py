@@ -30,6 +30,11 @@ class NavItem:
     badge: str = ""
     badge_kind: str = "todo"        # "todo" | "done" | "alert"
     ready: bool = True              # まだ作っていない画面は False
+    #: mode:fullaccess の PC にだけ出すタブ(4・6・7)
+    full_only: bool = False
+    #: いまは出さない(このPCに mode:fullaccess が無い)。**描くが隠す** ── マスタ管理で
+    #: アクセス権限を直したとき、画面を読み直さずにその場で出し入れするため
+    hidden: bool = False
 
 
 # 左のレール。左から作業する順:
@@ -95,14 +100,14 @@ def nav_items(badges: Optional[dict[str, tuple[str, str]]] = None) -> list[NavIt
     items = []
     every = _all_tabs()
     for no, (key, label, url, note) in enumerate(NAV, 1):
-        if not every and key not in LIMITED_NAV:
-            continue
+        full_only = key not in LIMITED_NAV
         ready = key in READY_SCREENS
         badge, kind = badges.get(key, ("", "todo"))
         if not ready and not badge:
             badge, kind = "準備中", "todo"
         items.append(NavItem(key=key, label=label, url=url, note=note, no=no,
-                             badge=badge, badge_kind=kind, ready=ready))
+                             badge=badge, badge_kind=kind, ready=ready,
+                             full_only=full_only, hidden=full_only and not every))
     return items
 
 
@@ -130,7 +135,7 @@ def home_url() -> str:
     """
     registered = {rule.rule for rule in current_app.url_map.iter_rules()}
     for item in nav_items():
-        if item.ready and item.url in registered:
+        if item.ready and not item.hidden and item.url in registered:
             return item.url
     return FALLBACK_URL
 

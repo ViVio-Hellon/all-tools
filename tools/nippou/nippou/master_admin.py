@@ -552,6 +552,9 @@ class Result:
     #: **同じ画面の「直の境界時刻」の表を描き直すため**(描き直さないと、
     #: 直した直後にその面を開いた人が古い時刻を見る)
     shift_times: Optional[list[list[str]]] = None
+    #: アクセス権限を書いたあとの「左のタブを全部出すか」。**レールをその場で出し入れする**
+    #: (前は画面を移るまで変わらず、効いていないように見えた)
+    all_tabs: Optional[bool] = None
 
 
 def _as_shown(value: Any) -> str:
@@ -1278,9 +1281,13 @@ def _after_access_write(result: Result) -> Result:
         log.exception("アクセス権限を読み直せませんでした")
         return result
     message = f"{result.message} このPCの判定: {status.summary()}。"
+    every = access_rights.all_tabs(status)
+    message += (" 左のタブ: 1〜8 全部。" if every else
+                " 左のタブ: 1・2・3・5・8 だけ(このPCの行に mode:fullaccess・Administrator がありません。"
+                f"このPC = {status.identity.describe()})。")
     if status.findings:
         message += f" 表に読めない行が{len(status.findings)}行あります(上の一覧)。"
-    return Result(True, message)
+    return Result(True, message, all_tabs=every)
 
 
 def table_notes(names: Iterable[str]) -> list[dict[str, str]]:

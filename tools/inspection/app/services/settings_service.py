@@ -157,6 +157,11 @@ class SettingsService:
         # 既定はライト(日報複合ツールの4ツールでそろえる。VBA版の既定はダークだった)
         return False if value is None else bool(value)
 
+    def theme_chosen(self) -> bool:
+        """この端末で明暗を選んだか。選んでいなければ、日報複合ツールの大設定の既定に従う。"""
+        with self._lock:
+            return self._data.get("dark_mode") is not None
+
     def to_dict(self) -> Dict[str, Any]:
         if self.forced_root_folder:
             return {"root_folder": self.forced_root_folder, "root_folder_default": self.default_root_folder,

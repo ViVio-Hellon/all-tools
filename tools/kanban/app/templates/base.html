@@ -23,7 +23,10 @@
 <script>
   (function () {
     var c = 'light';
-    try { c = localStorage.getItem('kanban.theme') || 'light'; } catch (e) { /* 既定のライト */ }
+    // 自分で選んでいなければ、日報複合ツールの大設定の既定(`kanban.theme_default`。js/theme.js)
+    try {
+      c = localStorage.getItem('kanban.theme') || localStorage.getItem('kanban.theme_default') || 'light';
+    } catch (e) { /* 既定のライト */ }
     var dark = c === 'dark' || (c === 'auto' && window.matchMedia
       && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');

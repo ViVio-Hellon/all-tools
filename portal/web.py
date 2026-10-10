@@ -43,6 +43,13 @@ _browser_tools = None
 # 心拍(ブラウザ版の自動終了に使う)
 _last_beat = time.monotonic()
 _beat_lock = threading.Lock()
+#: 裏に回った画面(「隠れます」と言ってきて、まだ表に戻っていない・閉じていない)。
+#: ブラウザは裏のタブのタイマーを間引き、Edge の「スリープ中のタブ」などはタブごと凍らせて
+#: 心拍が止まる ── そのあいだは心拍が途切れても終わらない(カレンダー・点検表と同じ決まり)
+_background: set[str] = set()
+#: 閉じた画面。閉じるときにも見え方が変わって「隠れます」が遅れて届くことがあり、
+#: それで裏に戻すと、閉じたのにいつまでも終わらない
+_left: set[str] = set()
 
 
 class CloseAsk:
@@ -188,6 +195,12 @@ def last_beat() -> float:
         return _last_beat
 
 
+def in_background() -> bool:
+    """裏に回っている画面があるか(あれば心拍が途切れても終わらない)。"""
+    with _beat_lock:
+        return bool(_background)
+
+
 def _error(code: str, message: str, status: int):
     return jsonify({"ok": False, "error": {"code": code, "message": message}}), status
 
@@ -246,13 +259,17 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         edition = "desktop" if app.config["BRIDGE"] else "browser"
         tools = [{**t.to_dict(), "origin": app_config.origin_of(t.scheme) if app.config["BRIDGE"] else ""}
                  for t in catalog.tools]
+        from . import user_settings
+
+        theme = user_settings.theme_default()
         return render_template(
             "shell.html", name=app_config.display_name(), version=app_config.version(),
-            edition=edition, identity=me, shell={
+            edition=edition, identity=me, theme=theme, shell={
                 "token": app.config["TOKEN"], "edition": edition,
                 "version": app_config.version(), "name": app_config.display_name(),
                 "tools": tools, "statusPollMs": app_config.status_poll_ms(),
                 "healthPollMs": app_config.health_poll_ms(),
+                "themeDefault": theme,
             })
 
     # ------------------------------------------------------------------
@@ -277,10 +294,29 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         if page and body.get("leaving"):
             log.info("画面が閉じられました")
             close_ask.gone(page)          # 画面を閉じた(sendBeacon)。もう頼まない
+            with _beat_lock:
+                _background.discard(page)
+                if len(_left) > 200:
+                    _left.clear()
+                _left.add(page[:64])
             return jsonify({"ok": True})
-        close_ask.seen(page)
+        hidden = bool(body.get("hidden")) if isinstance(body, dict) else False
         with _beat_lock:
+            if hidden and page[:64] in _left:
+                return jsonify({"ok": True})   # 閉じた画面から遅れて届いた「隠れます」
+            was = bool(_background)
+            if page:
+                _left.discard(page[:64])
+                if hidden:
+                    _background.add(page)
+                else:
+                    _background.discard(page)
             _last_beat = time.monotonic()
+            now = bool(_background)
+        if now != was:
+            log.info("画面が裏に回りました。心拍が途切れても終了しません" if now
+                     else "画面が表に戻りました。心拍の見張りを再開します")
+        close_ask.seen(page)
         return jsonify({"ok": True})
 
     @app.get("/api/close-ask")
@@ -370,6 +406,24 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         if not admin_password.session.is_open():
             return _error("locked", "管理者パスワードで鍵を開けてください", 403)
         return None
+
+    # ------------------------------------------------------------------
+    # 画面の色の既定(この端末。鍵は要らない ── 見やすさの好みで、ほかの端末には効かない)
+    # ------------------------------------------------------------------
+    @app.post("/api/settings/theme")
+    def change_theme():                           # noqa: ANN202
+        from . import user_settings
+
+        body = request.get_json(silent=True) or {}
+        theme = str(body.get("theme", ""))
+        if theme not in user_settings.THEMES:
+            return _error("bad_value", "ライトかダークを選んでください", 400)
+        user_settings.update({user_settings.KEY_THEME_DEFAULT: theme})
+        log.info("画面の色の既定を変えました: %s", theme)
+        label = "ダーク" if theme == "dark" else "ライト"
+        return jsonify({"ok": True, "theme": theme,
+                        "message": f"画面の色の既定を{label}にしました(各ツールで自分で選んだ色はそのままです)",
+                        **_settings_view(catalog)})
 
     # ------------------------------------------------------------------
     # 共有の DB の置き場所
@@ -634,9 +688,12 @@ def _settings_view(catalog) -> dict:
     for tool in catalog.tools:
         tools.append({**tool.to_dict(), "version": tool.version(), "dir": str(tool.dir),
                       "local": str(tool.local_root()), "logs": str(tool.local_root() / "logs")})
+    from . import user_settings
+
     return {
         "ok": True,
         "identity": me.to_dict(),
+        "theme_default": user_settings.theme_default(),
         "decision": decision.to_dict(catalog),
         "admin": admin_password.session.peek(),
         "password_custom": admin_password.is_custom(),

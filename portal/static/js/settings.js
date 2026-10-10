@@ -76,6 +76,15 @@ export function install(options) {
   for (const button of document.querySelectorAll("[data-copy]")) {
     button.addEventListener("click", () => copy($(button.dataset.copy).textContent));
   }
+  // 画面の色の既定。変えたら大きなタブの画面と4ツールの枠へその場で渡す(`shell.js`)
+  for (const button of document.querySelectorAll("[data-theme-default]")) {
+    button.addEventListener("click", async () => {
+      const theme = button.dataset.themeDefault;
+      if (await write("/api/settings/theme", { theme })) {
+        window.dispatchEvent(new CustomEvent("alltools:theme-default", { detail: theme }));
+      }
+    });
+  }
   $("loc-form").addEventListener("submit", (event) => {
     event.preventDefault();
     write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value },
@@ -245,6 +254,9 @@ async function copy(text) {
 // ------------------------------------------------------------------
 function paint(body, options = {}) {
   view = body;
+  for (const button of document.querySelectorAll("[data-theme-default]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeDefault === (body.theme_default || "light")));
+  }
   const box = $("lockbox");
   box.dataset.open = body.admin ? "1" : "0";
   $("lock-state").textContent = body.admin ? "🔓 鍵が開いています" : "🔒 鍵が掛かっています";

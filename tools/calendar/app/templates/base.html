@@ -14,6 +14,15 @@
 <html lang="ja"{% if theme in ("light", "dark") %} data-theme="{{ theme }}"{% endif %}>
 <head>
 <meta charset="utf-8">
+{% if not theme_chosen %}
+<script>
+  /* 見た目を選んでいなければ、日報複合ツールの大設定の既定(`calendar.theme_default`。描く前に当てる) */
+  try {
+    var shellTheme = localStorage.getItem("calendar.theme_default");
+    if (shellTheme === "light" || shellTheme === "dark") document.documentElement.dataset.theme = shellTheme;
+  } catch (e) { /* 既定のまま */ }
+</script>
+{% endif %}
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ display_name }}{% endblock %}</title>
 {# タブのアイコン。外部ファイルにしないのは要求を1本減らすため #}

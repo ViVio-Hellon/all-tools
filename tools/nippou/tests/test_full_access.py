@@ -90,6 +90,8 @@ class RailTests(WebTestCase):
     def rail(self) -> list[tuple[str, str]]:
         html = self.get("/settings").get_data(as_text=True)
         nav = html[html.index('<nav class="rail"'):html.index("</nav>", html.index('<nav class="rail"'))]
+        # 隠したタブ(`<li … hidden>`)は描いてあるが見えない。見えるものだけ
+        nav = re.sub(r"<li[^>]*\bhidden\b[^>]*>.*?</li>", "", nav, flags=re.S)
         return re.findall(r'<span class="n" aria-hidden="true">(\d+)</span>\s*<span class="rail__text">\s*'
                           r'<b class="label">([^<]+)</b>', nav)
 

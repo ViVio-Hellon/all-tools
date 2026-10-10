@@ -19,6 +19,9 @@ KEY_SHARED_DIR = "shared_db_dir"
 KEY_SHARED_NAME = "shared_db_name"
 KEY_ADMIN_PASSWORD = "admin_password"
 KEY_DISTRIBUTION_APPLIED = "distribution_applied"
+#: 画面の色の既定(ライト / ダーク)。大きなタブの画面と、4ツールの「選んでいないとき」の色
+KEY_THEME_DEFAULT = "theme_default"
+THEMES = ("light", "dark")
 
 
 def path() -> Path:
@@ -38,6 +41,12 @@ def load() -> dict[str, Any]:
 
 def get(key: str, default: Optional[Any] = None) -> Any:
     return load().get(key, default)
+
+
+def theme_default() -> str:
+    """画面の色の既定。決めていない・知らない値ならライト(4ツールの既定と同じ)。"""
+    value = get(KEY_THEME_DEFAULT)
+    return value if value in THEMES else "light"
 
 
 def save(key: str, value: Any) -> None:

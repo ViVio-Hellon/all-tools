@@ -91,6 +91,8 @@ def shell_context(active: str) -> dict[str, Any]:
         # 画面の見た目(ライト / ダーク / 自動)。**HTML を返す時点で決める**
         # ── 画面の JS が読んでから切り替えると、開くたびに一瞬白く光る
         "theme": user_settings.get_theme(),
+        # 選んでいなければ、日報複合ツールの大設定の既定に従う(`static/js/theme.js`)
+        "theme_chosen": user_settings.theme_is_chosen(),
     }
 
 

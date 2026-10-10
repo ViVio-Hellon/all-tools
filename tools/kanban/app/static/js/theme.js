@@ -12,6 +12,8 @@
 // スクリプトが**描く前に**付ける(白く光ってから暗くなるのを防ぐ)。
 
 export const THEME_KEY = 'kanban.theme';
+/** 日報複合ツールの大設定で決めた「画面の色の既定」。**自分で選んでいないときだけ**効く */
+export const SHELL_DEFAULT_KEY = 'kanban.theme_default';
 
 const ORDER = ['light', 'dark', 'auto'];
 const DEFAULT = 'light';
@@ -24,11 +26,26 @@ const TITLE = {
 
 const media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
-/** 覚えている選び方(auto / light / dark)。選んでいない・読めなければライト。 */
+/** 選んでいないときの明るさ。大設定の既定があればそれ、無ければライト。 */
+function fallback() {
+  try {
+    const v = localStorage.getItem(SHELL_DEFAULT_KEY);
+    return v === 'dark' || v === 'light' ? v : DEFAULT;
+  } catch (e) {
+    return DEFAULT;
+  }
+}
+
+/** この画面で自分で選んだか。 */
+function chosen() {
+  try { return ORDER.includes(localStorage.getItem(THEME_KEY)); } catch (e) { return false; }
+}
+
+/** 覚えている選び方(auto / light / dark)。選んでいなければ大設定の既定(無ければライト)。 */
 export function choice() {
   try {
     const v = localStorage.getItem(THEME_KEY);
-    return ORDER.includes(v) ? v : DEFAULT;
+    return ORDER.includes(v) ? v : fallback();
   } catch (e) {
     return DEFAULT;
   }
@@ -76,5 +93,16 @@ export function wireThemeToggle() {
     else if (media.addListener) media.addListener(follow);
   }
   // 別の画面(タブ・窓)で変えたら、こちらも合わせる
-  window.addEventListener('storage', (ev) => { if (ev.key === THEME_KEY) apply(); });
+  window.addEventListener('storage', (ev) => {
+    if (ev.key === THEME_KEY || ev.key === SHELL_DEFAULT_KEY) apply();
+  });
+  // 日報複合ツールの大きなタブの画面から「画面の色の既定」が届く(大設定で変えたとき・
+  // 枠を開くたび)。覚えておき、**自分で選んでいなければ**その色で塗り直す
+  window.addEventListener('message', (ev) => {
+    const data = ev.data;
+    if (ev.source !== window.parent || window.parent === window) return;
+    if (!data || data.type !== 'alltools:theme' || (data.theme !== 'light' && data.theme !== 'dark')) return;
+    try { localStorage.setItem(SHELL_DEFAULT_KEY, data.theme); } catch (e) { /* この画面のあいだは効く */ }
+    if (!chosen()) apply(data.theme);
+  });
 }

@@ -95,6 +95,30 @@ class TabScreenTests(WebTestCase):
                 self.assertIn(f'id="panel-{tab.key}"', html)
                 self.assertIn(tab.label, html)
 
+    def test_見出しのn件の中身をその面に並べる(self) -> None:
+        """画面に出していない欄(共有の日報管理のファイル名など)の困りごとも数えるので、
+        中身を見せないと「何もないのに 1件」になる。"""
+        import re
+        html = self.html()
+        badge = re.search(r'data-key="paths".*?<span class="tab__badge"[^>]*>(\d+)件</span>', html, re.S)
+        self.assertIsNotNone(badge)
+        self.assertIn('id="paths-problems"', html)
+        self.assertIn(f"見出しの「{badge.group(1)}件」は次のとおりです", html, "見出しの数と中身が合う")
+        self.assertIn('title="共有の日報管理のパス', html, "見出しの印にも中身を添える")
+
+    def test_使っていない欄は困りごとに数えない(self) -> None:
+        """仕掛の2つ目は空なら使わない。数えていたので、何も無いのに「1件」と出ていた。"""
+        html = self.html()
+        box = html[html.index('id="paths-problems"'):]
+        box = box[:box.index("</div>")]
+        self.assertNotIn("2つ目", box)
+
+    def test_表の行を直す窓は欄を広くとる(self) -> None:
+        self.assertIn('class="stack-fields stack-fields--wide" id="row-fields"', self.html())
+        css = (Path(__file__).resolve().parent.parent / "app" / "static" / "css" / "components.css"
+               ).read_text(encoding="utf-8")
+        self.assertIn(".stack-fields--wide .stack-field{", css)
+
     def test_既定の面に印が付く(self) -> None:
         self.assertIn('data-default="1"', self.html())
 

@@ -210,6 +210,8 @@ def _write(result: master_admin.Result, body: dict):
     payload: dict[str, Any] = master_presenter.to_dict(view)
     if result.shift_times is not None:
         payload["shift_times"] = result.shift_times
+    if result.all_tabs is not None:
+        payload["all_tabs"] = result.all_tabs
     if result.ok:
         return jsonify(payload)
     payload["error"] = {"code": result.reason, "message": result.message}

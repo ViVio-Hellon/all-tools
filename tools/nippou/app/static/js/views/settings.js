@@ -1305,6 +1305,10 @@ export function start() {
     try {
       const body = await api.post("/api/settings/access-rights", {});
       toast(body.message, body.problem ? "warn" : "ok");
+      // 左のタブ(mode:fullaccess)も**その場で**出し入れする。画面を移るまで待たせない
+      if (typeof body.all_tabs === "boolean") {
+        for (const li of document.querySelectorAll(".rail [data-nav-full]")) li.hidden = !body.all_tabs;
+      }
       // 当てたらラインの欄ごと描き直す(いまのライン・ボタンの色)
       if (body.applied) refreshKeeping();
       else if (box) {

@@ -1,7 +1,7 @@
 {
   "app_id": "nlm.inspection-sheet-print",
   "display_name": "点検表 選択・印刷",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "monitor_level": 2,
 
   "local_dir_name": "InspectionSheetPrint",

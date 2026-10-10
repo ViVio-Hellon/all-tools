@@ -801,6 +801,9 @@ table.list tbody tr:hover{ background:var(--sunken); }
   font-size:var(--fs-sm);
 }
 .stack-field__label{ min-width:0; overflow-wrap:anywhere; }
+/* マスタ管理の「行を直す / 1行足す」。打つのは名前・PC名・権限のような**文字**で、
+   90px の欄では入れた字が見切れて読めなかった。欄を残りの幅いっぱいにする */
+.stack-fields--wide .stack-field{ grid-template-columns:minmax(6em, 14em) minmax(0, 1fr) 3em; }
 /* VCの表裏。「使う」と面の名前と品名を**1行に並べる** ── 縦にばらすと、
    どの品名がどちらの面のものか読めなくなる。ここだけ列の幅がそろわない
    ので、格子ではなく素直に横並びにする */

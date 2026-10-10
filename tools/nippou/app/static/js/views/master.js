@@ -392,6 +392,22 @@ function rowBody(extra = {}) {
   };
 }
 
+/* ---- 左のタブを出し入れする ----
+   アクセス権限を書くと、サーバが読み直して「全部出すか」を返します
+   (`master_admin._after_access_write`)。前は画面を移るまでレールが変わらず、
+   mode:fullaccess を足しても効いていないように見えました。 */
+function paintRail(allTabs) {
+  if (typeof allTabs !== "boolean") return;
+  for (const li of document.querySelectorAll(".rail [data-nav-full]")) li.hidden = !allTabs;
+  const note = byId("access-tabs");
+  if (note) {
+    note.replaceChildren("左のタブ: ");
+    const b = document.createElement("b");
+    b.textContent = allTabs ? "1〜8 全部" : "1・2・3・5・8 だけ";
+    note.append(b, allTabs ? "" : "(このPCの行に mode:fullaccess がありません)");
+  }
+}
+
 /* ---- 直の境界時刻の表を描き直す ----
    時間用を直すと、サーバがその場で手元の直の時刻を写し直し、写した
    ものを返します(`master_admin.after_write`)。同じ画面の「直の境界時刻」
@@ -462,6 +478,7 @@ async function writeRow(url, extra) {
     loadSeq += 1;                      // 書く前に頼んだ一覧で、書いたあとの一覧を塗らない
     paint(body);
     paintShiftTimes(body.shift_times);
+    paintRail(body.all_tabs);
     closeModal("row-modal");
     toast(state?.message || "書き込みました", "ok");
   } catch (err) {

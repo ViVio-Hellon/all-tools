@@ -250,13 +250,18 @@ class DropTests(unittest.TestCase):
 
 
 class ThemeDefaultTests(unittest.TestCase):
-    """選んでいなければ、どのツールもライト(以前はツールごとに 自動 / ダーク とバラバラだった)。"""
+    """選んでいなければ、どのツールもライト(以前はツールごとに 自動 / ダーク とバラバラだった)。
+
+    1.5.0 から、大設定の「画面の色の既定」があればそちらに従う(既定はライトのまま)。
+    """
 
     def text(self, *parts: str) -> str:
         return ROOT.joinpath(*parts).read_text(encoding="utf-8")
 
     def test_入口と説明書はライト(self) -> None:
-        self.assertIn('data-theme="light"', self.text("portal", "templates", "shell.html").split("<head>")[0])
+        self.assertIn('data-theme="{{ theme or \'light\' }}"',
+                      self.text("portal", "templates", "shell.html").split("<head>")[0])
+        self.assertIn('return value if value in THEMES else "light"', self.text("portal", "user_settings.py"))
         for page in (ROOT / "portal" / "static" / "manual").glob("*.html"):
             with self.subTest(page=page.name):
                 self.assertIn('<html lang="ja" data-theme="light">', page.read_text(encoding="utf-8"))
@@ -264,11 +269,13 @@ class ThemeDefaultTests(unittest.TestCase):
     def test_日報はライト(self) -> None:
         base = self.text("tools", "nippou", "app", "templates", "base.html")
         self.assertIn('<html lang="ja" data-skin="neon" data-theme="light">', base)
-        self.assertIn('return saved() || DEFAULT;', self.text("tools", "nippou", "app", "static", "js", "theme.js"))
+        js = self.text("tools", "nippou", "app", "static", "js", "theme.js")
+        self.assertIn('return saved() || fallback();', js)
+        self.assertIn('return THEMES.includes(value) ? value : DEFAULT;', js, "大設定の既定が無ければライト")
         self.assertIn("const DEFAULT = 'light'", self.text("tools", "nippou", "app", "static", "vc", "coil", "coil-theme.js"))
 
     def test_看板はライト(self) -> None:
-        self.assertIn("localStorage.getItem('kanban.theme') || 'light'",
+        self.assertIn("localStorage.getItem('kanban.theme') || localStorage.getItem('kanban.theme_default') || 'light'",
                       self.text("tools", "kanban", "app", "templates", "base.html"))
         self.assertIn("const DEFAULT = 'light';", self.text("tools", "kanban", "app", "static", "js", "theme.js"))
 

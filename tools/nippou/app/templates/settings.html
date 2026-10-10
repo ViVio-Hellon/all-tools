@@ -70,8 +70,10 @@
             id="tab-{{ t.key }}" aria-controls="panel-{{ t.key }}"
             aria-selected="false" title="{{ t.note }}">
       <span class="tab__label">{{ t.label }}</span>
+      {% set why = (state.tab_problems or {}).get(t.key, []) %}
       <span class="tab__badge"
             {% if badge and badge.level %}data-level="{{ badge.level }}"{% endif %}
+            {% if why %}title="{{ why | join(' / ') }}"{% endif %}
             {% if not badge %}hidden{% endif %}>{{ badge.text if badge else "" }}</span>
     </button>
     {% endfor %}
@@ -1348,6 +1350,16 @@ LVC,119
         <code>.accdb</code> しか置いていないフォルダでは自動でそちらを拾います。
       </p>
 
+      {# 見出しの「n件」の中身(`presenters/settings.tab_problems`)。下の欄に出ていない
+         もの(共有の日報管理のファイル名など)も、ここには必ず出す #}
+      {% set here = (state.tab_problems or {}).get("paths", []) %}
+      {% if here %}
+      <div class="msg msg--warn msg--prose" id="paths-problems" style="margin-top:var(--sp-3)">
+        <b>見出しの「{{ here | length }}件」は次のとおりです</b>
+        <ul class="check__list">{% for p in here %}<li>{{ p }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+
       {% for group in path_groups %}
       <h3 style="margin-top:var(--sp-5)">{{ group.label }}</h3>
       {{ parts.path_group(group.rows, files, admin,
@@ -1884,7 +1896,7 @@ LVC,119
     </div>
     <div class="modal__body">
       <p class="lead" id="row-why"></p>
-      <div class="stack-fields" id="row-fields"></div>
+      <div class="stack-fields stack-fields--wide" id="row-fields"></div>
       <div class="msg msg--error" id="row-error" hidden
            style="margin-top:var(--sp-2)"></div>
     </div>

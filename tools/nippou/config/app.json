@@ -1,7 +1,7 @@
 {
   "app_id": "nlm.nippou-tool",
   "display_name": "日報管理ツール",
-  "version": "4.26.2",
+  "version": "4.27.0",
   "monitor_level": 1,
 
   "local_dir_name": "NippouTool",

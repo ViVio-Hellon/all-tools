@@ -2,6 +2,15 @@
 <html lang="ja" data-theme="{{ 'dark' if dark else 'light' }}">
 <head>
 <meta charset="utf-8">
+{% if not theme_chosen %}
+<script>
+  /* 明暗を選んでいなければ、日報複合ツールの大設定の既定(`inspection.theme_default`。描く前に当てる) */
+  try {
+    var shellTheme = localStorage.getItem("inspection.theme_default");
+    if (shellTheme === "light" || shellTheme === "dark") document.documentElement.dataset.theme = shellTheme;
+  } catch (e) { /* 既定のまま */ }
+</script>
+{% endif %}
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {# タブの名前にも版を出す。タスクバーやタブの一覧からでも「どれが動いているか」が読める #}
 <title>{% block title %}{{ display_name }} {{ version_label }}{% endblock %}</title>
@@ -83,7 +92,8 @@
     healthPollMs: {{ health_poll_ms }},
     alivePollMs: {{ alive_poll_ms }},
     jobPollMs: {{ job_poll_ms }},
-    version: {{ version | tojson }}
+    version: {{ version | tojson }},
+    themeChosen: {{ (theme_chosen | default(true)) | tojson }}
   };
 </script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>

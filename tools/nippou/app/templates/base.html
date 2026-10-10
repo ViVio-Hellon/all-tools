@@ -19,7 +19,8 @@
   } catch (e) { /* 既定のまま */ }
   /* 背景(ライト / ダーク)。選んでいれば描く前に当てる。選んでいなければライトのまま(`static/js/theme.js`) */
   try {
-    var theme = localStorage.getItem("nippou.theme");
+    // 自分で選んでいなければ、日報複合ツールの大設定の既定(`nippou.theme_default`)
+    var theme = localStorage.getItem("nippou.theme") || localStorage.getItem("nippou.theme_default");
     if (theme === "light" || theme === "dark") {
       document.documentElement.dataset.theme = theme;
     }
@@ -165,7 +166,7 @@
   <nav class="rail" aria-label="作業の順序">
     <ol>
       {% for item in nav %}
-      <li>
+      <li{% if item.full_only %} data-nav-full{% endif %}{% if item.hidden %} hidden{% endif %}>
         {# 2行。名前だけでは「全停」が何をする画面か押すまで分からない。
            説明はサーバが持つ(`shell.NavItem.note`) #}
         <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>

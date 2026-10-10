@@ -119,6 +119,13 @@ class SettingTests(unittest.TestCase):
         user_settings.set_theme("auto")
         self.assertEqual(user_settings.get_theme(), "auto")
 
+    def test_選んでいなければ大設定の既定に従う印(self) -> None:
+        """選んでいない(未設定)ときだけ、日報複合ツールの大設定の既定で塗る(`theme.js`)。"""
+        user_settings.set_value(user_settings.KEY_THEME, "")
+        self.assertFalse(user_settings.theme_is_chosen())
+        user_settings.set_theme("dark")
+        self.assertTrue(user_settings.theme_is_chosen())
+
     def test_一覧に無い値は覚えない(self) -> None:
         with self.assertRaises(ValueError):
             user_settings.set_theme("pink")

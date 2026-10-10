@@ -269,7 +269,9 @@ def start(*, open_browser: bool = True) -> int:
         while thread.is_alive() and not stopped.is_set():
             time.sleep(1)
             slept = watch.slept
-            idle = watch.tick(time.monotonic(), web.last_beat())
+            now = time.monotonic()
+            # 裏に回った画面があるあいだは、心拍が途切れても生きているものとして数える
+            idle = watch.tick(now, now if web.in_background() else web.last_beat())
             if watch.slept != slept:
                 log.info("見張りが止まっていました(スリープ・休止から戻った)。心拍は数え直します")
             if idle is not None:

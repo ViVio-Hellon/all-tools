@@ -4,8 +4,9 @@
   色・文字の大きさは python-web-tools(梱包資材総合ツール)の tokens.css にそろえる
   (現場は両方を使う。同じ意味の色は同じにする)。
     :root                        … ライト(既定)
-    prefers-color-scheme: dark   … OS がダークで、明示の指定が無いとき(画面は data-theme="light"
-                                   を付けているので、既定はライト。日報複合ツールの4ツールでそろえる)
+    prefers-color-scheme: dark   … OS がダークで、明示の指定が無いとき(画面は data-theme を
+                                   必ず付けるので、効くことはまず無い)
+    [data-theme="dark"]          … 大設定で画面の色の既定を「ダーク」にしたとき。4ツールにも渡す
 */
 :root{
   --ground:#f3f6f8; --surface:#ffffff; --sunken:#f1f6f8; --raised:#e9f1f4;
@@ -44,6 +45,21 @@
     color-scheme:dark;
   }
 }
+/* 大設定で「ダーク」を既定にしたとき(`user_settings.theme_default`)。値は上と同じ */
+:root[data-theme="dark"]{
+  --ground:#101820; --surface:#182129; --sunken:#141c23; --raised:#1f2a33;
+  --ink:#e2eaef; --muted:#95a7b2; --faint:#7f919c;
+  --rule:#28343d; --hairline:#222d35; --field-line:#6a7b86;
+  --accent:#5cc2d4; --accent-soft:#152b33; --accent-line:#2d4d58; --focus:#5cc2d4;
+  --bar-a:#0e2130; --bar-b:#154a5e;
+  --state-ok:#8fd3a6; --state-warn:#f0b07a; --state-error:#e49093; --state-info:#9cc1f0;
+  --warn-bg:#331e21; --warn-fg:#f2b8ba; --ok-bg:#16291f; --info-bg:#172235;
+  --tool-nippou:#6f9ee6; --tool-kanban:#e39b4d; --tool-calendar:#71bb87;
+  --tool-inspection:#df8a6d; --tool-settings:#95a7b2;
+  --shadow-sm:0 5px 18px rgb(0 0 0 / 30%); --shadow-md:0 10px 30px rgb(0 0 0 / 45%);
+  color-scheme:dark;
+}
+
 
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -175,6 +191,9 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .btn--primary:hover{filter:brightness(1.08);background:var(--accent)}
 .btn--danger{color:var(--act-danger)}
 .btn--small{height:30px;padding:0 10px;font-size:var(--fs-sm)}
+/* 2つから1つ選ぶ(画面の色の既定)。選んでいるほうを押された見た目にする */
+.btnrow{display:flex;gap:8px;flex-wrap:wrap}
+.btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
 .btn:disabled,.btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .msg{padding:10px 14px;border-radius:var(--radius-sm);margin:8px 0;font-size:var(--fs-md)}
 .msg--warn{background:var(--warn-bg);color:var(--warn-fg);border-left:4px solid var(--state-error)}

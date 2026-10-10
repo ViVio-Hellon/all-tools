@@ -375,6 +375,36 @@ class AccessRightsWebTests(WebTestCase):
         self.assertEqual(status.decision.line, "LVC")
         self.assertIn("伝送用ファイル", status.source)
 
+    def test_このPCの行がある表を先に読む(self) -> None:
+        """伝送用ファイルにも「アクセス権限」があるが、このPCの行は梱包資材マスタにだけある。
+
+        前は最初に見つかった伝送用ファイルの表だけを読み、梱包資材マスタに足した
+        mode:fullaccess が効かなかった。
+        """
+        self.master([{"管理番号": 1, "ログインID": FLOOR, "PC名": "FAC-PC-999999", "権限": "HVC",
+                      "有効": 1, "備考": ""}], file="transmission")
+        self.master(table({"管理番号": 90, "ログインID": FLOOR, "PC名": PCS["L-1"],
+                           "権限": "mode:fullaccess", "有効": 1, "備考": ""}))
+        status = self.svc.load()
+        self.assertIn("梱包資材マスタ", status.source)
+        self.assertTrue(status.decision.full_access)
+
+    def test_マスタ管理でmode_fullaccessを足すと左のタブにすぐ効く(self) -> None:
+        self.master(table())
+        self.svc.load()
+        page = self.get("/settings").get_data(as_text=True)
+        self.assertIn("<li data-nav-full hidden>", page, "出さないタブは描いて隠す")
+        self.post("/api/master/unlock", {"enable": True, "password": "nisk"})
+        res = self.post("/api/master/row/add", {"file": "material", "table": "アクセス権限", "values": {
+            "管理番号": 90, "ログインID": FLOOR, "PC名": PCS["L-1"], "権限": "mode:fullaccess",
+            "有効": 1}})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertIs(body["all_tabs"], True, "画面がその場でレールを出し入れする")
+        self.assertIn("左のタブ: 1〜8 全部", body["message"])
+        page = self.get("/settings").get_data(as_text=True)
+        self.assertNotIn("<li data-nav-full hidden>", page)
+
     def test_パスワードで変えたラインは表が変わるまで残る(self) -> None:
         from nippou import work_context
 

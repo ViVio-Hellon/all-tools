@@ -208,6 +208,11 @@ def get_theme() -> str:
     return value if value in THEME_LABELS else THEME_LIGHT
 
 
+def theme_is_chosen() -> bool:
+    """この端末で見た目を選んだか。選んでいなければ、日報複合ツールの大設定の既定に従う。"""
+    return get(KEY_THEME, None) in THEME_LABELS
+
+
 def set_theme(theme: str) -> None:
     """画面の見た目を保存する。**一覧に無い値は受けない**(``ValueError``)。"""
     if theme not in THEME_LABELS:

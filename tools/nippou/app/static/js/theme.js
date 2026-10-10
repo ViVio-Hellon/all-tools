@@ -26,6 +26,8 @@
 */
 
 const KEY = "nippou.theme";
+/** 日報複合ツールの大設定で決めた「画面の色の既定」。**自分で選んでいないときだけ**効く */
+const SHELL_DEFAULT_KEY = "nippou.theme_default";
 /** コイル・平板の道具が覚えている場所(`vc/coil/coil-theme.js` の KEY) */
 const COIL_KEY = "vc-calculator.coil.theme";
 const THEMES = ["light", "dark"];
@@ -43,9 +45,19 @@ export function saved() {
 /** 選んでいないときの見た目 */
 const DEFAULT = "light";
 
+/** 選んでいないときの色。大設定の既定があればそれ、無ければライト。 */
+function fallback() {
+  try {
+    const value = localStorage.getItem(SHELL_DEFAULT_KEY);
+    return THEMES.includes(value) ? value : DEFAULT;
+  } catch (err) {
+    return DEFAULT;
+  }
+}
+
 /** いま効いているほう。 */
 export function current() {
-  return saved() || DEFAULT;
+  return saved() || fallback();
 }
 
 /** 帯のボタンの押された見た目を、いま効いているほうに合わせる。 */
@@ -85,10 +97,31 @@ export function apply(theme) {
 }
 
 /**
+ * 日報複合ツールの大きなタブの画面から「画面の色の既定」が届く(大設定で変えたとき・
+ * 枠を開くたび)。覚えておき、**自分で選んでいなければ**その色で塗る(選んだ色は覚えない
+ * ── 覚えると、次に大設定で変えても付いてこなくなる)。
+ */
+let listening = false;
+function listenShell() {
+  if (listening || window.parent === window) return;
+  listening = true;
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (event.source !== window.parent) return;
+    if (!data || data.type !== "alltools:theme" || !THEMES.includes(data.theme)) return;
+    try { localStorage.setItem(SHELL_DEFAULT_KEY, data.theme); } catch (err) { /* この画面のあいだは効く */ }
+    if (saved()) return;
+    document.documentElement.dataset.theme = data.theme;
+    paintButtons();
+  });
+}
+
+/**
  * 帯の切り替えを繋ぐ。**帯は画面を移るたびに作り直される**ので、そのたびに
  * 呼ばれます(同じボタンに二重に付けないよう、付けたボタンに印を残す)。
  */
 export function wire(box) {
+  listenShell();
   if (!box) return;
   for (const btn of box.querySelectorAll("[data-theme-choice]")) {
     if (btn.dataset.wired === "1") continue;
