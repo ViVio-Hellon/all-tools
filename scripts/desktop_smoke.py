@@ -129,9 +129,25 @@ def command_line(pid: int) -> str:
 
 
 def alive(pid: int) -> bool:
+    """その pid のプロセスが居るか。**分からないときは「居る」と答える。**
+
+    以前は tasklist の出力に pid の字が含まれるかだけを見ていたので、tasklist が一瞬失敗して
+    何も返さないと「居ない」になり、子が終わるのを待つ(40 秒まで)見張りがその場で打ち切られて
+    いた ── 直後に数え直すとまだ終わり際の子が居て、「残ったプロセスがあります」と落ちた。
+    はっきり「該当なし」と言われたときだけ「居ない」にし、読めないときは待ち続ける。
+    """
     if WINDOWS:
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-        return str(pid) in out
+        done = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                              capture_output=True, text=True)
+        if done.returncode != 0:
+            return True                           # 読めなかった。打ち切らない
+        for line in done.stdout.splitlines():
+            cells = [c.strip().strip('"') for c in line.split('","')]
+            if len(cells) > 1 and cells[1] == str(pid):
+                return True                       # 2 列目が PID(ちょうど一致)
+        # 該当が無いときは「INFO: …」(日本語の Windows は「情報: …」)が出る。何も出なければ分からない
+        return not ("INFO:" in done.stdout or "情報:" in done.stdout or "INFO:" in done.stderr
+                    or "情報:" in done.stderr)
     return os.path.exists(f"/proc/{pid}")
 
 
