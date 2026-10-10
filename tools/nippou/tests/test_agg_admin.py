@@ -174,6 +174,20 @@ class AggScreenTests(WebTestCase):
         self.assertIn("納入先A", body)
         self.assertIn('data-table="lots"', body)
 
+    def test_日報CSVの流れの図を開けて_その図が配られている(self) -> None:
+        """図はツールの中の静的なページ(外へ取りに行かない・ダウンロードではなく開くだけ)。"""
+        import re
+        body = self.get("/agg").get_data(as_text=True)
+        link = re.search(r'<a class="btn" id="csv-flow" href="([^"]+)"\s+target="_blank"', body)
+        self.assertIsNotNone(link, "集計管理に「日報CSVの流れ(図)」がある")
+        self.assertIn("日報CSVの流れ(図)", body)
+        page = self.get(link.group(1))
+        self.assertEqual(page.status_code, 200)
+        html = page.get_data(as_text=True)
+        self.assertIn("<title>日報CSVの流れ</title>", html)
+        self.assertIn("<svg", html)
+        self.assertNotRegex(html, r"https?://", "外のサイトに取りに行かない(現場のPCは外に出られないことがある)")
+
     def test_レールに出ている(self) -> None:
         body = self.get("/agg").get_data(as_text=True)
         self.assertIn("集計管理", body)

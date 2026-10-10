@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日報CSVの流れ</title>
+<script>
+  /* 日報の画面と同じ明暗にする(自分で選んだ色 → 日報複合ツールの大設定の既定)。読めなければ OS に合わせる */
+  try {
+    var t = localStorage.getItem("nippou.theme") || localStorage.getItem("nippou.theme_default");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) { /* OS に合わせる */ }
+</script>
+
+<style>
+:root{
+  --bg:#f4f6f3; --fg:#1d2420; --mute:#5c6660; --line:#d5dbd4; --card:#ffffff;
+  --in:#2f7d5f; --in-soft:#e2f1ea;
+  --mid:#3c6aa8; --mid-soft:#e4ecf7;
+  --out:#9a5a12; --out-soft:#f8ecdc;
+  --stopA:#3c6aa8; --stopB:#b5482f; --stopC:#7a5aa6;
+  --code:#ecefe9; --arrow:#7c8780;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --fg:#e3e8e4; --mute:#9aa59e; --line:#2f3833; --card:#1b211e;
+  --in:#73c7a2; --in-soft:#1c3128; --mid:#8fb3e8; --mid-soft:#1c2738;
+  --out:#e7b06b; --out-soft:#36281a; --stopA:#8fb3e8; --stopB:#ec947d; --stopC:#bba2e2;
+  --code:#252c28; --arrow:#7f8b84; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --fg:#e3e8e4; --mute:#9aa59e; --line:#2f3833; --card:#1b211e;
+  --in:#73c7a2; --in-soft:#1c3128; --mid:#8fb3e8; --mid-soft:#1c2738;
+  --out:#e7b06b; --out-soft:#36281a; --stopA:#8fb3e8; --stopB:#ec947d; --stopC:#bba2e2;
+  --code:#252c28; --arrow:#7f8b84; color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"BIZ UDPGothic","Yu Gothic UI","Meiryo",system-ui,sans-serif;line-height:1.75}
+.wrap{max-width:64rem;margin:0 auto;padding-inline:16px;padding-block:28px 56px;display:grid;gap:34px}
+h1{font-size:1.55rem;margin:0;text-wrap:balance}
+h2{font-size:1.12rem;margin:0 0 8px;text-wrap:balance;display:flex;gap:10px;align-items:baseline}
+h2 .n{font-variant-numeric:tabular-nums;color:var(--mute);font-size:.9rem}
+p{margin:0 0 10px;max-width:68ch}
+.lead{color:var(--mute)}
+code{font-family:ui-monospace,Consolas,monospace;background:var(--code);padding:0 .3em;border-radius:3px;font-size:.88em}
+.fig{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.fig svg{display:block;min-width:760px;width:100%;height:auto}
+svg text{fill:var(--fg);font-family:inherit}
+svg .mute{fill:var(--mute)}
+svg .box{fill:var(--card);stroke:var(--line);stroke-width:1.2}
+svg .in{fill:var(--in-soft);stroke:var(--in);stroke-width:1.4}
+svg .mid{fill:var(--mid-soft);stroke:var(--mid);stroke-width:1.4}
+svg .out{fill:var(--out-soft);stroke:var(--out);stroke-width:1.4}
+svg .t-in{fill:var(--in);font-weight:700}
+svg .t-mid{fill:var(--mid);font-weight:700}
+svg .t-out{fill:var(--out);font-weight:700}
+svg .arrow{stroke:var(--arrow);stroke-width:1.6;fill:none;marker-end:url(#ah)}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .cell{fill:var(--card);stroke:var(--line)}
+svg .sA{fill:var(--stopA)} svg .sB{fill:var(--stopB)} svg .sC{fill:var(--stopC)}
+svg .lA{stroke:var(--stopA)} svg .lB{stroke:var(--stopB)} svg .lC{stroke:var(--stopC)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:40rem;font-size:.9rem}
+th,td{text-align:left;vertical-align:top;padding:8px 12px;border-bottom:1px solid var(--line)}
+th{font-size:.78rem;color:var(--mute);font-weight:600;letter-spacing:.03em}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.card h3{margin:0 0 6px;font-size:.98rem}
+.card ul{margin:0;padding-left:1.1em} .card li{margin:2px 0}
+.tag{font-size:.72rem;font-weight:700;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.t1{background:var(--in-soft);color:var(--in)} .t2{background:var(--mid-soft);color:var(--mid)} .t3{background:var(--out-soft);color:var(--out)}
+.meta{font-size:.82rem;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>日報のCSV ── 打った行がどう展開されるか</h1>
+  <p class="lead">日報管理ツールが書き出す集計CSVの作り方です。打つ場所は1つ(日報入力)だけで、保存のたびに「集計」の表へ並べ直し、その表からCSVを3本作ります。VBA の「印刷フォーマット → 集計フォーマット(Agg_OutPut / Aggre_Calcul)」と同じ二段構えです。</p>
+</header>
+
+<section>
+  <h2><span class="n">1</span>全体の流れ</h2>
+  <div class="fig">
+  <svg viewBox="0 0 980 470" role="img" aria-label="日報入力から集計の表、CSV 3本への流れ">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--arrow)"/></marker></defs>
+    <!-- column headings -->
+    <text x="20" y="24" class="t-in" font-size="14">① 打つところ(ここだけが正)</text>
+    <text x="355" y="24" class="t-mid" font-size="14">② 集計(保存のたびに作り直す)</text>
+    <text x="700" y="24" class="t-out" font-size="14">③ CSV(1日・1ラインに3本)</text>
+
+    <!-- input -->
+    <rect x="20" y="40" width="290" height="230" rx="8" class="in"/>
+    <text x="36" y="66" font-size="14" font-weight="700">日報入力(梱包実績日報表)</text>
+    <text x="36" y="88" font-size="12" class="mute">1直 = ページ1, 2, … × 1ページ12行</text>
+    <rect x="36" y="100" width="258" height="54" rx="4" class="box"/>
+    <text x="46" y="120" font-size="12">daily_header … 直に1つ</text>
+    <text x="46" y="140" font-size="11" class="mute">作業者・昼稼働・作業コメント</text>
+    <rect x="36" y="162" width="258" height="94" rx="4" class="box"/>
+    <text x="46" y="182" font-size="12">daily_detail … 1行ずつ(文字のまま)</text>
+    <text x="46" y="202" font-size="11" class="mute">LOT・材調質・寸法・検入枚数・時分</text>
+    <text x="46" y="220" font-size="11" class="mute">枚数・包数・実績・作業時間・単重</text>
+    <text x="46" y="238" font-size="11" class="mute">作業停止①〜⑤(記号+分)・紙の外の6欄</text>
+
+    <!-- arrow to summary -->
+    <path d="M312,155 L350,155" class="arrow"/>
+    <text x="318" y="145" font-size="10.5" class="mute">保存</text>
+
+    <!-- summary tables -->
+    <rect x="355" y="40" width="300" height="70" rx="8" class="mid"/>
+    <text x="370" y="64" font-size="13" font-weight="700">packing_report</text>
+    <text x="370" y="84" font-size="11.5">1作業日 × 1ライン × 1直 = 1行</text>
+    <text x="370" y="101" font-size="11" class="mute">直に1つしかないもの</text>
+
+    <rect x="355" y="122" width="300" height="78" rx="8" class="mid"/>
+    <text x="370" y="146" font-size="13" font-weight="700">packing_report_detail</text>
+    <text x="370" y="166" font-size="11.5">打った行1行 = 1行(空の行は落とす)</text>
+    <text x="370" y="184" font-size="11" class="mute">文字 → 値(数は数、時分は整数)</text>
+
+    <rect x="355" y="212" width="300" height="78" rx="8" class="mid"/>
+    <text x="370" y="236" font-size="13" font-weight="700">packing_stop_detail</text>
+    <text x="370" y="256" font-size="11.5">停止1つ = 1行(横持ち → 縦持ち)</text>
+    <text x="370" y="274" font-size="11" class="mute">記号の文字種で3分類・内訳名も固定で残す</text>
+
+    <!-- arrows to CSV -->
+    <path d="M657,75 C680,75 680,75 696,75" class="arrow"/>
+    <path d="M657,161 C680,161 680,170 696,170" class="arrow"/>
+    <path d="M657,251 C680,251 680,262 696,262" class="arrow"/>
+    <path d="M657,90 C676,120 676,150 696,166" class="arrow" opacity=".45"/>
+
+    <!-- CSVs -->
+    <rect x="700" y="40" width="262" height="72" rx="8" class="out"/>
+    <text x="714" y="63" font-size="13" font-weight="700">集計_日付_ライン.csv</text>
+    <text x="714" y="83" font-size="11.5">直ごとの合計(14列)</text>
+    <text x="714" y="101" font-size="11" class="mute">枚数・重量・停止3分類・稼働率…</text>
+
+    <rect x="700" y="128" width="262" height="78" rx="8" class="out"/>
+    <text x="714" y="151" font-size="13" font-weight="700">集計明細_日付_ライン.csv</text>
+    <text x="714" y="171" font-size="11.5">打った行を全部(約40列+)</text>
+    <text x="714" y="189" font-size="11" class="mute">停止は紙の①②③…の横並びに戻す</text>
+
+    <rect x="700" y="222" width="262" height="78" rx="8" class="out"/>
+    <text x="714" y="245" font-size="13" font-weight="700">停止内訳_日付_ライン.csv</text>
+    <text x="714" y="265" font-size="11.5">直 → 分類 → 記号ごとのまとめ</text>
+    <text x="714" y="283" font-size="11" class="mute">そのすぐ下に「1件ずつ」の行</text>
+
+    <!-- folder -->
+    <rect x="20" y="320" width="942" height="132" rx="8" class="box"/>
+    <text x="36" y="346" font-size="13" font-weight="700">置き場所</text>
+    <text x="36" y="372" font-size="12.5" font-family="ui-monospace,Consolas,monospace">&lt;集計CSVの出力パス&gt;\ライン\集計\2026.09\12\  集計_… 集計明細_… 停止内訳_…</text>
+    <text x="36" y="396" font-size="12.5" font-family="ui-monospace,Consolas,monospace">&lt;集計CSVの出力パス&gt;\ライン\集計\2026.09\    CSVの読み方.txt ・ 計算内容.csv(月に1つだけ)</text>
+    <text x="36" y="424" font-size="11.5" class="mute">並びは ライン → 種類 → 年月 → 日(探すときに絞る順)。ファイル名にも日付を残す(メールで送っても何の日か分かる)。</text>
+    <text x="36" y="442" font-size="11.5" class="mute">文字コードは BOM 付き UTF-8 ── Windows の Excel でそのまま開ける。</text>
+  </svg>
+  </div>
+  <p class="meta">出どころ: <code>services/summary.py</code>(②を作る)・<code>logic/packing_agg.py</code>(行と停止の並べ直し)・<code>reporting/csv_export.py</code>(③を書く)</p>
+</section>
+
+<section>
+  <h2><span class="n">2</span>1行がどう分かれて、どう戻るか</h2>
+  <p>例: ページ1の3行目に、LOT <code>H5422S0</code> で停止を2つ(① <code>3</code> 20分、② <code>ﾌｫｰｸ</code> 15分)打った場合。</p>
+  <div class="fig">
+  <svg viewBox="0 0 980 430" role="img" aria-label="1行の作業停止が縦に分かれ、明細CSVでは横に、停止内訳CSVではまとめと1件ずつに展開される図">
+    <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--arrow)"/></marker></defs>
+    <!-- input row -->
+    <text x="20" y="24" class="t-in" font-size="13">打った1行(ページ1・3行目)</text>
+    <g font-size="11.5">
+      <rect x="20" y="34" width="110" height="44" class="cell"/><text x="28" y="52" class="mute" font-size="10">LOT</text><text x="28" y="70">H5422S0</text>
+      <rect x="130" y="34" width="90" height="44" class="cell"/><text x="138" y="52" class="mute" font-size="10">実績 枚数</text><text x="138" y="70">1,200</text>
+      <rect x="220" y="34" width="90" height="44" class="cell"/><text x="228" y="52" class="mute" font-size="10">作業時間</text><text x="228" y="70">85</text>
+      <rect x="310" y="34" width="120" height="44" class="cell"/><text x="318" y="52" class="mute" font-size="10">停止① 記号 / 分</text><text x="318" y="70" class="sA" font-weight="700">3</text><text x="380" y="70">20</text>
+      <rect x="430" y="34" width="120" height="44" class="cell"/><text x="438" y="52" class="mute" font-size="10">停止② 記号 / 分</text><text x="438" y="70" class="sB" font-weight="700">ﾌｫｰｸ</text><text x="500" y="70">15</text>
+      <rect x="550" y="34" width="120" height="44" class="cell"/><text x="558" y="52" class="mute" font-size="10">停止③ 記号 / 分</text><text x="558" y="70" class="mute">(空)</text>
+      <rect x="670" y="34" width="290" height="44" class="cell"/><text x="678" y="52" class="mute" font-size="10">紙の外の6欄</text><text x="678" y="70">用途コード・用途名・納入先…</text>
+    </g>
+
+    <!-- arrows down -->
+    <path d="M200,82 L200,120" stroke="var(--arrow)" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <path d="M430,82 C430,104 520,104 560,122" stroke="var(--arrow)" stroke-width="1.6" fill="none" marker-end="url(#ah2)"/>
+
+    <!-- middle: lot row + stops -->
+    <text x="20" y="140" class="t-mid" font-size="13">集計(保存のたび)</text>
+    <rect x="20" y="150" width="380" height="56" rx="6" class="mid"/>
+    <text x="34" y="172" font-size="12" font-weight="700">packing_report_detail 1行</text>
+    <text x="34" y="192" font-size="11.5">H5422S0 ・ 1200 ・ 85分 ・ 紙の外の6欄</text>
+
+    <rect x="470" y="128" width="490" height="96" rx="6" class="mid"/>
+    <text x="484" y="150" font-size="12" font-weight="700">packing_stop_detail(停止1つ=1行。空の③は作らない)</text>
+    <text x="484" y="174" font-size="11.5"><tspan class="sA" font-weight="700">①</tspan>  記号 3     20分  数字 → 管理ロス設備停止</text>
+    <text x="484" y="196" font-size="11.5"><tspan class="sB" font-weight="700">②</tspan>  記号 ﾌｫｰｸ  15分  カタカナ → 段取り・突発停止</text>
+    <text x="484" y="216" font-size="10.5" class="mute">内訳名(マスタの名前)も保存した時点のまま残す</text>
+
+    <!-- arrows to outputs -->
+    <path d="M210,210 L210,262" stroke="var(--arrow)" stroke-width="1.6" marker-end="url(#ah2)"/>
+    <path d="M600,228 C600,250 330,248 300,262" stroke="var(--arrow)" stroke-width="1.6" fill="none" marker-end="url(#ah2)" opacity=".6"/>
+    <path d="M760,228 L760,262" stroke="var(--arrow)" stroke-width="1.6" marker-end="url(#ah2)"/>
+
+    <!-- outputs -->
+    <text x="20" y="282" class="t-out" font-size="13">集計明細_ … 1行に戻す</text>
+    <rect x="20" y="292" width="420" height="120" rx="6" class="out"/>
+    <text x="34" y="314" font-size="11.5">日付・ライン・直・ページ 1・行 3</text>
+    <text x="34" y="334" font-size="11.5">H5422S0 ・ 1200 ・ 85</text>
+    <text x="34" y="354" font-size="11.5">作業停止① <tspan class="sA" font-weight="700">3</tspan> 20 ・ 作業停止② <tspan class="sB" font-weight="700">ﾌｫｰｸ</tspan> 15 ・ ③ 空欄</text>
+    <text x="34" y="374" font-size="11.5">用途コード…(紙に出ない6欄はここだけ)</text>
+    <text x="34" y="396" font-size="10.5" class="mute">作業者・昼稼働・作業コメントは行ごとに繰り返す</text>
+
+    <text x="470" y="282" class="t-out" font-size="13">停止内訳_ … まとめ + 1件ずつ</text>
+    <rect x="470" y="292" width="490" height="120" rx="6" class="out"/>
+    <g font-size="11.5">
+      <text x="484" y="314" font-weight="700">直の合計  管理ロス設備停止  3   20分  1回</text>
+      <text x="484" y="334">1件ずつ   ページ1 3行目  H5422S0  作業停止①  20分</text>
+      <text x="484" y="358" font-weight="700">直の合計  段取り・突発停止  ﾌｫｰｸ  15分  1回</text>
+      <text x="484" y="378">1件ずつ   ページ1 3行目  H5422S0  作業停止②  15分</text>
+      <text x="484" y="400" font-size="10.5" class="mute">同じ記号が別の行にもあれば、まとめは足し算・1件ずつは紙をめくる順に並ぶ</text>
+    </g>
+  </svg>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>3本それぞれの中身</h2>
+  <div class="cols">
+    <div class="card">
+      <h3><span class="tag t3">集計_</span> 直ごとの合計 14列</h3>
+      <ul>
+        <li>1行 = 1直(その日・そのラインの直ぜんぶ)</li>
+        <li>合計枚数 = 実績枚数の和、合計重量(t) = 実績重量 ÷ 1000</li>
+        <li>停止は3分類の分と、その合計</li>
+        <li>稼働時間 = 1440 − 停止合計</li>
+        <li>操業時間 = 1440 − 管理ロスだけ</li>
+        <li>稼働率(%) = 稼働時間 ÷ 1440 × 100</li>
+        <li>生産性(t/h) = 重量(t) ÷ 稼働時間(h)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag t3">集計明細_</span> 打った行を全部</h3>
+      <ul>
+        <li>並びは 日付 → 直 → ページ → 行(紙をめくる順)</li>
+        <li>列は紙の左から右 + 紙の外の6欄 + 作業者など + 引当番号</li>
+        <li>作業停止④⑤は<strong>いちばん後ろ</strong>(前からある列の位置を動かさない)</li>
+        <li>空の行(何も打っていない行)は出さない</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag t3">停止内訳_</span> 手を打つための表</h3>
+      <ul>
+        <li>直を混ぜない(3直だけ長い、が見える)</li>
+        <li>並びは 直 → 分類(マスタの順) → 時間の長い順</li>
+        <li>「区分」列で <code>直の合計</code> / <code>1件ずつ</code> を絞り込める</li>
+        <li>割合はまとめの行にだけ入れる</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>打った字と CSV の字の違い(明細)</h2>
+  <p>CSV は②の「値」から作るので、打った文字そのものではありません。打った字そのものが要るときは紙(印刷)を見ます。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>打ったもの</th><th>集計(値)</th><th>CSV に出る字</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>空欄の数の欄</td><td class="num">0</td><td class="num">空欄</td><td>12行×30列が 0 で埋まらないように。打っていない所は空いているのが正</td></tr>
+      <tr><td><code>1000</code></td><td class="num">1000.0</td><td class="num">1000</td><td>割り切れれば小数点を出さない</td></tr>
+      <tr><td><code>57.5</code>(作業時間など)</td><td class="num">57.5</td><td class="num">57.5</td><td>小数はそのまま(丸めない)</td></tr>
+      <tr><td>時・分 <code>08</code></td><td class="num">8</td><td class="num">08</td><td>2桁に詰め直す。0時0分は <code>00</code>(0 は本当の値)</td></tr>
+      <tr><td>停止の記号だけ・分は空</td><td class="num">0分・1回</td><td class="num">記号 / 空欄</td><td>書いたのに回数に出ない、を避ける</td></tr>
+      <tr><td>停止の分だけ・記号は空</td><td>作らない</td><td>出ない</td><td>どの分類にも入れようがない(VBA も外していた)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2><span class="n">5</span>いつ書き出すか</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>きっかけ</th><th>出す先</th><th>中身</th></tr></thead>
+    <tbody>
+      <tr><td>日報の保存(確定・自動保存・新しいページ)</td><td><span class="tag t1">1つ目</span> 集計CSVの出力パス</td><td>その日・そのラインの3本を書き直す。書けなくても保存は成功のまま(画面で知らせる)</td></tr>
+      <tr><td>「共有へ保存」で送れたとき</td><td><span class="tag t2">2つ目</span> 決めてあれば</td><td>送った日の3本。同じ日にまだ送っていない直が残っていれば、送れるまで待つ(共有に無い中身を先に届けない)</td></tr>
+      <tr><td>集計・グラフの「期間を書き出す」</td><td>1つ目(と2つ目)</td><td>期間のうち中身のある日だけ</td></tr>
+      <tr><td>過去日報・CSV の取り込み</td><td>1つ目(と2つ目)</td><td>取り込んだ日の3本</td></tr>
+      <tr><td>月の初めて(または消された)とき</td><td>年月のフォルダ</td><td><code>CSVの読み方.txt</code>(列の説明)と <code>計算内容.csv</code>(式)を1つだけ置く</td></tr>
+    </tbody>
+  </table></div>
+  <p class="meta" style="margin-top:10px">集計管理の「4本ともCSVに出す」は、これとは別の書き出しです ── 画面に出ている表(日別・直別・ロット別・ロット一覧)を
+  そのまま <code>集計_日別_開始日_終了日_ライン.csv</code> などに出します。出どころは同じ②の集計なので、数は合います。</p>
+  <p class="meta">停止の分類は記号の文字種で決まります: 数字 → 管理ロス設備停止 / カタカナ → 段取り・突発停止 / 英字 → ハンドリング停止 / それ以外 → その他(VBA の CheckCharType と同じ)。</p>
+</section>
+</div>
+
+</body>
+</html>

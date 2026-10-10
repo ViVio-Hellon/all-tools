@@ -45,6 +45,10 @@
     </div>
     <button class="btn" type="button" id="reload">表示</button>
     <button class="btn" type="button" id="csv">4本ともCSVに出す</button>
+    {# 日報CSVがどう作られるかの図(`static/help/csv_flow.html`)。デスクトップ版は別の窓、
+       ブラウザ版は新しいタブで開く(`desktop.js` の watchLinks) #}
+    <a class="btn" id="csv-flow" href="{{ url_for('static', filename='help/csv_flow.html') }}"
+       target="_blank" rel="noopener" data-title="日報CSVの流れ">日報CSVの流れ(図)</a>
     <a class="lead" href="#push-log">共有保存の履歴へ ↓</a>
     <a class="lead" href="/standard-time">標準作業時間(別の画面) →</a>
   </div>

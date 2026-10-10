@@ -5,7 +5,7 @@
 
 | 大きなタブ | ツール | 版 | 元のリポジトリ |
 |---|---|---|---|
-| 日報 | 日報管理ツール | 4.27.0 | vba-daily-report-python-migration |
+| 日報 | 日報管理ツール | 4.27.1 | vba-daily-report-python-migration |
 | 看板 | 資材発注看板システム | 3.4.0 | vba-production-board-python-migration |
 | カレンダー | ライン管理カレンダー | 4.2.0 | vba-calendar-python-migration |
 | 点検表 | 点検表 選択・印刷 | 2.2.0 | vba-inspection-sheet-python-migration |
