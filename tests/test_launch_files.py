@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LAUNCHERS = ("Start.vbs", "start.bat", "stop.bat", "launcher_check.bat", "launcher_stop.bat")
+LAUNCHERS = ("Start.vbs", "start.bat", "stop.bat", "launcher_check.bat", "launcher_stop.bat",
+             "scripts/make_shortcuts.vbs")
 
 
 class EncodingTests(unittest.TestCase):
@@ -55,6 +56,26 @@ class ContentTests(unittest.TestCase):
         self.assertIn('cmd = "pythonw " & Chr(34) & script & Chr(34)', text)
         self.assertIn("shell.Run cmd, 0, False", text)
         self.assertIn("日報複合ツール.exe", text, "ふだんは exe を使うと書く")
+
+    def test_ショートカットはツールのフォルダにStart_vbsとexeを指して作る(self) -> None:
+        """配った先で1回押す。scripts の1つ上に (ブラウザ版)・(デスクトップ版) の2つ。"""
+        text = self.text("scripts/make_shortcuts.vbs")
+        self.assertIn("fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))", text,
+                      "ツールのフォルダは scripts の1つ上(押したときの場所)")
+        self.assertIn('BROWSER_LABEL = "(ブラウザ版)"', text)
+        self.assertIn('DESKTOP_LABEL = "(デスクトップ版)"', text)
+        self.assertIn('fso.BuildPath(root, "Start.vbs")', text)
+        self.assertIn('link.IconLocation = icon', text)
+        self.assertIn('exe & ",0"', text, "デスクトップ版のアイコンは exe のもの")
+        self.assertIn("がありません", text, "exe が無ければ作らずに知らせる")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("'"))
+        self.assertNotRegex(code, r"(?i)python|\.Run\b|\.Exec\b", "Python も外のプログラムも起こさない")
+        # 探す exe は配る名前が先。配布の決まり(make_dist の EXE_NAME)と食い違わない
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("alltools_make_dist_sc", ROOT / "scripts" / "make_dist.py")
+        make_dist = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(make_dist)
+        self.assertIn(f'EXE_NAMES = Array("{make_dist.EXE_NAME}"', text)
 
     def test_ランチャーの入口(self) -> None:
         """業務ツール統合ランチャー 1.7 の入口。繰り返し・隠れて呼ばれるので pause を置かない。"""

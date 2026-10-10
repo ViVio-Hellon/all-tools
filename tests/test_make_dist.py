@@ -44,6 +44,11 @@ class BuildTests(unittest.TestCase):
                 self.assertFalse((self.out / "tools" / tool / "配布メモ.txt").exists(),
                                  "ツールの配布メモは一式の配布メモにまとめる")
 
+    def test_ショートカットを作るものが入り_配布メモに書く(self) -> None:
+        self.assertTrue((self.out / "scripts" / "make_shortcuts.vbs").is_file())
+        memo = (self.out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(r"scripts\make_shortcuts.vbs", memo)
+
     def test_exeは配る名前で直下に入る(self) -> None:
         self.assertEqual((self.out / make_dist.EXE_NAME).read_bytes(), b"MZ-fake")
         memo = (self.out / "配布メモ.txt").read_text(encoding="utf-8-sig")
