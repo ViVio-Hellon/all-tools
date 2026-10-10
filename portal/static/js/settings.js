@@ -85,6 +85,15 @@ export function install(options) {
       }
     });
   }
+  // ブラウザ版: 画面が開かなかったときに待つ分
+  $("first-contact-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    write("/api/settings/first-contact", { minutes: $("first-contact-min").value });
+  });
+  $("first-contact-default").addEventListener("click", () => {
+    $("first-contact-min").value = "5";
+    write("/api/settings/first-contact", { minutes: 5 });
+  });
   $("loc-form").addEventListener("submit", (event) => {
     event.preventDefault();
     write("/api/settings/location", { folder: $("loc-folder").value, name: $("loc-name").value },
@@ -257,6 +266,9 @@ function paint(body, options = {}) {
   for (const button of document.querySelectorAll("[data-theme-default]")) {
     button.setAttribute("aria-pressed", String(button.dataset.themeDefault === (body.theme_default || "light")));
   }
+  // 打ちかけ(入力中)は上書きしない
+  const waitBox = $("first-contact-min");
+  if (waitBox && document.activeElement !== waitBox) waitBox.value = String(body.first_contact_min || 5);
   const box = $("lockbox");
   box.dataset.open = body.admin ? "1" : "0";
   $("lock-state").textContent = body.admin ? "🔓 鍵が開いています" : "🔒 鍵が掛かっています";

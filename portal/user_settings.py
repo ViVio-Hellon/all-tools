@@ -22,6 +22,11 @@ KEY_DISTRIBUTION_APPLIED = "distribution_applied"
 #: 画面の色の既定(ライト / ダーク)。大きなタブの画面と、4ツールの「選んでいないとき」の色
 KEY_THEME_DEFAULT = "theme_default"
 THEMES = ("light", "dark")
+#: ブラウザ版: 起動してから最初の心拍(画面が開いた合図)を待つ分。来なければ終わる
+#: (ブラウザが開かなかったときに残り続けない)。デスクトップ版には効かない
+KEY_FIRST_CONTACT_MIN = "first_contact_min"
+FIRST_CONTACT_MIN_DEFAULT = 5
+FIRST_CONTACT_MIN_RANGE = (1, 60)
 
 
 def path() -> Path:
@@ -47,6 +52,15 @@ def theme_default() -> str:
     """画面の色の既定。決めていない・知らない値ならライト(4ツールの既定と同じ)。"""
     value = get(KEY_THEME_DEFAULT)
     return value if value in THEMES else "light"
+
+
+def first_contact_min() -> int:
+    """最初の心拍を待つ分。決めていない・範囲の外・数でなければ既定(5分)。"""
+    value = get(KEY_FIRST_CONTACT_MIN)
+    low, high = FIRST_CONTACT_MIN_RANGE
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        return FIRST_CONTACT_MIN_DEFAULT
+    return value
 
 
 def save(key: str, value: Any) -> None:

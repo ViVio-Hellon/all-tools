@@ -42,7 +42,8 @@ REQUIRED_PACKAGES = (("flask", "Flask"), ("waitress", "waitress"))
 
 #: 画面(大きなタブのページ)からの心拍が途絶えて、終わるまでの時間(秒)
 IDLE_SEC = 90
-#: 最初の心拍を待つ上限(秒)。ブラウザが開かなかったときに残り続けない
+#: 最初の心拍を待つ上限(秒)の既定。ブラウザが開かなかったときに残り続けない。
+#: **大設定で分単位に変えられる**(`portal.user_settings.first_contact_min`。起動のときに読む)
 FIRST_CONTACT_SEC = 300
 
 #: 見張りの1回(1秒のはず)がこれより長く空いたら、そのあいだ PC ごと眠っていた
@@ -264,7 +265,10 @@ def start(*, open_browser: bool = True) -> int:
         print(f"起動しました: {url}")
 
     # --- 画面が居なくなったら終わる(心拍)---
-    watch = IdleWatch(time.monotonic())
+    from portal import user_settings
+    wait_min = user_settings.first_contact_min()
+    log.info("最初の画面を最大 %d 分待ちます(大設定で変えられます)", wait_min)
+    watch = IdleWatch(time.monotonic(), first_contact_sec=wait_min * 60)
     try:
         while thread.is_alive() and not stopped.is_set():
             time.sleep(1)

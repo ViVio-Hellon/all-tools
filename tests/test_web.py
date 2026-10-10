@@ -312,6 +312,40 @@ class ThemeDefaultTests(Base):
         self.assertEqual(self.shell()["themeDefault"], "light")
 
 
+class FirstContactTests(Base):
+    """ブラウザ版: 画面が開かなかったときに待つ分(大設定。この端末・鍵は要らない)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        user_settings.update({user_settings.KEY_FIRST_CONTACT_MIN: None})
+        self.addCleanup(user_settings.update, {user_settings.KEY_FIRST_CONTACT_MIN: None})
+
+    def test_既定は5分(self) -> None:
+        body = self.get("/api/settings").get_json()
+        self.assertEqual(body["first_contact_min"], 5)
+        self.assertEqual(body["first_contact_range"], [1, 60])
+
+    def test_変えれば覚える_起動のときに読む(self) -> None:
+        res = self.post("/api/settings/first-contact", {"minutes": "15"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["first_contact_min"], 15)
+        self.assertEqual(user_settings.first_contact_min(), 15)
+        start = (Path(__file__).resolve().parent.parent / "start_app.py").read_text(encoding="utf-8")
+        self.assertIn("first_contact_sec=wait_min * 60", start)
+
+    def test_範囲の外と数でないものは断る(self) -> None:
+        for value in ("0", "61", "abc", "2.5", ""):
+            with self.subTest(value=value):
+                self.assertEqual(self.post("/api/settings/first-contact", {"minutes": value}).status_code, 400)
+        self.assertEqual(user_settings.first_contact_min(), 5)
+
+    def test_手で壊れた値が書かれていても既定で動く(self) -> None:
+        for value in (0, 999, "10", True):
+            with self.subTest(value=value):
+                user_settings.update({user_settings.KEY_FIRST_CONTACT_MIN: value})
+                self.assertEqual(user_settings.first_contact_min(), 5)
+
+
 class ShutdownTests(Base):
     def tearDown(self) -> None:
         web.set_shutdown_hook(None)

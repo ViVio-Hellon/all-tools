@@ -426,6 +426,28 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
                         **_settings_view(catalog)})
 
     # ------------------------------------------------------------------
+    # ブラウザ版: 最初の画面を待つ分(この端末。次に Start.vbs で開いたときから効く)
+    # ------------------------------------------------------------------
+    @app.post("/api/settings/first-contact")
+    def change_first_contact():                   # noqa: ANN202
+        from . import user_settings
+
+        body = request.get_json(silent=True) or {}
+        low, high = user_settings.FIRST_CONTACT_MIN_RANGE
+        try:
+            minutes = int(str(body.get("minutes", "")).strip())
+        except ValueError:
+            minutes = 0
+        if not low <= minutes <= high:
+            return _error("bad_value", f"{low}〜{high} の分(整数)で入れてください", 400)
+        user_settings.update({user_settings.KEY_FIRST_CONTACT_MIN: minutes})
+        log.info("最初の画面を待つ時間を変えました: %d 分", minutes)
+        return jsonify({"ok": True,
+                        "message": f"ブラウザ版で画面が開かなかったとき、{minutes}分待って終わるようにしました"
+                                   "(次に Start.vbs で開いたときから効きます)",
+                        **_settings_view(catalog)})
+
+    # ------------------------------------------------------------------
     # 共有の DB の置き場所
     # ------------------------------------------------------------------
     @app.post("/api/settings/location")
@@ -694,6 +716,8 @@ def _settings_view(catalog) -> dict:
         "ok": True,
         "identity": me.to_dict(),
         "theme_default": user_settings.theme_default(),
+        "first_contact_min": user_settings.first_contact_min(),
+        "first_contact_range": list(user_settings.FIRST_CONTACT_MIN_RANGE),
         "decision": decision.to_dict(catalog),
         "admin": admin_password.session.peek(),
         "password_custom": admin_password.is_custom(),

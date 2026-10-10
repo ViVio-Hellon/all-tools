@@ -42,6 +42,23 @@
       </div>
     </article>
 
+    <!-- ブラウザ版: 最初の画面を待つ時間(この端末。鍵は要らない) -->
+    <article class="card" id="first-contact-card">
+      <h2>ブラウザ版: 画面が開かなかったときに待つ時間</h2>
+      <p class="lead">
+        Start.vbs で起動したのにブラウザの画面が開かなかったとき、裏で待ち続けないよう、この時間が過ぎたら終わります。
+        画面を一度でも開いたあとは関係ありません(閉じれば約90秒で終わります)。デスクトップ版には効きません。
+        変えると、<strong>次に Start.vbs で開いたときから</strong>効きます。
+      </p>
+      <form class="pathform" id="first-contact-form">
+        <label>待つ時間(分)<input type="number" id="first-contact-min" min="1" max="60" step="1" inputmode="numeric"></label>
+        <div class="pathform__act">
+          <button type="submit" class="btn btn--primary">変える</button>
+          <button type="button" class="btn" id="first-contact-default">既定(5分)に戻す</button>
+        </div>
+      </form>
+    </article>
+
     <!-- タブ表示権限 -->
     <article class="card">
       <div class="card__head">
