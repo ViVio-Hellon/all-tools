@@ -89,6 +89,47 @@
       </div>
     </article>
 
+    <!-- アクセス権限の早見表(梱包資材マスタの「アクセス権限」。説明だけ。portal/access_guide.py) -->
+    {% if access_guide %}
+    <article class="card" id="access-guide">
+      <h2>アクセス権限の早見表 <small>(梱包資材マスタの表「アクセス権限」)</small></h2>
+      <p class="lead">
+        「権限」の欄に何を書くと、どのツールで何が出るか。同じ表を python-web-tools と各ツールが
+        <strong>別々の決まりで</strong>読みます。書き換えるのは日報・看板・カレンダーのマスタ管理です
+        (どのタブを出すかは、上の「タブ表示権限」で決めます)。
+      </p>
+      <div class="tablewrap">
+        <table class="grid guide">
+          <thead><tr><th>権限の値</th>{% for t in access_guide.tools %}<th>{{ t.title }}</th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for row in access_guide.rows %}
+            <tr>
+              <td><code>{{ row.value }}</code><br><small>{{ row.note }}</small></td>
+              {% for cell in row.cells %}
+              <td{% if cell == access_guide.not_read %} class="guide__off"{% endif %}>{{ cell }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+            <tr>
+              <td><b>当てはまる行が無い</b><br><small>この端末の行が 1 つも無い</small></td>
+              {% for cell in access_guide.no_row %}<td{% if cell == access_guide.not_read %} class="guide__off"{% endif %}>{{ cell }}</td>{% endfor %}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>ライン名の一覧(この字のとおりに書く)</h3>
+      <dl class="facts">
+        {% for l in access_guide.lines %}
+        <dt>{{ l.title }}</dt><dd>{% for n in l.names %}<code>{{ n }}</code>{% if not loop.last %} {% endif %}{% endfor %}</dd>
+        {% endfor %}
+      </dl>
+      <h3>読み方の決まり</h3>
+      <ul class="guide__rules">
+        {% for r in access_guide.rules %}<li>{{ r }}</li>{% endfor %}
+      </ul>
+    </article>
+    {% endif %}
+
     <!-- 共有の DB の置き場所 -->
     <article class="card">
       <h2>共有の DB の置き場所</h2>

@@ -259,12 +259,12 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         edition = "desktop" if app.config["BRIDGE"] else "browser"
         tools = [{**t.to_dict(), "origin": app_config.origin_of(t.scheme) if app.config["BRIDGE"] else ""}
                  for t in catalog.tools]
-        from . import user_settings
+        from . import access_guide, user_settings
 
         theme = user_settings.theme_default()
         return render_template(
             "shell.html", name=app_config.display_name(), version=app_config.version(),
-            edition=edition, identity=me, theme=theme, shell={
+            edition=edition, identity=me, theme=theme, access_guide=access_guide.view(), shell={
                 "token": app.config["TOKEN"], "edition": edition,
                 "version": app_config.version(), "name": app_config.display_name(),
                 "tools": tools, "statusPollMs": app_config.status_poll_ms(),

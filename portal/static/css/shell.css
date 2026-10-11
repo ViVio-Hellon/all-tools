@@ -289,3 +289,10 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 /* 大設定の上の知らせ(入口の処理が止まった・起こし直した) */
 .portal-state{margin:0 0 12px}
 .row-unlock{display:flex;gap:8px;align-items:center;margin:8px 0}
+
+/* アクセス権限の早見表。「読まない」は薄く ── 効くところが目に入るように */
+.grid.guide td{vertical-align:top;font-size:var(--fs-md);min-width:9em}
+.grid.guide td small{color:var(--muted)}
+.grid.guide td.guide__off{color:var(--faint)}
+.guide__rules{margin:0;padding-left:1.2em;font-size:var(--fs-md)}
+.guide__rules li{margin:2px 0}

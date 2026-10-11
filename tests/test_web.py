@@ -346,6 +346,16 @@ class FirstContactTests(Base):
                 self.assertEqual(user_settings.first_contact_min(), 5)
 
 
+class AccessGuideTests(Base):
+    def test_大設定にアクセス権限の早見表が出る(self) -> None:
+        html = self.get("/", token=False).get_data(as_text=True)
+        self.assertIn('id="access-guide"', html)
+        for text in ("mode:fullaccess", "mode:field", "mode:material", "Administrator",
+                     "当てはまる行が無い", "ライン名の一覧", "中板", "大板小板"):
+            with self.subTest(text=text):
+                self.assertIn(text, html)
+
+
 class ShutdownTests(Base):
     def tearDown(self) -> None:
         web.set_shutdown_hook(None)
