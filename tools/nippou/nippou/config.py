@@ -117,6 +117,15 @@ KEY_WIP_DIR = "wip_master_dir"                    # SIKALOT / SIKAHIKI / SIKAODR
 # 仕掛の**2つ目の置き場所**(v4.23.0)。**空なら見ない。** 1つ目でファイルが無い・
 # ファイルはあるが探すもの(ロット・引当・受注)が無いとき、こちらを見る
 KEY_WIP_DIR2 = "wip_master_dir_2"
+# 仕掛の**2つ目のファイル名**(v4.28.0。python-web-tools の `lot_db2_files` と同じ考え)。
+# **1つ目はファイル名固定**(SIKALOT / SIKAHIKI / SIKAODR)、2つ目は名前も決められる ──
+#   「2つ目はファイル名も指定できるように。SIKALOT は名前が同じでも圧縮版だったように、
+#    混乱を招く。名前を変えておかないと持ち運びもしにくい」
+# 空なら1つ目と同じ名前(今までどおり)。2つ目の置き場所を決めていなければ使わない
+KEY_WIP2_LOT_FILE = "wip_master_2_lot_file"
+KEY_WIP2_HIKI_FILE = "wip_master_2_hiki_file"
+KEY_WIP2_ORDER_FILE = "wip_master_2_order_file"
+WIP2_FILE_KEYS = (KEY_WIP2_LOT_FILE, KEY_WIP2_HIKI_FILE, KEY_WIP2_ORDER_FILE)
 KEY_MATERIAL_DIR = "material_master_dir"          # 梱包資材マスタ / LS4LOT
 KEY_TRANSMISSION_DIR = "transmission_master_dir"  # 伝送用ファイル
 
@@ -202,7 +211,8 @@ PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_WIP_DIR2, KEY_M
              KEY_MONTHLY_DIR, KEY_REPORT_OUT_DIR, KEY_REPORT_OUT_DIR2,
              KEY_STANDARD_TIME_OUT_DIR,
              KEY_ACCESS_DB_FILE, KEY_LINE_TARGET_FILE, KEY_STOP_REASON_FILE,
-             KEY_VC_MASTER_DIR, KEY_LOG_DIR, KEY_BACKUP_DIR)
+             KEY_VC_MASTER_DIR, KEY_LOG_DIR, KEY_BACKUP_DIR,
+             *WIP2_FILE_KEYS)
 
 
 def resolve_dir(text: str) -> Path:
@@ -536,14 +546,38 @@ class Settings:
         text = configured.strip() if isinstance(configured, str) else ""
         return resolve_dir(text) if text else None
 
-    def _wip_paths(self, filename: str) -> list[Path]:
-        """仕掛のファイルを探す順(1つ目 → 2つ目)。同じフォルダなら1つにまとめる。"""
-        paths = [_pick_source(self.wip_master_dir, filename)]
+    def wip2_filename(self, filename: str) -> str:
+        """2つ目で探すファイル名。**決めてあればその名前、無ければ1つ目と同じ名前。**
+
+        決められるのは仕掛ロット・引当・受注の3つ(`WIP2_FILE_KEYS`)。コイル割り数(LS4LOT)は
+        1つ目と同じ名前で探します。
+        """
+        from . import user_settings
+
+        key = {self.gw_lot_master_filename: KEY_WIP2_LOT_FILE,
+               self.gw_hiki_master_filename: KEY_WIP2_HIKI_FILE,
+               self.gw_order_master_filename: KEY_WIP2_ORDER_FILE}.get(filename)
+        configured = user_settings.get(key) if key else None
+        text = configured.strip() if isinstance(configured, str) else ""
+        return text or filename
+
+    def wip2_path(self, filename: str) -> Optional[Path]:
+        """2つ目で実際に読むファイル。**2つ目の置き場所を決めていなければ None。**"""
         second = self.wip_master_dir_2
-        if second is not None:
-            candidate = _pick_source(second, filename)
-            if candidate != paths[0]:
-                paths.append(candidate)
+        if second is None:
+            return None
+        return _pick_source(second, self.wip2_filename(filename))
+
+    def _wip_paths(self, filename: str) -> list[Path]:
+        """仕掛のファイルを探す順(1つ目 → 2つ目)。同じファイルなら1つにまとめる。
+
+        2つ目は**名前も決められる**(`wip2_filename`)ので、同じフォルダでも名前が違えば
+        別のファイルとして探します。
+        """
+        paths = [_pick_source(self.wip_master_dir, filename)]
+        candidate = self.wip2_path(filename)
+        if candidate is not None and candidate != paths[0]:
+            paths.append(candidate)
         return paths
 
     @property

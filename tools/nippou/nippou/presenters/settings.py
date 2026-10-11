@@ -54,6 +54,15 @@ PATH_FIELDS = (
      "ロット番号から引くとき、1つ目に仕掛のファイル(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT)が"
      "無い・壊れている・ファイルはあるがそのロット(引当・受注)が無いときに、ここを見ます。"
      "1つ目の SIKALOT に BOX最終実績の寸法が無いときは、ここの BOX設計の寸法を使います。空なら見ません"),
+    # 2つ目のファイル名(v4.28.0)。**1つ目は名前を決め打ち**(SIKALOT / SIKAHIKI / SIKAODR)、
+    # 2つ目だけ名前も決められる(python-web-tools と同じ)
+    (config.KEY_WIP2_LOT_FILE, "仕掛ロットのファイル名(2つ目)",
+     "2つ目の置き場所で探す仕掛ロットのファイル名(例: SIKALOT2.sqlite3)。空なら1つ目と同じ SIKALOT。"
+     "名前を変えても、中身の要る列はそろえておいてください"),
+    (config.KEY_WIP2_HIKI_FILE, "仕掛引当のファイル名(2つ目)",
+     "2つ目の置き場所で探す仕掛引当のファイル名。空なら1つ目と同じ SIKAHIKI"),
+    (config.KEY_WIP2_ORDER_FILE, "仕掛受注のファイル名(2つ目)",
+     "2つ目の置き場所で探す仕掛受注のファイル名。空なら1つ目と同じ SIKAODR"),
     (config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所",
      "梱包資材マスタがあるフォルダ(既定: 参照用マスタと同じフォルダ)。"
      "コイル割り数(LS4LOT)は、仕掛の置き場所(1つ目・2つ目)に無いときだけここを見ます"),
@@ -209,6 +218,9 @@ PATH_TAB: dict[str, str] = {
     config.KEY_REFERENCE_DIR: "paths",
     config.KEY_WIP_DIR: "paths",
     config.KEY_WIP_DIR2: "paths",
+    config.KEY_WIP2_LOT_FILE: "paths",
+    config.KEY_WIP2_HIKI_FILE: "paths",
+    config.KEY_WIP2_ORDER_FILE: "paths",
     config.KEY_MATERIAL_DIR: "paths",
     config.KEY_TRANSMISSION_DIR: "paths",
     config.KEY_SOUND_DIR: "paths",
@@ -249,6 +261,8 @@ SHOWN_PATH_KEYS: tuple[str, ...] = (
     config.KEY_WIP_DIR,
     # 仕掛の2つ目(v4.23.0)。1つ目で見つからないときに見る。空なら見ない
     config.KEY_WIP_DIR2,
+    # 2つ目のファイル名(v4.28.0)。2つ目の置き場所のすぐ下に並べる
+    *config.WIP2_FILE_KEYS,
     config.KEY_MATERIAL_DIR,
     config.KEY_TRANSMISSION_DIR,
     config.KEY_SOUND_DIR,
@@ -291,6 +305,7 @@ FIXED_NAME_KEYS: dict[str, str] = {
 PATH_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("read", "読みに行く先",
      (config.KEY_REFERENCE_DIR, config.KEY_WIP_DIR, config.KEY_WIP_DIR2,
+      *config.WIP2_FILE_KEYS,
       config.KEY_MATERIAL_DIR,
       config.KEY_TRANSMISSION_DIR, config.KEY_SOUND_DIR,
       config.KEY_LINE_TARGET_FILE, config.KEY_STOP_REASON_FILE,
@@ -312,6 +327,9 @@ PATH_KEY_NAMES: dict[str, str] = {
     "reference_dir": config.KEY_REFERENCE_DIR,
     "wip_dir": config.KEY_WIP_DIR,
     "wip_dir_2": config.KEY_WIP_DIR2,
+    "wip2_lot_file": config.KEY_WIP2_LOT_FILE,
+    "wip2_hiki_file": config.KEY_WIP2_HIKI_FILE,
+    "wip2_order_file": config.KEY_WIP2_ORDER_FILE,
     "material_dir": config.KEY_MATERIAL_DIR,
     "transmission_dir": config.KEY_TRANSMISSION_DIR,
     "sound_dir": config.KEY_SOUND_DIR,
@@ -516,6 +534,15 @@ def path_views() -> list[PathView]:
             looking_for = "置き場所のフォルダ"
         else:
             looking_for = "フォルダ"
+        if key in config.WIP2_FILE_KEYS and SETTINGS.wip_master_dir_2 is None:
+            # 2つ目の置き場所を決めていなければ、名前も使わない。**打てるようにはしておく**
+            # (置き場所より先に名前を決めてもよい)
+            out.append(PathView(
+                key=key, label=label, note=note, value=text, tab=PATH_TAB.get(key, ""),
+                protected=key in PROTECTED_LABELS, off=True, is_file=True,
+                empty_text=EMPTY_TEXT.get(key, ""),
+                resolved="(使っていません ── 2つ目の置き場所を決めると使います)"))
+            continue
         if key in OFF_WHEN_EMPTY_KEYS and not text:
             out.append(PathView(
                 key=key, label=label, note=note, tab=PATH_TAB.get(key, ""),
@@ -631,6 +658,10 @@ def _resolved_dir(key: str) -> Path:
         config.KEY_ACCESS_DB_FILE: lambda: SETTINGS.access_db_path,
         config.KEY_LINE_TARGET_FILE: lambda: SETTINGS.line_target_path,
         config.KEY_STOP_REASON_FILE: lambda: SETTINGS.stop_reason_csv_path,
+        # 2つ目で実際に読むファイル(2つ目の置き場所が無ければ空)
+        config.KEY_WIP2_LOT_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_lot_master_filename) or Path(""),
+        config.KEY_WIP2_HIKI_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_hiki_master_filename) or Path(""),
+        config.KEY_WIP2_ORDER_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_order_master_filename) or Path(""),
     }[key]()
 
 
@@ -645,6 +676,7 @@ def _sound_file_keys() -> tuple[str, ...]:
 SOUND_FILE_KEYS = _sound_file_keys()
 FILE_KEYS = ((config.KEY_ACCESS_DB_FILE, config.KEY_LINE_TARGET_FILE,
               config.KEY_STOP_REASON_FILE)
+             + config.WIP2_FILE_KEYS
              + SOUND_FILE_KEYS)
 
 # ファイルの欄のうち、**フォルダを書いてよいもの。**
@@ -673,7 +705,10 @@ OPTIONAL_PATH_KEYS = (config.KEY_LINE_TARGET_FILE,
                       # ログも書くときに作る(書けなければ手元へ書く)
                       config.KEY_LOG_DIR,
                       # LocalBackup は写すときに作る(親が無ければ待つ)
-                      config.KEY_BACKUP_DIR)
+                      config.KEY_BACKUP_DIR,
+                      # 2つ目のファイル名。2つ目は1つ目で見つからないときの控えなので、
+                      # 無くても困りごとに数えない(欄には「ありません」を出す)
+                      *config.WIP2_FILE_KEYS)
 
 # **空なら使わない欄。** 既定の道が無い(空 = 出さない)ので、空のときは
 # 道も「ありません」も出さず「使っていません」と言う
@@ -684,13 +719,17 @@ EMPTY_TEXT: dict[str, str] = {
     config.KEY_VC_MASTER_DIR: "空なら参照用マスタと同じフォルダ",
     config.KEY_REPORT_OUT_DIR2: "空なら出しません",
     config.KEY_WIP_DIR2: "空なら2つ目は見ません",
+    config.KEY_WIP2_LOT_FILE: "空なら1つ目と同じ SIKALOT",
+    config.KEY_WIP2_HIKI_FILE: "空なら1つ目と同じ SIKAHIKI",
+    config.KEY_WIP2_ORDER_FILE: "空なら1つ目と同じ SIKAODR",
     config.KEY_STANDARD_TIME_OUT_DIR: "空なら集計CSVと同じ先",
     config.KEY_LOG_DIR: "空ならこの端末の logs",
     config.KEY_BACKUP_DIR: "空なら共有の日報管理のパスと同じフォルダ",
 }
 
 # そのファイルを**読むだけ**の欄。あるかどうかはファイル自身で見る
-READ_FILE_KEYS = (config.KEY_LINE_TARGET_FILE, config.KEY_STOP_REASON_FILE)
+READ_FILE_KEYS = (config.KEY_LINE_TARGET_FILE, config.KEY_STOP_REASON_FILE,
+                  *config.WIP2_FILE_KEYS)
 
 
 def file_views() -> list[FileView]:

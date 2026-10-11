@@ -309,5 +309,71 @@ class SecondWipDirTests(WebTestCase):
         self.assertNotEqual(res.status_code, 200)
 
 
+    # -- 2つ目はファイル名も決められる(v4.28.0。1つ目はファイル名固定) ----
+    def names(self, **files) -> None:
+        body = {"password": "nisk", **files}
+        res = self.post("/api/settings/paths", body)
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+
+    def test_2つ目は決めたファイル名で引く(self) -> None:
+        """2つ目の SIKALOT は名前を変えて置く(圧縮版と取り違えないように)。"""
+        self.write(self.second, "SIKALOT2.sqlite3", LOT_COLUMNS, [_lot("H5422S0")])
+        self.write(self.second, "SIKAHIKI2.sqlite3", HIKI_COLUMNS, [HIKI])
+        self.write(self.second, "SIKAODR2.sqlite3", ODR_COLUMNS, [ODR])
+        self.use()
+        self.names(wip_master_2_lot_file="SIKALOT2.sqlite3", wip_master_2_hiki_file="SIKAHIKI2.sqlite3",
+                   wip_master_2_order_file="SIKAODR2.sqlite3")
+        body = self.lookup()
+        self.assertEqual(body["lot"]["state"], "filled", body)
+        self.assertEqual(body["rows"]["1"]["VC"], "A:VE-20NF_B:VE-20NF")
+
+    def test_1つ目はファイル名固定_2つ目の名前は1つ目に効かない(self) -> None:
+        """1つ目に SIKALOT2 しか無ければ、1つ目では見つからない(1つ目は SIKALOT のまま)。"""
+        from nippou.config import SETTINGS
+
+        self.write(self.first, "SIKALOT2.sqlite3", LOT_COLUMNS, [_lot("H5422S0")])
+        self.use(second=False)
+        self.names(wip_master_2_lot_file="SIKALOT2.sqlite3")
+        self.assertEqual([p.name for p in SETTINGS.gw_lot_master_paths], ["SIKALOT.sqlite3"],
+                         "2つ目を決めていなければ名前も使わない")
+        self.assertNotEqual(self.lookup()["lot"]["state"], "filled")
+
+    def test_2つ目の名前が空なら1つ目と同じ名前(self) -> None:
+        from nippou.config import SETTINGS
+
+        self.use()
+        self.assertEqual([p.name for p in SETTINGS.gw_hiki_master_paths], ["SIKAHIKI.sqlite3"] * 2)
+
+    def test_同じフォルダでも名前が違えば2つ目として見る(self) -> None:
+        from nippou.config import SETTINGS
+
+        body = {"wip_master_dir": str(self.first), "wip_master_dir_2": str(self.first), "password": "nisk",
+                "wip_master_2_lot_file": "SIKALOT_圧縮.sqlite3"}
+        self.assertEqual(self.post("/api/settings/paths", body).status_code, 200)
+        self.assertEqual([p.name for p in SETTINGS.gw_lot_master_paths],
+                         ["SIKALOT.sqlite3", "SIKALOT_圧縮.sqlite3"])
+
+    def test_ファイル名の欄はフォルダや拡張子違いを断る_変えるには管理者パスワード(self) -> None:
+        self.use()
+        for bad in ("sub\\SIKALOT2.sqlite3", "SIKALOT2.xlsx"):
+            with self.subTest(bad=bad):
+                res = self.post("/api/settings/paths", {"password": "nisk", "wip_master_2_lot_file": bad})
+                self.assertEqual(res.status_code, 400, res.get_data(as_text=True))
+        res = self.post("/api/settings/paths", {"wip_master_2_lot_file": "SIKALOT2.sqlite3"})
+        self.assertNotEqual(res.status_code, 200)
+
+    def test_設定画面と配布設定に2つ目のファイル名の欄がある(self) -> None:
+        from nippou import config, distribution
+
+        self.use()
+        html = self.get("/settings?tab=paths").get_data(as_text=True)
+        for label in ("仕掛ロットのファイル名(2つ目)", "仕掛引当のファイル名(2つ目)", "仕掛受注のファイル名(2つ目)"):
+            self.assertIn(label, html)
+        self.assertIn('data-path-key="wip_master_2_lot_file"', html)
+        keys = [item.key for item in distribution.ITEMS]
+        for key in config.WIP2_FILE_KEYS:
+            self.assertIn(key, keys)
+
+
 if __name__ == "__main__":
     unittest.main()
