@@ -36,7 +36,8 @@ LINE_NAMES: dict[str, tuple[str, ...]] = {
 #: 値ごとに、各ツールで何が起きるか。(値, 説明, {ツール: 起きること})
 ROWS: tuple[tuple[str, str, dict[str, str]], ...] = (
     ("Administrator", "管理者", {
-        "nippou": "どのラインの日報も「記録を見る」で見て直せる。左のタブを 1〜8 全部出す",
+        "nippou": "どのラインの日報も「記録を見る」で見て直せる。集計管理・集計グラフでラインを選べる"
+                  "(1 ラインずつ・混ぜない)。左のタブを 1〜8 全部出す",
         "kanban": "現場モード・倉庫モードのどちらも使える(切り替えられる)",
         "calendar": NOT_READ,
         "inspection": NOT_READ,

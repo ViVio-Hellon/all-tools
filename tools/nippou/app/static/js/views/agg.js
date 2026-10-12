@@ -65,8 +65,15 @@ function paintPushLog(view) {
 export function start() {
   const startInput = document.getElementById("start");
   const endInput = document.getElementById("end");
+  /*
+    ライン(Administrator の PC だけ出る欄)。**欄が無ければ送らない** ── サーバが
+    この端末のラインで読む。選んだら、そのまま引き直す(「表示」の押し忘れで、
+    前のラインの表を新しいラインのつもりで読まない)
+  */
+  const lineSelect = document.getElementById("agg-line");
   const span = () => ({ start: startInput?.value || "",
-                        end: endInput?.value || "" });
+                        end: endInput?.value || "",
+                        ...(lineSelect ? { line: lineSelect.value } : {}) });
   /*
     共有保存の履歴の期間。**このカードの開始日・終了日**(v3.86.0) ──
     上の表の期間に付いていくと、遠くの欄を探して打つことになる。
@@ -106,18 +113,27 @@ export function start() {
     }
   }
 
-  document.getElementById("reload")?.addEventListener("click", async () => {
+  // いま表に出しているライン。読めなかったら欄をここへ戻す(表と欄のラインを食い違わせない)
+  let shownLine = lineSelect?.value || "";
+  async function reloadTables() {
     try {
       const body = await api.post("/api/agg/tables", span());
+      shownLine = body.line || shownLine;
       for (const table of body.tables || []) paintTable(table);
       // 表だけ新しくして時刻を置き去りにしない(graph.js と同じ)
       stampAsOf(body.generated_at);
-      showNote(`${body.start} 〜 ${body.end} / ${lineLabel(body.line)}`, "ok");
+      const head = `${body.start} 〜 ${body.end} / ${lineLabel(body.line)}`;
+      const lead = document.getElementById("agg-lead");
+      if (lead) lead.textContent = head;
+      showNote(head, "ok");
     } catch (err) {
+      if (lineSelect) lineSelect.value = shownLine;
       showNote(err.message, "error");
       toastError(err.message);
     }
-  });
+  }
+  document.getElementById("reload")?.addEventListener("click", reloadTables);
+  lineSelect?.addEventListener("change", reloadTables);
 
   document.getElementById("push-log-reload")?.addEventListener("click", loadPushLog);
   document.getElementById("push-log-scope")?.addEventListener("change", loadPushLog);

@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-head">
   <h1>集計管理</h1>
-  <span class="lead">{{ agg.start }} 〜 {{ agg.end }} / {{ agg.line | line_label }}</span>
+  <span class="lead" id="agg-lead">{{ agg.start }} 〜 {{ agg.end }} / {{ agg.line | line_label }}</span>
   {# いつ引いた表か(理由は graph.html と同じ) #}
   <span class="asof" id="agg-asof"
         data-at="{{ agg.generated_at }}"
@@ -44,6 +44,18 @@
       <input id="end" type="date" value="{{ agg.end }}">
     </div>
     <button class="btn" type="button" id="reload">表示</button>
+    {# ライン ── **アクセス権限の表で Administrator の PC だけ**(`services/line_view`)。
+       選んだラインの表だけを出す(混ぜない)。ほかのラインは控え(LocalBackup)から #}
+    {% if line_pick.shown %}
+    <div class="field" data-line-pick>
+      <label for="agg-line">ライン</label>
+      <select id="agg-line">
+        {% for ln in line_pick.lines %}
+        <option value="{{ ln.code }}" {% if ln.code == line_pick.line %}selected{% endif %}>{{ ln.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <button class="btn" type="button" id="csv">4本ともCSVに出す</button>
     {# 日報CSVがどう作られるかの図(`static/help/csv_flow.html`)。デスクトップ版は別の窓、
        ブラウザ版は新しいタブで開く(`desktop.js` の watchLinks) #}

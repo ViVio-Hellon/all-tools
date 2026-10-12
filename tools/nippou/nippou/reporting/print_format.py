@@ -127,6 +127,11 @@ def _esc(value: object) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
+#: 右の理由の枠の見出し。紙は「ヨ：その他（理由を記載）」ですが、「ヨ」は停止内訳の
+#: 記号で、停止内訳を直すと変わります。刷るものには記号を付けず「その他」とだけ出します
+REASON_LABEL = "その他"
+
+
 def _head_html(header: HeaderRecord) -> str:
     """紙の頭(1〜3行目)。**実物の Excel と同じ並びにする。**
 
@@ -161,7 +166,7 @@ def _head_html(header: HeaderRecord) -> str:
 <div class="head__right">
 <div class="head__box"><b>ページ</b>{_esc(header.page)}</div>
 <div class="head__box"><b>昼稼働</b>{day}</div>
-<div class="head__box head__box--reason"><b>ヨ：その他（理由を記載）</b>{_esc(header.reason)}</div>
+<div class="head__box head__box--reason"><b>{_esc(REASON_LABEL)}</b>{_esc(header.reason)}</div>
 </div>
 </div>'''
 

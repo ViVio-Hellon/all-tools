@@ -212,6 +212,32 @@ table.grid tbody tr:hover .rowno__del{ opacity:1; }
 .rowask[hidden]{ display:none; }
 .rowask__text{ font-weight:700; }
 
+/* 順に打つ(v4.29.0)。行番号のダブルクリックで、その行のすぐ下に出る(位置は views/entry.js)。
+   1 欄ずつ聞いて Enter で表へ入れる ── マウスを使わずに 1 行打ち切れる */
+table.grid td.rowno .rowno__n{ cursor:pointer; user-select:none; }
+.seqentry{
+  position:fixed; z-index:72; width:min(22rem, calc(100vw - 16px));
+  display:grid; gap:var(--sp-1);
+  padding:var(--sp-3);
+  color:var(--ink); background:var(--surface);
+  border:1px solid var(--rule); border-left:4px solid var(--accent);
+  border-radius:8px; box-shadow:var(--shadow-2);
+}
+.seqentry[hidden]{ display:none; }
+.seqentry__head{ display:flex; justify-content:space-between; align-items:baseline; gap:var(--sp-2); }
+.seqentry__count{ color:var(--muted); font-size:var(--fs-sm); font-variant-numeric:tabular-nums; }
+.seqentry__label{ font-weight:700; font-size:1.15em; }
+.seqentry__input{ font-size:1.6em; padding:4px 8px; width:100%; box-sizing:border-box;
+                  font-variant-numeric:tabular-nums; letter-spacing:.06em; }
+.seqentry__hint{ margin:0; color:var(--muted); font-size:var(--fs-sm); }
+.seqentry__error{ margin:0; color:var(--state-error); font-weight:700; font-size:var(--fs-sm); }
+.seqentry__error[hidden]{ display:none; }
+.seqentry__steps{ margin:var(--sp-1) 0 0; padding:0; list-style:none;
+                  display:flex; flex-wrap:wrap; gap:2px 10px; font-size:var(--fs-sm); color:var(--muted); }
+.seqentry__steps li[aria-current="step"]{ color:var(--ink); font-weight:700; }
+.seqentry__steps li b{ font-weight:inherit; color:var(--ink); font-variant-numeric:tabular-nums; }
+.seqentry__keys{ margin:0; font-size:var(--fs-sm); color:var(--muted); }
+
 /* ページの案内(v4.8.0 → v4.9.0)── 表のすぐ上に**1行だけ**。場面ごとに一言と、
    要るときだけボタン1つ(views/entry.js paintPageGuide)。くわしくはマウスで */
 .page-guide{

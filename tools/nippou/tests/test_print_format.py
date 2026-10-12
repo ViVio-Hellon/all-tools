@@ -91,6 +91,12 @@ class SheetLayoutTests(unittest.TestCase):
         # 枠の中に「有・無」を両方出して、どちらか分からない紙にしない
         self.assertNotIn("<b>昼稼働</b>有・無", out)
 
+    def test_理由の枠は記号を付けずその他とだけ出す(self) -> None:
+        """「ヨ」は停止内訳の記号で、停止内訳を直すと変わる。刷るものには付けない。"""
+        out = build_print_html(make_header(reason="段取り替え"), [])
+        self.assertIn('<div class="head__box head__box--reason"><b>その他</b>段取り替え</div>', out)
+        self.assertNotIn("ヨ：", out.split("<body>", 1)[1])
+
     def test_昼稼働が空なら無と読む(self) -> None:
         out = build_print_html(make_header(day_shift=""), [])
         self.assertIn("<b>昼稼働</b>無", out)

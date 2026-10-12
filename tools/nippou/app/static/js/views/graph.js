@@ -17,6 +17,7 @@
 */
 
 import { api } from "../api.js";
+import { lineLabel } from "../line_label.js";
 import { stampAsOf } from "../asof.js";
 import { toast, toastError } from "../toast.js";
 import { paintTile } from "../chart.js";
@@ -282,9 +283,18 @@ export function start() {
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
 
+  /*
+    ライン(Administrator の PC だけ出る欄)。**欄が無ければ送らない** ── サーバが
+    この端末のラインで読む。読めなかったら欄を前のラインへ戻す(絵と欄を食い違わせない)
+  */
+  const lineSelect = document.getElementById("graph-line");
+  const linePart = () => (lineSelect ? { line: lineSelect.value } : {});
+  let shownLine = lineSelect?.value || "";
+
   document.getElementById("reload")?.addEventListener("click", async () => {
     try {
       const body = await api.post("/api/graph/dashboard", {
+        ...linePart(),
         start: document.getElementById("start").value,
         end: document.getElementById("end").value,
         // 目標線を出すかどうか(VBA `Targetline`)。**判断は人**
@@ -294,11 +304,22 @@ export function start() {
       });
       replaceTiles(body);
       if (pick) paintFocus(pick.value);
+      shownLine = body.line || shownLine;
+      const lead = document.getElementById("graph-lead");
+      if (lead) lead.textContent = `${body.report_date} / ${lineLabel(body.line)}`;
       // **いつ引いた数字かも一緒に更新する。** 忘れると、絵だけ新しく
       // なって時刻が前のまま残る ── いちばん悪い形の嘘になります
       stampAsOf(body.generated_at);
       toast("表示を更新しました", "ok");
-    } catch (err) { toastError(err); }
+    } catch (err) {
+      if (lineSelect) lineSelect.value = shownLine;
+      toastError(err);
+    }
+  });
+
+  // ラインも、選んだ時点で引き直す(「表示」の押し忘れで前のラインを読まない)
+  lineSelect?.addEventListener("change", () => {
+    document.getElementById("reload")?.click();
   });
 
   // 目標線のチェックは、押した時点で引き直す ── 「表示」を
@@ -318,6 +339,7 @@ export function start() {
   document.getElementById("csv")?.addEventListener("click", async () => {
     try {
       const body = await api.post("/api/graph/csv", {
+        ...linePart(),
         start: document.getElementById("start")?.value || "",
         end: document.getElementById("end")?.value || "",
       });

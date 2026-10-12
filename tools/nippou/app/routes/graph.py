@@ -5,6 +5,12 @@
     POST /api/graph/history     期間の推移だけ(直終わりの確認が使う)
     POST /api/graph/csv         集計用CSVを書き出す(3本。ライン/集計/年月/日 へ)
 
+【Administrator はラインを選べる(v4.29.0)】
+アクセス権限の表で Administrator の PC には「表示」の隣に「ライン」を出し、選んだ
+ラインのグラフを出します(ほかのラインは控えから。`services/line_view`)。**混ぜません**
+── 1 度に出すのは 1 ラインだけ。ほかの PC はこれまでどおりこの端末のライン。
+直の終わりの確認(`/graph/review`)は、いつもこの端末のラインです。
+
 【45度線(目標値)】
 ライン毎の目標(1日あたりの枚数)を読んで、赤い線を重ねる
 (VBA `目標値抜き取り` + `グラフ挿入` の「★目標値追加」)。
@@ -38,7 +44,7 @@ from nippou.logging_setup import get_logger, log_button_click
 from nippou.presenters import dashboard as dash
 from nippou.presenters import settings as settings_view
 from nippou.reporting import csv_export
-from nippou.services import summary
+from nippou.services import line_view, summary
 from nippou.services.nippou_service import format_business_date
 
 from .. import error_body, get_repo, shell
@@ -54,7 +60,7 @@ def _line_label(line: str) -> str:
     return line_names.label(line)
 
 
-def _history(start: date, end: date, line: str) -> dict:
+def _history(start: date, end: date, line: str, repo=None) -> dict:
     """期間の日別推移。**空でも「無い」と言える形で返す。**
 
     枚数の推移には目標を重ねます ── **直の終わりに見るのはここ**で、
@@ -64,7 +70,7 @@ def _history(start: date, end: date, line: str) -> dict:
     """
     from nippou.logic import line_target
 
-    rows = summary.period_rows(get_repo(), start, end, line)
+    rows = summary.period_rows(repo or get_repo(), start, end, line)
     labels = [r.report_date for r in rows]
     target = line_target.flat_line(_target_of(line), len(rows))
     return {
@@ -121,17 +127,23 @@ def _today_shifts(report_date: str, line: str) -> dict:
 
 
 def _dashboard(start: date, end: date, report_date: str, line: str,
-               *, with_target: bool = True, mode: str = dash.MODE_DAY):
+               *, with_target: bool = True, mode: str = dash.MODE_DAY, repo=None):
     """1画面ぶんのタイル。**DBを読むのは presenter の中だけ。**
 
     `with_target` は画面の「目標線」のチェック(VBA `Targetline`)。
     外すと45度線を重ねません ── 実績だけを見たい場面があるので、
     VBA と同じく**出す・出さないを人が決められる**ようにしています。
     """
+    own = repo is None or repo is get_repo()
+    repo = repo or get_repo()
+    pending = repo.pending_sync_headers()
+    if not own:
+        # ほかのライン(控えの写し)は、**そのラインのぶんだけ**数える(混ぜない)
+        pending = [h for h in pending if h.line == line]
     return dash.build(
-        get_repo(), report_date=report_date, line=line, start=start, end=end,
+        repo, report_date=report_date, line=line, start=start, end=end,
         # 共有へまだ出していないページ。0でも出す(押し忘れか、無いのか)
-        pending=len(get_repo().pending_sync_headers()),
+        pending=len(pending),
         target=_target_of(line) if with_target else None,
         # その日を見るのか、期間を見るのか。**押された側をそのまま渡す**
         mode=mode)
@@ -167,6 +179,8 @@ def index():
     return render_template(
         "graph.html",
         dashboard=_dashboard(start, end, report_date, ctx.line).as_dict(),
+        # 「表示」の隣のライン(Administrator の PC だけ)
+        line_pick=line_view.choices(ctx.line).as_dict(),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)
         out_dir=settings_view.output_dir_view(),
         **shell.shell_context("graph", ribbon=_ribbon(ctx, calc)))
@@ -198,10 +212,16 @@ def dashboard_reload():
     # その日 / 期間。**知らない字は「その日」に倒します**(画面が古くても動く)
     mode = (dash.MODE_PERIOD if str(payload.get("mode", "")) == dash.MODE_PERIOD
             else dash.MODE_DAY)
-    log_button_click("graph_dashboard", line=ctx.line,
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    log_button_click("graph_dashboard", line=line,
                      extra=f"{start}~{end} {mode}")
-    return jsonify(_dashboard(start, end, report_date, ctx.line,
-                              with_target=with_target, mode=mode).as_dict())
+    try:
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            view = _dashboard(start, end, report_date, line,
+                              with_target=with_target, mode=mode, repo=repo)
+    except line_view.NoBackup as exc:
+        return jsonify(error_body("no_backup", str(exc))), 404
+    return jsonify(view.as_dict())
 
 
 @bp.post("/api/graph/history")
@@ -219,8 +239,14 @@ def history():
             "bad_range", "開始日は終了日以前にしてください", field="start")), 422
 
     ctx = work_context.get_context()
-    log_button_click("graph_history", line=ctx.line, extra=f"{start}~{end}")
-    return jsonify(_history(start, end, ctx.line))
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    log_button_click("graph_history", line=line, extra=f"{start}~{end}")
+    try:
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            body = _history(start, end, line, repo=repo)
+    except line_view.NoBackup as exc:
+        return jsonify(error_body("no_backup", str(exc))), 404
+    return jsonify(body)
 
 
 @bp.post("/api/graph/csv")
@@ -276,12 +302,18 @@ def export_csv():
         return jsonify(error_body(
             "bad_range", "開始日は終了日以前にしてください", field="start")), 422
 
+    # 画面で選んでいるライン(Administrator だけ)。出し先も <ライン>\集計\… で分かれる
+    line = line_view.resolve(payload.get("line"), ctx.line)
+
     # **1つ目だけ。** 2つ目の出力先へは「共有へ保存」で送れたときに出します
     # (`services/second_output`)
     try:
-        written = csv_export.write_period_set(
-            get_repo(), start, end, ctx.line, SETTINGS.report_output_dir,
-            always=named)
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            written = csv_export.write_period_set(
+                repo, start, end, line, SETTINGS.report_output_dir,
+                always=named)
+    except line_view.NoBackup as exc:
+        return jsonify(error_body("no_backup", str(exc))), 404
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("集計CSVの書き出しに失敗しました")
         return jsonify(error_body("write_failed", f"出力に失敗しました: {exc}")), 500
@@ -292,11 +324,11 @@ def export_csv():
     swept = _sweep_legends()
 
     period = f"{start}〜{end}" if start != end else str(start)
-    log_button_click("graph_csv", line=ctx.line, extra=period)
+    log_button_click("graph_csv", line=line, extra=period)
     return jsonify({**_csv_payload(written, period, start, end),
-                    "line": ctx.line,
+                    "line": line,
                     "legend_sweep": swept.as_dict(),
-                    "message": _csv_message(written, period, ctx.line, swept)})
+                    "message": _csv_message(written, period, line, swept)})
 
 
 def _csv_range(payload: dict, today: str):

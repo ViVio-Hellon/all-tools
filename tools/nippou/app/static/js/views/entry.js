@@ -1673,6 +1673,238 @@ async function clearRow(row) {
   toast(`${row}行目を空にしました`, "ok");
 }
 
+/*
+  ---- 順に打つ (v4.29.0) ── 行番号のダブルクリック ----
+
+      日報を入力:VBAに合った機能なのだが作業時間の開始から順にmsgboxに入力していく
+      モードがありました(マウスによる操作を減らす)同じ機能である必要はないが、
+      作業開始 0815 enter 作業終了 0911 enter 作業人数 3 enter ~梱包数まで
+      入力とエンターだけでも いけるモードはつくれないか 行の数字ダブルクリックで発火させる
+
+  1 欄ずつ聞き、Enter で**表の欄へそのまま入れて**次へ進む(入れたら、欄を離れたときと
+  同じくサーバへ送る ── 計算・重量の確かめ・包数の 1 は打ったときと同じに走る)。
+
+    ・空のまま Enter … 今の値のまま次へ(開いたときは今の値が入っていて、選んである)
+    ・Shift+Enter    … 前へ
+    ・Esc / ほかの所を押す … やめる(それまでに入れたぶんは残る)
+
+  **確かめるのは形だけ**(時刻は 4 桁の時分・人数や枚数は数字)。中身の良し悪しは
+  これまでどおりサーバと保存前の確かめが見る。
+*/
+const SEQ_STEPS = [
+  { key: "start", label: "作業開始", fields: ["KZ", "KH"], kind: "hhmm",
+    hint: "時分を 4 桁で(例 0815)。3 桁(815)・8:15 でも入ります" },
+  { key: "end", label: "作業終了", fields: ["SZ", "SH"], kind: "hhmm",
+    hint: "時分を 4 桁で(例 0911)" },
+  { key: "HIT", label: "作業人数", fields: ["HIT"], kind: "num", hint: "例 3" },
+  { key: "AI", label: "合紙", fields: ["AI"], kind: "pick" },
+  { key: "MAI", label: "個装単位 枚数", fields: ["MAI"], kind: "num", hint: "例 50" },
+  { key: "TUT", label: "梱包単位 包数(梱包数)", fields: ["TUT"], kind: "num",
+    hint: "例 2。空のままなら、枚数があれば 1 が入ります" },
+];
+
+const seq = { row: 0, step: 0 };
+
+function seqField(family, row = seq.row) {
+  return document.getElementById(`${family}${row}`);
+}
+
+/** 選ぶ欄(合紙)の選べるもの。空(選ばない)は 0、ほかは並びの番号 */
+function seqChoices(step) {
+  const el = seqField(step.fields[0]);
+  return el ? [...el.options].map((o) => o.value) : [];
+}
+
+/** その欄の今の値を、聞く欄に出す形で(時刻は 0815) */
+function seqCurrent(step) {
+  const values = step.fields.map((f) => String(seqField(f)?.value || "").trim());
+  if (step.kind === "hhmm") {
+    const [h, m] = values;
+    return h || m ? `${h.padStart(2, "0")}${m.padStart(2, "0")}` : "";
+  }
+  return values[0];
+}
+
+/**
+ * 打たれた字を、その欄へ入れる値に読む。**読めなければ理由を返す。**
+ * 返すのは { values: [欄ごとの値] } か { error }。空のままは { keep: true }。
+ */
+function seqParse(step, raw) {
+  const text = String(raw || "").normalize("NFKC").trim();
+  if (step.kind === "pick") {
+    const choices = seqChoices(step);
+    if (!text) return { keep: true };
+    if (/^\d+$/.test(text)) {
+      const n = Number(text);
+      if (n === 0) return { values: [""] };
+      const named = choices.filter((c) => c);
+      if (n >= 1 && n <= named.length) return { values: [named[n - 1]] };
+    }
+    if (choices.includes(text)) return { values: [text] };
+    return { error: `${choices.filter((c) => c).map((c, i) => `${i + 1}=${c}`).join("・")}・0=空 のどれかで` };
+  }
+  if (!text) return { keep: true };
+  if (step.kind === "hhmm") {
+    const digits = text.replace(/[:：.\s]/g, "");
+    if (!/^\d{3,4}$/.test(digits)) return { error: "時分を 4 桁の数字で(例 0815)" };
+    const h = Number(digits.slice(0, -2));
+    const m = Number(digits.slice(-2));
+    if (h > 23) return { error: "時は 0〜23 で" };
+    if (m > 59) return { error: "分は 0〜59 で" };
+    return { values: [String(h).padStart(2, "0"), String(m).padStart(2, "0")] };
+  }
+  if (!/^\d+(\.\d+)?$/.test(text)) return { error: "数字で" };
+  return { values: [text] };
+}
+
+function seqPaint() {
+  const step = SEQ_STEPS[seq.step];
+  const input = document.getElementById("seq-entry-input");
+  document.getElementById("seq-entry-title").textContent = `${seq.row}行目を順に打つ`;
+  document.getElementById("seq-entry-count").textContent = `${seq.step + 1} / ${SEQ_STEPS.length}`;
+  document.getElementById("seq-entry-label").textContent = step.label;
+  let hint = step.hint || "";
+  if (step.kind === "pick") {
+    const named = seqChoices(step).filter((c) => c);
+    hint = `${named.map((c, i) => `${i + 1} = ${c}`).join(" / ")} / 0 = 空(字でも入ります)`;
+  }
+  document.getElementById("seq-entry-hint").textContent = hint;
+  const error = document.getElementById("seq-entry-error");
+  error.hidden = true;
+  error.textContent = "";
+  // 進み具合 ── どこまで入れて、いまどこか
+  const list = document.getElementById("seq-entry-steps");
+  list.replaceChildren(...SEQ_STEPS.map((s, i) => {
+    const li = document.createElement("li");
+    if (i === seq.step) li.setAttribute("aria-current", "step");
+    const now = seqCurrent(s);
+    // 進み具合は短く(「梱包単位 包数(梱包数)」→「梱包単位 包数」)
+    li.append(`${s.label.replace(/\s*[(（].*?[)）]/g, "")} `);
+    if (now) {
+      const b = document.createElement("b");
+      b.textContent = s.kind === "hhmm" ? `${now.slice(0, 2)}:${now.slice(2)}` : now;
+      li.append(b);
+    } else {
+      li.append("—");
+    }
+    return li;
+  }));
+  input.inputMode = step.kind === "pick" ? "text" : "numeric";
+  input.value = seqCurrent(step);
+  input.focus({ preventScroll: true });
+  input.select();
+}
+
+function seqPlace(row) {
+  const box = document.getElementById("seq-entry");
+  const cell = document.querySelector(`#grid-body tr[data-row="${row}"] td.rowno`);
+  if (!box || !cell) return;
+  // 行のすぐ下(行の中身を隠さない)。下に入らなければ上へ
+  const at = cell.getBoundingClientRect();
+  const below = at.bottom + 4;
+  const top = below + box.offsetHeight + 8 <= window.innerHeight
+    ? below : Math.max(8, at.top - box.offsetHeight - 4);
+  const left = Math.min(Math.max(8, at.left), window.innerWidth - box.offsetWidth - 8);
+  box.style.left = `${Math.max(8, left)}px`;
+  box.style.top = `${top}px`;
+}
+
+function seqOpen(row) {
+  const box = document.getElementById("seq-entry");
+  if (!box || !row) return;
+  // 見るだけの直・使えない欄(呼び出し中の鍵など)では開かない
+  const locked = SEQ_STEPS.some((s) => s.fields.some((f) => {
+    const el = seqField(f, row);
+    return !el || el.disabled || el.readOnly;
+  }));
+  if (locked) { toast("この行はいま打てません", "warn"); return; }
+  closeRowAsk();
+  seq.row = row;
+  seq.step = 0;
+  for (const tr of document.querySelectorAll("#grid-body tr")) delete tr.dataset.focus;
+  const tr = document.querySelector(`#grid-body tr[data-row="${row}"]`);
+  if (tr) tr.dataset.focus = "1";
+  // 行を画面の中ほどへ(窓を行の下か上に置く余地を作る)。**中身を入れてから測って置く**
+  tr?.scrollIntoView({ block: "center" });
+  box.hidden = false;
+  seqPaint();
+  seqPlace(row);
+}
+
+function seqClose({ next = false } = {}) {
+  const box = document.getElementById("seq-entry");
+  if (!box || box.hidden) return;
+  box.hidden = true;
+  const row = seq.row;
+  seq.row = 0;
+  // 打ち終えたら次の行のロット№へ(続けて打てる)。やめたときは、いた欄へ
+  const target = next ? (seqField("LOT", row + 1) || seqField("TUT", row))
+                      : seqField(SEQ_STEPS[seq.step]?.fields[0] || "KZ", row);
+  if (target && !target.disabled) {
+    target.focus();
+    if (target.tagName === "INPUT") target.select();
+  }
+}
+
+/** いまの欄を表へ入れる。**読めなければ止まって理由を出す** */
+function seqCommit() {
+  const step = SEQ_STEPS[seq.step];
+  const got = seqParse(step, document.getElementById("seq-entry-input")?.value);
+  if (got.error) {
+    const error = document.getElementById("seq-entry-error");
+    error.textContent = got.error;
+    error.hidden = false;
+    document.getElementById("seq-entry-input")?.select();
+    return false;
+  }
+  const row = seq.row;
+  if (got.keep) {
+    // 包数を空のまま通った ── 欄を離れたときと同じく送る(枚数があれば 1 が入る)
+    if (step.key === "TUT") later(`settle:TUT${row}`, () => settle(row, "TUT"));
+    return true;
+  }
+  let changed = false;
+  step.fields.forEach((family, i) => {
+    const el = seqField(family);
+    if (!el || el.value === got.values[i]) return;
+    el.value = got.values[i];
+    // **人が打った値**(前に頼んだ答えが遅れて着いても戻さない)
+    touched(el);
+    changed = true;
+  });
+  if (!changed) return true;
+  // 開始時刻を人が入れた ── 写した印は落とす(以後ツールは消さない)
+  if (step.key === "start") forgetCarried(seq.row);
+  // 欄を離れたときと同じく送る(計算・重量の確かめ・包数の 1)
+  const family = step.fields[step.fields.length - 1];
+  later(`settle:${family}${row}`, () => settle(row, family));
+  return true;
+}
+
+function seqKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    seqClose();
+    return;
+  }
+  if (event.key !== "Enter") return;
+  // 日本語の変換を確定する Enter は取らない
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  if (event.shiftKey) {
+    if (seq.step > 0) { seq.step -= 1; seqPaint(); }
+    return;
+  }
+  if (!seqCommit()) return;
+  if (seq.step + 1 >= SEQ_STEPS.length) {
+    toast(`${seq.row}行目を打ち終えました`, "ok");
+    seqClose({ next: true });
+    return;
+  }
+  seq.step += 1;
+  seqPaint();
+}
+
 /** 「重量を変更しますか？」。**はい**なら、その行だけ計算し直す。 */
 async function askWeight(ask) {
   if (!confirm(ask.message)) return;      // いいえ ── 入っている値のまま
@@ -2458,9 +2690,26 @@ export function start() {
     document.addEventListener("scroll", () => closeRowAsk(), { signal, capture: true });
     window.addEventListener("resize", () => closeRowAsk(), { signal });
   }
+  // 順に打つ(v4.29.0)。ほかの所を押したら閉じる(入れたぶんは残る)
+  {
+    const signal = pageSignal();
+    document.getElementById("seq-entry-input")?.addEventListener("keydown", seqKey, { signal });
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest?.("#seq-entry, td.rowno")) seqClose();
+    }, { signal });
+    window.addEventListener("resize", () => { if (seq.row) seqPlace(seq.row); }, { signal });
+  }
   // 開始・終了の時/分のダブルクリック。**欄ごとに繋がず、表に1つ**(上と同じ理由)
   // 枚数・包数のダブルクリックは「上の行と同じ」(v4.7.0)
   document.getElementById("grid-body")?.addEventListener("dblclick", (event) => {
+    // 行の番号 ── その行を順に打つ(v4.29.0)。✕ は「空にする」のまま
+    const rowno = event.target.closest?.("td.rowno");
+    if (rowno && !event.target.closest?.("[data-clear-row]")) {
+      event.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      seqOpen(Number(rowno.closest("tr")?.dataset.row));
+      return;
+    }
     const input = event.target.closest?.("input[data-stamp]");
     if (input) {
       event.preventDefault();

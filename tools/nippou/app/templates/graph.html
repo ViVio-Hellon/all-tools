@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-head">
   <h1>集計・グラフ</h1>
-  <span class="lead">{{ dashboard.report_date }} / {{ dashboard.line | line_label }}</span>
+  <span class="lead" id="graph-lead">{{ dashboard.report_date }} / {{ dashboard.line | line_label }}</span>
   {#
     **いつ引いた数字か。**
 
@@ -80,6 +80,18 @@
       ネオン表示
     </label>
     <button class="btn" type="button" id="reload">表示</button>
+    {# ライン ── **アクセス権限の表で Administrator の PC だけ**(`services/line_view`)。
+       選んだラインのグラフだけを出す(混ぜない)。ほかのラインは控え(LocalBackup)から #}
+    {% if line_pick.shown %}
+    <div class="field" data-line-pick>
+      <label for="graph-line">ライン</label>
+      <select id="graph-line">
+        {% for ln in line_pick.lines %}
+        <option value="{{ ln.code }}" {% if ln.code == line_pick.line %}selected{% endif %}>{{ ln.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <button class="btn" type="button" id="csv">この期間の集計CSVを出力</button>
     <span class="lead">
       <b>いま出している期間ぶん</b>を、1日ずつ3本で出します ──

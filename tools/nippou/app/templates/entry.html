@@ -606,7 +606,7 @@
    使える近道が出ます** ── ここは一覧として1行で言い、残りは「くわしく」に #}
 <p class="lead tip" tabindex="0" id="shortcut-tip">
   <span class="tip__line"><b>Enter</b> で次の欄・<b>枚数をダブルクリック</b>で上の行と同じ・
-    <b>包数</b>は空なら 1。欄にマウスを乗せると説明が出ます</span>
+    <b>包数</b>は空なら 1・<b>行の番号をダブルクリック</b>で順に打つ。欄にマウスを乗せると説明が出ます</span>
   <span class="tip__mark" aria-hidden="true">くわしく</span>
   <span class="tip__more">
     <b>Enter / Shift+Enter</b> … 次の欄へ / 前の欄へ(2桁で自動で進む欄と同じ順。
@@ -618,7 +618,10 @@
     (包数が空だと、実績合計の枚数と重量が出ません)。<br>
     <b>終了の時・分</b> … 欄のすぐ下に出る「直の終わり」を押すと、この直の終わりの時刻が
     入ります。<br>
-    <b>停止の記号</b> … 一覧のいちばん上に、このラインでよく使う記号が並びます。</span>
+    <b>停止の記号</b> … 一覧のいちばん上に、このラインでよく使う記号が並びます。<br>
+    <b>行の番号をダブルクリック</b> … その行を 1 欄ずつ聞いていきます(作業開始 0815 Enter →
+    作業終了 0911 Enter → 作業人数 3 Enter → 合紙 → 枚数 → 包数)。マウスを使わずに打てます。
+    空のまま Enter は今の値のまま、Shift+Enter で前へ、Esc でやめます(入れたぶんは残ります)。</span>
 </p>
 </div>
 </div>
@@ -689,7 +692,7 @@
            消すのはこの行だけで、下の行は繰り上がりません(紙は12行の
            罫線が引かれた用紙で、行番号は紙の行番号です)。 #}
         <td class="rowno">
-          <span class="rowno__n">{{ row }}</span>
+          <span class="rowno__n" title="ダブルクリックで、この行を順に打つ(作業開始から包数まで)">{{ row }}</span>
           <button class="rowno__del" type="button" data-clear-row="{{ row }}"
                   title="{{ row }}行目を空にする" aria-label="{{ row }}行目を空にする"
           >✕</button>
@@ -811,6 +814,29 @@
   <span class="rowask__text" id="row-ask-text"></span>
   <button class="btn btn--danger btn--sm" type="button" id="row-ask-yes">空にする</button>
   <button class="btn btn--sm" type="button" id="row-ask-no">やめる</button>
+</div>
+{# 順に打つ(v4.29.0)。**行番号をダブルクリック**すると、その行を 1 欄ずつ聞いていく。
+
+       日報を入力:VBAに合った機能なのだが作業時間の開始から順にmsgboxに入力していく
+       モードがありました(マウスによる操作を減らす)… 作業開始 0815 enter 作業終了
+       0911 enter 作業人数 3 enter ~梱包数まで 入力とエンターだけでも いけるモード
+
+   聞く順は 作業開始 → 作業終了 → 作業人数 → 合紙 → 個装単位 枚数 → 梱包単位 包数。
+   Enter で表へ入れて次へ(空のまま Enter は今の値のまま)・Shift+Enter で前へ・Esc でやめる
+   (それまでに入れたぶんは残る)。並びと読み方は views/entry.js の SEQ_STEPS #}
+<div class="seqentry" id="seq-entry" role="dialog" aria-modal="false"
+     aria-labelledby="seq-entry-title" hidden>
+  <div class="seqentry__head">
+    <b id="seq-entry-title">順に打つ</b>
+    <span class="seqentry__count" id="seq-entry-count"></span>
+  </div>
+  <label class="seqentry__label" for="seq-entry-input" id="seq-entry-label"></label>
+  <input class="seqentry__input" id="seq-entry-input" type="text" autocomplete="off"
+         inputmode="numeric" spellcheck="false">
+  <p class="seqentry__hint" id="seq-entry-hint"></p>
+  <p class="seqentry__error" id="seq-entry-error" role="alert" hidden></p>
+  <ol class="seqentry__steps" id="seq-entry-steps"></ol>
+  <p class="seqentry__keys"><b>Enter</b> 入れて次へ ・ <b>Shift+Enter</b> 前へ ・ <b>Esc</b> やめる</p>
 </div>
 {# 「直の終わり」(v4.7.0)。**終了の時/分に入っているあいだだけ、その欄のすぐ下に
    出ます。** 押すと、開いている直の終わりの時刻が終了の時と分に入ります。

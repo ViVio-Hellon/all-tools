@@ -6,6 +6,11 @@
     POST /api/agg/push-log      共有保存の履歴(表とグラフ)
     POST /api/agg/push-log/csv  共有保存の履歴をCSVにする
 
+【Administrator はラインを選べる(v4.29.0)】
+アクセス権限の表で Administrator の PC には「表示」の隣に「ライン」を出し、選んだ
+ラインの表を出します(ほかのラインは控えから。`services/line_view`)。**混ぜません**
+── 1 度に出すのは 1 ラインだけです。ほかの PC はこれまでどおりこの端末のライン。
+
 【共有保存の履歴は、画面が開いてから読む】
 履歴は共有の `日報データ.sqlite3` にもあり、全端末の行はそちらにしか
 ありません。共有が遅い・届かないときに画面ごと待たせないよう、表とグラフは
@@ -35,6 +40,7 @@ from nippou.logging_setup import get_logger, log_button_click
 from nippou.presenters import agg_admin, push_log
 from nippou.presenters import settings as settings_view
 from nippou.reporting import csv_export
+from nippou.services import line_view
 
 from .. import error_body, get_repo, shell
 
@@ -70,6 +76,8 @@ def index():
         "agg.html",
         agg=agg_admin.build(get_repo(), line=ctx.line, start=start,
                             end=end).as_dict(),
+        # 「表示」の隣のライン(Administrator の PC だけ)
+        line_pick=line_view.choices(ctx.line).as_dict(),
         # 共有保存の履歴の期間は、上の表とは別に選べる(既定は同じ月初〜当日)
         push_presets=push_log.period_presets(end),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)
@@ -80,15 +88,21 @@ def index():
 @bp.post("/api/agg/tables")
 def tables():
     """期間を変えて取り直す。**表を作るのはいつもサーバ側の1か所。**"""
-    span, err = _range(request.get_json(silent=True) or {})
+    payload = request.get_json(silent=True) or {}
+    span, err = _range(payload)
     if err:
         return err
     start, end = span
 
     ctx = work_context.get_context()
-    log_button_click("agg_tables", line=ctx.line, extra=f"{start}~{end}")
-    return jsonify(agg_admin.build(get_repo(), line=ctx.line, start=start,
-                                   end=end).as_dict())
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    log_button_click("agg_tables", line=line, extra=f"{start}~{end}")
+    try:
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            view = agg_admin.build(repo, line=line, start=start, end=end)
+    except line_view.NoBackup as exc:
+        return jsonify(error_body("no_backup", str(exc))), 404
+    return jsonify(view.as_dict())
 
 
 @bp.post("/api/agg/csv")
@@ -105,20 +119,26 @@ def export_csv():
     start, end = span
 
     ctx = work_context.get_context()
-    view = agg_admin.build(get_repo(), line=ctx.line, start=start, end=end)
+    # 画面で選んでいるライン(Administrator だけ。ファイル名にもそのラインが入る)
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    try:
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            view = agg_admin.build(repo, line=line, start=start, end=end)
+    except line_view.NoBackup as exc:
+        return jsonify(error_body("no_backup", str(exc))), 404
     written: list[str] = []
     try:
         for table in view.tables:
             out = csv_export.agg_output_path(
                 SETTINGS.report_output_dir, table.key,
-                start.isoformat(), end.isoformat(), ctx.line)
+                start.isoformat(), end.isoformat(), line)
             count = csv_export.write_table(table, out)
             written.append(f"{table.title} {count}行\n{out}")
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("集計CSVの書き出しに失敗しました")
         return jsonify(error_body("write_failed", f"出力に失敗しました: {exc}")), 500
 
-    log_button_click("agg_csv", line=ctx.line, extra=f"{start}~{end}")
+    log_button_click("agg_csv", line=line, extra=f"{start}~{end}")
     return jsonify({"files": written, "message": "\n".join(written)})
 
 
