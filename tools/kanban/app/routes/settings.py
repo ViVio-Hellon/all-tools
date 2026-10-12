@@ -28,6 +28,7 @@
 ``POST /api/line``                          必要
 ``POST /api/shared-db-path``                必要
 ``GET  /api/shared-db-status``              **不要**(いまの接続先と、届いているか)
+``GET  /api/file-places``                   **不要**(ファイルの場所の一覧。接続先などを変えたら出し直す)
 ``GET  /api/stats`` / ``/api/stats/csv``    **不要**(看板集計を読む)
 ``POST /api/reimport``                      必要
 ``POST /api/sync/discard-failed``           必要(送れない操作を捨てて共有DBの状態に戻す)
@@ -1444,6 +1445,17 @@ def shared_db_status():
         "configured": bool(cfg.shared_db_path.strip()),
         "problem": _path_problem(path),
     })
+
+
+@bp.get("/api/file-places")
+def file_places():
+    """「ファイルの場所」の一覧(共有するもの / この端末だけ / アプリのフォルダ)。**読むだけ。**
+
+    設定画面は開いたときにサーバが描くので、そのままだと**接続先を変えても古い場所を
+    出し続けた**(看板履歴・梱包資材マスタの既定は共有DBと同じフォルダなので、3 行とも
+    古いまま)。変えたあと画面がここを取り直して描き直す。設定は毎回読み直す(:func:`_cfg`)。
+    """
+    return jsonify(_file_places(_cfg(), get_store()))
 
 
 @bp.post("/api/sync/discard-failed")

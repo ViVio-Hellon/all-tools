@@ -22,12 +22,17 @@
 #}
 <script>
   (function () {
-    var c = 'light';
-    // 自分で選んでいなければ、日報複合ツールの大設定の既定(`kanban.theme_default`。js/theme.js)
+    var c = 'default', look = 'light';
+    // 自分で選んだもの(`kanban.theme_choice`)。選んでいなければ、日報複合ツールの大設定の
+    // 既定(`kanban.theme_default`)、それも無ければライト。前の版の `kanban.theme` は
+    // 読まない(大設定の既定が無かったころの選択。js/theme.js が一度だけ消す)
     try {
-      c = localStorage.getItem('kanban.theme') || localStorage.getItem('kanban.theme_default') || 'light';
+      var v = localStorage.getItem('kanban.theme_choice');
+      if (v === 'light' || v === 'dark' || v === 'auto') c = v;
+      if (localStorage.getItem('kanban.theme_default') === 'dark') look = 'dark';
     } catch (e) { /* 既定のライト */ }
-    var dark = c === 'dark' || (c === 'auto' && window.matchMedia
+    if (c !== 'default') look = c;
+    var dark = look === 'dark' || (look === 'auto' && window.matchMedia
       && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     document.documentElement.setAttribute('data-theme-choice', c);
@@ -103,9 +108,9 @@
     {# モードの札。押すと設定画面(モードの変更はそこにある) #}
     <a class="mode-chip mode-chip--{{ mode_tone }}" href="/settings"
        title="いまのモード。押すと設定画面が開きます">{{ mode_label }}</a>
-    {# 画面の明るさ。押すたびに 自動 → ライト → ダーク(この端末に覚える。js/theme.js) #}
+    {# 画面の明るさ。押すたびに ライト → ダーク → 自動 → 既定(大設定に従う)(この端末に覚える。js/theme.js) #}
     <button class="btn btn--ghost btn--sm theme-toggle" type="button" id="theme-toggle"
-            title="画面の明るさ">◐ 自動</button>
+            title="画面の明るさ">◇ 既定</button>
     <button class="btn btn--danger" type="button" id="quit">■ 終了</button>
   </div>
 </header>

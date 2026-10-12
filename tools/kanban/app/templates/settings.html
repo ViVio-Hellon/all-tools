@@ -890,7 +890,7 @@
     共有フォルダに置き、<b>全端末が同じファイルを読み書きします</b>。置き場所は「接続先」タブで決め、
     ほかの端末へは「配布設定」で揃えます。この PC を入れ替えても中身はそのままです。
   </p>
-  {% set places = state.places.shared %}{% include "_places.html" %}
+  <div data-places="shared">{% set places = state.places.shared %}{% include "_places.html" %}</div>
 </section>
 
 <section class="card">
@@ -901,13 +901,13 @@
     PC を替えるときは移りません(設定は「配布設定」で配り直し、担当ライン・モードは選び直してください)。
     手元の SQLite に<b>まだ送れていない操作</b>が残っているうちは消さないでください。
   </p>
-  {% set places = state.places.local %}{% include "_places.html" %}
+  <div data-places="local">{% set places = state.places.local %}{% include "_places.html" %}</div>
 </section>
 
 <section class="card">
   <h2>アプリのフォルダ <span class="scope">入れ替えると置き換わる</span></h2>
   <p class="card__note">アプリの本体と一緒に配るものです。新しい版に入れ替えると置き換わります。</p>
-  {% set places = state.places.app %}{% include "_places.html" %}
+  <div data-places="app">{% set places = state.places.app %}{% include "_places.html" %}</div>
 </section>
 
 <section class="card">

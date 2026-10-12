@@ -1721,6 +1721,35 @@ class ReimportTest(RouteTestBase):
         Path(target).unlink()
         self.assertIn("見つかりません", self.get("/api/shared-db-status").json["problem"])
 
+    def test_file_places_follow_the_new_connection_target(self):
+        """接続先を変えたら「複数の PC で共有するファイル」もその場で新しい場所を出す。
+
+        設定画面は開いたときにサーバが描くので、以前は変えたあとも前の接続先のまま
+        だった(読み直しが見送られると、ずっと古いまま)。画面は ``/api/file-places`` を
+        取り直して描き直す。看板履歴・梱包資材マスタの既定は共有DBと同じフォルダ。
+        """
+        folder = self.dir / "新しい接続先"
+        folder.mkdir()
+        target = self.a_real_db("新しい接続先/看板マスタ.sqlite3")
+        self.assertNotIn(target, self.get("/settings").get_data(as_text=True))
+
+        self.assertTrue(self.change(target).json["changed"])
+
+        places = self.get("/api/file-places").json
+        shared = {p["label"]: p["path"] for p in places["shared"]}
+        self.assertEqual(shared["看板マスタ(共有DB)"], target)
+        self.assertEqual(shared["看板履歴"], str(folder / config.HISTORY_DB_NAME))
+        self.assertEqual(shared["梱包資材マスタ"], str(folder / config.ACCESS_DB_NAME))
+        self.assertTrue(places["shared"][0]["exists"])
+        self.assertEqual(set(places), {"shared", "local", "app"})
+        # 読み直したときも新しい場所(設定は毎回読み直す)
+        html = self.get("/settings").get_data(as_text=True)
+        block = html[html.index('data-places="shared"'):html.index('data-places="local"')]
+        self.assertIn(target, block)
+
+    def test_file_places_needs_the_token(self):
+        self.assertEqual(self.get("/api/file-places", token=None).status_code, 401)
+
 class CancelledWhileShippingTest(RouteTestBase):
     """発送処理中に注文が取り消された(赤なし・緑あり)を、現場に確かめさせる。
 

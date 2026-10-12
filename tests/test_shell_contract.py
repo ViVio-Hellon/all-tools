@@ -275,8 +275,10 @@ class ThemeDefaultTests(unittest.TestCase):
         self.assertIn("const DEFAULT = 'light'", self.text("tools", "nippou", "app", "static", "vc", "coil", "coil-theme.js"))
 
     def test_看板はライト(self) -> None:
-        self.assertIn("localStorage.getItem('kanban.theme') || localStorage.getItem('kanban.theme_default') || 'light'",
-                      self.text("tools", "kanban", "app", "templates", "base.html"))
+        # 自分で選んでいなければ大設定の既定、それも無ければライト(v3.5.0。選んだものは kanban.theme_choice)
+        html = self.text("tools", "kanban", "app", "templates", "base.html")
+        self.assertIn("var c = 'default', look = 'light';", html)
+        self.assertIn("localStorage.getItem('kanban.theme_default') === 'dark'", html)
         self.assertIn("const DEFAULT = 'light';", self.text("tools", "kanban", "app", "static", "js", "theme.js"))
 
     def test_カレンダーと点検表はライト(self) -> None:

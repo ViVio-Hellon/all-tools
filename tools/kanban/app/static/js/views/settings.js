@@ -678,6 +678,7 @@ function wireHistoryPath() {
       box.textContent = `✔ ${clock()} ${r.message}`;
       box.hidden = false;
       renderHistory(r);
+      refreshPlaces();
     } catch (e) {
       box.className = 'banner banner--bad';
       box.textContent = e.message;
@@ -758,6 +759,7 @@ function wireLogDir() {
     try {
       const r = await api.post('/api/log-dir', { path, ...creds });
       show(r);
+      refreshPlaces();
       box.className = 'banner banner--ok';
       box.textContent = `✔ ${clock()} ${r.message}`;
       box.hidden = false;
@@ -785,6 +787,7 @@ function wireCsvDir() {
       document.getElementById('csv-now-path').textContent = r.path;
       const dest = document.getElementById('csv-dest');
       if (dest) dest.textContent = r.path;
+      refreshPlaces();
       box.className = 'banner banner--ok';
       box.textContent = `✔ ${clock()} ${r.message}`;
       box.hidden = false;
@@ -841,6 +844,7 @@ async function onAccessPathChange() {
     box.textContent = `✔ ${clock()} ${r.message}`;
     box.hidden = false;
     refreshAccess();
+    refreshPlaces();
   } catch (e) {
     box.className = 'banner banner--bad';
     box.textContent = e.message;
@@ -887,6 +891,52 @@ async function onLineChange(ev) {
     ev.target.value = state.line;
     bad(e.message);
   }
+}
+
+// ------------------------------------------------------------------
+// ファイルの場所(「この端末について」の面。app/templates/_places.html と同じ形)
+// ------------------------------------------------------------------
+// 開いたときはサーバが描く。置き場所を変えたら**その場で取り直して描き直す**
+// (以前は読み直すまで前の場所のまま ── 読み直しが見送られると、ずっと古いままだった)
+async function refreshPlaces() {
+  try {
+    renderPlaces(await api.get('/api/file-places'));
+  } catch (e) { /* 取れなければ今のまま(読み直せば出る) */ }
+}
+
+function renderPlaces(places) {
+  if (!places) return;
+  state.places = places;
+  for (const [key, rows] of Object.entries(places)) {
+    const body = document.querySelector(`[data-places="${key}"] tbody`);
+    if (!body || !Array.isArray(rows)) continue;
+    body.replaceChildren(...rows.map(placeRow));
+  }
+}
+
+function placeRow(f) {
+  const tr = document.createElement('tr');
+  const cell = (child) => {
+    const td = document.createElement('td');
+    td.append(child);
+    tr.appendChild(td);
+  };
+  const label = document.createElement('b');
+  label.textContent = f.label || '';
+  const path = document.createElement('code');
+  path.textContent = f.path || '';
+  cell(label);
+  cell(path);
+  cell(f.what || '');
+  cell(f.exists ? 'あり' : 'まだ無い・届かない');
+  return tr;
+}
+
+/** 接続先(共有DB)を変えたあと。既定の場所が共有DBのフォルダに付いていくものも出し直す */
+function afterPathChange() {
+  refreshPlaces();
+  if (document.getElementById('history-path-card')) checkHistory();
+  if (document.getElementById('access-now-path')) refreshAccess();
 }
 
 // ------------------------------------------------------------------
@@ -1020,6 +1070,10 @@ async function onAccdbChange() {
     }
     state.shared_db_path = r.path;
     state.shared_db_configured = true;
+    // **ファイルの場所も出し直す。** 下の読み直しは、ほかの欄に打ちかけがあると
+    // 見送られる・繋ぎ直せなければしない ── 以前は「複数の PC で共有するファイル」が
+    // 前の接続先のまま残った(看板履歴・梱包資材マスタの既定も共有DBと同じフォルダ)
+    afterPathChange();
     const text = `✔ 接続先を変えました(${clock()})\n${r.path}\n${r.message || ''}`.trim();
     const kind = r.reconnected ? 'ok' : 'warn';
     showSourceResult(kind, text);

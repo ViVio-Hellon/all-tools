@@ -35,13 +35,31 @@ _PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{display_name} を起動しています</title>
 <script>
-  // 画面の明るさ。業務画面と同じ選び方(帯の「◐ 自動 / ☀ / ☾」)に合わせる
+  // 画面の明るさ。業務画面(base.html の頭のスクリプト・js/theme.js)と同じ決め方:
+  // 自分で選んだもの(`kanban.theme_choice`)、選んでいなければ日報複合ツールの大設定の
+  // 既定(`kanban.theme_default`)、それも無ければライト
   (function () {{
-    var c = 'auto';
-    try {{ c = localStorage.getItem('kanban.theme') || 'auto'; }} catch (e) {{}}
-    var dark = c === 'dark' || (c === 'auto' && window.matchMedia
+    var root = document.documentElement;
+    var c = 'default', look = 'light';
+    try {{
+      var v = localStorage.getItem('kanban.theme_choice');
+      if (v === 'light' || v === 'dark' || v === 'auto') c = v;
+      if (localStorage.getItem('kanban.theme_default') === 'dark') look = 'dark';
+    }} catch (e) {{}}
+    if (c !== 'default') look = c;
+    var dark = look === 'dark' || (look === 'auto' && window.matchMedia
       && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    root.setAttribute('data-theme', dark ? 'dark' : 'light');
+    // 日報複合ツールの大きなタブの画面から既定が届く(入口の shell.js の sendTheme)。
+    // 覚えておき、自分で選んでいなければその色で塗る
+    if (window.parent === window) return;
+    window.addEventListener('message', function (ev) {{
+      var d = ev.data;
+      if (ev.source !== window.parent) return;
+      if (!d || d.type !== 'alltools:theme' || (d.theme !== 'light' && d.theme !== 'dark')) return;
+      try {{ localStorage.setItem('kanban.theme_default', d.theme); }} catch (e) {{}}
+      if (c === 'default') root.setAttribute('data-theme', d.theme);
+    }});
   }})();
 </script>
 <style>
