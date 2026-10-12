@@ -8,6 +8,7 @@
 
 Excel VBA の「シート印刷管理」フォーム(UFPrintManager / UFPreview)を、
 **Python + Rust/Tauri(デスクトップ版)** に移行したものです。点検表そのものは **Excel ファイルのまま** 使います。
+**VER2.3.0 から Word の点検表(.doc / .docx / .docm)も**、一覧の決まりは同じまま載せて、非表示の Word でプレビュー・印刷します。
 
 VER2.0.0 から **デスクトップ版(`InspectionSheet.exe`)** を使います。専用の窓で動き、**ポートを使いません**。
 ブラウザ版(`Start.vbs` / `start.bat`)も予備として残してあります。**2つは同時には動きません**
@@ -17,10 +18,14 @@ VER2.0.0 から **デスクトップ版(`InspectionSheet.exe`)** を使います
 **[python-web-tools](https://github.com/ViVio-Hellon/python-web-tools)(梱包資材総合ツール)と同じ**です。
 同じ端末で並べて使うものなので、起動の仕方・帯・ボタンの色・終わり方をそろえています。
 
-- 点検表フォルダ(ルート > カテゴリー > サブカテゴリー > Excel)から一覧を自動作成
+- 点検表フォルダ(ルート > カテゴリー > サブカテゴリー > Excel・Word)から一覧を自動作成
 - 選択・カテゴリ/表示中の全選択・全解除・**選んだ順番**の並べ替え・検索
 - Excel の `CopyPicture` によるプレビュー(HTML へは変換しない)
 - Excel の `PrintOut` による印刷(印刷範囲・用紙・余白などは Excel 側の設定をそのまま使用)
+- **Word の点検表**(VER2.3.0): `Document.PrintOut` で印刷(用紙・余白などは文書の設定のまま)、プレビューは1ページ目。
+  Word は Word の点検表が来たときだけ起動し、**処理のたびに終える**(Word は利用者がダブルクリックした文書を
+  こちらの Word で開いてしまうことがあるため。利用者の文書が開いていれば Word を見せて残し、閉じない)。
+  設定ファイルの `extensions` が前の版の既定(xlsm / xlsx / xls だけ)のままなら、Word も足して読む
 - 印刷部数(1～100)・進み具合(「2 / 5 点検表Bを印刷しています」)・二重実行防止・中止
 - ダーク/ライト(既定はライト。日報複合ツールの4ツールでそろえる。VBA 版の既定はダークだった)
 - 起動待機画面・多重起動防止・ログ・安全な停止・タブを閉じたら自動終了
@@ -31,7 +36,7 @@ VER2.0.0 から **デスクトップ版(`InspectionSheet.exe`)** を使います
 
 | 項目 | 内容 |
 |---|---|
-| OS | Windows(Excel がインストールされたラインPC) |
+| OS | Windows(Excel がインストールされたラインPC。Word の点検表を使うなら Word も) |
 | Python | 3.9 以上 + `requirements.txt`(**Flask / waitress の2つだけ**。python-web-tools と同じ) |
 | デスクトップ版 | `InspectionSheet.exe`(Microsoft Edge WebView2 で画面を出す。Windows 10/11 に標準で入っている)。Python は各PCのものを使う(同梱しない) |
 | ブラウザ版(予備) | Microsoft Edge / Google Chrome |

@@ -50,7 +50,7 @@ def read_job():
             job[parts[1]] = unhexw(parts[2]) if len(parts) > 2 else ""
 
 
-STATE = {"excel": False, "jobs": 0}
+STATE = {"excel": False, "word": False, "jobs": 0}
 
 
 def result(key, value):
@@ -72,10 +72,41 @@ def start_excel(job):
     return True
 
 
+def is_word(job, i):
+    return job.get(f"kind.{i}", "excel") == "word"
+
+
+def start_word(job):
+    """本物と同じく Word は Word の点検表が来たときだけ起動し、処理の終わりに終える。"""
+    if job.get("fake_no_word") == "1":
+        result("word.code", "WORD_CREATE_FAILED")
+        return False
+    if not STATE["word"]:
+        STATE["word"] = True
+        emit("WORD 0")
+    return True
+
+
+def finish_word(job):
+    if STATE["word"]:
+        STATE["word"] = False
+        emit("WORDBYE " + ("0" if job.get("fake_user_doc") == "1" else "1"))
+
+
 def run(job):
+    rc = run_job(job)
+    finish_word(job)
+    return rc
+
+
+def run_job(job):
     mode = job.get("mode", "")
     STDIN_BROKEN["on"] = job.get("fake_stdin_eof") == "1"
-    if not start_excel(job):
+    if mode == "preview" and is_word(job, 1):
+        return preview_word(job)
+    count = int(job.get("count", "0") or 0)
+    all_word = mode == "print" and count > 0 and all(is_word(job, i) for i in range(1, count + 1))
+    if not all_word and not start_excel(job):
         return 3
     rc = 0
     if mode == "print":
@@ -97,7 +128,11 @@ def run(job):
             if job.get("fake_hang_at") == str(i):
                 time.sleep(60)
             path = job.get(f"file.{i}", "")
-            if "fail" in path:
+            if is_word(job, i) and not start_word(job):
+                result(f"item.{i}.code", "WORD_CREATE_FAILED")
+                emit(f"END {i} NG")
+                rc = 4
+            elif "fail" in path:
                 result(f"item.{i}.code", "PRINT_FAILED")
                 result(f"item.{i}.message", "プリンターがオフラインです")
                 emit(f"END {i} NG")
@@ -134,6 +169,34 @@ def run(job):
     if job.get("fake_die_after") == "1":
         sys.exit(9)                                    # 途中で落ちた(FINISH を出さない)
     return rc
+
+
+def preview_word(job):
+    """Word の1ページ目: EMFDATA → EMFDONE。COPY と言われたらクリップボード経由(COPIED)。"""
+    if not start_word(job):
+        result("fatal.code", "WORD_CREATE_FAILED")
+        return 3
+    result("item.1.sheet", "page 1 / 2")
+    result("item.1.range", "page 1")
+    result("item.1.range_source", "word_page")
+    emf = bytes.fromhex(job.get("fake_emf_hex", "0102030405"))
+    b64 = base64.b64encode(emf).decode("ascii")
+    for i in range(0, len(b64), 8):
+        emit(f"EMFDATA {b64[i:i + 8]}")
+    emit("EMFDONE 1")
+    cmd = wait_command()
+    if cmd == "OK":
+        return 0
+    result("log", "Word page picture not used; copy page 1 to the clipboard")
+    emit("COPIED 1")
+    cmd = wait_command()
+    if cmd == "OK":
+        return 0
+    if cmd == "EXPORT":
+        emit("EXPORT_FAILED 1")
+        result("item.1.code", "COPY_FAILED")
+        result("item.1.message", "No image on the clipboard (Word)")
+    return 4
 
 
 def main():

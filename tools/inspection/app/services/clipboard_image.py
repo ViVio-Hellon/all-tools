@@ -7,6 +7,9 @@ VBA版 UFPreview.CreatePictureFromClipboard と同じく、
 
 Excel の CopyPicture は「遅延レンダリング」でクリップボードへ登録することがあるため、
 この処理は Excel がまだ起動している間（VBScript 側が待機している間）に呼ぶ。
+
+Word の点検表は、1ページ目を拡張メタファイルのバイト列で受け取り(`emf_to_png`)、
+同じ描き方で PNG にする(クリップボードを通らない)。
 """
 from __future__ import annotations
 
@@ -98,6 +101,7 @@ if IS_WINDOWS:
     _sig(_user32.GetDC, [wintypes.HWND], wintypes.HDC)
     _sig(_user32.ReleaseDC, [wintypes.HWND, wintypes.HDC], ctypes.c_int)
     _sig(_gdi32.CopyEnhMetaFileW, [wintypes.HANDLE, wintypes.LPCWSTR], wintypes.HANDLE)
+    _sig(_gdi32.SetEnhMetaFileBits, [wintypes.UINT, ctypes.c_char_p], wintypes.HANDLE)
     _sig(_gdi32.DeleteEnhMetaFile, [wintypes.HANDLE], wintypes.BOOL)
     _sig(_gdi32.GetEnhMetaFileHeader, [wintypes.HANDLE, wintypes.UINT, ctypes.c_void_p], wintypes.UINT)
     _sig(_gdi32.CreateCompatibleDC, [wintypes.HDC], wintypes.HDC)
@@ -166,6 +170,19 @@ if IS_WINDOWS:
                 raise ClipboardImageError("拡張メタファイルを複製できませんでした")
         finally:
             _user32.CloseClipboard()
+        return _hemf_to_png(hemf, scale, max_pixels)
+
+    def emf_to_png(data: bytes, scale: float = 2.0, max_pixels: int = 3200) -> Tuple[bytes, Dict[str, Any]]:
+        """拡張メタファイルのバイト列(Word の1ページ目)を PNG にする。"""
+        if not data:
+            raise ClipboardImageError("拡張メタファイルが空です")
+        hemf = _gdi32.SetEnhMetaFileBits(len(data), data)
+        if not hemf:
+            raise ClipboardImageError("拡張メタファイルを読めませんでした")
+        return _hemf_to_png(hemf, scale, max_pixels)
+
+    def _hemf_to_png(hemf: Any, scale: float, max_pixels: int) -> Tuple[bytes, Dict[str, Any]]:
+        """拡張メタファイルを描いて PNG にする。**ハンドルはここで消す。**"""
         try:
             header = ENHMETAHEADER()
             _gdi32.GetEnhMetaFileHeader(hemf, ctypes.sizeof(header), ctypes.byref(header))
@@ -282,3 +299,6 @@ else:
                        retries: int = 15, delay: float = 0.2,
                        expected_owner: Optional[int] = None) -> Tuple[bytes, Dict[str, Any]]:
         raise ClipboardImageError("クリップボードからの画像取得は Windows でのみ使用できます")
+
+    def emf_to_png(data: bytes, scale: float = 2.0, max_pixels: int = 3200) -> Tuple[bytes, Dict[str, Any]]:
+        raise ClipboardImageError("拡張メタファイルの描画は Windows でのみ使用できます")

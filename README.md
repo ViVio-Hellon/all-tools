@@ -8,7 +8,7 @@
 | 日報 | 日報管理ツール | 4.29.0 | vba-daily-report-python-migration |
 | 看板 | 資材発注看板システム | 3.5.0 | vba-production-board-python-migration |
 | カレンダー | ライン管理カレンダー | 4.2.0 | vba-calendar-python-migration |
-| 点検表 | 点検表 選択・印刷 | 2.2.0 | vba-inspection-sheet-python-migration |
+| 点検表 | 点検表 選択・印刷 | 2.3.0 | vba-inspection-sheet-python-migration |
 | **大設定** | タブ表示権限(どの端末にどのタブを出すか)・共有の DB の置き場所・配布設定 | ― | (このリポジトリ) |
 
 > **1.4.0 で名前を「統合ツール」から「日報複合ツール」に変えました**(ほかの「統合」「総合」の付くものと紛らわしいため)。
@@ -25,6 +25,7 @@
 > 日報・看板・カレンダー・点検表で何が出るか(`portal/access_guide.py`。各ツールの決まりと試験で突き合わせる)。
 > 1.5.3: 看板が大設定の「画面の色の既定」に付いていかなかったのを直す(看板 3.5.0)。日報 4.29.0 で、Administrator の PC は
 > 集計管理・集計グラフでラインを選べる(1 ラインずつ)・行の番号のダブルクリックで順に打つ。
+> 1.5.4: 点検表 2.3.0 で、Word の点検表(.doc / .docx / .docm)も一覧に載せて、Word でプレビュー・印刷する。
 
 どのタブを出すかは、**ログインID と PC名** で決めます(python-web-tools のアクセス権限と同じ考え方の、
 別の表 `タブ表示権限`)。どのラインでも全タブを出すわけではありません。
@@ -166,7 +167,7 @@
 
 1. GitHub Actions の「デスクトップ版(Windows)」の成果物 **AllTools-windows** の `AllTools.exe` を、一式のフォルダの直下に置く
 2. (必要なら)大設定・各ツールの設定画面で配布設定を書き出す
-3. `scripts\make_dist.bat` → 一式の隣に `日報複合ツール_VER1.5.3\` ができる(`日報複合ツール.exe` の名前で exe が入る。
+3. `scripts\make_dist.bat` → 一式の隣に `日報複合ツール_VER1.5.4\` ができる(`日報複合ツール.exe` の名前で exe が入る。
    tests・src-tauri・端末ごとの設定は入らない)。中の `配布メモ.txt` に、入れたものと配った先ですることがあります
 4. 配った先の PC で `scripts\make_shortcuts.vbs` をダブルクリックすると、ツールのフォルダ(scripts の1つ上)に
    次の2つができます

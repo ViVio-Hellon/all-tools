@@ -3,7 +3,10 @@
   "extensions": [
     "xlsm",
     "xlsx",
-    "xls"
+    "xls",
+    "doc",
+    "docx",
+    "docm"
   ],
   "require_name_prefix": true,
   "excel": {

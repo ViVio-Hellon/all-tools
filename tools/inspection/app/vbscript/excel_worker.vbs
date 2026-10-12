@@ -1,5 +1,5 @@
 ' ============================================================================
-' excel_worker.vbs - Excel COM worker for the inspection sheet print system
+' excel_worker.vbs - Excel / Word COM worker for the inspection sheet print system
 '
 '   * ASCII ONLY. Do not add Japanese text to this file (cscript reads it as
 '     ANSI). Japanese values travel as hex (UTF-16 code units) instead.
@@ -9,6 +9,12 @@
 '     Excel takes seconds, so it is kept while jobs keep coming. Python
 '     closes stdin after an idle period; then Excel quits and the worker ends.
 '     Each job has mode = preview | print | selftest.
+'   * Word documents (kind.<i> = word, decided by Python from the extension:
+'     .doc / .docx / .docm) are opened in a hidden Word instead of Excel.
+'     Word is started only when a Word document comes, and it is quit at the
+'     end of every job (Word has no IgnoreRemoteRequests: a document the user
+'     double-clicks may open in our hidden Word, so it is not kept running).
+'     If the user's own document is open in it, Word is shown and left alone.
 '   * NO FILES are exchanged with Python. Python from the Microsoft Store
 '     writes %LOCALAPPDATA% / %TEMP% to a private copy that cscript and
 '     Excel cannot see ("path not found", 0x4C). Everything goes through
@@ -22,11 +28,17 @@
 '   stdout (ASCII, one command per line)        stdin (reply from Python)
 '     READY <mode>
 '     EXCEL <hwnd>            (Python records the Excel PID from this)
+'     WORD <hwnd>             (Python records the Word PID from this)
+'     WORDBYE 1|0             (Word quit / left running for the user's documents)
 '     OPENED <i>
 '     COPIED 1                              ->  OK | EXPORT | RECOPY | SKIP
 '                                               (RECOPY: someone else replaced the
 '                                                clipboard; copy again)
 '     EXPORTED 1 | EXPORT_FAILED 1
+'     EMFDONE 1                             ->  OK | COPY
+'                                               (Word preview: page 1 as EMF in
+'                                                EMFDATA lines; COPY = could not
+'                                                draw it, copy page 1 instead)
 '     NEXT <i>                              ->  GO | STOP
 '     BEGIN <i>
 '     END <i> OK|NG
@@ -35,6 +47,7 @@
 '     JOB <n>                 (number of job keys read)
 '     RESULT <key> <hex>      (item.<i>.code, item.<i>.message, ...)
 '     PNGDATA <base64>        (chart export fallback, several lines)
+'     EMFDATA <base64>        (Word page 1 as an enhanced metafile, several lines)
 '   <hex> = UTF-16 code units as 4 hex digits each ("AB" -> "00410042")
 '
 ' Ported from the VBA version:
@@ -50,17 +63,26 @@ Const xlA1 = 1
 Const xlNone = -4142
 Const msoAutomationSecurityForceDisable = 3
 Const adTypeBinary = 1
+Const adSaveCreateOverWrite = 2
 Const TemporaryFolder = 2
+Const wdAlertsNone = 0
+Const wdDoNotSaveChanges = 0
+Const wdPrintView = 3
+Const wdGoToPage = 1
+Const wdGoToAbsolute = 1
+Const wdStatisticPages = 2
 
 Const RC_OK = 0
 Const RC_ARGS = 2
 Const RC_EXCEL = 3
 Const RC_ITEM = 4
 
-Dim gFso, gJob, gXl, gMode, gLastErrNumber, gLastErrDesc, gJobError
+Dim gFso, gJob, gXl, gWd, gWordReported, gMode, gLastErrNumber, gLastErrDesc, gJobError
 
 Set gFso = CreateObject("Scripting.FileSystemObject")
 Set gXl = Nothing
+Set gWd = Nothing
+gWordReported = False
 gLastErrNumber = 0
 gLastErrDesc = ""
 gJobError = ""
@@ -101,10 +123,12 @@ Function Main()
         End Select
 
         CloseAllBooks
+        FinishWord
         Emit "FINISH " & rc
         Main = rc
     Loop
     QuitExcel
+    FinishWord
     Emit "BYE"
 End Function
 
@@ -116,6 +140,10 @@ Function RunPreview()
     Dim path, wb, ws, rng, how, cmd, attempt
 
     RunPreview = RC_ITEM
+    If IsWord(1) Then
+        RunPreview = RunPreviewWord()
+        Exit Function
+    End If
     path = JobValue("file.1", "")
     If Not gFso.FileExists(path) Then
         SetItemError 1, "FILE_NOT_FOUND", 0, path
@@ -332,16 +360,16 @@ Function ExportViaChart(rng)
     tmpWb.Close False
     Err.Clear
     If gFso.FileExists(outPath) Then
-        ExportViaChart = EmitFileBase64(outPath)
+        ExportViaChart = EmitFileBase64(outPath, "PNGDATA")
         gFso.DeleteFile outPath, True
         Err.Clear
     End If
 End Function
 
 
-' Send a binary file as base64 lines: "PNGDATA <chunk>".
+' Send a binary file as base64 lines: "<prefix> <chunk>" (PNGDATA / EMFDATA).
 ' ADODB.Stream + MSXML are part of Windows.
-Function EmitFileBase64(path)
+Function EmitFileBase64(path, prefix)
     Dim stm, doc, el, b64, i
 
     EmitFileBase64 = False
@@ -364,7 +392,7 @@ Function EmitFileBase64(path)
         Exit Function
     End If
     For i = 1 To Len(b64) Step 3000
-        Emit "PNGDATA " & Mid(b64, i, 3000)
+        Emit prefix & " " & Mid(b64, i, 3000)
     Next
     EmitFileBase64 = (Len(b64) > 0)
 End Function
@@ -376,7 +404,7 @@ End Function
 ' are taken from the workbook as they are. Nothing is changed.
 ' ----------------------------------------------------------------------------
 Function RunPrint()
-    Dim count, copies, i, cmd, failed
+    Dim count, copies, i, cmd, failed, path, excels, excelReady, ok
 
     RunPrint = RC_OK
     count = CLng(JobValue("count", "0"))
@@ -389,9 +417,19 @@ Function RunPrint()
         RunPrint = RC_ARGS
         Exit Function
     End If
-    If Not StartExcel() Then
-        RunPrint = RC_EXCEL
-        Exit Function
+    ' Excel is started first as before (only when an Excel workbook is in the job).
+    ' Word starts at the first Word document (StartWord).
+    excels = 0
+    For i = 1 To count
+        If Not IsWord(i) Then excels = excels + 1
+    Next
+    excelReady = False
+    If excels > 0 Then
+        excelReady = StartExcel()
+        If Not excelReady And excels = count Then
+            RunPrint = RC_EXCEL
+            Exit Function
+        End If
     End If
 
     failed = 0
@@ -404,7 +442,20 @@ Function RunPrint()
             Exit For
         End If
         Emit "BEGIN " & i
-        If PrintOne(i, JobValue("file." & i, ""), copies) Then
+        path = JobValue("file." & i, "")
+        ok = False
+        If IsWord(i) Then
+            If StartWord() Then
+                ok = PrintOneWord(i, path, copies)
+            Else
+                SetItemError i, "WORD_CREATE_FAILED", gLastErrNumber, gLastErrDesc
+            End If
+        ElseIf excelReady Then
+            ok = PrintOne(i, path, copies)
+        Else
+            SetItemError i, "EXCEL_CREATE_FAILED", 0, ""
+        End If
+        If ok Then
             Emit "END " & i & " OK"
         Else
             failed = failed + 1
@@ -462,6 +513,387 @@ Function RunSelfTest()
     End If
 End Function
 
+
+
+' ============================================================================
+' Word documents (.doc / .docx / .docm)
+'   Print : open read-only -> PrintOut Copies (the document's own settings)
+'   Preview: page 1 of the print layout as an enhanced metafile (EMFDATA).
+'            If Python cannot draw it, page 1 is copied to the clipboard
+'            and read the same way as an Excel range (COPIED).
+' ============================================================================
+Function IsWord(index)
+    IsWord = (LCase(JobValue("kind." & index, "excel")) = "word")
+End Function
+
+
+Function RunPreviewWord()
+    Dim path, doc, rng, cmd, attempt
+
+    RunPreviewWord = RC_ITEM
+    path = JobValue("file.1", "")
+    If Not gFso.FileExists(path) Then
+        SetItemError 1, "FILE_NOT_FOUND", 0, path
+        Exit Function
+    End If
+    If Not StartWord() Then
+        WriteResult "fatal.code", "WORD_CREATE_FAILED"
+        If Len(gLastErrDesc) > 0 Then WriteResult "fatal.message", gLastErrDesc
+        RunPreviewWord = RC_EXCEL
+        Exit Function
+    End If
+
+    Set doc = OpenDoc(1, path)
+    If doc Is Nothing Then Exit Function
+    WriteResult "item.1.sheet", "page 1 / " & PageCount(doc)
+    WriteResult "item.1.range", "page 1"
+    WriteResult "item.1.range_source", "word_page"
+
+    cmd = "COPY"
+    If EmitPageEmf(doc) Then
+        Emit "EMFDONE 1"
+        cmd = WaitCommand()
+    End If
+    If cmd = "OK" Then
+        RunPreviewWord = RC_OK
+        CloseDoc doc
+        Exit Function
+    End If
+
+    ' Fallback: copy page 1 to the clipboard
+    WriteResult "log", "Word page picture not used; copy page 1 to the clipboard"
+    Set rng = FirstPageRange(doc)
+    If rng Is Nothing Then
+        SetItemError 1, "RANGE_FAILED", gLastErrNumber, gLastErrDesc
+        CloseDoc doc
+        Exit Function
+    End If
+    If Not CopyWordRange(rng) Then
+        SetItemError 1, "COPY_FAILED", gLastErrNumber, gLastErrDesc
+        CloseDoc doc
+        Exit Function
+    End If
+    Emit "COPIED 1"
+    cmd = WaitCommand()
+    attempt = 1
+    Do While cmd = "RECOPY" And attempt < 3
+        attempt = attempt + 1
+        WriteResult "log", "Clipboard replaced by another program; copy again (" & attempt & ")"
+        If Not CopyWordRange(rng) Then
+            SetItemError 1, "COPY_FAILED", gLastErrNumber, gLastErrDesc
+            CloseDoc doc
+            Exit Function
+        End If
+        Emit "COPIED 1"
+        cmd = WaitCommand()
+    Loop
+    If cmd = "OK" Then
+        RunPreviewWord = RC_OK
+    ElseIf cmd = "EXPORT" Then
+        ' The chart export is an Excel feature; Word has nothing like it
+        Emit "EXPORT_FAILED 1"
+        SetItemError 1, "COPY_FAILED", 0, "No image on the clipboard (Word)"
+    End If
+    CloseDoc doc
+End Function
+
+
+' Page 1 of the print layout as an EMF file -> EMFDATA lines
+Function EmitPageEmf(doc)
+    Dim win, bits, stm, outPath
+
+    EmitPageEmf = False
+    On Error Resume Next
+    Set win = Nothing
+    Set win = doc.Windows(1)
+    If Err.Number <> 0 Or win Is Nothing Then
+        Err.Clear
+        Set win = doc.ActiveWindow
+    End If
+    Err.Clear
+    win.View.Type = wdPrintView
+    Err.Clear
+    doc.Repaginate
+    Err.Clear
+    bits = win.Panes(1).Pages(1).EnhMetaFileBits
+    If Err.Number <> 0 Then
+        gLastErrNumber = Err.Number
+        gLastErrDesc = Err.Description
+        WriteResult "log", "EnhMetaFileBits failed: " & gLastErrDesc
+        Err.Clear
+        Exit Function
+    End If
+    outPath = gFso.BuildPath(gFso.GetSpecialFolder(TemporaryFolder).Path, _
+                             "isp_" & Replace(gFso.GetTempName(), ".tmp", ".emf"))
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = adTypeBinary
+    stm.Open
+    stm.Write bits
+    stm.SaveToFile outPath, adSaveCreateOverWrite
+    stm.Close
+    If Err.Number <> 0 Then
+        gLastErrNumber = Err.Number
+        gLastErrDesc = Err.Description
+        WriteResult "log", "EMF save failed: " & gLastErrDesc
+        Err.Clear
+    End If
+    If gFso.FileExists(outPath) Then
+        If gFso.GetFile(outPath).Size > 0 Then EmitPageEmf = EmitFileBase64(outPath, "EMFDATA")
+        gFso.DeleteFile outPath, True
+        Err.Clear
+    End If
+End Function
+
+
+' From the top of the document to the top of page 2 (or the end)
+Function FirstPageRange(doc)
+    Dim p2, endPos, okFlag
+
+    Set FirstPageRange = Nothing
+    On Error Resume Next
+    endPos = doc.Content.End
+    Set p2 = Nothing
+    Set p2 = doc.GoTo(wdGoToPage, wdGoToAbsolute, 2)
+    okFlag = (Err.Number = 0)
+    Err.Clear
+    If okFlag Then
+        If Not p2 Is Nothing Then
+            If p2.Start > 0 And p2.Start < endPos Then endPos = p2.Start
+        End If
+    End If
+    Err.Clear
+    Set FirstPageRange = doc.Range(0, endPos)
+    If Err.Number <> 0 Then
+        gLastErrNumber = Err.Number
+        gLastErrDesc = Err.Description
+        Err.Clear
+        Set FirstPageRange = Nothing
+    End If
+End Function
+
+
+Function CopyWordRange(rng)
+    Dim attempt
+
+    CopyWordRange = False
+    On Error Resume Next
+    For attempt = 1 To 5
+        Err.Clear
+        rng.CopyAsPicture
+        If Err.Number <> 0 Then
+            Err.Clear
+            rng.Copy
+        End If
+        If Err.Number = 0 Then
+            CopyWordRange = True
+            Exit Function
+        End If
+        gLastErrNumber = Err.Number
+        gLastErrDesc = Err.Description
+        WriteResult "log", "Word copy retry " & attempt & ": " & gLastErrDesc
+        Err.Clear
+        WScript.Sleep 300 * attempt
+    Next
+End Function
+
+
+Function PrintOneWord(index, path, copies)
+    Dim doc, number, description
+
+    PrintOneWord = False
+    Set doc = OpenDoc(index, path)
+    If doc Is Nothing Then Exit Function
+    WriteResult "item." & index & ".sheet", "pages " & PageCount(doc)
+
+    number = 0
+    description = ""
+    On Error Resume Next
+    Err.Clear
+    ' PrintOut(Background, Append, Range, OutputFileName, From, To, Item, Copies)
+    ' Background = False: wait until Word has spooled it, then close
+    doc.PrintOut False, , , , , , , copies
+    number = Err.Number
+    description = Err.Description
+    Err.Clear
+    On Error GoTo 0
+    If number = 0 Then
+        PrintOneWord = True
+    ElseIf IsBusyError(number) Then
+        SetItemError index, "WORD_BUSY", number, description
+    Else
+        SetItemError index, "PRINT_FAILED", number, description
+    End If
+    CloseDoc doc
+End Function
+
+
+Function PageCount(doc)
+    PageCount = ""
+    On Error Resume Next
+    PageCount = CStr(doc.ComputeStatistics(wdStatisticPages))
+    Err.Clear
+End Function
+
+
+Function StartWord()
+    Dim number, description
+
+    StartWord = False
+    On Error Resume Next
+    If WordAlive() Then
+        StartWord = True
+        Exit Function
+    End If
+    Set gWd = CreateObject("Word.Application")
+    If Err.Number <> 0 Then
+        number = Err.Number
+        description = Err.Description
+        Err.Clear
+        gLastErrNumber = number
+        gLastErrDesc = description
+        WriteResult "word.code", "WORD_CREATE_FAILED"
+        WriteResult "word.errno", "0x" & Hex(number)
+        WriteResult "word.message", description
+        Set gWd = Nothing
+        Exit Function
+    End If
+    If gWd Is Nothing Then
+        gLastErrNumber = 0
+        gLastErrDesc = ""
+        Exit Function
+    End If
+    gWordReported = False
+    gWd.Visible = False
+    gWd.DisplayAlerts = wdAlertsNone
+    Err.Clear
+    If JobValue("disable_macros", "1") = "1" Then
+        gWd.AutomationSecurity = msoAutomationSecurityForceDisable
+        Err.Clear
+    End If
+    WriteResult "word.version", gWd.Version
+    Err.Clear
+    StartWord = True
+End Function
+
+
+Function WordAlive()
+    Dim v
+    WordAlive = False
+    If gWd Is Nothing Then Exit Function
+    On Error Resume Next
+    v = ""
+    v = gWd.Version
+    If Err.Number = 0 And Len(v) > 0 Then
+        WordAlive = True
+    Else
+        Set gWd = Nothing
+    End If
+    Err.Clear
+End Function
+
+
+' End of a job: quit Word. If the user's own document opened in it, show Word
+' and leave it running (never close what we did not open).
+Sub FinishWord()
+    Dim openDocs
+    If gWd Is Nothing Then Exit Sub
+    On Error Resume Next
+    openDocs = -1
+    openDocs = gWd.Documents.Count
+    If Err.Number <> 0 Then
+        Err.Clear
+        Set gWd = Nothing
+        Emit "WORDBYE 1"
+        Exit Sub
+    End If
+    If openDocs = 0 Then
+        gWd.NormalTemplate.Saved = True
+        Err.Clear
+        gWd.Quit wdDoNotSaveChanges
+        Err.Clear
+        Emit "WORDBYE 1"
+    Else
+        gWd.Visible = True
+        Err.Clear
+        WriteResult "log", "Word left running: " & openDocs & " document(s) of the user are open"
+        Emit "WORDBYE 0"
+    End If
+    Set gWd = Nothing
+    gWordReported = False
+End Sub
+
+
+' Documents.Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles,
+'   PasswordDocument, PasswordTemplate, Revert, WritePasswordDocument,
+'   WritePasswordTemplate, Format, Encoding, Visible)
+' The dummy password makes a protected document fail instead of asking.
+Function OpenDoc(index, path)
+    Dim doc, pwd, attempt, number, description
+
+    Set OpenDoc = Nothing
+    If Not gFso.FileExists(path) Then
+        SetItemError index, "FILE_NOT_FOUND", 0, path
+        Exit Function
+    End If
+    pwd = JobValue("open_password", "")
+    number = 0
+    description = ""
+    On Error Resume Next
+    For attempt = 1 To 3
+        Err.Clear
+        Set doc = Nothing
+        If Len(pwd) > 0 Then
+            Set doc = gWd.Documents.Open(path, False, True, False, pwd, pwd, False, , , 0, , False)
+        Else
+            Set doc = gWd.Documents.Open(path, False, True, False, , , False, , , 0, , False)
+        End If
+        number = Err.Number
+        description = Err.Description
+        Err.Clear
+        If number = 0 Then Exit For
+        If Not IsBusyError(number) Then Exit For
+        WScript.Sleep 1000 * attempt
+    Next
+    If number = 0 Then
+        If doc Is Nothing Then number = -1
+    End If
+    If number <> 0 Then
+        If IsBusyError(number) Then
+            SetItemError index, "WORD_BUSY", number, description
+        Else
+            SetItemError index, "OPEN_FAILED", number, description
+        End If
+        Exit Function
+    End If
+    Emit "OPENED " & index
+    ReportWordWindow doc
+    Set OpenDoc = doc
+End Function
+
+
+' Word has no Application.Hwnd; the document window has one (Word 2013+)
+Sub ReportWordWindow(doc)
+    Dim hwnd
+    If gWordReported Then Exit Sub
+    gWordReported = True
+    On Error Resume Next
+    hwnd = 0
+    hwnd = doc.Windows(1).Hwnd
+    If Err.Number <> 0 Or hwnd = 0 Then
+        Err.Clear
+        hwnd = 0
+        hwnd = doc.ActiveWindow.Hwnd
+    End If
+    Err.Clear
+    If hwnd <> 0 Then Emit "WORD " & CStr(hwnd)
+End Sub
+
+
+Sub CloseDoc(doc)
+    On Error Resume Next
+    If Not doc Is Nothing Then doc.Close wdDoNotSaveChanges
+    Err.Clear
+End Sub
 
 ' ----------------------------------------------------------------------------
 ' Excel application

@@ -396,7 +396,7 @@ function renderItems() {
   }
   if (!inv.categories.length) {
     showEmpty("点検表が見つかりません",
-      "対象: .xlsm / .xlsx / .xls\nフォルダ構成: ルート > カテゴリー > サブカテゴリー > Excel");
+      "対象: .xlsm / .xlsx / .xls(Excel)・.doc / .docx / .docm(Word)\nフォルダ構成: ルート > カテゴリー > サブカテゴリー > Excel・Word");
     setTools(false);
     return;
   }
@@ -417,7 +417,7 @@ function renderItems() {
     $("items-title").textContent = `${cat.name} > ${sub ? sub.name : ""}`;
     $("items-count").textContent = `${items.length} 件`;
     for (const item of items) grid.appendChild(itemCard(item));
-    if (sub && !items.length) showEmpty("表示できる点検表がありません", "このフォルダには命名規則に合う Excel ファイルがありません。");
+    if (sub && !items.length) showEmpty("表示できる点検表がありません", "このフォルダには命名規則に合う Excel・Word ファイルがありません。");
     renderUnmatched(sub);
   }
   setTools(items.length > 0);

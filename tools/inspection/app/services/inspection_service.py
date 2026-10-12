@@ -7,7 +7,7 @@ VBA版との対応:
     SortCollectionAscending    → 大文字小文字を区別しない昇順（vbTextCompare 相当）
 
 フォルダ構成:
-    ルート ─ カテゴリー ─ サブカテゴリー ─ Excel（.xlsm / .xlsx / .xls）
+    ルート ─ カテゴリー ─ サブカテゴリー ─ Excel（.xlsm / .xlsx / .xls）・Word（.doc / .docx / .docm）
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def _list_files(path: str, exts: Tuple[str, ...], errors: List[Dict[str, str]]) 
             for entry in it:
                 name = entry.name
                 if name.startswith("~$"):
-                    continue  # Excel が作る一時ロックファイル
+                    continue  # Excel・Word が作る一時ロックファイル
                 ext = os.path.splitext(name)[1][1:].lower()
                 if ext not in exts:
                     continue

@@ -18,6 +18,18 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
     JOB <n>             … 読めたジョブの項目数(0 = ジョブファイルを読めなかった)
     RESULT <key> <hex>  … 結果(item.1.code など)
     PNGDATA <base64>    … グラフ経由で書き出したプレビュー画像(クリップボードが使えないとき)
+    WORD <hwnd>         … Word の PID を記録(Word の点検表を開いたとき)
+    WORDBYE 1|0         … Word を終えた / 利用者の文書が開いているので残した
+    EMFDATA <base64> …  EMFDONE 1  → OK / COPY
+                        … Word の1ページ目(拡張メタファイル)。描けなければ COPY で
+                          クリップボード経由(COPIED)に切り替えさせる
+
+【Word の点検表(VER2.3.0)】
+拡張子が .doc / .docx / .docm のものは、同じ処理プログラムが**非表示の Word** で開く
+(`kind.<i>` = word を添える。決めるのはここの `kind_of`)。印刷は Document.PrintOut、
+プレビューは1ページ目。Word は Excel と違って利用者がダブルクリックした文書を
+こちらの Word で開いてしまうことがあるので、**処理のたびに終える**(利用者の文書が
+開いていれば Word を見せて残す)。
 
 <hex> は UTF-16 の1単位を4桁の16進にしたもの。日本語を含む値(ファイルパス・
 エラー内容)もこれで送るので、標準入出力は ASCII だけで済む(文字化けしない)。
@@ -59,19 +71,30 @@ IS_WINDOWS = os.name == "nt"
 CREATE_NO_WINDOW = 0x08000000
 DUMMY_PASSWORD = "__isp_no_password__"
 
+#: Word で開く拡張子(一覧に載せるかは設定の `extensions`。ここは「どちらで開くか」だけ)
+WORD_EXTENSIONS = ("doc", "docx", "docm")
+
+
+def kind_of(path: str) -> str:
+    """その点検表を開くアプリ。Word の拡張子なら "word"、ほかは "excel"。"""
+    ext = os.path.splitext(path or "")[1][1:].lower()
+    return "word" if ext in WORD_EXTENSIONS else "excel"
+
 # 利用者に表示するメッセージ（要件定義書 16. エラー処理）
 ERROR_MESSAGES: Dict[str, str] = {
     "FILE_NOT_FOUND": "対象の点検表ファイルが見つかりません。",
     "OPEN_FAILED": "点検表を開けませんでした。",
     "EXCEL_BUSY": "Excelが使用中です。しばらく待ってから再度お試しください。",
     "EXCEL_CREATE_FAILED": "Excelを起動できませんでした。Excelがインストールされているか確認してください。",
+    "WORD_BUSY": "Wordが使用中です。しばらく待ってから再度お試しください。",
+    "WORD_CREATE_FAILED": "Wordを起動できませんでした。Wordがインストールされているか確認してください。",
     "NO_VISIBLE_SHEET": "表示できるシートがありません。",
     "RANGE_FAILED": "印刷範囲の取得に失敗しました。",
     "COPY_FAILED": "プレビュー画像を取得できませんでした。",
     "PREVIEW_FAILED": "プレビュー画像を取得できませんでした。",
     "PRINT_FAILED": "印刷に失敗しました。",
-    "TIMEOUT": "Excelが応答しませんでした。パスワード付きのブックや、確認メッセージが表示される"
-               "ブックの可能性があります。",
+    "TIMEOUT": "Excel・Wordが応答しませんでした。パスワード付きのファイルや、確認メッセージが表示される"
+               "ファイルの可能性があります。",
     "WORKER_FAILED": "Excel処理プログラム（VBScript）の実行に失敗しました。",
     "JOB_READ_FAILED": "Excel処理プログラム（VBScript）が処理の指示を読み込めませんでした。",
     "STOPPED": "中止したため印刷していません。",
@@ -84,7 +107,7 @@ ERROR_MESSAGES: Dict[str, str] = {
 
 
 def message_for(code: str) -> str:
-    return ERROR_MESSAGES.get(code, "Excelの処理でエラーが発生しました。")
+    return ERROR_MESSAGES.get(code, "Excel・Wordの処理でエラーが発生しました。")
 
 
 class ExcelError(Exception):
@@ -266,6 +289,8 @@ class _Session:
         self.worker = worker
         self.cscript = cscript
         self.excel: Optional[ProcessIdentity] = None
+        # Word は処理のたびに終える(`WORDBYE`)。いま開いている Word だけ
+        self.word: Optional[ProcessIdentity] = None
         self.jobs = 0
         self.printer = ""
 
@@ -308,10 +333,12 @@ class VbsExcelBackend:
     # ---- プレビュー -----------------------------------------------
     def preview(self, path: str) -> PreviewImage:
         e = self.excel_cfg
+        word = kind_of(path) == "word"
         params = {
             **self._base_params(),
             "count": 1,
             "file.1": path,
+            "kind.1": "word" if word else "excel",
             "appearance": 2 if e.preview_appearance == "printer" else 1,
             "max_rows": e.preview_max_rows,
             "max_cols": e.preview_max_cols,
@@ -320,15 +347,32 @@ class VbsExcelBackend:
         max_pixels = e.preview_max_pixels
         seq_before = clipboard_image.sequence_number()
         state: Dict[str, Any] = {"png": None, "info": {}, "clip_error": "", "exported": None,
-                                 "chunks": [], "recopies": 0, "owner_error": False}
+                                 "chunks": [], "emf": [], "recopies": 0, "owner_error": False,
+                                 "method": ""}
 
         def handler(cmd: str, args: List[str], worker: _WorkerProcess) -> None:
-            if cmd == "COPIED":
-                excel = self._session.excel if self._session else None
+            if cmd == "EMFDATA" and args:
+                state["emf"].append(args[0])
+            elif cmd == "EMFDONE":
+                # Word の1ページ目。描けなければクリップボード経由に切り替えさせる
+                try:
+                    data = base64.b64decode("".join(state["emf"]))
+                    png, info = clipboard_image.emf_to_png(data, scale, max_pixels)
+                    state.update(png=png, info=info, method="word-page")
+                    worker.send("OK")
+                except (ValueError, binascii.Error, clipboard_image.ClipboardImageError) as exc:
+                    state["clip_error"] = str(exc)
+                    self.log.warning("Word の1ページ目を描けないため、クリップボード経由にします: %s", exc)
+                    worker.send("COPY")
+                state["emf"] = []
+            elif cmd == "COPIED":
+                # 置いたのはこちらの Excel / Word か(Word の点検表なら Word)
+                session = self._session
+                owner = (session.word if word else session.excel) if session else None
                 try:
                     png, info = clipboard_image.read_image_png(
                         scale, max_pixels, previous_sequence=seq_before,
-                        expected_owner=excel.pid if excel else None)
+                        expected_owner=owner.pid if owner else None)
                     state.update(png=png, info=info)
                     worker.send("OK")
                 except clipboard_image.ClipboardOwnerError as exc:
@@ -360,7 +404,8 @@ class VbsExcelBackend:
         if state["png"]:
             # 画像取得後に Excel の終了で止まった場合も、画像は使える（Excel は強制終了済み）
             info = state["info"]
-            return PreviewImage(state["png"], "image/png", method=f"clipboard-{info.get('format')}",
+            return PreviewImage(state["png"], "image/png",
+                                method=state["method"] or f"clipboard-{info.get('format')}",
                                 width=info.get("width", 0), height=info.get("height", 0), **meta)
         if state["exported"] and state["chunks"]:
             try:
@@ -386,6 +431,7 @@ class VbsExcelBackend:
         params: Dict[str, Any] = {**self._base_params(), "count": len(files), "copies": copies}
         for index, path in enumerate(files, 1):
             params[f"file.{index}"] = path
+            params[f"kind.{index}"] = kind_of(path)
         outcomes = {i: ItemOutcome(i) for i in range(1, len(files) + 1)}
         current = {"index": 0, "stop_sent": False}
 
@@ -519,6 +565,13 @@ class VbsExcelBackend:
                 if session.excel and excel and session.excel.pid != excel.pid:
                     self.registry.remove(session.excel.pid)     # 前の Excel は終わっていた
                 session.excel = excel or session.excel
+            elif command == "WORD" and len(parts) > 1:
+                word = self._track_app(parts[1], "word")
+                if session.word and word and session.word.pid != word.pid:
+                    self.registry.remove(session.word.pid)
+                session.word = word or session.word
+            elif command == "WORDBYE":
+                self._word_closed(session, quit_=len(parts) < 2 or parts[1] != "0")
             elif command == "FINISH":
                 finish_code = _int(parts[1]) if len(parts) > 1 else 0
                 break
@@ -636,6 +689,9 @@ class VbsExcelBackend:
         if session.cscript:
             self.registry.remove(session.cscript.pid)
         self._ensure_excel_exit(session.excel, force=force)
+        if session.word is not None:
+            self._ensure_exit(session.word, force=force, exe="winword.exe", label="Word")
+            session.word = None
         if self._session is session:
             self._session = None
         self.log.info("Excelを閉じました(%s・%d件処理)", reason, session.jobs)
@@ -643,29 +699,48 @@ class VbsExcelBackend:
                          excel_pid=session.excel.pid if session.excel else None, printer=session.printer)
 
     def _track_excel(self, hwnd_text: str) -> Optional[ProcessIdentity]:
+        return self._track_app(hwnd_text, "excel")
+
+    def _track_app(self, hwnd_text: str, app: str) -> Optional[ProcessIdentity]:
+        label = "Word" if app == "word" else "Excel"
         hwnd = _int(hwnd_text)
         pid = pid_from_hwnd(hwnd) if hwnd else None
         identity = get_process_identity(pid) if pid else None
         if identity:
-            self.registry.add(identity, "excel")
-            self.log.info("Excelを起動しました pid=%s", identity.pid)
-            event_log.record("excel.open", event_log.INFO, excel_pid=identity.pid,
+            self.registry.add(identity, app)
+            self.log.info("%sを起動しました pid=%s", label, identity.pid)
+            event_log.record(f"{app}.open", event_log.INFO, **{f"{app}_pid": identity.pid},
                              printer=self._current_printer())
         else:
-            self.log.warning("Excel の PID を取得できませんでした hwnd=%s", hwnd_text)
+            self.log.warning("%s の PID を取得できませんでした hwnd=%s", label, hwnd_text)
         return identity
+
+    def _word_closed(self, session: "_Session", *, quit_: bool) -> None:
+        """処理の終わりに Word を終えた(`WORDBYE 1`)/ 利用者の文書があるので残した(`0`)。"""
+        word, session.word = session.word, None
+        if word is None:
+            return
+        if quit_:
+            self._ensure_exit(word, force=False, exe="winword.exe", label="Word")
+        else:
+            # 利用者の文書が開いている Word は、こちらのものではなくなった。止めない
+            self.registry.remove(word.pid)
+            self.log.info("Word に利用者の文書が開いているため、終えずに残しました pid=%s", word.pid)
 
     def _ensure_excel_exit(self, excel: Optional[ProcessIdentity], force: bool) -> None:
         """Excel が確実に終了したことを確認する（残っていればその PID だけ強制終了）。"""
-        if excel is None:
+        self._ensure_exit(excel, force=force, exe="excel.exe", label="Excel")
+
+    def _ensure_exit(self, proc: Optional[ProcessIdentity], *, force: bool, exe: str, label: str) -> None:
+        if proc is None:
             return
         grace = 0 if force else self.excel_cfg.excel_exit_grace_sec
-        if not wait_for_exit(excel.pid, excel.create_time, grace):
-            self.log.warning("Excelプロセスが終了しないため強制終了します pid=%s", excel.pid)
-            if not terminate_verified(excel.pid, excel.create_time, ["excel.exe"]):
-                self.log.error("Excelプロセスを終了できませんでした pid=%s", excel.pid)
+        if not wait_for_exit(proc.pid, proc.create_time, grace):
+            self.log.warning("%sプロセスが終了しないため強制終了します pid=%s", label, proc.pid)
+            if not terminate_verified(proc.pid, proc.create_time, [exe]):
+                self.log.error("%sプロセスを終了できませんでした pid=%s", label, proc.pid)
                 return
-        self.registry.remove(excel.pid)
+        self.registry.remove(proc.pid)
 
     @staticmethod
     def _detail(results: Dict[str, str], index: int) -> str:
@@ -856,7 +931,7 @@ class ExcelService:
 
     def cleanup_leftovers(self, reason: str) -> int:
         """前回の異常終了などで残った Excel / cscript を片付ける（記録した PID のみ）。"""
-        cleaned = self.registry.cleanup(reason, ["excel.exe", "cscript.exe"] if IS_WINDOWS else None)
+        cleaned = self.registry.cleanup(reason, ["excel.exe", "winword.exe", "cscript.exe"] if IS_WINDOWS else None)
         return len(cleaned)
 
 

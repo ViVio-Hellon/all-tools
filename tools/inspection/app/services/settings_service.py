@@ -7,7 +7,9 @@ VBA版との対応:
 【config/inspection.json の各キー】(JSON はコメントを書けないのでここに置く)
 
     root_folder          点検表ルートフォルダ(VBA版の DEFAULT_Path \\ DEFAULT_FOLDER)
-    extensions           一覧に載せる拡張子(VBA版と同じ xlsm / xlsx / xls)
+    extensions           一覧に載せる拡張子(VBA版の xlsm / xlsx / xls に、VER2.3.0 で Word の
+                         doc / docx / docm を足した)。Word のものは Word で開いて刷る。
+                         前の版の既定(xlsm / xlsx / xls の3つだけ)のままなら Word も足して読む
     require_name_prefix  true: ファイル名が「カテゴリ_サブカテゴリ_」で始まるものだけ
                          表示し、表示名は接頭辞を除いた部分(VBA版と同じ)
     excel.backend        auto(Windows は VBScript 経由)/ vbscript / dummy(模擬)
@@ -44,6 +46,12 @@ CONFIG_PATH = Path(os.environ.get("INSPECTION_BUSINESS_CONFIG",
                                   str(APP_ROOT / "config" / "inspection.json")))
 
 
+#: 一覧に載せる拡張子の既定(Excel と Word)。Word の点検表は Word で開く(VER2.3.0)
+DEFAULT_EXTENSIONS = ("xlsm", "xlsx", "xls", "doc", "docx", "docm")
+#: 前の版の既定(Excel だけ)。設定ファイルがこれのままなら、Word も足して読む
+OLD_DEFAULT_EXTENSIONS = ("xlsm", "xlsx", "xls")
+
+
 @dataclass
 class ExcelConfig:
     backend: str = "auto"
@@ -63,7 +71,7 @@ class ExcelConfig:
 @dataclass
 class InspectionConfig:
     root_folder: str = ""
-    extensions: List[str] = field(default_factory=lambda: ["xlsm", "xlsx", "xls"])
+    extensions: List[str] = field(default_factory=lambda: list(DEFAULT_EXTENSIONS))
     require_name_prefix: bool = True
     excel: ExcelConfig = field(default_factory=ExcelConfig)
     max_copies: int = 100
@@ -96,6 +104,10 @@ def load_inspection_config(path: Optional[Path] = None) -> InspectionConfig:
     exts = raw.get("extensions")
     if isinstance(exts, list) and exts:
         cfg.extensions = [str(e).lower().lstrip(".") for e in exts if str(e).strip()]
+        # 前の版の既定のまま(アプリのフォルダの設定ファイルを入れ替えていない端末)なら、
+        # Word も一覧に載せる。自分で決めた並びは触らない
+        if sorted(cfg.extensions) == sorted(OLD_DEFAULT_EXTENSIONS):
+            cfg.extensions = list(DEFAULT_EXTENSIONS)
     cfg.require_name_prefix = bool(raw.get("require_name_prefix", True))
     ex = raw.get("excel") if isinstance(raw.get("excel"), dict) else {}
     d = ExcelConfig()
