@@ -93,6 +93,8 @@ def index():
         shift_times=get_repo().get_shift_times(),
         shift_defaults=default_times_text(),
         state=state,
+        # 日報入力の「時間を割り振る」(v4.30.0)。変えるのは管理者モードだけ
+        time_split=_time_split_enabled(),
         paths=state["paths"],
         # 面ごとに欄を置くので、鍵で引ける形も渡す(出どころは `paths` と同じ)
         path_map=state["path_map"],
@@ -526,6 +528,33 @@ def empty_pages_list():
     from nippou.services import empty_pages
 
     return jsonify(empty_pages.find(get_repo()).as_dict())
+
+
+def _time_split_enabled() -> bool:
+    from .entry import time_split_enabled
+
+    return time_split_enabled()
+
+
+@bp.post("/api/settings/time-split")
+def time_split():
+    """日報入力の「時間を割り振る」を使うか(v4.30.0)。**変えるのは管理者モードだけ。**"""
+    from nippou import user_settings
+    from nippou.config import KEY_TIME_SPLIT
+
+    ctx = work_context.get_context()
+    if not ctx.admin:
+        return jsonify(error_body(
+            "not_admin", "「時間を割り振る」のオン・オフは管理者モードでのみ変えられます")), 403
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled") is True
+    remembered = user_settings.save(KEY_TIME_SPLIT, enabled)
+    log_button_click("time_split_on" if enabled else "time_split_off", line=ctx.line)
+    return jsonify({
+        "enabled": _time_split_enabled(), "remembered": remembered,
+        "message": ("日報入力に「時間を割り振る」を出します" if enabled
+                    else "日報入力の「時間を割り振る」を出さないようにしました"),
+    })
 
 
 @bp.post("/api/settings/empty-pages/delete")

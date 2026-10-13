@@ -1299,6 +1299,30 @@ export function start() {
     btn.addEventListener("click", () => setLine(btn.dataset.line, btn.dataset.maru));
   }
 
+  // ---- 時間を割り振る(v4.30.0)── 日報入力のボタンを出すか。管理者モードだけ ----
+  for (const btn of document.querySelectorAll("#time-split-choices [data-time-split]")) {
+    btn.addEventListener("click", async () => {
+      const box = document.getElementById("time-split-note");
+      try {
+        const body = await api.post("/api/settings/time-split",
+                                    { enabled: btn.dataset.timeSplit === "1" });
+        for (const b of document.querySelectorAll("#time-split-choices [data-time-split]")) {
+          b.classList.toggle("btn--primary", (b.dataset.timeSplit === "1") === body.enabled);
+        }
+        const now = document.getElementById("time-split-now");
+        if (now) now.textContent = body.enabled ? "オン" : "オフ";
+        toast(body.message, body.remembered === false ? "warn" : "ok");
+        if (box) box.hidden = true;
+      } catch (err) {
+        if (box) {
+          box.hidden = false;
+          box.textContent = err.message;
+          box.className = "msg msg--error";
+        }
+      }
+    });
+  }
+
   // ---- アクセス権限の表(v4.12.0)── 読み直して、ラインが変わっていれば当てる ----
   document.getElementById("access-reload")?.addEventListener("click", async () => {
     const box = document.getElementById("access-note");

@@ -2774,6 +2774,43 @@ export function start() {
     }, { signal });
   }
 
+  /*
+    時間を割り振る(v4.30.0。設定でオンにした端末だけボタンがある)。
+
+    **決めるのはサーバ**(`logic/time_split`・`/api/entry/distribute-times`)。まず
+    `dry_run` で何行・どの時刻になるかを聞いて確かめ、はいなら同じ道で書く。ほかのページは
+    サーバが書き、いまのページは返ってきた12行を塗っていつもどおり保存する。
+  */
+  document.getElementById("time-split")?.addEventListener("click", async () => {
+    const mine = gen;
+    let plan;
+    try {
+      plan = await send("/api/entry/distribute-times", { ...collect(), dry_run: true });
+    } catch (err) {
+      toastError(err);
+      return;
+    }
+    if (!live(mine)) return;
+    const pages = (plan.pages || []).map((n) => `${n}ページ`).join("・");
+    const lines = [
+      `${plan.shift} ${plan.start}〜${plan.end}(${plan.minutes}分)を、打った ${plan.count} 行に割り振ります。`,
+      `${pages}/最初の行 ${plan.first} 〜 最後の行 ${plan.last}/${plan.step === 5 ? "5分" : "1分"}刻み`,
+    ];
+    if (plan.overwrite) lines.push("", `開始・終了の時刻が入っている ${plan.overwrite} 行も書き換えます。`);
+    lines.push("", "よろしいですか?");
+    if (!confirm(lines.join("\n"))) return;
+    try {
+      const since = editSeq;
+      const body = await send("/api/entry/distribute-times", collect());
+      if (!live(mine)) return;
+      paint(body, { since });
+      toast(body.message, "ok");
+      maybeAutosave();
+    } catch (err) {
+      toastError(err);
+    }
+  });
+
   document.getElementById("new-page")?.addEventListener("click", async () => {
     /*
       **押す前に、いまの12行で確かめ直す**(v4.8.0)。

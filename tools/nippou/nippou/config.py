@@ -149,6 +149,10 @@ KEY_TERMINAL_MARU = "terminal_maru_sub"
 # 変えたラインが、起動し直すたびに表の値へ戻ってしまうので
 KEY_ACCESS_LINE_APPLIED = "access_rights_line"
 
+# 日報入力の「時間を割り振る」(v4.30.0。`logic/time_split`)。**オンにした端末だけ**ボタンが出る。
+# 変えるには管理者パスワード(設定・管理者 →「管理者」の面)。既定はオフ
+KEY_TIME_SPLIT = "time_split_enabled"
+
 # CSV と印刷用HTMLの書き出し先。**どこに出たのか分からない**という
 # 声があったので、設定できるようにした(既定はローカル領域の `work`)。
 # 共有のフォルダを指せば、出したCSVを他の人がそのまま開ける

@@ -976,6 +976,8 @@ def index():
         # ── グラフ画面と同じ `_out_dir.html` を使います
         out_dir=settings_view.output_dir_view(),
         maru_sub=ctx.maru_sub,
+        # 「時間を割り振る」のボタン(設定でオンにした端末だけ。v4.30.0)
+        time_split=time_split_enabled(),
         tab_loaded_at=f"{tab_loaded_at:.3f}",
         **shell.shell_context("entry", ribbon=ctx.ribbon(calc, page)))
 
@@ -1071,6 +1073,124 @@ def update_state():
     if filled:
         # 画面はこの欄を一瞬光らせる(**入ったことが見えるように**)
         body["filled"] = filled
+    return jsonify(body)
+
+
+def time_split_enabled() -> bool:
+    """「時間を割り振る」を使う端末か(設定・管理者でオンにする。既定はオフ)。"""
+    from nippou import user_settings
+    from nippou.config import KEY_TIME_SPLIT
+
+    value = user_settings.get(KEY_TIME_SPLIT, False)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "on", "yes")
+    return bool(value)
+
+
+@bp.post("/api/entry/distribute-times")
+def distribute_times():
+    """**直の開始〜終了を、打った行へ順に割り振る**(v4.30.0。`logic/time_split`)。
+
+        開始行と終了行の時間は一切入力せず、作業者の任意のタイミングで発火させると
+        開始行と終了行までの時間を割り当てる(この機能のオンオフは設定、パスワード要)
+
+    数えるのは**この直の全ページ**の、打った欄がある行(ページ順・行順)。いま開いている
+    ページは画面の中身(まだ保存していなくても)、ほかのページは保存してある中身を使います。
+    `dry_run` なら何も書かずに、何行・どの時刻で割り振るかだけ返します(画面が確かめに使う)。
+
+    ほかのページはここで書き(画面の外から書いた印を付ける)、いまのページは画面へ返して、
+    画面がいつもどおり保存します。入っている開始・終了の時刻は書き換えます。
+    """
+    from nippou.logic import time_split
+    from nippou.services import page_writer, shift_check
+
+    if not time_split_enabled():
+        return jsonify(error_body(
+            "time_split_off", "「時間を割り振る」はこの端末では使わない設定です"
+                              "(設定・管理者の「管理者」の面でオンにできます。管理者パスワードが要ります)")), 403
+    refused = line_refusal()
+    if refused:
+        return refused
+    payload = request.get_json(silent=True) or {}
+    ctx = work_context.get_context()
+    calc = current_calculator()
+    moved = screen_mismatch(ctx, calc, payload)
+    if moved:
+        return page_moved_refusal(moved)
+    reason = _read_only_reason(ctx, calc)
+    if reason:
+        return jsonify(error_body("read_only", reason)), 403
+    screen_key = _screen_key(ctx, calc, payload)
+    report_date, line, shift, page = screen_key or _target(ctx, calc)
+
+    repo = get_repo()
+    start_text, end_text = shift_check.bounds_of(repo.get_shift_times(), shift)
+    start = time_split.parse_hhmm(start_text)
+    end = time_split.parse_hhmm(end_text)
+    if start is None or end is None:
+        return jsonify(error_body(
+            "no_shift", f"{shift}の開始・終了時刻が分かりません。設定画面で時間マスタを取り込んでください。")), 422
+    total = (end - start) % (24 * 60)
+
+    # この直の全ページ。いまのページは画面の中身
+    state = presenter.parse_state(payload)
+    pages = {n: _load_state(report_date, line, shift, n)
+             for n in repo.saved_pages(report_date, line, shift) if n != page}
+    pages[page] = state
+    targets = [(n, row) for n in sorted(pages) for row in sorted(pages[n].rows)
+               if time_split.is_filled(pages[n].rows[row])]
+    stops = [time_split.row_stop_minutes(pages[n].rows[row]) for n, row in targets]
+    plan = time_split.split(stops, total)
+    if not plan.ok:
+        return jsonify(error_body("cannot_split", plan.message)), 422
+
+    rows = []
+    overwrite = 0
+    for (n, row), (a, b) in zip(targets, plan.slots):
+        values = pages[n].rows[row]
+        if any(str(values.get(f, "") or "").strip() for f in ("KZ", "KH", "SZ", "SH")):
+            overwrite += 1
+        kz, kh = time_split.clock(start, a)
+        sz, sh = time_split.clock(start, b)
+        rows.append({"page": n, "row": row, "start": f"{kz}:{kh}", "end": f"{sz}:{sh}",
+                     "values": (kz, kh, sz, sh)})
+    summary = {
+        "shift": shift, "start": start_text, "end": end_text, "minutes": total,
+        "count": len(rows), "pages": sorted({r["page"] for r in rows}), "step": plan.step,
+        "overwrite": overwrite,
+        "first": rows[0]["start"], "last": rows[-1]["end"],
+        "rows": [{k: r[k] for k in ("page", "row", "start", "end")} for r in rows],
+    }
+    if payload.get("dry_run"):
+        return jsonify(summary)
+
+    for r in rows:
+        kz, kh, sz, sh = r["values"]
+        target = pages[r["page"]]
+        target.set(r["row"], "KZ", kz)
+        target.set(r["row"], "KH", kh)
+        target.set(r["row"], "SZ", sz)
+        target.set(r["row"], "SH", sh)
+    problem = None
+    try:
+        for n in sorted(pages):
+            found = _recalculate(pages[n], ctx, calc, shift=shift)
+            if n == page:
+                problem = found
+                continue
+            if not any(r["page"] == n for r in rows):
+                continue
+            header, details = presenter.to_records(pages[n], report_date, line, shift, n)
+            page_writer.save_page(repo, header, details, by_screen=False)
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log.exception("時間の割り振りの保存に失敗しました")
+        return jsonify(error_body("save_failed", f"ほかのページを保存できませんでした: {exc}")), 500
+    log_button_click("distribute_times", line=line,
+                     extra=f"{report_date}/{shift} {len(rows)}行 {start_text}〜{end_text}")
+    body = _view(state, ctx, calc, problem=problem, key=screen_key)
+    body["distributed"] = summary
+    body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
+                       f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
     return jsonify(body)
 
 
