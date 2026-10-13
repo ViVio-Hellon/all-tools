@@ -1135,7 +1135,13 @@ function applyReadOnly(only) {
   上へ戻って空欄を探さずに済む。閉じても入力は消えず、「理由を書く…」で
   開き直せる。
 */
-let reasonAsked = "";
+/*
+  **もう聞いた行**(v4.32.0)。前は「空のいちばん上の行」1つだけを覚えていたので、ある行で
+  ポップアップを「やめる」と、その行が空のまま「いちばん上」に居座り、**ほかの行で「その他」を
+  選んでも聞かなくなっていました**。行ごとに覚え、「その他」でなくなった行は忘れます
+  (選び直せばまた聞く)。
+*/
+const reasonAsked = new Set();
 
 /**
  * 理由の欄を、**行ごとに**並べ直す。
@@ -1226,12 +1232,15 @@ function paintReason(view, since = null) {
       : '作業停止の記号で<b>「その他」</b>を選ぶと、<b>その行ごと</b>に書けます。';
   }
 
-  // **開いた瞬間だけ**ポップアップを出す。出し続けると、欄を離れる
-  // たびに割り込んで入力が進まない
-  const first = entries.find((e) => e.empty);
-  const seen = first ? String(first.row) : "";
-  if (first && seen !== reasonAsked) askReason(first);
-  reasonAsked = seen;
+  // **その行で「その他」になった瞬間だけ**ポップアップを出す。出し続けると、欄を離れる
+  // たびに割り込んで入力が進まない。「その他」でなくなった行は忘れる(選び直せばまた聞く)
+  const present = new Set(entries.map((e) => String(e.row)));
+  for (const row of [...reasonAsked]) {
+    if (!present.has(row)) reasonAsked.delete(row);
+  }
+  const fresh = entries.find((e) => e.empty && !reasonAsked.has(String(e.row)));
+  for (const row of present) reasonAsked.add(row);
+  if (fresh) askReason(fresh);
 }
 
 function askReason(entry) {
@@ -2496,9 +2505,8 @@ export function start() {
   lastLookedUp.clear();
   askingRow = 0;
   lastProblem = "";
-  // いま描かれている状態を出発点にする。`null` のままだと、最初の応答で
-  // 「開いた瞬間」と誤って判定してポップアップが勝手に出る
-  reasonAsked = "";
+  // 紙を開き直したら、聞いた行は忘れる(開いた紙の空の「その他」は1度だけ聞く)
+  reasonAsked.clear();
 
   markRow = 0;
   pickedHiki = "";
@@ -2803,7 +2811,8 @@ export function start() {
     } else if (rest) {
       lines.push("", `休憩 ${rest.start}〜${rest.end}(${rest.minutes}分)は飛ばします。` +
         `${rest.page}ページ ${rest.row}行目が休憩をまたぎます。`);
-      lines.push(rest.slot ? `その行に休憩(停止の記号「0」${rest.minutes}分)を入れます。` : rest.note);
+      if (rest.slot) lines.push(`その行に休憩(停止の記号「0」${rest.minutes}分)を入れます。`);
+      if (rest.note) lines.push(rest.note);
     }
     if (plan.overwrite) lines.push("", `開始・終了の時刻が入っている ${plan.overwrite} 行も書き換えます。`);
     lines.push("", "よろしいですか?");

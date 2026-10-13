@@ -1211,10 +1211,18 @@ def _rest_plan(shift, rest, plan, targets, pages, day_work) -> dict | None:
     """休憩をどう扱ったか(画面の確かめと、書くときに使う)。飛ばさなければ None。
 
     休憩にかかって終わりをのばした行に、休憩を停止の記号「0」(休憩食事)で入れます。
-    **直の中にもう「0」の停止があれば入れません**(二重になる)。その行の停止①〜⑤が
-    埋まっていても入れられません(画面に出して、手で入れてもらう)。
+
+        休憩が1分でもはいっていると、60分で打ってくれない(v4.32.0)
+
+    前は直の中に「0」の停止が**1つでもあれば**入れていませんでした。いまは**「0」の分の合計が
+    休憩の長さ(60分)に届いていれば**入れず、届いていなければ入れます。その行にもう「0」が
+    あれば、その欄を60分にします(2つ並べない)。停止①〜⑤が埋まっていれば入れられないので、
+    画面に出して手で入れてもらいます。
     """
+    from decimal import Decimal
+
     from nippou.logic import save_checks, time_split
+    from nippou.logic.work_time import stop_minutes
 
     if day_work:
         return {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"} if shift in time_split.BREAKS else None
@@ -1225,20 +1233,41 @@ def _rest_plan(shift, rest, plan, targets, pages, day_work) -> dict | None:
     page, row = targets[plan.break_index]
     info: dict = {"start": begin, "end": end, "minutes": length, "page": page, "row": row,
                   "slot": None, "note": ""}
-    has_rest = any(
-        save_checks.normalize(str(values.get(code, "") or "")) == save_checks.REST_STOP_CODE
-        for p in pages.values() for values in p.rows.values()
-        for code, _minutes in time_split.STOP_SLOTS)
-    if has_rest:
-        info["note"] = "休憩(停止の記号「0」)はもう入っているので、足しません"
+
+    def is_rest(values: dict, code: str) -> bool:
+        return save_checks.normalize(str(values.get(code, "") or "")) == save_checks.REST_STOP_CODE
+
+    rest_total = sum((stop_minutes(str(values.get(minutes, "") or ""))
+                      for p in pages.values() for values in p.rows.values()
+                      for code, minutes in time_split.STOP_SLOTS if is_rest(values, code)),
+                     Decimal(0))
+    if rest_total >= length:
+        info["note"] = f"休憩(停止の記号「0」)はもう {time_split_minutes(rest_total)}分入っているので、足しません"
         return info
     values = pages[page].rows[row]
+    # その行にもう「0」があれば、その欄を休憩の長さにする(2つ並べない)
+    for code, minutes in time_split.STOP_SLOTS:
+        if is_rest(values, code):
+            info["slot"] = [code, minutes]
+            info["note"] = (f"その行の休憩「0」({time_split_minutes(stop_minutes(str(values.get(minutes, '') or '')))}分)"
+                            f"を {length}分にします")
+            return info
     for code, minutes in time_split.STOP_SLOTS:
         if not str(values.get(code, "") or "").strip() and not str(values.get(minutes, "") or "").strip():
             info["slot"] = [code, minutes]
+            if rest_total > 0:
+                info["note"] = (f"ほかの行に休憩「0」が {time_split_minutes(rest_total)}分入っています"
+                                f"(そのままにします)")
             return info
     info["note"] = f"{page}ページ {row}行目の停止①〜⑤が埋まっているので、休憩は手で入れてください"
     return info
+
+
+def time_split_minutes(value) -> str:
+    """分を画面の字に(1 / 2.5)。"""
+    from nippou.logic.work_time import minutes_text
+
+    return minutes_text(value)
 
 
 def _apply_shortcuts(state, payload: dict) -> tuple[dict | None, list[dict]]:

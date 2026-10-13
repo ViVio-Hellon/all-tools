@@ -21,16 +21,17 @@ from nippou.logic import etc_marks  # noqa: E402
 
 
 class MarkListTests(unittest.TestCase):
-    def test_6つある(self) -> None:
-        """写真のボタンと同じ6つ。増やすときは `MARKS` に1行足す。"""
+    def test_7つある(self) -> None:
+        """写真のボタンの6つ + 同梱なし(v4.32.0)。増やすときは `MARKS` に1行足す。"""
         self.assertEqual([m.key for m in etc_marks.MARKS],
-                         ["store", "ear", "outsource", "ex", "flip", "spot"])
+                         ["store", "ear", "outsource", "ex", "flip", "spot", "nobundle"])
 
     def test_書き込む文字はVBAのまま(self) -> None:
         """**紙に出る文字が変わらない。** 集計はこの文字を探して数える。"""
         self.assertEqual({m.key: m.text for m in etc_marks.MARKS}, {
             "store": "ストア", "ear": "耳付き", "outsource": "外注出荷",
-            "ex": "EX", "flip": "反転作業", "spot": "スポット有"})
+            "ex": "EX", "flip": "反転作業", "spot": "スポット有",
+            "nobundle": "同梱なし"})
 
     def test_自動で押せるのは2つだけ(self) -> None:
         """残り4つは元データから決められない。**勝手に押さない。**"""

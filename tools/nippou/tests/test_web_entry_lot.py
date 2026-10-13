@@ -346,7 +346,7 @@ class MarkToggleTests(WebTestCase):
 
     def test_ボタンは画面に6つ出る(self) -> None:
         html = self.client.get("/", headers=HEADERS).get_data(as_text=True)
-        for label in ("ｽﾄｱ", "耳付", "外注", "EX", "反転", "ｽﾎﾟｯﾄ"):
+        for label in ("ｽﾄｱ", "耳付", "外注", "EX", "反転", "ｽﾎﾟｯﾄ", "同梱なし"):
             with self.subTest(label=label):
                 self.assertIn(label, html)
         self.assertIn('data-mark="outsource"', html)

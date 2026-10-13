@@ -241,7 +241,7 @@ class DistributeWebTests(WebTestCase):
         tim = sum(Decimal(body["rows"][str(n)]["TIM"] or 0) for n in range(1, 13))
         self.assertEqual(tim, total - 60)
 
-    def test_休憩0がもう入っていれば足さない(self) -> None:
+    def test_休憩0が60分入っていれば足さない(self) -> None:
         self.enable()
         _day, _line, shift = self.key()
         if shift not in ts.BREAKS:
@@ -250,7 +250,42 @@ class DistributeWebTests(WebTestCase):
                   "header": {"worker": "山田"}}
         rest = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()["rest"]
         self.assertIsNone(rest["slot"])
-        self.assertIn("もう入っている", rest["note"])
+        self.assertIn("もう 60分入っている", rest["note"])
+
+    def test_休憩0が1分でも足りなければ60分を入れる(self) -> None:
+        """休憩が1分でもはいっていると、60分で打ってくれない"""
+        self.enable()
+        _day, _line, shift = self.key()
+        if shift not in ts.BREAKS:
+            self.skipTest(f"{shift} には休憩の決まりが無い")
+        screen = {"rows": {str(n): row(f"L{n}") for n in range(1, 13)}, "header": {"worker": "山田"}}
+        screen["rows"]["1"]["S"] = "0"
+        screen["rows"]["1"]["TH"] = "1"
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        rest = plan["rest"]
+        self.assertIsNotNone(rest["slot"], rest)
+        self.assertIn("1分入っています", rest["note"])
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        crossing = body["rows"][str(rest["row"])]
+        code, minutes = rest["slot"]
+        self.assertEqual((crossing[code], crossing[minutes]), ("0", "60"))
+
+    def test_またぐ行にもう0があればその欄を60分にする(self) -> None:
+        self.enable()
+        _day, _line, shift = self.key()
+        if shift not in ts.BREAKS:
+            self.skipTest(f"{shift} には休憩の決まりが無い")
+        screen = {"rows": {str(n): row(f"L{n}") for n in range(1, 13)}, "header": {"worker": "山田"}}
+        crossing_row = self.post("/api/entry/distribute-times",
+                                 {**screen, "dry_run": True}).get_json()["rest"]["row"]
+        screen["rows"][str(crossing_row)].update(S="0", TH="5")
+        rest = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()["rest"]
+        if rest["row"] != crossing_row:
+            self.skipTest("5分の停止でまたぐ行が動いた")
+        self.assertEqual(rest["slot"], ["S", "TH"])
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        got = body["rows"][str(crossing_row)]
+        self.assertEqual((got["S"], got["TH"], got.get("SS", "")), ("0", "60", ""))
 
     def test_昼稼働なら休憩を飛ばさない(self) -> None:
         self.enable()
