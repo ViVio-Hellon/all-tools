@@ -106,7 +106,7 @@
       <label class="stack-field">
         <span class="stack-field__label">{{ label }}</span>
         {% if name in spin_fields %}
-        {# スピンボタン(v4.16.0)。▲▼ で1ずつ・上下の矢印キーでも。**打つのはそのまま** #}
+        {# スピンボタン(v4.16.0)。▲▼ で1ずつ・押しっぱなしで続けて(v4.31.2)・上下の矢印キーでも。**打つのはそのまま** #}
         {% set low, high = spin_fields[name] %}
         <span class="spin">
           <input id="dim-{{ name }}" data-dim="{{ name }}" type="text"
@@ -114,9 +114,9 @@
                  data-spin-min="{{ low }}"{% if high is not none %} data-spin-max="{{ high }}"{% endif %}>
           <span class="spin__btns">
             <button class="spin__btn" type="button" data-spin="1" tabindex="-1"
-                    aria-label="{{ label }}を1増やす" title="1増やす">▲</button>
+                    aria-label="{{ label }}を1増やす" title="1増やす(押しっぱなしで続けて増える)">▲</button>
             <button class="spin__btn" type="button" data-spin="-1" tabindex="-1"
-                    aria-label="{{ label }}を1減らす" title="1減らす">▼</button>
+                    aria-label="{{ label }}を1減らす" title="1減らす(押しっぱなしで続けて減る)">▼</button>
           </span>
         </span>
         {% else %}

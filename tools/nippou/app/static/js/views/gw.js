@@ -18,6 +18,7 @@
 */
 import { api, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
+import { pageSignal } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 
 /* ---------------------------------------------------------------- */
@@ -1012,8 +1013,8 @@ function syncAngle() {
 /* ---------------------------------------------------------------- */
 /** 1つ増やす / 減らす。**打った値から**数え、下限・上限で止める。
  *  打ったときと同じ通り道(input / change)を流すので、下書き・角当ての同期もそのまま効く */
-function stepSpin(input, step) {
-  if (!input || input.disabled) return;
+function stepSpin(input, step, { settle = true } = {}) {
+  if (!input || input.disabled) return false;
   const low = input.dataset.spinMin === undefined ? null : Number(input.dataset.spinMin);
   const high = input.dataset.spinMax === undefined ? null : Number(input.dataset.spinMax);
   // 空の欄は 0 から数える(バンドは ▲ 1回で 1 本。締枚数は下限の 1 に止まる)
@@ -1021,19 +1022,78 @@ function stepSpin(input, step) {
   let next = (Number.isFinite(now) ? now : 0) + step;
   if (low !== null) next = Math.max(low, next);
   if (high !== null) next = Math.min(high, next);
+  const moved = String(next) !== input.value;
   input.value = String(next);
   input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
+  if (settle) input.dispatchEvent(new Event("change", { bubbles: true }));
+  return moved;
+}
+
+/*
+  **押しっぱなしで続けて変わる**(v4.31.2)。
+
+      梱包枚数とバンド本数のスピンボタンを押しっぱなしで連続で数値変化するように
+      50枚とかだと50回押さないとだめなのはしんどい
+
+  押した瞬間に1つ、0.4秒押し続けると続けて動き始め、長く押すほど速くなる(1秒で
+  約8回 → 2秒を過ぎると約25回)。離す・ボタンの外へ出る・窓が裏へ回ると止まる。
+  下限・上限に着いたら止まる。続けているあいだは `input` だけ流し、`change` は離したときに
+  1回だけ(下書きの保存・角当ての同期を1回で済ませる)。
+*/
+const SPIN_DELAY_MS = 400;
+const SPIN_SLOW_MS = 120;
+const SPIN_FAST_MS = 40;
+const SPIN_FAST_AFTER_MS = 2000;
+
+function holdSpin(btn) {
+  const input = btn.closest(".spin")?.querySelector("input");
+  const step = Number(btn.dataset.spin);
+  if (!input || input.disabled) return () => {};
+  stepSpin(input, step, { settle: false });
+  const began = Date.now();
+  let timer = 0;
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (!stepSpin(input, step, { settle: false })) return;   // 下限・上限に着いた
+    const fast = Date.now() - began > SPIN_FAST_AFTER_MS;
+    timer = setTimeout(tick, fast ? SPIN_FAST_MS : SPIN_SLOW_MS);
+  };
+  timer = setTimeout(tick, SPIN_DELAY_MS);
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(timer);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
 }
 
 function wireSpins() {
   for (const btn of document.querySelectorAll("[data-spin]")) {
+    let stop = null;
+    const release = () => { if (stop) { stop(); stop = null; } };
+    btn.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();          // 欄の焦点・選択を動かさない
+      release();
+      try { btn.setPointerCapture(event.pointerId); } catch { /* 古いブラウザ */ }
+      stop = holdSpin(btn);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      btn.addEventListener(type, release);
+    }
+    btn.addEventListener("pointerleave", release);
+    // 窓の後始末は画面ごと(画面へ来るたびに繋ぎ直すので、出るときに外す)
+    const signal = pageSignal();
+    window.addEventListener("blur", release, { signal });
+    document.addEventListener("visibilitychange", release, { signal });
     btn.addEventListener("click", (event) => {
       event.preventDefault();          // 欄の label へ押したことを流さない
-      stepSpin(btn.closest(".spin")?.querySelector("input"), Number(btn.dataset.spin));
+      // マウス・指はもう pointerdown で動かした。キーボードなど(detail が 0)だけここで1つ
+      if (event.detail === 0) stepSpin(btn.closest(".spin")?.querySelector("input"), Number(btn.dataset.spin));
     });
   }
-  // 上下の矢印キーでも(片手で数を合わせる)
+  // 上下の矢印キーでも(片手で数を合わせる)。押し続ければキーの連打で続けて変わる
   for (const input of document.querySelectorAll(".spin input")) {
     input.addEventListener("keydown", (event) => {
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;

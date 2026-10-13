@@ -64,6 +64,77 @@ class GwSpinTests(WebTestCase):
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class HoldSpinBrowserTests(WebTestCase):
+    """押しっぱなしで続けて変わる(v4.31.2)。
+
+        梱包枚数とバンド本数のスピンボタンを押しっぱなしで連続で数値変化するように
+        50枚とかだと50回押さないとだめなのはしんどい
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from tests._browser import chromium_or_skip
+        cls.pw, cls.browser = chromium_or_skip()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.browser.close()
+        cls.pw.stop()
+
+    def open(self):
+        from tests.test_seq_entry import BrowserTests
+        ctx = self.browser.new_context(viewport={"width": 1400, "height": 900})
+        self.addCleanup(ctx.close)
+        ctx.route("http://app.test/**", lambda route: BrowserTests._forward(self, route))
+        page = ctx.new_page()
+        self.errors: list[str] = []
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        page.goto("http://app.test/gw", wait_until="load")
+        page.wait_for_selector("#dim-count")
+        page.wait_for_timeout(300)
+        return page
+
+    def button(self, page, name: str, step: int) -> str:
+        return f'label:has(#dim-{name}) [data-spin="{step}"]'
+
+    def test_1回押せば1つ(self) -> None:
+        page = self.open()
+        page.click(self.button(page, "count", 1))
+        page.click(self.button(page, "count", 1))
+        self.assertEqual(page.input_value("#dim-count"), "2")
+        self.assertEqual(self.errors, [])
+
+    def test_押しっぱなしで続けて増え_離すと止まる(self) -> None:
+        page = self.open()
+        page.hover(self.button(page, "count", 1))
+        page.mouse.down()
+        page.wait_for_timeout(2600)
+        page.mouse.up()
+        held = int(page.input_value("#dim-count"))
+        self.assertGreater(held, 15, "2.6秒押せば十数回以上は進む")
+        page.wait_for_timeout(500)
+        self.assertEqual(int(page.input_value("#dim-count")), held, "離したら止まる")
+        # 減らすほうも続けて動き、下限(1)で止まる
+        page.hover(self.button(page, "count", -1))
+        page.mouse.down()
+        page.wait_for_timeout(4000)
+        page.mouse.up()
+        self.assertEqual(page.input_value("#dim-count"), "1")
+        self.assertEqual(self.errors, [])
+
+    def test_ボタンの外へ出たら止まる(self) -> None:
+        page = self.open()
+        page.hover(self.button(page, "horizontal_bands", 1))
+        page.mouse.down()
+        page.wait_for_timeout(900)
+        page.mouse.move(5, 5)
+        page.mouse.up()
+        moved = page.input_value("#dim-horizontal_bands")
+        page.wait_for_timeout(500)
+        self.assertEqual(page.input_value("#dim-horizontal_bands"), moved)
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
 class StaffModalLayoutTests(WebTestCase):
     def test_広い窓で班を横に並べる(self) -> None:
         html = self.get("/").get_data(as_text=True)
