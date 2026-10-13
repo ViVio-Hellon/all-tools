@@ -714,7 +714,11 @@ def _push(ctx):
 
     payload = request.get_json(silent=True) or {}
     skip = shift_check.normalize_skip(payload.get("skip"))
-    reports = shift_check.run_pending(get_repo(), skip=skip, admin=ctx.editor)
+    # 「設備移動のため保存」で通せるのは**いまの直だけ**(v4.32.0)。前の直のぶんは
+    # その直の人か管理者が通す ── 次の直の人が代わりに「休憩が取れなかった」と言えない
+    mine = _current_key(ctx)
+    reports = shift_check.run_pending(get_repo(), skip=skip, admin=ctx.editor,
+                                      skip_only=mine)
     # **押したことを残す**(時刻・いまの直・担当者)。止めたときも送れた
     # ときも同じ1回の「押した」から数える(`services/push_history`)
     pressed, current = _pressed(ctx, reports, payload.get("worker"))
@@ -737,8 +741,13 @@ def _push(ctx):
 
         blockers = []
         for report in shift_check.blocked_reports(reports):
-            for finding in save_checks.unskippable(report.findings):
+            own = ctx.editor or mine is None or (report.report_date, report.line, report.shift) == mine
+            # 前の直のぶんは、休憩・最終時間も**ここでは通せない**(打っても通らないと先に言う)
+            for finding in (save_checks.unskippable(report.findings) if own else report.findings):
                 item = finding.as_dict()
+                if not own and finding.skippable:
+                    item["message"] = (f"{item['message']}(前の直のぶんです。「設備移動のため保存」で"
+                                       "通せるのは、その直の人か管理者だけです)")
                 # **どの直の話かまで書く。** 直が複数まとまって断られる
                 # ので、「1ページ 1行目」だけでは探しようがありません
                 item["where"] = f"{report.key_text} {item['where']}".strip()
@@ -860,6 +869,17 @@ def _standard_time(write) -> "standard_time.Outcome":
     except Exception as exc:                      # noqa: BLE001 - 次の保存で写す
         log.exception("標準作業時間へ写せませんでした")
         return standard_time.Outcome(error=str(exc))
+
+
+def _current_key(ctx):
+    """いまの直 `(報告日, ライン, 直)`。読めなければ None(そのときは前のとおり全部に効く)。"""
+    from .entry import current_calculator
+
+    try:
+        return tuple(ctx.current_key(current_calculator()))
+    except Exception:                             # noqa: BLE001 - 押すのは止めない
+        log.exception("いまの直を読めませんでした")
+        return None
 
 
 def _pressed(ctx, reports, worker=None):

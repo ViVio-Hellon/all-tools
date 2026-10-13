@@ -292,12 +292,21 @@ def run_for_save(repo: NippouRepository, report_date: str, line: str,
 
 
 def run_pending(repo: NippouRepository, *, skip: bool = False,
-                admin: bool = False) -> list[CheckReport]:
+                admin: bool = False,
+                skip_only: Optional[tuple[str, str, str]] = None) -> list[CheckReport]:
     """これから共有へ送る直を、ぜんぶ確かめる。
 
     送るのは「まだ送っていないページ」(`pending_sync_headers`)で、日も直も
     混ざりえます。**ページではなく直の単位**で見ます ── 梱包数も休憩も
     作業時間も、ページをまたいで足してからでないと判断できません。
+
+    `skip_only` を渡すと、「設備移動のため保存」で通すのは**その直だけ**(v4.32.0)。
+
+        これは当事者が入力するものであって次直の作業者が入力するのはおかしくないですか？
+
+    前は打つと、未送信の直**ぜんぶ**の休憩・最終時間が通っていました ── 次の直の人が、
+    前の直の「休憩が取れなかった」を代わりに言えてしまう。前の直のぶんを通せるのは
+    管理者(`admin`)だけです。
     """
     keys: list[tuple[str, str, str]] = []
     for header in repo.pending_sync_headers():
@@ -314,7 +323,8 @@ def run_pending(repo: NippouRepository, *, skip: bool = False,
     reports = []
     for no, key in enumerate(keys, start=1):
         job_progress.step(label=" ".join(key))
-        reports.append(run(repo, *key, skip=skip, admin=admin, codes=codes))
+        mine = skip_only is None or admin or key == tuple(skip_only)
+        reports.append(run(repo, *key, skip=skip and mine, admin=admin, codes=codes))
         job_progress.step(done=no)
     return reports
 

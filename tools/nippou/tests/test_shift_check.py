@@ -536,6 +536,44 @@ class CheckScreenTests(WebTestCase):
         res = self.post("/api/settings/push", {"skip": "設備移動のため保存"})
         self.assertNotEqual(res.status_code, 422)
 
+    def _save_skippable(self, day: str, line: str, shift: str) -> None:
+        """休憩と最終時間だけが足りないページ(「設備移動のため保存」で通せる断りだけ)。"""
+        from nippou.db.models import DetailRecord, HeaderRecord
+
+        rows = [DetailRecord(report_date=day, line=line, shift=shift, page=1,
+                             row_no=1, lot="A", ken="99", mai="1", tut="1")]
+        self.repo().save(HeaderRecord(report_date=day, line=line, shift=shift,
+                                      page=1), rows)
+
+    def test_前の直のぶんは一文では通らない(self) -> None:
+        """これは当事者が入力するものであって次直の作業者が入力するのはおかしくないですか？(v4.32.0)
+
+        前の直の休憩・最終時間を、次の直の人が「設備移動のため保存」で通せていた。
+        """
+        _day, line, _shift = self._current()
+        self._save_skippable("2020年1月6日", line, "1直")          # 前の直(いまの直ではない)
+        res = self.post("/api/settings/push", {"skip": "設備移動のため保存"})
+        self.assertEqual(res.status_code, 422)
+        body = res.get_json()
+        self.assertFalse(body["skippable_only"], "打っても通らないと先に言う")
+        self.assertTrue(any("前の直のぶん" in b["message"] for b in body["skip_blockers"]),
+                        body["skip_blockers"])
+
+    def test_いまの直のぶんは一文で通る_前の直が混ざっていても断るのは前の直だけ(self) -> None:
+        day, line, shift = self._current()
+        self._save_skippable(day, line, shift)
+        self._save_skippable("2020年1月6日", line, "1直")
+        body = self.post("/api/settings/push", {"skip": "設備移動のため保存"}).get_json()
+        blocked = [(r["report_date"], r["shift"]) for r in body["reports"] if not r["ok"]]
+        self.assertEqual(blocked, [("2020年1月6日", "1直")])
+
+    def test_管理者なら前の直のぶんも一文で通せる(self) -> None:
+        _day, line, _shift = self._current()
+        self._save_skippable("2020年1月6日", line, "1直")
+        self.post("/api/settings/admin", {"enable": True, "password": "nisk"})
+        res = self.post("/api/settings/push", {"skip": "設備移動のため保存"})
+        self.assertNotEqual(res.status_code, 422)
+
     def test_何も溜まっていなければ関門は素通り(self) -> None:
         res = self.post("/api/settings/push", {})
         self.assertNotEqual(res.status_code, 422)
