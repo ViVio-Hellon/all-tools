@@ -10,8 +10,10 @@
       (日報入力のロット欄と同じ直し方)。保存してある側が全角でも当たる
     ・空欄は断る(期間の全部を出さない)。期間が逆・空・形違いも断る
     ・期間は報告日で、両端を含む。既定は直近3か月(2か月前の月初〜当日)
-    ・**ラインを混ぜない**: 探すのは1ライン。Administrator の PC だけ選べ、
-      ほかのラインは控えから読む(控えには書かない)。ほかの PC はこの端末のライン
+    ・ラインは**だれでも選べる**(定義のラインと「全ライン」。見るだけ)。1つのラインを
+      選べばそのラインだけ。共有を読めないとき、ほかのラインは控えから読む(控えには
+      書かない)が、控えを読めるのは Administrator の PC・管理者モードだけ
+    ・探す元は共有の日報データ + この端末(共有と控えは `test_lot_search_shared.py`)
     ・並びは 作業日 → 直 → ページ → 行。直をまたいだロットは全部の行が出る
     ・上限を超えたら先のぶんだけ出して「多すぎるので絞ってください」
     ・当たった行の鍵で、紙・下見・呼び出しの既存の道がそのまま通る
@@ -64,11 +66,15 @@ class LotSearchTests(unittest.TestCase):
         self.conn = connect(Path(self._tmp.name) / "t.sqlite3")
         self.addCleanup(self.conn.close)
         self.repo = NippouRepository(self.conn)
+        # 共有の日報データは**無い**(フォルダごと)。この端末の分だけで探す。
+        # 本物の置き場所を読みに行かないよう、必ず一時フォルダの道を渡す
+        self.shared = Path(self._tmp.name) / "共有" / "日報データ.sqlite3"
 
     def find(self, lot: str, *, line: str = "L-1", start: str = SPAN["start"],
              end: str = SPAN["end"], own_line: str = "L-1", editor: bool = False):
         query = lot_search.LotQuery.of({"lot": lot, "start": start, "end": end}, line)
-        return lot_search.search(self.repo, query, own_line=own_line, editor=editor)
+        return lot_search.search(self.repo, query, own_line=own_line, editor=editor,
+                                 shared_path=self.shared)
 
     def lots(self, found) -> list[str]:
         return [h["lot"] for h in found.hits]
@@ -135,7 +141,7 @@ class LotSearchTests(unittest.TestCase):
         self.assertEqual(lot_search.default_span(date(2026, 3, 31))[0], date(2026, 1, 1))
 
     # -- ライン -----------------------------------------------------------
-    def test_ラインを混ぜない(self) -> None:
+    def test_選んだラインだけ(self) -> None:
         save(self.repo, line="L-1", lots=("N710001",))
         save(self.repo, line="HVC", lots=("N710002",))
         self.assertEqual(self.lots(self.find("N71", line="L-1")), ["N710001"])
@@ -166,7 +172,7 @@ class LotSearchTests(unittest.TestCase):
         self.assertIn("2行", found.summary)
         self.assertIn("1ロット・2直", found.summary)
         # どの直・ページの何行目かが、行ごとに言える
-        self.assertEqual(found.hits[1]["where"], f"{DAY} 2直 1ページ 1行目")
+        self.assertEqual(found.hits[1]["where"], f"{DAY} L-1 2直 1ページ 1行目")
 
     # -- 上限 -------------------------------------------------------------
     def test_上限を超えたら先のぶんだけ出して絞らせる(self) -> None:
@@ -207,14 +213,15 @@ class LotSearchTests(unittest.TestCase):
         self.assertEqual(row["実績枚数"], "10")
         # 作業者は**そのページの**名前(直の1ページ目ではない)
         self.assertEqual(row["作業者"], "佐藤")
-        self.assertEqual(row["共有へ"], "済")
+        # 送り済み。共有を読めなかったので「この端末」(読めれば「共有」)
+        self.assertEqual(row["どこから"], "この端末")
 
     def test_打ちかけ_未送信の行も出る(self) -> None:
-        """自動保存で置いた行は明細にある。共有へ渡していなければ「未」。"""
+        """自動保存で置いた行は明細にある。共有へ渡していなければ「この端末・未送信」。"""
         save(self.repo, lots=("N7131T0",), dirty=True)
         found = self.find("N71")
         row = dict(zip(found.table.columns, found.table.rows[0]))
-        self.assertEqual(row["共有へ"], "未")
+        self.assertEqual(row["どこから"], "この端末・未送信")
 
     # -- 呼び出し ---------------------------------------------------------
     def test_呼び出すは管理者だけ_行き先はラインで決まる(self) -> None:
@@ -298,8 +305,15 @@ class LotSearchWebTests(WebTestCase):
         self.assertEqual(lot_search.default_span(date.fromisoformat(end))[0].isoformat(), start)
         self.assertTrue(start.endswith("-01"))
 
-    def test_一般の端末にはラインの欄が出ない(self) -> None:
-        self.assertNotIn('id="lot-line"', self.get("/records").get_data(as_text=True))
+    def test_一般の端末にもラインの欄が出る_既定はこの端末のライン(self) -> None:
+        page = self.get("/records").get_data(as_text=True)
+        self.assertIn('id="lot-line"', page)
+        at = page.index('id="lot-line"')
+        select = page[at:page.index("</select>", at)]
+        self.assertIn('<option value="L-1" selected>', select)
+        self.assertIn('<option value="HVC"', select)          # 控えが無くても定義のライン
+        self.assertIn('<option value="*"', select)
+        self.assertIn("全ライン", select)
 
     def test_Administratorにはラインの欄が出る(self) -> None:
         self.administrator()
@@ -358,11 +372,20 @@ class LotSearchWebTests(WebTestCase):
         self.assertTrue(ctx.recall.active)
         self.assertEqual((ctx.recall.shift, ctx.recall.page), ("2直", 1))
 
-    def test_一般の端末は名指ししてもこの端末のライン(self) -> None:
+    def test_一般の端末もほかのラインを選べる_共有が無ければ控えは読まずそう言う(self) -> None:
+        """見るのは誰でも。ただし**ほかのラインの控え**は今の決まりのまま(管理者だけ)。"""
         self.backup_of("HVC", "N719999")
         body = self.search(line="HVC").get_json()
-        self.assertEqual(body["line"], "L-1")
+        self.assertEqual(body["line"], "HVC")
         self.assertNotIn("N719999", str(body["hits"]))
+        self.assertEqual(body["shared"], "missing")
+        self.assertIn("がまだ無いので、この端末の分だけ探しました", body["notice"])
+        self.assertIn("Administrator の PC か管理者モードのときだけ", body["notice"])
+
+    def test_欄に無いラインは断る(self) -> None:
+        res = self.search(line="コイル")
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.get_json()["error"]["field"], "line")
 
     def test_Administratorは選んだラインだけ_控えには書かない(self) -> None:
         self.administrator()
@@ -382,11 +405,11 @@ class LotSearchWebTests(WebTestCase):
         back = self.search(line="L-1").get_json()
         self.assertNotIn("N719999", str(back["hits"]))
 
-    def test_控えの無いラインはそう言う(self) -> None:
+    def test_控えの無いラインはそう言う_探すのはやめない(self) -> None:
         self.administrator()
         res = self.search(line="AIM")
-        self.assertEqual(res.status_code, 404)
-        self.assertIn("控えがありません", res.get_json()["error"]["message"])
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn("控えが無い・開けないライン: AIM", res.get_json()["notice"])
 
     # -- CSV --------------------------------------------------------------
     def read_csv(self, path: Path) -> list[list[str]]:

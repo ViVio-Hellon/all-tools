@@ -1097,6 +1097,8 @@ def distribute_times():
     数えるのは**この直の全ページ**の、打った欄がある行(ページ順・行順)。いま開いている
     ページは画面の中身(まだ保存していなくても)、ほかのページは保存してある中身を使います。
     `dry_run` なら何も書かずに、何行・どの時刻で割り振るかだけ返します(画面が確かめに使う)。
+    停止の分を先に渡した残りは、**梱包数(枚数 × 包数)の比**で分けます(v4.34.0。梱包数が
+    どの行にも無ければ均等)。
 
     ほかのページはここで書き(画面の外から書いた印を付ける)、いまのページは画面へ返して、
     画面がいつもどおり保存します。入っている開始・終了の時刻は書き換えます。
@@ -1140,10 +1142,14 @@ def distribute_times():
     targets = [(n, row) for n in sorted(pages) for row in sorted(pages[n].rows)
                if time_split.is_filled(pages[n].rows[row])]
     stops = [time_split.row_stop_minutes(pages[n].rows[row]) for n, row in targets]
+    # 梱包数(枚数 × 包数)の比で分ける(v4.34.0)。どの行にも無ければ均等、一部だけ無ければ
+    # その行は梱包数がある行の平均で数える(`time_split.pack_weights`)
+    weights, by_packs = time_split.pack_weights(
+        [time_split.row_packs(pages[n].rows[row]) for n, row in targets])
     # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
     day_work = any(p.day_shift for p in pages.values())
     rest = None if day_work else time_split.break_window(shift, start, total)
-    plan = time_split.split(stops, total, rest=rest)
+    plan = time_split.split(stops, total, rest=rest, weights=weights)
     if not plan.ok:
         return jsonify(error_body("cannot_split", plan.message)), 422
     rest_info = _rest_plan(shift, rest, plan, targets, pages, day_work)
@@ -1165,6 +1171,8 @@ def distribute_times():
         "first": rows[0]["start"], "last": rows[-1]["end"],
         "rows": [{k: r[k] for k in ("page", "row", "start", "end")} for r in rows],
         "rest": rest_info,
+        # 確かめの窓に出す、割り振り方の一言(梱包数に合わせたか・均等か)
+        "by_packs": by_packs, "weight_note": time_split.WEIGHT_NOTES[by_packs],
     }
     if payload.get("dry_run"):
         return jsonify(summary)
@@ -1202,7 +1210,8 @@ def distribute_times():
     body["distributed"] = summary
     body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
                        f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
-    if rest_info:
+    # 昼稼働(有)の直は `{"skipped": ...}` だけ(時刻が無い)。前はここで落ちていた(v4.34.0 で直す)
+    if rest_info and rest_info.get("start"):
         body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
     return jsonify(body)
 

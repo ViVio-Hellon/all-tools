@@ -10,7 +10,9 @@
   控えから手元へ入れてから開きます(`/api/records/backup/open`)。
 
   「ロットを探す」(v4.33.0)は、当たった行から**同じ2つへ**行く入口です
-  (紙を見る・下見・呼び出す。新しい道は作らない)。
+  (紙を見る・下見・呼び出す。新しい道は作らない)。探すのは共有の日報データ
+  (全 PC が送った行)とこの端末の行で、この端末に無い直の紙・下見はサーバが
+  共有から読んで出します。
 
   判断はどちらもサーバが持ちます ── 呼び出してよいか(管理者モードか)も、
   その直に何ページあるかも、ここでは決めません。
@@ -97,7 +99,10 @@ async function loadPreview(mark = 0) {
       return false;
     }
     loaded = key();
-    note(`読み込みました: 担当者=${body.worker} / 明細${body.rows.length}行`
+    // この端末に無い直は、どこから読んだかを添える(控え / 共有の日報データ)
+    const from = body.from_shared ? "(共有の日報データから読みました)"
+      : body.from_backup ? "(控えから読みました)" : "";
+    note(`読み込みました${from}: 担当者=${body.worker} / 明細${body.rows.length}行`
          + pagesNote(body.pages) + (mark ? ` / ${mark}行目に印を付けました` : ""));
     paint(body.rows, mark);
     document.getElementById("print").disabled = false;
@@ -356,10 +361,11 @@ function wireBackup() {
    **サーバが決めて返します**(`presenters/lot_search.py`)。ここは写すだけ。
    押した先はこの画面の既存の道です:
 
-       紙を見る  `/report/nippou`(その行のあるページの紙)
+       紙を見る  `/report/nippou`(その行のあるページの紙。この端末に無い直は共有から)
        下見      「日付を指定して見る」の欄へ入れて「中身を見る」と同じ読み込み
-       呼び出す  `/api/settings/recall`(この端末のライン)か
-                 `/api/records/backup/open`(ほかのライン。控えから入れて開く)
+       呼び出す  行ごとの `recall_path`: `/api/settings/recall`(この端末のラインで
+                 手元にあるページ)か `/api/records/backup/open`(ほかのライン・手元に
+                 無いページ。控えから入れて開く)
    ================================================================ */
 function lotNote(text, kind = "info") {
   const box = document.getElementById("lot-note");
@@ -372,7 +378,7 @@ function lotNote(text, kind = "info") {
 function lotSpan() {
   const value = (id) => document.getElementById(id)?.value || "";
   const lineSelect = document.getElementById("lot-line");
-  // ラインの欄は Administrator の PC だけにある。**無ければ送らない**(サーバがこの端末のライン)
+  // ラインの欄は全員にある(「全ライン」も)。**無ければ送らない**(サーバがこの端末のライン)
   return { start: value("lot-start"), end: value("lot-end"), lot: value("lot-no"),
            ...(lineSelect ? { line: lineSelect.value } : {}) };
 }
@@ -422,10 +428,13 @@ function lotRow(cells, numeric, hit, recall) {
     " ",
     lotButton("下見", `${hit.where} を下の「中身の下見」に出します`, () => previewHit(hit)));
   if (recall.allowed) {
-    actions.append(" ", lotButton("呼び出す", `${hit.where} のページを日報入力に開いて直します`,
+    // 行き先は行ごと(この端末のラインで手元にあるページは手元、ほかは控えから入れて開く)
+    const path = hit.recall_path || recall.path;
+    const via = path.includes("/backup/") ? "控えから入れて" : "";
+    actions.append(" ", lotButton("呼び出す", `${hit.where} のページを${via}日報入力に開いて直します`,
       async () => {
         try {
-          const body = await api.post(recall.path, {
+          const body = await api.post(path, {
             report_date: hit.report_date, line: hit.line, shift: hit.shift, page: hit.page });
           toast(body.message, "ok");
           location.href = body.next || "/";
@@ -468,9 +477,13 @@ async function searchLots() {
   try {
     const view = await api.post("/api/records/lot-search", lotSpan());
     paintLots(view);
-    // 多すぎる・何も無いときは注意の色。当たれば何行・何直か
-    if (view.warning) lotNote(view.summary ? `${view.summary}\n${view.warning}` : view.warning, "warn");
-    else lotNote(`${view.summary}(${view.start} 〜 ${view.end} / ${lineLabel(view.line)})`, "ok");
+    // 多すぎる・何も無い・共有を読めなかったときは注意の色。当たれば何行・何直か。
+    // **どこを探したか**(共有 + この端末 / この端末と控えだけ)は、いつも最後に添える
+    const head = view.warning
+      ? view.summary
+      : `${view.summary}(${view.start} 〜 ${view.end} / ${view.line_label || lineLabel(view.line)})`;
+    const text = [head, view.warning, view.notice, view.scope].filter(Boolean).join("\n");
+    lotNote(text, view.warning || view.notice ? "warn" : "ok");
   } catch (err) {
     lotNote(err.message, "error");
     // 前に探した表を、新しい条件の結果のつもりで読ませない

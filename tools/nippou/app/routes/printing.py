@@ -13,8 +13,15 @@
 【ロットを探す(v4.33.0)】
 期間とロット№(頭の数桁だけでも)から、保存した日報の行を探します。当たった行から
 「紙を見る」「下見」「呼び出す」(管理者)へは、この画面の既存の道をそのまま使います。
-探し方・出どころ・上限は `presenters/lot_search.py`、どのラインを読むかは
-集計管理と同じ `services/line_view`(Administrator の PC だけ選べる・混ぜない)。
+探し方・出どころ・上限・ラインの決め方は `presenters/lot_search.py`。探す範囲は
+**共有の日報データ(全 PC が送った行)+ この端末のまだ送っていない行**で、共有を
+読めなければ手元と控え(`services/shared_reports`)。ラインの欄は全員に出し、
+「全ライン」も選べます(見るだけ。呼び出すのは今の決まりのまま)。
+
+【共有にしか無い直の紙・下見】
+ロットを探すは共有から行を拾うので、**この端末にも控えにも無い直**が当たります
+(ほかのラインの PC が送った直・VBA の直)。紙と下見は、手元 → 控え(読めるときだけ)
+→ 共有の日報データ の順に探して出します。共有は読むだけです。
 
 【手元に無ければ控えを見る(v4.12.0)】
 下見と紙は、手元に無い直なら控え(`services/local_backup`)から出します。
@@ -230,12 +237,22 @@ def _wants_all(payload: dict) -> bool:
     return str(payload.get("page", "")).strip().lower() == ALL_PAGES
 
 
-def _missing(report_date: str, line: str, shift: str) -> Response:
+def _missing_text(why: str = "") -> str:
+    """見つからないときの一言。共有を読めなかったなら、そのわけも(押して何も分からない、にしない)。"""
+    text = "該当するデータが見つかりません。"
+    if why:
+        text += f"({why}、共有からは読めませんでした)"
+    return text
+
+
+def _missing(report_date: str, line: str, shift: str, why: str = "") -> Response:
+    from html import escape
+
     log.info("印刷用HTML: 該当なし %s/%s/%s", report_date, line, shift)
     return Response(
         "<!doctype html><meta charset='utf-8'>"
         "<p style='font-family:sans-serif;padding:40px'>"
-        "該当するデータが見つかりません。</p>",
+        f"{escape(_missing_text(why))}</p>",
         mimetype="text/html", status=404)
 
 
@@ -264,7 +281,6 @@ def index():
     """
     from nippou.presenters import lot_search
     from nippou.presenters import settings as settings_view
-    from nippou.services import line_view
 
     ctx = work_context.get_context()
     from .entry import build_service, current_calculator
@@ -328,10 +344,9 @@ def index():
         # 呼び出せるか。管理者モードか、アクセス権限の表で Administrator(v4.12.0)
         admin=ctx.editor,
         backup=_backup_view(ctx),
-        # ロットを探す(v4.33.0)。既定の期間はここで決める(`presenters/lot_search`)。
-        # ラインの欄は集計管理と同じく Administrator の PC だけ(`services/line_view`)
+        # ロットを探す(v4.33.0)。既定の期間とラインの欄はここで決める
+        # (`presenters/lot_search`。ラインの欄は全員に、「全ライン」も)
         lot=lot_search.screen(ctx.business_date(calc), ctx.line),
-        lot_pick=line_view.choices(ctx.line).as_dict(),
         # 押す前に「どこへ出るか」を出す(集計管理と同じ1行)
         out_dir=settings_view.output_dir_view(),
         # **いまの直**。ここから紙・表・グラフへ1押しで行けるように
@@ -356,19 +371,20 @@ def load():
     if not (report_date and line and shift):
         return jsonify(error_body("empty", "報告日・ライン・直を指定してください")), 400
 
-    saved, loaded, from_backup = _load_any(report_date, line, shift, page)
+    saved, loaded, where, why = _load_any(report_date, line, shift, page)
     if loaded is None:
         return jsonify({
             "found": False, "pages": saved,
             "message": (f"ページ{page} は保存されていません(この直にあるのは "
                         + "・".join(f"{n}ページ" for n in saved) + ")")
-            if saved else "該当するデータが見つかりません。"})
+            if saved else _missing_text(why)})
 
     header, details = loaded
     return jsonify({
         "found": True,
-        # 手元に無く、控え(LocalBackup)から読んだか
-        "from_backup": from_backup,
+        # 手元に無く、控え(LocalBackup)から読んだか / 共有の日報データから読んだか
+        "from_backup": where == FROM_BACKUP,
+        "from_shared": where == FROM_SHARED,
         "pages": saved,
         "worker": header.worker or "(未入力)",
         "count": header.count,
@@ -417,9 +433,9 @@ def report():
     stamps = _backfill_stamps(report_date, line, shift)
 
     if _wants_all(args):
-        pages = _all_pages(report_date, line, shift)
+        pages, why = _all_pages(report_date, line, shift)
         if not pages:
-            return _missing(report_date, line, shift)
+            return _missing(report_date, line, shift, why)
         log_button_click("print_report", line=line,
                          extra=f"{report_date}/{shift}/全{len(pages)}ページ")
         return Response(
@@ -427,9 +443,9 @@ def report():
                                           **aggregate),
             mimetype="text/html")
 
-    _, loaded, _ = _load_any(report_date, line, shift, page)
+    _, loaded, _, why = _load_any(report_date, line, shift, page)
     if loaded is None:
-        return _missing(report_date, line, shift)
+        return _missing(report_date, line, shift, why)
 
     header, details = loaded
     log_button_click("print_report", line=line, extra=f"{report_date}/{shift}/{page}")
@@ -479,34 +495,16 @@ def _may_read_backup(ctx, line: str) -> bool:
     return bool(line) and (ctx.editor or line == ctx.terminal_line)
 
 
-def _load_any(report_date: str, line: str, shift: str, page: int):
-    """(その直のページ, そのページ, 控えから読んだか)。**手元が先、無ければ控え。**"""
+#: 紙・下見をどこから読んだか(`_load_any`)
+FROM_LOCAL = "local"
+FROM_BACKUP = "backup"
+FROM_SHARED = "shared"
+
+
+def _backup_pages(report_date: str, line: str, shift: str) -> list:
+    """控えにあるその直の全ページ。**読めるときだけ**(`_may_read_backup`)。無ければ空。"""
     from nippou.services import local_backup
 
-    repo = get_repo()
-    saved = repo.saved_pages(report_date, line, shift)
-    loaded = repo.load(report_date, line, shift, page)
-    if saved or not _may_read_backup(work_context.get_context(), line):
-        return saved, loaded, False
-    try:
-        with local_backup.reader(line) as backup:
-            if backup is None:
-                return saved, loaded, False
-            return (backup.saved_pages(report_date, line, shift),
-                    backup.load(report_date, line, shift, page), True)
-    except Exception:                             # noqa: BLE001 - 控えが読めないだけ
-        log.exception("控えを読めませんでした %s/%s/%s", report_date, line, shift)
-        return saved, loaded, False
-
-
-def _all_pages(report_date: str, line: str, shift: str) -> list:
-    """その直の全ページ(手元が先、無ければ控え)。"""
-    from nippou.services import local_backup
-
-    repo = get_repo()
-    numbers = repo.saved_pages(report_date, line, shift)
-    if numbers:
-        return [p for p in (repo.load(report_date, line, shift, n) for n in numbers) if p]
     if not _may_read_backup(work_context.get_context(), line):
         return []
     try:
@@ -518,6 +516,49 @@ def _all_pages(report_date: str, line: str, shift: str) -> list:
     except Exception:                             # noqa: BLE001 - 控えが読めないだけ
         log.exception("控えを読めませんでした %s/%s/%s", report_date, line, shift)
         return []
+
+
+def _shared_pages(report_date: str, line: str, shift: str) -> tuple[list, str]:
+    """(共有の日報データにあるその直の全ページ, 読めなかったわけ)。**読むだけ。**
+
+    ロットを探すで共有から拾った直(この端末にも控えにも無い)の紙と下見のため。
+    ほかのラインでも誰でも読めます(見るだけ。直すのは「呼び出す」の決まりのまま)。
+    """
+    from nippou.services import shared_reports
+
+    found = shared_reports.shift_pages(report_date, line, shift)
+    return found.pages, ("" if found.ok else found.reason())
+
+
+def _all_pages(report_date: str, line: str, shift: str) -> tuple[list, str]:
+    """(その直の全ページ, 共有を読めなかったわけ)。**手元 → 控え → 共有の日報データ。**"""
+    repo = get_repo()
+    numbers = repo.saved_pages(report_date, line, shift)
+    if numbers:
+        return [p for p in (repo.load(report_date, line, shift, n) for n in numbers) if p], ""
+    pages = _backup_pages(report_date, line, shift)
+    if pages:
+        return pages, ""
+    return _shared_pages(report_date, line, shift)
+
+
+def _load_any(report_date: str, line: str, shift: str, page: int):
+    """(その直のページ, そのページ, どこから読んだか, 共有を読めなかったわけ)。
+
+    **手元 → 控え(読めるときだけ)→ 共有の日報データ**の順。直の単位で決めます
+    (手元にその直が1ページでもあれば手元だけ ── これまでどおり)。
+    """
+    repo = get_repo()
+    saved = repo.saved_pages(report_date, line, shift)
+    if saved:
+        return saved, repo.load(report_date, line, shift, page), FROM_LOCAL, ""
+    pages, where, why = _backup_pages(report_date, line, shift), FROM_BACKUP, ""
+    if not pages:
+        (pages, why), where = _shared_pages(report_date, line, shift), FROM_SHARED
+    if not pages:
+        return [], None, "", why
+    loaded = next((p for p in pages if int(p[0].page) == int(page)), None)
+    return [int(h.page) for h, _ in pages], loaded, where, why
 
 
 def _backup_view(ctx) -> dict:
@@ -602,23 +643,21 @@ def backup_open():
 # ロットを探す (v4.33.0)
 # ----------------------------------------------------------------------
 def _lot_search(payload: dict):
-    """(結果, 断り)。**どちらか1つだけ。** ラインの決め方は集計管理と同じ。"""
+    """(結果, 断り)。**どちらか1つだけ。**
+
+    ラインは誰でも選べます(定義のラインか「全ライン」。見るだけ ── `presenters/lot_search`)。
+    共有・控えが読めなくても断りにはせず、手元で探した結果にわけを添えて返します。
+    """
     from nippou.presenters import lot_search
-    from nippou.services import line_view
 
     ctx = work_context.get_context()
-    # Administrator の PC だけ名指しが効く。ほかは何を送ってきてもこの端末のライン
-    line = line_view.resolve(payload.get("line"), ctx.line)
     try:
+        line = lot_search.pick_line(payload.get("line"), ctx.line)
         query = lot_search.LotQuery.of(payload, line)
     except lot_search.BadRequest as exc:
         return None, (jsonify(error_body("bad_condition", str(exc), field=exc.field)),
                       exc.status)
-    try:
-        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
-            found = lot_search.search(repo, query, own_line=ctx.line, editor=ctx.editor)
-    except line_view.NoBackup as exc:
-        return None, (jsonify(error_body("no_backup", str(exc))), 404)
+    found = lot_search.search(get_repo(), query, own_line=ctx.line, editor=ctx.editor)
     return found, None
 
 
@@ -629,9 +668,9 @@ def lot_search_view():
     found, err = _lot_search(payload)
     if err:
         return err
-    log_button_click("lot_search", line=found.query.line,
+    log_button_click("lot_search", line=found.query.line_label,
                      extra=f"{found.query.lot} {found.query.start}~{found.query.end} "
-                           f"{found.total}行")
+                           f"{found.total}行 共有:{found.shared}")
     return jsonify(found.as_dict())
 
 
@@ -654,15 +693,17 @@ def lot_search_csv():
     query = found.query
     out = csv_export.lot_search_output_path(
         SETTINGS.report_output_dir, query.lot, query.start.isoformat(),
-        query.end.isoformat(), query.line)
+        query.end.isoformat(), query.line_label)
     try:
         count = csv_export.write_table(found.table, out)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("ロットを探すのCSVを書けませんでした")
         return jsonify(error_body("write_failed", f"出力に失敗しました: {exc}")), 500
-    log_button_click("lot_search_csv", line=query.line,
+    log_button_click("lot_search_csv", line=query.line_label,
                      extra=f"{query.lot} {query.start}~{query.end} {count}行")
     message = f"{found.table.title} {count}行\n{out}"
+    if found.notice:
+        message += f"\n{found.notice}"
     if found.too_many:
         message += (f"\n(当たった {found.total}行のうち、画面と同じ先の {count}行です。"
                     "ロット№の桁を増やすか、期間を絞ってください)")

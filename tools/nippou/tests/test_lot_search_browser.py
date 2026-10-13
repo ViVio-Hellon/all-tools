@@ -4,6 +4,7 @@
 
 キーボードだけで使えること(ロット№を打って **Enter** で探す)と、当たった行の
 「下見」が下の「中身の下見」に出て、当たった行に印が付くことを確かめる。
+「全ライン」で共有の日報データにしか無い行が出て、その「下見」も開けること。
 配線は `views/records.js` の中で、Python の試験では壊れても分からないので。
 """
 from __future__ import annotations
@@ -31,7 +32,11 @@ class LotSearchBrowserTests(WebTestCase):
 
     def setUp(self) -> None:
         super().setUp()
+        from nippou import config, user_settings
         from tests.test_lot_search import save
+        # 共有の日報データは一時フォルダの中(作るのは使う試験だけ)。本物の置き場所を読まない
+        self.share = self.tmp / "共有"
+        user_settings.save(config.KEY_ACCESS_DIR, str(self.share))
         save(self.repo(), shift="1直", lots=("N7131T0", "L715C50"))
         save(self.repo(), shift="2直", worker="佐藤", lots=("X000000", "N7131T0"))
         # 直の実績の確認(`shift_end.js`)へ連れて行かれないように、先に確認を済ませる
@@ -84,6 +89,35 @@ class LotSearchBrowserTests(WebTestCase):
         self.assertIn("N7131T0", hit.text_content())
         self.assertEqual(hit.locator("td").first.text_content(), "2")
         self.assertFalse(page.is_disabled("#print"))     # このページの紙も押せる
+        self.assertEqual(self.errors, [])
+
+    def test_全ラインで共有の行を探して_下見は共有から出る(self) -> None:
+        """ラインの欄は誰にでもある。共有にしか無い直の「下見」も中身が出る。"""
+        from tests.test_lot_search_shared import send
+
+        self.share.mkdir()
+        send(self.share / "日報データ.sqlite3", line="HVC", shift="3直", worker="鈴木",
+             lots=("Y000000", "N7199T9"))
+        page = self.open_records()
+        page.select_option("#lot-line", "*")
+        page.fill("#lot-no", "N71")
+        page.press("#lot-no", "Enter")
+        page.wait_for_selector("#lot-rows tr button")
+        rows = page.locator("#lot-rows tr")
+        self.assertEqual(rows.count(), 3)
+        last = rows.nth(2)
+        self.assertIn("HVC", last.text_content())
+        self.assertIn("共有", last.text_content())                 # どこから
+        note = page.text_content("#lot-note")
+        self.assertIn("全ライン", note)
+        self.assertIn("探した範囲: 共有の日報データ", note)
+
+        last.locator("button", has_text="下見").click()
+        page.wait_for_selector("#preview tr.row-hit")
+        self.assertEqual(page.input_value("#p-line"), "HVC")
+        self.assertEqual(page.input_value("#p-shift"), "3直")
+        self.assertIn("N7199T9", page.locator("#preview tr.row-hit").text_content())
+        self.assertIn("共有の日報データから読みました", page.text_content("#note"))
         self.assertEqual(self.errors, [])
 
     def test_空欄でEnterなら断りを出す(self) -> None:

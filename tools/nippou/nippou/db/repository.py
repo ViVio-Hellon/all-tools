@@ -418,17 +418,13 @@ class NippouRepository:
             for _, header in matched
         ]
 
-    def lot_rows_between(self, start_date: date, end_date: date, line: str
-                         ) -> list[tuple[HeaderRecord, DetailRecord]]:
-        """期間(報告日・両端含む)の、**ロット№の入っている明細行**と、その行のページの見出し。
+    def headers_between(self, start_date: date, end_date: date, line: str
+                        ) -> dict[tuple[str, str, str, int], HeaderRecord]:
+        """期間(報告日・両端含む)の、そのラインのページの見出し(鍵 → 見出し)。**明細は引かない。**
 
-        記録を見る「ロットを探す」(`presenters/lot_search.py`)の出どころです。
-        **ラインは必ず1つ** ── 混ぜて読む道を作りません(`services/line_view`)。
-
-        `list_headers_between` はページごとに明細を引くので、3か月ぶんだと
-        何百回も問い合わせます。ここは見出し1回・明細1回で済ませます。
-        並べ替えとロット№の比べ方は呼ぶ側が決めます(全角や空白を揃えてから
-        比べるので、SQL の `LIKE` では決められない)。
+        「ロットを探す」で、**手元にあるページ**を知るのに使います ── 手元のページは
+        共有の同じページより先に採るので、ロット№を打ち直して当たらなくなったページの
+        古い中身が、共有から出てこないように。
         """
         headers: dict[tuple[str, str, str, int], HeaderRecord] = {}
         for r in self.conn.execute("SELECT * FROM daily_header WHERE line=?", (line,)):
@@ -436,6 +432,21 @@ class NippouRepository:
             if parsed is not None and start_date <= parsed <= end_date:
                 header = self._header_from_row(r)
                 headers[header.key()] = header
+        return headers
+
+    def lot_rows_between(self, start_date: date, end_date: date, line: str
+                         ) -> list[tuple[HeaderRecord, DetailRecord]]:
+        """期間(報告日・両端含む)の、**ロット№の入っている明細行**と、その行のページの見出し。
+
+        記録を見る「ロットを探す」(`presenters/lot_search.py`)の、手元と控えの出どころです。
+        **1回に読むのは1ライン**(「全ライン」はラインごとに呼んで並べる)。
+
+        `list_headers_between` はページごとに明細を引くので、3か月ぶんだと
+        何百回も問い合わせます。ここは見出し1回・明細1回で済ませます。
+        並べ替えとロット№の比べ方は呼ぶ側が決めます(全角や空白を揃えてから
+        比べるので、SQL の `LIKE` では決められない)。
+        """
+        headers = self.headers_between(start_date, end_date, line)
         if not headers:
             return []
         found: list[tuple[HeaderRecord, DetailRecord]] = []

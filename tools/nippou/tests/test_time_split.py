@@ -12,6 +12,9 @@
     ・最初の行は直の開始、最後の行は直の終了ちょうど。日をまたぐ直(3直)は 0 時へ戻る
     ・この直の全ページ(ページ順・行順)。いまのページは画面の中身、ほかは保存した中身
     ・オン・オフは設定・管理者で、管理者モード(パスワード)のときだけ。既定はオフ
+    ・停止を先に渡した残りは梱包数(枚数 × 包数。包数が空なら 1)の比で分ける。どの行にも無ければ
+      均等、一部だけ無ければその行は梱包数がある行の平均(v4.34.0)。比が極端でも 5 分刻みのまま、
+      どの行にも最低 1 刻み(5 分)。1 分刻みは均等でも 1 行 5 分取れないときだけ
 """
 from __future__ import annotations
 
@@ -133,6 +136,147 @@ class RestTests(unittest.TestCase):
         a, b = got[plan.break_index]
         self.assertTrue(a < "02:00" and b >= "03:00", (a, b))
         self.assertEqual(got[-1][1], "07:00")
+
+
+class PackTests(unittest.TestCase):
+    """梱包数に合わせて割り振る(v4.34.0)。
+
+        梱包10包み1
+        梱包5包み1 であれば梱包10包み1のほうが時間振りが多い
+        梱包数の入力がなければ均等でいいです
+    """
+
+    def assertWhole(self, plan, total: int) -> None:
+        """つながっていて、0 分の行が無く、最後は直の終わりちょうど。"""
+        self.assertTrue(plan.ok, plan.message)
+        self.assertEqual(plan.slots[0][0], 0)
+        self.assertEqual(plan.slots[-1][1], total)
+        for (_a, b), (c, _d) in zip(plan.slots, plan.slots[1:]):
+            self.assertEqual(b, c, "行はつながったまま")
+        self.assertTrue(all(b > a for a, b in plan.slots), plan.slots)
+
+    def test_梱包数は枚数かける包数_包数が空なら1(self) -> None:
+        self.assertEqual(ts.row_packs({"MAI": "10", "TUT": "1"}), 10)
+        self.assertEqual(ts.row_packs({"MAI": "10", "TUT": "3"}), 30)
+        self.assertEqual(ts.row_packs({"MAI": "10", "TUT": ""}), 10, "包数が空なら 1")
+        self.assertEqual(ts.row_packs({"MAI": "10"}), 10)
+        self.assertEqual(ts.row_packs({"MAI": "x", "TUT": "1"}), 0, "数字でない欄は 0(梱包数の確かめと同じ)")
+        self.assertEqual(ts.row_packs({"MAI": "", "TUT": "1"}), 0)
+        self.assertEqual(ts.row_packs({"LOT": "A", "S": "ｲ", "TH": "30"}), 0, "停止だけの行")
+        self.assertEqual(ts.row_packs({"MAI": "10", "TUT": "0"}), 0)
+
+    def test_梱包10と梱包5は2対1(self) -> None:
+        weights, by_packs = ts.pack_weights([ts.row_packs({"MAI": "10", "TUT": "1"}),
+                                             ts.row_packs({"MAI": "5", "TUT": "1"})])
+        self.assertTrue(by_packs)
+        plan = ts.split([Decimal(0)] * 2, 480, weights=weights)
+        self.assertWhole(plan, 480)
+        self.assertEqual(plan.slots, [(0, 320), (320, 480)])
+        self.assertEqual(times(plan), [("07:00", "12:20"), ("12:20", "15:00")])
+
+    def test_梱包数がどの行にも無ければ均等(self) -> None:
+        weights, by_packs = ts.pack_weights([Decimal(0)] * 22)
+        self.assertFalse(by_packs)
+        self.assertEqual(weights, [Decimal(1)] * 22)
+        plan = ts.split([Decimal(0)] * 22, 480, weights=weights)
+        self.assertEqual(plan.slots, ts.split([Decimal(0)] * 22, 480).slots, "重みが全部同じ = いままでの均等")
+        self.assertEqual(times(plan)[:3], [("07:00", "07:20"), ("07:20", "07:45"), ("07:45", "08:05")])
+        same = ts.split([Decimal(0)] * 22, 480, weights=[Decimal(7)] * 22)
+        self.assertEqual(same.slots, plan.slots, "梱包数が全部同じでも均等")
+
+    def test_一部だけ梱包数が無い行は平均で数える(self) -> None:
+        weights, by_packs = ts.pack_weights([Decimal(10), Decimal(0), Decimal(20)])
+        self.assertTrue(by_packs)
+        self.assertEqual(weights, [Decimal(10), Decimal(15), Decimal(20)])
+        plan = ts.split([Decimal(0)] * 3, 450, weights=weights)
+        self.assertWhole(plan, 450)
+        self.assertEqual([b - a for a, b in plan.slots], [100, 150, 200])
+
+    def test_停止は先に渡して残りを梱包数の比で(self) -> None:
+        # 120 分・2行目に停止 30 分 → 残り 90 分を 10:5 で 60 分・30 分
+        plan = ts.split([Decimal(0), Decimal(30)], 120, weights=[Decimal(10), Decimal(5)])
+        self.assertWhole(plan, 120)
+        self.assertEqual(plan.slots, [(0, 60), (60, 120)])
+        # 停止の大きい行が梱包数の少ない行でも、作業時間はマイナスにしない
+        plan = ts.split([Decimal(0), Decimal(0), Decimal(40)], 120,
+                        weights=[Decimal(1000), Decimal(1000), Decimal(1)])
+        self.assertWhole(plan, 120)
+        a, b = plan.slots[2]
+        self.assertGreaterEqual(b - a, 40)
+
+    def test_休憩をまたいでも梱包数の比(self) -> None:
+        # 1直: 休憩を除いた 420 分を 10:5 で 280 分・140 分。2行目が 12:00 をまたいで 60 分のびる
+        start = ts.parse_hhmm("07:00")
+        plan = ts.split([Decimal(0)] * 2, 480, rest=ts.break_window("1直", start, 480),
+                        weights=[Decimal(10), Decimal(5)])
+        self.assertWhole(plan, 480)
+        self.assertEqual(times(plan, start), [("07:00", "11:40"), ("11:40", "15:00")])
+        self.assertEqual(plan.break_index, 1)
+        spans = [b - a for a, b in plan.slots]
+        self.assertEqual((spans[0], spans[1] - 60), (280, 140))
+
+    def test_比が極端でも0分の行は出ない(self) -> None:
+        for weights in ([1, 1000], [1000, 1], [1000, 1, 1], [1, 1000, 1], [1, 1, 1000],
+                        [1000, 1000, 1, 1000]):
+            with self.subTest(weights=weights):
+                w = [Decimal(x) for x in weights]
+                plan = ts.split([Decimal(0)] * len(w), 480, weights=w)
+                self.assertWhole(plan, 480)
+                self.assertEqual(plan.step, 5, "比が極端でも 5 分刻みのまま")
+                self.assertTrue(all(b - a >= 5 for a, b in plan.slots), plan.slots)
+                start = ts.parse_hhmm("07:00")
+                plan = ts.split([Decimal(0)] * len(w), 480, weights=w,
+                                rest=ts.break_window("1直", start, 480))
+                self.assertWhole(plan, 480)
+
+    def test_比が極端でも5分刻みのまま短い行に5分(self) -> None:
+        """1 と 1000 でも直の全部を 1 分刻みにはしない。短い行にも 1 刻み(5 分)。"""
+        plan = ts.split([Decimal(0)] * 2, 480, weights=[Decimal(1), Decimal(1000)])
+        self.assertEqual(plan.step, 5)
+        self.assertEqual(plan.slots, [(0, 5), (5, 480)])
+        plan = ts.split([Decimal(0)] * 3, 480, weights=[Decimal(1000), Decimal(1), Decimal(1)])
+        self.assertEqual(plan.step, 5)
+        self.assertEqual(plan.slots, [(0, 470), (470, 475), (475, 480)])
+        plan = ts.split([Decimal(0)] * 22, 480, weights=[Decimal(1)] * 21 + [Decimal(1000)])
+        self.assertEqual(plan.step, 5)
+        self.assertTrue(all(b - a >= 5 and b % 5 == 0 for a, b in plan.slots), plan.slots)
+
+    def test_停止がある行は停止を刻みに切り上げた分が下限(self) -> None:
+        # 梱包数がいちばん少ない行に停止 12 分 → 15 分(5 分刻みに切り上げ)が下限
+        plan = ts.split([Decimal(0), Decimal(12), Decimal(0)], 480,
+                        weights=[Decimal(1000), Decimal(1), Decimal(1000)])
+        self.assertWhole(plan, 480)
+        self.assertEqual(plan.step, 5)
+        a, b = plan.slots[1]
+        self.assertEqual(b - a, 15)
+        # 最後の行でも同じ(前の行が後ろのぶんを残す)
+        plan = ts.split([Decimal(0), Decimal(12)], 480, weights=[Decimal(1000), Decimal(1)])
+        self.assertEqual(plan.slots, [(0, 465), (465, 480)])
+
+    def test_1分刻みに落とすのは均等でも5分取れないときだけ(self) -> None:
+        # 96 行 × 5 分 = 480 分 → 収まるので、比が極端でも 5 分刻み
+        w = [Decimal(1)] * 95 + [Decimal(1000)]
+        plan = ts.split([Decimal(0)] * 96, 480, weights=w)
+        self.assertEqual(plan.step, 5)
+        self.assertWhole(plan, 480)
+        self.assertTrue(all(b - a == 5 for a, b in plan.slots), "どの行も 5 分ちょうど")
+        # 97 行は収まらない → いままでどおり 1 分刻み(重みがあってもなくても)
+        self.assertEqual(ts.split([Decimal(0)] * 97, 480).step, 1)
+        plan = ts.split([Decimal(0)] * 97, 480, weights=[Decimal(1)] * 96 + [Decimal(1000)])
+        self.assertEqual(plan.step, 1)
+        self.assertWhole(plan, 480)
+        # 停止で残りが減って 1 行 5 分取れないときも 1 分刻み
+        self.assertEqual(ts.split([Decimal(0), Decimal(0), Decimal(475)], 480,
+                                  weights=[Decimal(10), Decimal(5), Decimal(1)]).step, 1)
+
+    def test_合計は直の長さちょうど(self) -> None:
+        for n, total in ((5, 480), (13, 470), (22, 490), (7, 600)):
+            with self.subTest(n=n, total=total):
+                w = [Decimal(x) for x in (10, 5, 30, 1, 7, 12, 3, 8, 50, 2, 9, 4, 6, 10, 5,
+                                          30, 1, 7, 12, 3, 8, 50)[:n]]
+                plan = ts.split([Decimal(0)] * n, total, weights=w)
+                self.assertWhole(plan, total)
+                self.assertEqual(sum(b - a for a, b in plan.slots), total)
 
 
 def row(lot: str, **extra) -> dict:
@@ -297,6 +441,59 @@ class DistributeWebTests(WebTestCase):
         total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
         self.assertEqual(plan["rows"][0]["end"], ":".join(ts.clock(ts.parse_hhmm(start), total // 2 // 5 * 5
                                                                  if (total / 2) % 5 < 2.5 else (total // 2 // 5 + 1) * 5)))
+        # 書くときも落ちない(前は休憩の時刻が無くて思わぬエラーになっていた)
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        self.assertIn("2行に割り振りました", body.get("message", ""), body)
+        self.assertNotIn("休憩", body["message"])
+
+    def test_梱包数に合わせて割り振る(self) -> None:
+        """梱包10包み1 / 梱包5包み1 であれば梱包10包み1のほうが時間振りが多い"""
+        self.enable()
+        _day, _line, shift = self.key()
+        start, end = self.bounds(shift)
+        total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
+        screen = {"rows": {"1": row("A", MAI="10", TUT="1"), "2": row("B", MAI="5", TUT="1")},
+                  "header": {"worker": "山田"}, "day_shift": True}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertTrue(plan["by_packs"])
+        self.assertEqual(plan["weight_note"], "梱包数に合わせて割り振ります(梱包数が無い行は平均で数えます)")
+        want = ts.split([Decimal(0)] * 2, total, weights=[Decimal(10), Decimal(5)])
+        self.assertEqual([(r["start"], r["end"]) for r in plan["rows"]], times(want, ts.parse_hhmm(start)))
+        first, second = [(ts.parse_hhmm(r["end"]) - ts.parse_hhmm(r["start"])) % 1440 for r in plan["rows"]]
+        self.assertGreater(first, second)
+        self.assertEqual(first + second, total)
+        # 書くときも同じ割り振り
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        self.assertEqual(body.get("distributed", {}).get("rows"), plan["rows"], body)
+
+    def test_包数が空なら1と数える(self) -> None:
+        self.enable()
+        screen = {"rows": {"1": row("A", MAI="10", TUT=""), "2": row("B", MAI="5", TUT="2")},
+                  "header": {"worker": "山田"}, "day_shift": True}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertTrue(plan["by_packs"])
+        spans = [(ts.parse_hhmm(r["end"]) - ts.parse_hhmm(r["start"])) % 1440 for r in plan["rows"]]
+        self.assertLessEqual(abs(spans[0] - spans[1]), 5, "10×1 と 5×2 は同じ梱包数")
+
+    def test_梱包数が無ければ均等と確かめの窓に出す(self) -> None:
+        self.enable()
+        screen = {"rows": {"1": {"LOT": "A"}, "2": {"LOT": "B", "S": "ｲ", "TH": "10"}},
+                  "header": {"worker": "山田"}, "day_shift": True}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertFalse(plan["by_packs"])
+        self.assertEqual(plan["weight_note"], "梱包数が無いので均等に割り振ります")
+
+    def test_一部だけ梱包数が無い行は平均(self) -> None:
+        self.enable()
+        _day, _line, shift = self.key()
+        start, end = self.bounds(shift)
+        total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
+        screen = {"rows": {"1": row("A", MAI="10"), "2": {"LOT": "B"}, "3": row("C", MAI="20")},
+                  "header": {"worker": "山田"}, "day_shift": True}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertTrue(plan["by_packs"])
+        want = ts.split([Decimal(0)] * 3, total, weights=[Decimal(10), Decimal(15), Decimal(20)])
+        self.assertEqual([(r["start"], r["end"]) for r in plan["rows"]], times(want, ts.parse_hhmm(start)))
 
     def test_割り振れなければ理由を返す(self) -> None:
         self.enable()
@@ -359,6 +556,7 @@ class DistributeBrowserTests(WebTestCase):
         page.click("#time-split")
         page.wait_for_function("document.getElementById('KZ1').value !== ''", timeout=5000)
         self.assertTrue(self.dialogs and "3 行に割り振ります" in self.dialogs[0], self.dialogs)
+        self.assertIn("梱包数に合わせて割り振ります", self.dialogs[0])
         shift = self.dialogs[0].split(" ")[0]
         start, end = shift_check.bounds_of(self.repo().get_shift_times(), shift)
         self.assertEqual(f'{page.input_value("#KZ1")}:{page.input_value("#KH1")}', start)

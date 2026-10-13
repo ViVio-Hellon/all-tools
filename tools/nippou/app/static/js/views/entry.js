@@ -2788,6 +2788,7 @@ export function start() {
     **決めるのはサーバ**(`logic/time_split`・`/api/entry/distribute-times`)。まず
     `dry_run` で何行・どの時刻になるかを聞いて確かめ、はいなら同じ道で書く。ほかのページは
     サーバが書き、いまのページは返ってきた12行を塗っていつもどおり保存する。
+    停止を先に渡した残りは梱包数の比で分ける(v4.34.0。梱包数が無ければ均等)。
   */
   document.getElementById("time-split")?.addEventListener("click", async () => {
     const mine = gen;
@@ -2804,6 +2805,8 @@ export function start() {
       `${plan.shift} ${plan.start}〜${plan.end}(${plan.minutes}分)を、打った ${plan.count} 行に割り振ります。`,
       `${pages}/最初の行 ${plan.first} 〜 最後の行 ${plan.last}/${plan.step === 5 ? "5分" : "1分"}刻み`,
     ];
+    // 梱包数に合わせるか・均等か(v4.34.0。文言はサーバが決める)
+    if (plan.weight_note) lines.push(plan.weight_note);
     // 休憩の時間は飛ばす(v4.31.0)。どの行にかかって、休憩を入れるのかも先に言う
     const rest = plan.rest;
     if (rest?.skipped) {
