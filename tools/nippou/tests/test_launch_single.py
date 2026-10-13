@@ -147,9 +147,15 @@ class StartingTests(GuardTestCase):
         self.assertEqual(result.url, "http://127.0.0.1:8733/")
 
     def test_起動中の印を消さない(self) -> None:
-        """待っているあいだに印を消すと、相手が書き足せなくなります。"""
+        """待っているあいだに印を消すと、相手が書き足せなくなります。
+
+        pid 999 が**このアプリだ**と決めておく。決めないと本物の pid 999 を見に行き、
+        全部の試験を流して別のプロセスがその番号を使っていると「別のプロセスでした」で
+        印を消して(それは正しい動き)、この試験だけが落ちていました。
+        """
         launch_guard.claim_lock(self.info(pid=999, port=0))
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "looks_like_our_process", return_value=True), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "STARTUP_GRACE_SEC", 0.4), \
              patch.object(launch_guard, "POLL_INTERVAL_SEC", 0.05):
