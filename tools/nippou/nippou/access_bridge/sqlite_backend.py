@@ -404,7 +404,10 @@ def _failure(message: str, exc: Exception) -> ScriptResult:
     """
     from dbkit.sqlite_toolkit import is_lock_error
 
-    kind = ErrorKind.LOCKED if is_lock_error(exc) else ErrorKind.UNKNOWN
+    # **名前は `LOCK_CONFLICT`。** `LOCKED` という種別は無く、ロック中に限って
+    # ここが AttributeError で落ちていました(呼び手の広い捕捉に拾われ、画面には
+    # 「type object 'ErrorKind' has no attribute 'LOCKED'」と出ていた)
+    kind = ErrorKind.LOCK_CONFLICT if is_lock_error(exc) else ErrorKind.UNKNOWN
     return ScriptResult(
         success=False,
         error=AccessBridgeError(kind=kind, err_number=None, message=message))

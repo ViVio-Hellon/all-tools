@@ -159,7 +159,14 @@ def _sorted(details: Iterable[DetailRecord]) -> list[DetailRecord]:
 
 
 def _last_page(details: Sequence[DetailRecord]) -> int:
-    return max((d.page for d in details), default=0)
+    """**終了(分)まで入っている行がある**、いちばん後ろのページ。
+
+    「次ページ発行」は次のページを**空で**作ります(12行の空行つき)。ページ番号の
+    最大で見ていたので、出したまま打たなかった空のページが「最終ページ」になり、
+    そこに埋まった行が無いので **最終時間の確かめが黙って素通り**していました
+    (9:50 で止まった1直が「直すところはありません」で共有へ出た)。
+    """
+    return max((d.page for d in details if (d.sh or "").strip() != ""), default=0)
 
 
 def _filled_rows(details: Sequence[DetailRecord], page: int) -> list[DetailRecord]:

@@ -149,6 +149,13 @@ class ShiftEndTests(unittest.TestCase):
         found = save_checks.check_shift_end(rows, "3直", "06:30")
         self.assertEqual(found[0].page, 2)
 
+    def test_次ページ発行で出した空のページは最終ページに数えない(self) -> None:
+        """空の2ページ目(12行とも空)が「最終ページ」になり、素通りしていた。"""
+        rows = [row(1, page=1, sz="4", sh="0")] + [row(n, page=2) for n in range(1, 13)]
+        found = save_checks.check_shift_end(rows, "3直", "06:30")
+        self.assertEqual([f.code for f in found], [save_checks.SHIFT_END])
+        self.assertEqual(found[0].page, 1)
+
     def test_日勤の残業は通す(self) -> None:
         """VBA では前段(定時エンド)に阻まれて一度も通らなかった道。
 

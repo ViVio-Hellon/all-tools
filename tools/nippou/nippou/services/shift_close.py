@@ -392,3 +392,28 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult) -> None:
     result.pushed = len(summary_.succeeded)
     if summary_.failed:
         result.push_note = f"共有へ送れなかったものが{len(summary_.failed)}件あります"
+    if summary_.succeeded:
+        _after_push(repo, list(summary_.succeeded))
+
+
+def _after_push(repo: NippouRepository, pushed_keys: list) -> None:
+    """**手で押した「共有へ保存」と同じ後始末**(標準作業時間・集計CSVの2つ目)。
+
+    自動で送った直は、ここを通っていませんでした。標準作業時間は「送れた直」
+    だけを写す作りなので、5分前の自動確定や翌朝の拾いで送られた直は
+    **いつまでも標準作業時間に入りません**でした(2つ目の出力先も同じ)。
+
+    共有保存の履歴(`push_history`)には残しません ── あちらは「押した」記録です。
+    月替わりの書き出しもしません(VBA も自動印刷では飛ばしていた)。
+    **どちらが失敗しても、送れたことは変わりません。**
+    """
+    from . import second_output, standard_time
+
+    try:
+        standard_time.after_push(repo, pushed_keys, SETTINGS.standard_time_db_path)
+    except Exception:                             # noqa: BLE001 - 次の保存で写す
+        log.exception("自動送信のあと、標準作業時間へ写せませんでした")
+    try:
+        second_output.after_push(repo, pushed_keys)
+    except Exception:                             # noqa: BLE001 - 送れてはいる
+        log.exception("自動送信のあと、集計CSVの2つ目の出力先へ出せませんでした")

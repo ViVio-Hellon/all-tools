@@ -96,6 +96,9 @@ class Left:
     #: すでに引き継がれているなら、その人と時刻
     taken_by: str = ""
     taken_at: str = ""
+    #: 「共有へ保存」を押したが**届かなかった**(最後に試した結果が 送れなかった/一部)。
+    #: 中身が綺麗でも、押す出口だけでは通れない(共有のフォルダに届かない日)
+    push_failed: bool = False
 
     @property
     def key_text(self) -> str:
@@ -115,7 +118,8 @@ class Left:
                 "shift": self.shift, "pages": self.pages,
                 "problems": list(self.problems), "clean": self.clean,
                 "taken": self.taken, "taken_by": self.taken_by,
-                "taken_at": self.taken_at, "key_text": self.key_text}
+                "taken_at": self.taken_at, "key_text": self.key_text,
+                "push_failed": self.push_failed}
 
 
 @dataclass(frozen=True)
@@ -209,7 +213,13 @@ def decide(left: Sequence[Left], *, started: bool,
         return Gate()
 
     actions = [ACTION_PUSH]
-    if any(not item.clean for item in left):
+    # **押しても届かなかったら、綺麗でも引き継げる。**
+    #
+    # 綺麗な直の出口は「共有へ保存」だけでした。共有のフォルダに届かない日
+    # (ネットワーク断・ロック・Access の無い端末)は押しても送れず、引き継ぐ
+    # ボタンも出ないので、**次の直が入力を始められませんでした。** 一度押して
+    # 届かなかった直にだけ出します(届く日はこれまでどおり押すだけ)
+    if any(not item.clean or item.push_failed for item in left):
         actions.append(ACTION_TAKE)
 
     untaken = [item for item in left if not item.taken]
@@ -228,11 +238,14 @@ def _message(left: Sequence[Left], *, blocked: bool) -> str:
     lines = [head]
     if blocked:
         lines.append("片付けるまで、この直の入力は始められません。")
+    failed = any(item.push_failed for item in left)
     if not dirty:
         # **主語を書く。** 「直すところはありません」だけだと、すぐ下の
         # 「いまの直」の帯と言い合っているように読めます
         lines.append("前の直に直すところはありません ── "
                      "「共有へ保存」を押せば済みます(誰でも押せます)。")
+        if failed:
+            lines.append(_UNREACHABLE)
         return "\n".join(lines)
 
     count = sum(len(item.problems) for item in dirty)
@@ -243,6 +256,12 @@ def _message(left: Sequence[Left], *, blocked: bool) -> str:
     lines.append("引き継いでも消えません ── "
                  "共有へ出るまで、この知らせは出続けます。")
     return "\n".join(lines)
+
+
+#: 押したが共有へ届かなかったときに足す一行
+_UNREACHABLE = ("ただし さっき「共有へ保存」を押したときは共有へ届きませんでした。"
+                "届くまで待てないときは「直せないまま引き継ぐ」で入力を始められます"
+                "(前の直は手元に残り、届くようになってから「共有へ保存」で送ります)。")
 
 
 def taken_note(item: Left) -> str:

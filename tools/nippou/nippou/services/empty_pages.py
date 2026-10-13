@@ -21,6 +21,28 @@ from ..logic import line_names
 log = get_logger("services.empty_pages")
 
 
+def ever_sent(repo: NippouRepository, report_date: str, line: str, shift: str,
+              page: int) -> bool:
+    """その紙を**一度でも**共有へ渡したか。
+
+    `synced_at`(送った時刻)は、送ったあとに中身を変えて保存すると消えます
+    (未送信に戻るため ── `repository.save`)。それで見ていたので、
+
+        送った紙を空にして保存する → `synced_at` が消える → 「渡していない」ので消せる
+
+    となり、**共有には古い行の入った紙が残ったまま、手元からは消える**ことが
+    ありました。共有へは消す道が無いので、二度と直せません。送ったときの指紋
+    (`synced_hash`)は直しても消さない約束なので、こちらで見ます。
+    """
+    found = repo.conn.execute(
+        "SELECT synced_at, synced_hash FROM daily_header"
+        " WHERE report_date=? AND line=? AND shift=? AND page=?",
+        (report_date, line, shift, page)).fetchone()
+    if found is None:
+        return False
+    return bool(found["synced_at"] or found["synced_hash"])
+
+
 def find(repo: NippouRepository, *, line: str | None = None) -> logic.Found:
     """中身の無い紙をぜんぶ。**古いものから並びます。**
 
@@ -40,8 +62,9 @@ def find(repo: NippouRepository, *, line: str | None = None) -> logic.Found:
             report_date=header.report_date, line=header.line,
             shift=header.shift, page=header.page, worker=header.worker,
             saved_at=header.saved_at,
-            # 共有へ渡してあるか。`synced_at` が入っていれば渡してある
-            synced=bool(header.synced_at)))
+            # 共有へ渡してあるか(一度でも。送ったあとに空にしたものも含む)
+            synced=ever_sent(repo, header.report_date, header.line,
+                             header.shift, header.page)))
     return logic.build(found)
 
 
@@ -63,7 +86,7 @@ def remove(repo: NippouRepository, report_date: str, line: str, shift: str,
         log.info("打ってある紙なので消しません key=%s", key_text)
         return False, (f"{key_text} には打ってあるものがあります。"
                        "中身の無いページだけを消せます")
-    if header.synced_at:
+    if ever_sent(repo, report_date, line, shift, page):
         log.info("共有へ渡してあるので消しません key=%s", key_text)
         return False, (f"{key_text} は共有へ渡してあるので、ここからは"
                        "消せません(手元だけ消すと、どちらが本当か"

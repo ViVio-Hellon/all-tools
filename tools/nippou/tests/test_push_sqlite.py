@@ -98,6 +98,20 @@ class TableTests(unittest.TestCase):
                          ("報告日", "ライン", "直", "ページ", "行番号"))
 
 
+class FailureKindTests(unittest.TestCase):
+    """ロック中の失敗は「ロック」と分かる形で返す(種別名の取り違えで落ちていた)。"""
+
+    def test_ロックはLOCK_CONFLICT(self) -> None:
+        import sqlite3 as _sqlite3
+
+        result = sqlite_backend._failure("database is locked",
+                                         _sqlite3.OperationalError("database is locked"))
+        self.assertFalse(result.success)
+        # 名前で比べる(Web版の試験がモジュールを読み直すので、列挙の実体が別になりうる)
+        self.assertEqual(result.error.kind.name, "LOCK_CONFLICT")
+        self.assertIn("database is locked", result.error.message)
+
+
 class PushRecordsTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

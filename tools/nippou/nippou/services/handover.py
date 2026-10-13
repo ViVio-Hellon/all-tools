@@ -62,8 +62,29 @@ def left_behind(repo: NippouRepository, *, current_key: tuple[str, str, str],
             report_date=key[0], line=key[1], shift=key[2],
             pages=report.pages, problems=_problems(report),
             taken_by=taken.get("taken_by", ""),
-            taken_at=taken.get("taken_at", "")))
+            taken_at=taken.get("taken_at", ""),
+            push_failed=_push_failed(repo, *key)))
     return found
+
+
+def _push_failed(repo: NippouRepository, report_date: str, line: str,
+                 shift: str) -> bool:
+    """その直を最後に送ろうとしたとき**届かなかった**か(共有保存の履歴から)。
+
+    読めなければ False(これまでどおり「押すだけ」の出口)。
+    """
+    from . import push_history
+
+    try:
+        found = repo.conn.execute(
+            "SELECT result FROM push_history WHERE report_date=? AND line=? AND shift=?"
+            " AND result IN (?, ?, ?) ORDER BY pressed_at DESC, rowid DESC LIMIT 1",
+            (report_date, line, shift, push_history.SENT, push_history.PARTIAL,
+             push_history.FAILED)).fetchone()
+    except Exception:                 # noqa: BLE001 - 関門は出す
+        log.exception("共有保存の履歴を読めませんでした key=%s", (report_date, line, shift))
+        return False
+    return bool(found) and found["result"] in (push_history.PARTIAL, push_history.FAILED)
 
 
 def gate(repo: NippouRepository, *, current_key: tuple[str, str, str],

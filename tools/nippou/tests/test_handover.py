@@ -107,6 +107,16 @@ class ActionsTests(unittest.TestCase):
         self.assertIn("この画面からは直せません", gate.message)
         self.assertIn("引き継ぐ", gate.message)
 
+    def test_押しても届かなかったら綺麗でも引き継げる(self):
+        """共有に届かない日、出口が「共有へ保存」だけだと次の直が始められない。"""
+        item = Left(report_date="2026年9月17日", line="L-1", shift="1直", pages=1,
+                    push_failed=True)
+        gate = handover.decide([item], started=False)
+        self.assertTrue(gate.all_clean)
+        self.assertEqual(gate.actions, [handover.ACTION_PUSH, handover.ACTION_TAKE])
+        self.assertIn("共有へ届きませんでした", gate.message)
+        self.assertIn("直せないまま引き継ぐ", gate.message)
+
     def test_引き継いでも消えないと書いてある(self):
         """**5番目の約束。** ここを書かないと「押せば消える」に読めます。"""
         gate = handover.decide([_left(problems=["だめ"])], started=False)
