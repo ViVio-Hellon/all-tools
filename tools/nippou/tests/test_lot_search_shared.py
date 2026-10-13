@@ -22,6 +22,7 @@ import csv
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -257,6 +258,11 @@ class SharedSearchTests(unittest.TestCase):
                                           slow_match, path=self.shared, seconds=0.2)
         self.assertEqual(readout.status, shared_reports.TIMEOUT)
         self.assertEqual(readout.rows, [])
+        # 置いていった糸が共有を開いたまま終わるのを待つ ── Windows では開いている
+        # ファイルを消せず、一時フォルダの後片付けが落ちる
+        for worker in threading.enumerate():
+            if worker.name == "shared-reports":
+                worker.join(10)
 
     def test_件数の上限(self) -> None:
         send(self.shared, line="HVC", lots=tuple(f"N71000{n}" for n in range(6)))
