@@ -69,6 +69,9 @@
       <span class="badge">{{ "sqlite3" if f.kind == "sqlite3" else "Access" }}</span>
       {% if f.is_write_target and not f.exists and f.writable %}
         <span class="badge">初回の保存で作られます</span>
+      {% elif not f.exists and f.recheck %}<span class="badge badge--alert" data-recheck
+        title="フォルダは見えるのに、ファイルだけ見つかりませんでした({{ f.checked_at }})。共有のファイルを作り直している最中(仕掛は毎時00分など)だと、一瞬だけこう見えます。数秒後に確かめ直します"
+        >いま見つかりません({{ f.checked_at }})</span>
       {% elif not f.exists %}<span class="badge badge--alert">このファイルがありません</span>
       {% elif f.readable %}<span class="badge badge--done">読めます</span>
       {% else %}<span class="badge badge--alert">{{ f.error }}</span>{% endif %}

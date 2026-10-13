@@ -506,6 +506,12 @@ class FileView:
     # 「この表が、画面のどの機能を動かしているか」。設定を直す人が
     # 見ているのは機能の側なので、表の名前だけでは繋がらない
     uses: list[dict[str, str]] = field(default_factory=list)
+    # **フォルダは見えるのに、ファイルだけ見つからない**(v4.31.1)。共有のファイルを
+    # 決まった時刻に作り直す仕組み(仕掛の SIKALOT などは毎時00分)だと、入れ替えの
+    # あいだの一瞬だけ「無い」に見える ── 画面は数秒後に確かめ直す(`settings.js`)
+    recheck: bool = False
+    # いつ確かめたか(時:分:秒)。一瞬の「無い」だったと分かるように出す
+    checked_at: str = ""
 
 
 def path_views() -> list[PathView]:
@@ -764,6 +770,8 @@ def _file_view(key: str, label: str, getter) -> FileView:
     suffix = path.suffix.lower()
     view.kind = "sqlite3" if suffix in source_db.SUFFIXES else "access"
     view.is_write_target = key == WRITE_TARGET_KEY
+    from datetime import datetime
+    view.checked_at = datetime.now().strftime("%H:%M:%S")
     try:
         view.exists = path.exists()
         if view.exists:
@@ -771,6 +779,11 @@ def _file_view(key: str, label: str, getter) -> FileView:
     except OSError as exc:
         view.error = str(exc)
         return view
+    if not view.exists and not view.is_write_target:
+        try:
+            view.recheck = path.parent.is_dir()
+        except OSError:
+            view.recheck = False
 
     if view.is_write_target:
         # 書き込み先は**まだ無くてもよい**。sqlite3 なら反映のときに

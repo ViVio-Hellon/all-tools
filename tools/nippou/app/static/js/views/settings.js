@@ -1792,6 +1792,10 @@ export function start() {
       if (kid.is_write_target && !kid.exists && kid.writable) {
         badge.className = "badge";
         badge.textContent = "初回の保存で作られます";
+      } else if (!kid.exists && kid.recheck) {
+        badge.className = "badge badge--alert";
+        badge.dataset.recheck = "";
+        badge.textContent = `いま見つかりません(${kid.checked_at})`;
       } else if (!kid.exists) {
         badge.className = "badge badge--alert";
         badge.textContent = "このファイルがありません";
@@ -1804,6 +1808,25 @@ export function start() {
       }
     });
   }
+
+  /*
+    **一瞬の「見つかりません」を確かめ直す**(v4.31.1)。フォルダは見えるのにファイルだけ
+    無いときは、共有のファイルを作り直している最中のことがある(仕掛の SIKALOT などは
+    毎時00分)。数秒おいて2回まで取り直し、見つかればその場で「読めます」に描き直す。
+  */
+  async function recheckFiles(left = 2) {
+    if (!document.querySelector(".path__file [data-recheck]")) return;
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    try {
+      const fresh = await api.get("/api/settings/state");
+      for (const row of document.querySelectorAll(".path[data-path-key]")) {
+        for (const b of row.querySelectorAll(".path__file [data-recheck]")) delete b.dataset.recheck;
+        repaintFiles(row, row.dataset.pathKey, fresh.files);
+      }
+    } catch { /* 取り直せなければ、出ているまま */ }
+    if (left > 1) recheckFiles(left - 1);
+  }
+  recheckFiles();
 
   function repaintPath(row, view) {
     if (!row || !view) return;
