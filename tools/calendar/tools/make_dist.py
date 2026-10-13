@@ -44,6 +44,8 @@ INCLUDE: tuple[str, ...] = (
     "process_manager.py",
     # デスクトップ版(日報複合ツールの窓)の入口(日報複合ツールの外枠が子として起動する)
     "bridge.py",
+    # 配布設定を書き出すだけの入口(日報複合ツールの大設定の「まとめて書き出す」が起こす)
+    "export_distribution.py",
     "app", "calendar_app", "config", "docs", "tools",
 )
 

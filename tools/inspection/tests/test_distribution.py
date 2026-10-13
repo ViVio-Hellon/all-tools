@@ -124,7 +124,8 @@ class ExportTests(DistributionTestCase):
     def test_何も設定していなければ断る(self):
         t = self.terminal("empty")
         result = t.dist.export("nisk", ["root_folder"])
-        self.assertEqual(result.reason, distribution.REFUSE_BAD_INPUT)
+        # 失敗とは分ける(日報複合ツールの大設定が「既定のままなので要りません」と出す)
+        self.assertEqual(result.reason, distribution.REFUSE_NOTHING)
         self.assertFalse(self.dist_dir.exists())
 
     def test_知らない項目は断る(self):

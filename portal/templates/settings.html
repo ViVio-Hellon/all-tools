@@ -176,25 +176,32 @@
       <p class="lead">この端末で決めた<b>共有の DB の置き場所</b>と<b>管理者パスワード</b>を、配った先の端末でも使います。
         書き出すと、一式のフォルダの直下に「配布設定」フォルダができます。配った先は起動したときに読み込み、
         <b>その端末にすでにある設定は上書きしません</b>(揃えたいときは「読み込み直す」)。
-        各ツールの設定は、それぞれのタブの設定画面の配布設定で配ります。</p>
+        各ツールの設定は、それぞれのタブの設定画面の配布設定で配ります
+        (下の「4ツールの分もまとめて書き出す」で、大設定の分と一緒に1度に書き出せます)。</p>
       <div class="msg msg--info" id="dist-state"></div>
       <ul class="dist-list" id="dist-contents"></ul>
       <h3 class="dist-h">各ツールの配布設定</h3>
-      <p class="lead">各ツールのタブの設定画面で書き出すと、<b>そのツールのフォルダの中</b>
-        (<code>tools\&lt;ツール&gt;\配布設定</code>)にできます。一式の直下ではありません。</p>
+      <p class="lead">各ツールのタブの設定画面(または下の「4ツールの分もまとめて書き出す」)で書き出すと、
+        <b>そのツールのフォルダの中</b>(<code>tools\&lt;ツール&gt;\配布設定</code>)にできます。一式の直下ではありません。</p>
       <table class="list dist-tools" id="dist-tools"><thead><tr><th>ツール</th><th>配布設定</th><th>置き場所</th></tr></thead><tbody></tbody></table>
       <ol class="lead dist-steps">
-        <li>大設定で「配布設定を書き出す」(共有の DB の置き場所・管理者パスワード)</li>
-        <li>配りたい設定があるツールだけ、そのタブの設定画面で配布設定を書き出す</li>
+        <li>鍵を開けて「4ツールの分もまとめて書き出す」を押す ── 大設定(共有の DB の置き場所・管理者パスワード)と
+          4ツールの配布設定(各ツールの設定画面の既定の選び方のまま)を1度に書き出し、結果をツールごとに1行出します。
+          「既定のままなので要りません」は、そのツールでこの端末が変えた設定が無いということです(配った先も既定で動きます)</li>
+        <li>ライン・日報の音声ファイルなど、既定では入らないものも配りたいツールだけ、そのあとでそのタブの設定画面で
+          選んで書き出し直す(まとめて書き出すと、既定の選び方で書き直します)</li>
         <li>一式の <code>scripts\make_dist.bat</code> を実行する ── 大設定と、上の一覧で「あり」のツールの配布設定が
           <b>まとめて</b>配布用フォルダ(一式の隣の「日報複合ツール_VER…」)に入ります</li>
         <li>できたフォルダごと配る。配った先は起動したときにそれぞれ読み込みます</li>
       </ol>
       <div class="card__tools">
-        <button type="button" class="btn btn--primary" id="dist-export" data-admin>配布設定を書き出す</button>
+        <button type="button" class="btn btn--primary" id="dist-export-all" data-admin>4ツールの分もまとめて書き出す</button>
+        <button type="button" class="btn" id="dist-export" data-admin>配布設定を書き出す</button>
         <button type="button" class="btn" id="dist-reapply" data-admin>読み込み直す</button>
         <button type="button" class="btn btn--danger" id="dist-remove" data-admin>消す</button>
       </div>
+      <!-- まとめて書き出した結果(ツールごとに1行) -->
+      <ul class="dist-list dist-all" id="dist-all-results" aria-live="polite"></ul>
     </article>
 
     <!-- このアプリ -->

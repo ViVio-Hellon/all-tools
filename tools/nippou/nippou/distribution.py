@@ -94,6 +94,9 @@ LEGACY_FILE = ("config", "site.json")  # v3.71〜3.72
 REFUSE_NEED_PASSWORD = "need_password"
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_FAILED = "failed"
+#: 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
+#: 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
+REFUSE_NOTHING = "nothing"
 
 #: 音声ファイルの名前の鍵(`sound_file_<音>`)。**音の並びは `logic/sound` から**
 SOUND_NAME_KEYS: tuple[str, ...] = tuple(config.sound_file_key(key)
@@ -561,7 +564,7 @@ def export(password: str, items: list[str], files: list[str], *,
     if not settings and not sound_sources:
         return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
                       + " はこの端末で変えていないため既定のままです)。",
-                      REFUSE_BAD_INPUT)
+                      REFUSE_NOTHING)
 
     # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を
     # 残さない(配った先がそれを読んでしまう)

@@ -8193,6 +8193,10 @@ v3.73 の `配布先\` も同じ階層でしたが、名前と中身の形を py
 合わせました(`設定.json` は `{"format":1, "created_at", "created_on", "settings":{…}}`)。
 前の版の `配布先\` / `config\site.json` は、`配布設定\` が無いときだけ読みます。
 
+> 日報複合ツールの中では、大設定の **「4ツールの分もまとめて書き出す」** でも書き出せます(設定画面の既定の
+> 選び方のまま ── この端末のラインと音声ファイルは入れない。大設定がこのフォルダの `export_distribution.py` を
+> 子として起こし、管理者パスワードは大設定の鍵で確かめる)。
+
 ### python-web-tools からまねたもの
 
 | python-web-tools(`packaging_tool/distribution.py`) | こちら(`nippou/distribution.py`) |

@@ -101,6 +101,9 @@ REFUSE_NEED_PASSWORD = admin_password.REFUSE_NEED_PASSWORD
 REFUSE_WRONG_PASSWORD = admin_password.REFUSE_WRONG
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_FAILED = "failed"
+#: 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
+#: 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
+REFUSE_NOTHING = "nothing"
 
 
 def settings_path(base: Optional[Path] = None) -> Path:
@@ -212,15 +215,19 @@ def _show(value: Any) -> str:
 # ------------------------------------------------------------------
 # 書き出す(配る側)
 # ------------------------------------------------------------------
-def export(password: str, items: list[str]) -> Result:
+def export(password: str, items: list[str], *, admin: bool = False) -> Result:
     """**この端末のいまの設定**を ``配布設定\\`` に書き出す(前の中身は置き換える)。
 
     この端末で一度も変えていない項目は入れない ── 配った先も同じ既定で
     動くので要らない(空で上書きしないためにも入れない)。
+
+    ``admin=True`` は、管理者パスワードを呼ぶ側がもう確かめたとき
+    (日報複合ツールの大設定の「まとめて書き出す」。``export_distribution.py``)。
     """
-    blocked = _guard(password, "書き出す")
-    if blocked is not None:
-        return blocked
+    if not admin:
+        blocked = _guard(password, "書き出す")
+        if blocked is not None:
+            return blocked
     unknown = [k for k in items if k not in ITEM_KEYS]
     if unknown:
         return Result(False, f"知らない項目です: {', '.join(unknown)}",
@@ -234,7 +241,7 @@ def export(password: str, items: list[str]) -> Result:
     if not settings:
         return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
                       + " はこの端末で変えていないため既定のままです)。",
-                      REFUSE_BAD_INPUT)
+                      REFUSE_NOTHING)
 
     from . import terminals
 

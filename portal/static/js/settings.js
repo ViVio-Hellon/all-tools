@@ -113,6 +113,16 @@ export function install(options) {
     }
     write("/api/distribution/export", {});
   });
+  // 大設定の分と4ツールの分をまとめて。大設定の分も書き出すので、打ちかけの置き場所は同じく止める
+  $("dist-export-all").addEventListener("click", () => {
+    if (locEdited()) {
+      toast("共有の DB の置き場所に、まだ反映していない値があります。先に「変える」で反映するか、"
+        + "元に戻してから書き出してください。", "ng", 9000);
+      $("loc-folder").focus();
+      return;
+    }
+    exportAll();
+  });
   $("dist-reapply").addEventListener("click", () => {
     if (confirm("配布設定を読み込み直します。この端末の置き場所・管理者パスワードは、配布設定の値で上書きされます。よろしいですか?")) {
       write("/api/distribution/reapply", {});
@@ -569,6 +579,56 @@ function paintDistribution() {
       });
       body.append(tr);
     }
+  }
+}
+
+/**
+ * 大設定の分と4ツールの分をまとめて書き出す。結果はツールごとに1行
+ * (書き出した・既定のままなので要らない・書き出せなかったと理由)。各ツールの配布設定の一覧
+ * (あり/なし)は、答えに入っている大設定のいまで描き直す。
+ */
+async function exportAll() {
+  const d = view?.distribution || {};
+  // 各ツールの配布設定は**既定の選び方で書き直す**。設定画面でラインなどを入れて書き出していたら外れる
+  if ((d.tools || []).some((t) => t.exists)
+      && !confirm("各ツールの配布設定を、それぞれの設定画面の既定の選び方で書き直します"
+        + "(ライン・日報の音声ファイルなど、既定では入らないものを入れて書き出していたら外れます)。よろしいですか?")) {
+    return;
+  }
+  const button = $("dist-export-all");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "書き出しています…";
+  $("dist-all-results").replaceChildren();
+  try {
+    const seq = ++asked;
+    const body = await api.post("/api/distribution/export-all", {});
+    paintIfFresh(seq, body);
+    paintExportAll(body.exported || []);
+    toast(body.message || "書き出しました", body.all_ok ? "ok" : "ng", body.all_ok ? 6000 : 9000);
+  } catch (err) {
+    if (err.status === 403 && err.code === "locked") {
+      toast("管理者パスワードで鍵を開けてください", "ng");
+      $("lock-pass").focus();
+    } else {
+      toastError(err);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+function paintExportAll(results) {
+  const list = $("dist-all-results");
+  list.replaceChildren();
+  for (const r of results) {
+    const li = document.createElement("li");
+    li.className = `is-${r.state}`;
+    li.textContent = `${r.title}: ${r.line}`;
+    // 長い文言(既定のままの項目の一覧・置き場所)は、指を置くと出す
+    if (r.message && r.message !== r.line) li.title = r.message;
+    list.append(li);
   }
 }
 

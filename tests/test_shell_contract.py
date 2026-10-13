@@ -527,6 +527,17 @@ class SettingsFormTests(unittest.TestCase):
     def test_反映していない置き場所があれば配布設定を書き出さない(self) -> None:
         export = between(self.js, '$("dist-export").addEventListener', "\n  });\n")
         self.assertLess(export.index("locEdited()"), export.index('write("/api/distribution/export"'))
+        # まとめて書き出すも大設定の分を書き出すので同じ
+        export_all = between(self.js, '$("dist-export-all").addEventListener', "\n  });\n")
+        self.assertLess(export_all.index("locEdited()"), export_all.index("exportAll()"))
+
+    def test_まとめて書き出すとツールごとに1行出し_一覧も描き直す(self) -> None:
+        run = between(self.js, "async function exportAll()", "\n}\n")
+        self.assertIn('api.post("/api/distribution/export-all"', run)
+        self.assertLess(run.index("paintIfFresh(seq, body)"), run.index("paintExportAll(body.exported"))
+        self.assertIn("button.disabled = true;", run, "書き出しているあいだに2度押させない")
+        paint = between(self.js, "function paintExportAll(", "\n}\n")
+        self.assertIn("`${r.title}: ${r.line}`", paint)
 
     def test_保存するの2度押しで2行足さない(self) -> None:
         save = between(self.js, "async function saveRow(", "\n}\n")

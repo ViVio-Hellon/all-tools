@@ -95,6 +95,9 @@ ITEM_CHECKS: Dict[str, Callable[[Any], bool]] = {key: check for key, _, _, check
 REFUSE_NEED_PASSWORD = "need_password"
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_FAILED = "failed"
+# 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
+# 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
+REFUSE_NOTHING = "nothing"
 
 
 def integrated_where(folder) -> str:
@@ -240,7 +243,7 @@ class Distribution:
         defaults = [ITEM_LABELS[k] for k in items if k not in settings]
         if not settings:
             return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
-                          + " はこの端末で変えていないため既定のままです)。", REFUSE_BAD_INPUT)
+                          + " はこの端末で変えていないため既定のままです)。", REFUSE_NOTHING)
 
         meta = {"format": FORMAT, "app_id": app_config.app_id(), "app_version": app_config.version(),
                 "created_at": _now(), "created_on": platform.node(), "settings": settings}

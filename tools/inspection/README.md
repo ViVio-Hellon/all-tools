@@ -85,7 +85,7 @@ start.bat --demo
 |---|---|
 | 点検表フォルダ | 点検表の親フォルダ(VBA 版のフォルダ設定) |
 | 管理者パスワード | 配布設定を操作するときの確認。変えていない端末は梱包資材総合ツールと同じ既定の値 |
-| 配布設定 | この端末の設定を `配布設定\` へ書き出し、ほかのラインの端末が起動時に読み込む(python-web-tools から移植) |
+| 配布設定 | この端末の設定を `配布設定\` へ書き出し、ほかのラインの端末が起動時に読み込む(python-web-tools から移植)。日報複合ツールの中では、大設定の「4ツールの分もまとめて書き出す」でも書き出せる(画面の既定の選び方のまま。`export_distribution.py`) |
 
 変えた値は利用者ごとに `%LOCALAPPDATA%\InspectionSheetPrint\data\user_settings.json` へ保存します
 (設定ファイルは書き換えません。管理者パスワードは撹拌して保存します)。
@@ -97,6 +97,7 @@ start.bat --demo
 <ApplicationRoot>
 ├─ InspectionSheet.exe デスクトップ版(GitHub Actions が作る。リポジトリには入れない)
 ├─ bridge.py           デスクトップ版の入口(標準入出力で要求を受け、Flask を呼ぶだけ。待ち受けない)
+├─ export_distribution.py   配布設定を書き出すだけの入口(日報複合ツールの大設定の「まとめて書き出す」が起こす)
 ├─ src-tauri/          デスクトップ版の外枠(Rust/Tauri: 窓・Python の監視・同時起動の防止・部品を返す)
 ├─ Start.vbs / start.bat / stop.bat   ブラウザ版(予備)の起動・診断起動・停止(CP932 / CRLF)
 ├─ start_app.py        起動の開始点(環境確認 → ロック → 待機画面 → 本体 → 準備完了)

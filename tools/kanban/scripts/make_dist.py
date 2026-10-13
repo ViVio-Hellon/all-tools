@@ -44,6 +44,8 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat", "run_kanban.bat", "run_kanban_warehouse.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py", "bridge.py",
     "process_manager.py", "main.py",
+    # 配布設定を書き出すだけの入口(日報複合ツールの大設定の「まとめて書き出す」が起こす)
+    "export_distribution.py",
     "app", "config", "docs", "kanban", "dbkit", "tools", "scripts",
 )
 

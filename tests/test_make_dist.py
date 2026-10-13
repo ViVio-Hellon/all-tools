@@ -126,15 +126,17 @@ _COPY_SKIP = {".git", "src-tauri", "tests", "__pycache__", "logs", "配布設定
               ".github", ".pytest_cache"}
 
 
-class DeliveredTerminalTests(unittest.TestCase):
-    """配布設定を書き出した一式を make_dist で作り、**配った先の端末**で起動して読み込まれるか。
+class _Delivered(unittest.TestCase):
+    """一式を一時フォルダへ写し、配布設定を用意して(``prepare``)make_dist で配布用フォルダを作る。
 
-        配布設定し配布設定フォルダを入れて別PCに持ち込んだが全ツールにおいて何も反映されていない
-
-    1か所でも食い違う(make_dist が写さない・ツールが別の場所を見る・起動のどこかが先に既定値を
-    書いてしまい「その端末にすでにある」になる)と、配った先では**黙って**何も読まれない。
-    外枠(日報複合ツール.exe)と同じく、各ツールの bridge.py を子として起こして確かめる。
+    端末(利用者ごとの領域)を作る・入口と4ツールを外枠と同じ形で起こす・読み込んだかを見る、の道具。
+    試験は持たない(下の2つが使う)。
     """
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        """写した一式(``source``)に、配る元で書き出した配布設定を置く。"""
+        raise NotImplementedError
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -159,19 +161,7 @@ class DeliveredTerminalTests(unittest.TestCase):
             "calendar": str(share / "カレンダー"),
             "inspection": str(share / "点検表"),
         }
-        # 配る元で書き出したもの(各ツールの設定画面・大設定の「配布設定を書き出す」と同じ形・同じ場所)
-        bundles = {
-            source / "配布設定" / "日報複合ツール.json": {"shared_db_dir": cls.expected["portal"]},
-            source / "tools" / "nippou" / "配布設定" / "設定.json": {"access_dir": cls.expected["nippou"]},
-            source / "tools" / "kanban" / "配布設定" / "設定.json": {"shared_db_path": cls.expected["kanban"]},
-            source / "tools" / "calendar" / "配布設定" / "設定.json": {"保存用DBフォルダ": cls.expected["calendar"]},
-            source / "tools" / "inspection" / "配布設定" / "設定.json": {"root_folder": cls.expected["inspection"]},
-        }
-        for path, settings in bundles.items():
-            path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"format": 1, "created_at": "2026/10/13 08:00:00",
-                                        "created_on": "配る元", "settings": settings},
-                                       ensure_ascii=False, indent=2), encoding="utf-8")
+        cls.prepare(source)
         cls.dist, cls.lines = make_dist.build(cls.tmp / "配った一式", exe=cls.tmp / "無い.exe", root=source)
 
     @classmethod
@@ -179,9 +169,10 @@ class DeliveredTerminalTests(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # --- 端末 -------------------------------------------------------
-    def terminal(self, name: str) -> dict[str, str]:
-        """何も設定していない端末(利用者ごとの領域を一時フォルダへ)。"""
-        base = self.tmp / "端末" / name
+    @classmethod
+    def terminal(cls, name: str, root: Optional[Path] = None) -> dict[str, str]:
+        """何も設定していない端末(利用者ごとの領域を一時フォルダへ)。``root`` は一式の場所(既定は配った一式)。"""
+        base = cls.tmp / "端末" / name
         env = {k: v for k, v in os.environ.items() if not k.startswith(_TOOL_ENV_PREFIXES)}
         env.update({
             "LOCALAPPDATA": str(base / "Local"), "APPDATA": str(base / "Roaming"),
@@ -193,21 +184,26 @@ class DeliveredTerminalTests(unittest.TestCase):
             "CALENDAR_LOCAL_DIR": str(base / "LineCalendar"),
             "INSPECTION_LOCAL_DIR": str(base / "InspectionSheetPrint"),
             "ALLTOOLS_LOG_QUIET": "1", "ALLTOOLS_LOGIN_ID": "tester", "ALLTOOLS_PC_NAME": "DELIVERED-PC",
-            "ALLTOOLS_SHELL": "1", "ALLTOOLS_ROOT": str(self.dist),
+            "ALLTOOLS_SHELL": "1", "ALLTOOLS_ROOT": str(root or cls.dist),
             "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
         })
         return env
 
     @staticmethod
-    def stored(env: dict[str, str], tool: str) -> Optional[str]:
-        """その端末の設定ファイルに入っている、配布設定の項目の値(無ければ None)。"""
-        path, key = {
+    def settings_file(env: dict[str, str], tool: str) -> tuple[Path, str]:
+        """その端末の設定ファイルと、配布設定の項目(試験で見る1つ)の鍵。"""
+        return {
             "portal": (Path(env["ALLTOOLS_LOCAL_DIR"]) / "data" / "user_settings.json", "shared_db_dir"),
             "nippou": (Path(env["NIPPOU_LOCAL_DIR"]) / "runtime" / "user_config.json", "access_dir"),
             "kanban": (Path(env["KANBAN_CONFIG"]), "shared_db_path"),
             "calendar": (Path(env["CALENDAR_LOCAL_DIR"]) / "data" / "settings.json", "保存用DBフォルダ"),
             "inspection": (Path(env["INSPECTION_LOCAL_DIR"]) / "data" / "user_settings.json", "root_folder"),
         }[tool]
+
+    @classmethod
+    def stored(cls, env: dict[str, str], tool: str) -> Optional[str]:
+        """その端末の設定ファイルに入っている、配布設定の項目の値(無ければ None)。"""
+        path, key = cls.settings_file(env, tool)
         try:
             return json.loads(path.read_text(encoding="utf-8-sig")).get(key)
         except (OSError, ValueError):
@@ -274,6 +270,33 @@ class DeliveredTerminalTests(unittest.TestCase):
                 self.assertEqual(self.stored(env, tool), value,
                                  f"{tool} が配布設定を読み込んでいない。\n--- 標準エラーの終わり ---\n{tails[tool]}")
 
+
+class DeliveredTerminalTests(_Delivered):
+    """配布設定を書き出した一式を make_dist で作り、**配った先の端末**で起動して読み込まれるか。
+
+        配布設定し配布設定フォルダを入れて別PCに持ち込んだが全ツールにおいて何も反映されていない
+
+    1か所でも食い違う(make_dist が写さない・ツールが別の場所を見る・起動のどこかが先に既定値を
+    書いてしまい「その端末にすでにある」になる)と、配った先では**黙って**何も読まれない。
+    外枠(日報複合ツール.exe)と同じく、各ツールの bridge.py を子として起こして確かめる。
+    """
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        # 配る元で書き出したもの(各ツールの設定画面・大設定の「配布設定を書き出す」と同じ形・同じ場所)
+        bundles = {
+            source / "配布設定" / "日報複合ツール.json": {"shared_db_dir": cls.expected["portal"]},
+            source / "tools" / "nippou" / "配布設定" / "設定.json": {"access_dir": cls.expected["nippou"]},
+            source / "tools" / "kanban" / "配布設定" / "設定.json": {"shared_db_path": cls.expected["kanban"]},
+            source / "tools" / "calendar" / "配布設定" / "設定.json": {"保存用DBフォルダ": cls.expected["calendar"]},
+            source / "tools" / "inspection" / "配布設定" / "設定.json": {"root_folder": cls.expected["inspection"]},
+        }
+        for path, settings in bundles.items():
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"format": 1, "created_at": "2026/10/13 08:00:00",
+                                        "created_on": "配る元", "settings": settings},
+                                       ensure_ascii=False, indent=2), encoding="utf-8")
+
     # --- 試験 -------------------------------------------------------
     def test_配布用フォルダに大設定と4ツールの配布設定が入る(self) -> None:
         self.assertTrue((self.dist / "配布設定" / "日報複合ツール.json").is_file())
@@ -307,6 +330,60 @@ class DeliveredTerminalTests(unittest.TestCase):
                 (hidden / folder.relative_to(self.dist)).rename(folder)
         for tool in self.expected:
             self.assertIsNone(self.stored(env, tool), f"{tool}: 配布設定が無いのに値が入った")
+        tails = self.start_all(env, lambda tool: self.stored(env, tool) == self.expected[tool])
+        self.assert_read(env, tails)
+
+
+class ExportAllDeliveredTests(_Delivered):
+    """大設定の「4ツールの分もまとめて書き出す」→ make_dist → 配った先で5つとも読む、を通しで。
+
+        大設定の「配布設定を書き出す」だけ押して、各ツールの設定画面の配布設定を書き出して
+        いなかったため、配った先で4ツールとも何も反映されなかった
+
+    配る元の端末で入口・4ツールの設定をしておき、写した一式で入口の ``export_all`` を
+    (入口のプロセスと同じく)そのまま呼ぶ。各ツールは、そのツールのフォルダの
+    ``export_distribution.py`` が子として書き出す。
+    """
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        env = cls.terminal("配る元", root=source)
+        # 看板は管理者パスワードを入れずに配ると、書き出した直後の確認で断る(最初に押した人が決められるため)
+        hashed = subprocess.run([sys.executable, "-c", "from kanban import config; print(config.hash_password('line2026'))"],
+                                cwd=source / "tools" / "kanban", env=env, capture_output=True, text=True,
+                                encoding="utf-8", check=True).stdout.strip()
+        for tool, value in cls.expected.items():
+            path, key = cls.settings_file(env, tool)
+            values = {key: value}
+            if tool == "kanban":
+                values["admin_password_hash"] = hashed
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, "-c", "import json, sys; from portal import distribution; "
+                                   "sys.stdout.write(json.dumps(distribution.export_all(), ensure_ascii=False))"],
+            cwd=source, env=env, capture_output=True, timeout=300)
+        cls.outcome = json.loads(done.stdout.decode("utf-8") or "{}") if done.returncode == 0 else {
+            "ok": False, "results": [], "error": done.stderr.decode("utf-8", errors="replace")[-1500:]}
+
+    def test_まとめて書き出すと5つとも書き出したと出る(self) -> None:
+        self.assertEqual([r["id"] for r in self.outcome.get("results", [])],
+                         ["portal", "nippou", "kanban", "calendar", "inspection"], self.outcome.get("error"))
+        for result in self.outcome["results"]:
+            with self.subTest(tool=result["id"]):
+                self.assertEqual(result["state"], "done", result["line"])
+        self.assertTrue(self.outcome["ok"])
+
+    def test_配布用フォルダに大設定と4ツールの配布設定が入る(self) -> None:
+        self.assertTrue((self.dist / "配布設定" / "日報複合ツール.json").is_file())
+        for tool in ("nippou", "kanban", "calendar", "inspection"):
+            with self.subTest(tool=tool):
+                self.assertTrue((self.dist / "tools" / tool / "配布設定" / "設定.json").is_file())
+                self.assertTrue((self.dist / "tools" / tool / "export_distribution.py").is_file(),
+                                "配った先の大設定からも、まとめて書き出せる")
+
+    def test_配った先の端末で起動すると5つとも読み込む(self) -> None:
+        env = self.terminal("配った先")
         tails = self.start_all(env, lambda tool: self.stored(env, tool) == self.expected[tool])
         self.assert_read(env, tails)
 

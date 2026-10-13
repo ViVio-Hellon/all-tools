@@ -84,6 +84,10 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
 ITEM_LABELS = {key: label for key, label, _ in ITEMS}
 
+#: 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
+#: 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
+REFUSE_NOTHING = "nothing"
+
 #: この端末が最後に配布設定を読み込んだ日時(この端末の設定ファイルの付記)
 META_APPLIED = "_配布設定を読み込んだ日時"
 
@@ -306,7 +310,7 @@ def export(items: list[str]) -> Result:
             False,
             "書き出せる設定がありません(" + "・".join(defaults)
             + " はこの端末で変えていないため既定のままです)。",
-            "bad_input",
+            REFUSE_NOTHING,
         )
 
     folder = directory()

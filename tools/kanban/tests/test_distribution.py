@@ -98,7 +98,8 @@ class ExportTest(DistributionTestBase):
     def test_nothing_to_write_is_refused(self):
         result = distribution.export(["export_interval_sec"])
         self.assertFalse(result.ok)
-        self.assertEqual(result.reason, "bad_input")
+        # 失敗とは分ける(日報複合ツールの大設定が「既定のままなので要りません」と出す)
+        self.assertEqual(result.reason, distribution.REFUSE_NOTHING)
         self.assertFalse(self.folder.exists())
 
     def test_unknown_items_are_refused(self):

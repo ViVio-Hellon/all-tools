@@ -47,6 +47,8 @@ INCLUDE: tuple[str, ...] = (
     "process_manager.py",
     # デスクトップ版(日報複合ツールの窓)の入口。ポートを使わない(標準入出力)
     "bridge.py",
+    # 配布設定を書き出すだけの入口(日報複合ツールの大設定の「まとめて書き出す」が起こす)
+    "export_distribution.py",
     "app", "config", "dbkit", "nippou", "scripts",
     # VC長さ計算の仕様の記録(vc-calculator から移した VBA 解析)。README が指す
     "docs",

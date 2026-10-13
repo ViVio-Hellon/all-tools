@@ -164,7 +164,7 @@ button,input,select{font:inherit;color:inherit}
 .card h2{margin:0 0 6px;font-size:17px}
 .card h2 small{font-weight:400;color:var(--muted);font-size:var(--fs-sm)}
 .card__head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-.card__tools{display:flex;gap:8px}
+.card__tools{display:flex;gap:8px;flex-wrap:wrap}
 .dist-list{margin:4px 0 12px;padding-left:20px;font-size:var(--fs-md)}
 .dist-list:empty{display:none}
 .facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:6px 0 0}
@@ -277,6 +277,10 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .dist-tools td.is-ok{color:var(--state-ok);font-weight:700}
 .dist-steps{margin:6px 0 12px;padding-left:22px}
 .dist-steps li{margin:2px 0}
+.dist-all{margin-top:10px}
+.dist-all li.is-done{color:var(--state-ok)}
+.dist-all li.is-failed{color:var(--state-error);font-weight:700}
+.dist-all li.is-nothing{color:var(--muted)}
 
 /* ツールの処理が止まった・終わった知らせ(枠の上に重ねる。**枠は消さない** ── 打ちかけを写し取れるように) */
 .lostbar{position:absolute;left:0;right:0;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;

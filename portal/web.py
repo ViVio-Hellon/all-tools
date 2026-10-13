@@ -485,6 +485,16 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
     def distribution_export():                    # noqa: ANN202
         return distribution_action(distribution.export)
 
+    @app.post("/api/distribution/export-all")
+    def distribution_export_all():                # noqa: ANN202
+        """大設定の分と4ツールの分をまとめて書き出す。**1つ書き出せなくても 200 で、ツールごとの結果を返す。**"""
+        refused = need_admin()
+        if refused:
+            return refused
+        outcome = distribution.export_all()
+        return jsonify({"ok": True, "message": outcome["message"], **_settings_view(catalog),
+                        "all_ok": outcome["ok"], "exported": outcome["results"]})
+
     @app.post("/api/distribution/remove")
     def distribution_remove():                    # noqa: ANN202
         return distribution_action(distribution.remove)

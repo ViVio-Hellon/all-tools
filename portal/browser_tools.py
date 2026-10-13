@@ -155,6 +155,19 @@ def has_live_lock(tool: Tool) -> bool:
     return False
 
 
+def child_env() -> dict[str, str]:
+    """入口から各ツールの Python を子として起こすときの環境変数。
+
+    入口のものをそのまま渡す(手元の領域の `<頭>_LOCAL_DIR`・`LOCALAPPDATA` など ── ツールが
+    単体で動くときと同じ領域を見る)。デスクトップ版の印(`ALLTOOLS_SHELL`)だけは外す
+    (ツールが「外枠の子」と思い違えないように)。配布設定のまとめての書き出し
+    (`distribution.export_all`)も同じものを使う。
+    """
+    env = dict(os.environ, ALLTOOLS_PORTAL="1", PYTHONIOENCODING="utf-8")
+    env.pop("ALLTOOLS_SHELL", None)
+    return env
+
+
 class BrowserTools:
     """ブラウザ版の各ツール(起こした子と、つないだ相手)。"""
 
@@ -164,8 +177,7 @@ class BrowserTools:
         self._children: dict[str, subprocess.Popen] = {}
 
     def _spawn(self, tool: Tool) -> subprocess.Popen:
-        env = dict(os.environ, ALLTOOLS_PORTAL="1", PYTHONIOENCODING="utf-8")
-        env.pop("ALLTOOLS_SHELL", None)
+        env = child_env()
         out = log_dir()
         out.mkdir(parents=True, exist_ok=True)
         err = open(out / f"browser_{tool.id}.log", "ab")

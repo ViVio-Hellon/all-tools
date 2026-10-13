@@ -12,6 +12,8 @@
 
 タブ表示権限の表そのものは共有の DB にあるので、配る必要はない。
 各ツールの配布設定(各ツールの設定画面で書き出す `tools\\<ツール>\\配布設定\\`)とは別。
+大設定の「4ツールの分もまとめて書き出す」(`export_all`)は、大設定の分と4ツールの分を
+1度に書き出す(各ツールの設定画面で1つずつ書き出すのは手間で、抜けやすい)。
 
 管理者パスワードは撹拌した値(`pbkdf2$…`)で入る。ここから値は読めない。
 """
@@ -21,6 +23,8 @@ import datetime as _dt
 import json
 import os
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -201,6 +205,117 @@ def export() -> Result:
                     r"PC ごとに割り当てが違うことがあるので、\\サーバ名\共有 の形をおすすめします。")
     log.info("配布設定を書き出しました: %s", ", ".join(names))
     return Result(True, message, applied=names)
+
+
+# ------------------------------------------------------------------
+# まとめて書き出す(大設定 + 4ツール)。鍵が開いているかは呼ぶ側(web)が確かめる
+#
+#     大設定の「配布設定を書き出す」だけ押して、各ツールの設定画面の配布設定を
+#     書き出していなかったため、配った先で4ツールとも何も反映されなかった
+#
+# 各ツールは別のプロセス・別の手元の領域で動き、パッケージの名前(`app` など)もぶつかるので、
+# ここからは読み込まない。そのツールのフォルダで、書き出すだけの入口(`export_distribution.py`)を
+# 子として起こし、標準出力の JSON 1行を受け取る。書き出すものは、各ツールの設定画面の既定の
+# 選び方と同じ(端末ごとに違うライン・表示などは入れない)。
+# ------------------------------------------------------------------
+#: 各ツールの、配布設定を書き出すだけの入口(そのツールのフォルダの直下)
+TOOL_EXPORTER = "export_distribution.py"
+#: 1ツールを待つ上限(秒)。ふつうは数秒で終わる(共有フォルダが遅い日の分を見込む)
+TOOL_EXPORT_TIMEOUT_SEC = 60
+
+#: まとめて書き出したときの1つずつの結果
+STATE_DONE = "done"           # 書き出した
+STATE_NOT_NEEDED = "nothing"  # 既定のままなので要らない(配った先も既定で動く)
+STATE_FAILED = "failed"       # 書き出せなかった(理由は message)
+
+
+def export_tool(tool: Any) -> Result:
+    """そのツールの配布設定を、そのツールのプロセスで書き出す(`tools\\<ツール>\\配布設定\\`)。
+
+    環境変数はブラウザ版の各ツールを起こすときと同じ(`browser_tools.child_env`)。
+    手元の領域の指定(`<頭>_LOCAL_DIR` など)もそのまま渡るので、ツールが単体で動くときと
+    同じ設定を読む。
+    """
+    from .browser_tools import child_env
+
+    script = Path(tool.dir) / TOOL_EXPORTER
+    if not script.is_file():
+        return Result(False, f"配布設定を書き出す入口({script})がありません。", STATE_FAILED)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        done = subprocess.run([sys.executable, str(script)], cwd=str(tool.dir), env=child_env(),
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=TOOL_EXPORT_TIMEOUT_SEC, creationflags=flags)
+    except subprocess.TimeoutExpired:
+        return Result(False, f"{TOOL_EXPORT_TIMEOUT_SEC} 秒待っても終わりませんでした"
+                             "(共有フォルダが遅い・止まっているかもしれません)。", STATE_FAILED)
+    except OSError as exc:
+        return Result(False, f"書き出す処理を起こせませんでした: {exc}", STATE_FAILED)
+    reply = _reply_of(done.stdout)
+    if reply is None:
+        tail = [line for line in done.stderr.decode("utf-8", errors="replace").splitlines() if line.strip()][-3:]
+        return Result(False, f"書き出す処理の答えが読めませんでした(終了コード {done.returncode})。"
+                             + (" " + " / ".join(tail) if tail else ""), STATE_FAILED)
+    applied = reply.get("applied")
+    return Result(bool(reply.get("ok")), str(reply.get("message") or ""), str(reply.get("reason") or ""),
+                  applied=[str(a) for a in applied] if isinstance(applied, list) else [])
+
+
+def _reply_of(stdout: bytes) -> Optional[dict]:
+    """入口の答え(標準出力の最後の JSON 1行)。読めなければ None。"""
+    for line in reversed(stdout.decode("utf-8", errors="replace").splitlines()):
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) and "ok" in data else None
+    return None
+
+
+def _outcome(tool_id: str, title: str, result: Result) -> dict[str, Any]:
+    """画面に1行で出す形。"""
+    if result.ok:
+        state = STATE_DONE
+        line = (f"書き出しました({len(result.applied)}項目: {'・'.join(result.applied)})"
+                if result.applied else "書き出しました")
+    elif result.reason == "nothing":
+        state = STATE_NOT_NEEDED
+        line = "既定のままなので要りません(この端末で変えた設定がありません。配った先も既定で動きます)"
+    else:
+        state = STATE_FAILED
+        line = f"書き出せませんでした: {result.message}"
+    return {"id": tool_id, "title": title, "state": state, "line": line,
+            "message": result.message, "reason": result.reason, "applied": result.applied}
+
+
+def export_all() -> dict[str, Any]:
+    """大設定の分と、catalog の4ツールの分を順に書き出す。**1つ書き出せなくても残りは続ける。**
+
+    戻り値の `results` はツールごとの結果(`_outcome`)。`ok` は書き出せなかったものが無いか。
+    """
+    from . import catalog as catalog_mod
+
+    catalog = catalog_mod.load()
+    results = [_outcome(catalog.portal.id, catalog.portal.title, export())]
+    for tool in catalog.tools:
+        try:
+            result = export_tool(tool)
+        except Exception as exc:                  # noqa: BLE001 - 残りのツールは続ける
+            result = Result(False, str(exc), STATE_FAILED)
+        results.append(_outcome(tool.id, tool.title, result))
+    for item in results:
+        log.info("まとめて書き出す: %s → %s(%s)", item["title"], item["state"], item["message"])
+    count = {state: sum(1 for r in results if r["state"] == state)
+             for state in (STATE_DONE, STATE_NOT_NEEDED, STATE_FAILED)}
+    message = (f"配布設定をまとめて書き出しました(書き出した {count[STATE_DONE]}・"
+               f"既定のままで要らない {count[STATE_NOT_NEEDED]}・書き出せなかった {count[STATE_FAILED]})。")
+    if count[STATE_FAILED]:
+        message += " 書き出せなかったものは、下の結果の理由を見て直し、もう一度押してください。"
+    elif count[STATE_DONE]:
+        message += " 配るときは scripts\\make_dist.bat で配布用フォルダを作ってください(書き出したものが全部入ります)。"
+    return {"ok": not count[STATE_FAILED], "message": message, "results": results}
 
 
 def _readme(meta: dict[str, Any]) -> str:
