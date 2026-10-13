@@ -1140,9 +1140,13 @@ def distribute_times():
     targets = [(n, row) for n in sorted(pages) for row in sorted(pages[n].rows)
                if time_split.is_filled(pages[n].rows[row])]
     stops = [time_split.row_stop_minutes(pages[n].rows[row]) for n, row in targets]
-    plan = time_split.split(stops, total)
+    # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
+    day_work = any(p.day_shift for p in pages.values())
+    rest = None if day_work else time_split.break_window(shift, start, total)
+    plan = time_split.split(stops, total, rest=rest)
     if not plan.ok:
         return jsonify(error_body("cannot_split", plan.message)), 422
+    rest_info = _rest_plan(shift, rest, plan, targets, pages, day_work)
 
     rows = []
     overwrite = 0
@@ -1160,6 +1164,7 @@ def distribute_times():
         "overwrite": overwrite,
         "first": rows[0]["start"], "last": rows[-1]["end"],
         "rows": [{k: r[k] for k in ("page", "row", "start", "end")} for r in rows],
+        "rest": rest_info,
     }
     if payload.get("dry_run"):
         return jsonify(summary)
@@ -1171,6 +1176,12 @@ def distribute_times():
         target.set(r["row"], "KH", kh)
         target.set(r["row"], "SZ", sz)
         target.set(r["row"], "SH", sh)
+    # 休憩にかかった行に、休憩(停止の記号「0」)を入れる
+    if rest_info and rest_info.get("slot"):
+        code_family, minutes_family = rest_info["slot"]
+        target = pages[rest_info["page"]]
+        target.set(rest_info["row"], code_family, time_split.REST_CODE)
+        target.set(rest_info["row"], minutes_family, str(rest_info["minutes"]))
     problem = None
     try:
         for n in sorted(pages):
@@ -1191,7 +1202,43 @@ def distribute_times():
     body["distributed"] = summary
     body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
                        f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
+    if rest_info:
+        body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
     return jsonify(body)
+
+
+def _rest_plan(shift, rest, plan, targets, pages, day_work) -> dict | None:
+    """休憩をどう扱ったか(画面の確かめと、書くときに使う)。飛ばさなければ None。
+
+    休憩にかかって終わりをのばした行に、休憩を停止の記号「0」(休憩食事)で入れます。
+    **直の中にもう「0」の停止があれば入れません**(二重になる)。その行の停止①〜⑤が
+    埋まっていても入れられません(画面に出して、手で入れてもらう)。
+    """
+    from nippou.logic import save_checks, time_split
+
+    if day_work:
+        return {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"} if shift in time_split.BREAKS else None
+    if rest is None or plan.break_index is None:
+        return None
+    at, length = rest
+    begin, end = time_split.BREAKS[shift]
+    page, row = targets[plan.break_index]
+    info: dict = {"start": begin, "end": end, "minutes": length, "page": page, "row": row,
+                  "slot": None, "note": ""}
+    has_rest = any(
+        save_checks.normalize(str(values.get(code, "") or "")) == save_checks.REST_STOP_CODE
+        for p in pages.values() for values in p.rows.values()
+        for code, _minutes in time_split.STOP_SLOTS)
+    if has_rest:
+        info["note"] = "休憩(停止の記号「0」)はもう入っているので、足しません"
+        return info
+    values = pages[page].rows[row]
+    for code, minutes in time_split.STOP_SLOTS:
+        if not str(values.get(code, "") or "").strip() and not str(values.get(minutes, "") or "").strip():
+            info["slot"] = [code, minutes]
+            return info
+    info["note"] = f"{page}ページ {row}行目の停止①〜⑤が埋まっているので、休憩は手で入れてください"
+    return info
 
 
 def _apply_shortcuts(state, payload: dict) -> tuple[dict | None, list[dict]]:

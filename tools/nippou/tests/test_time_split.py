@@ -87,6 +87,54 @@ class SplitTests(unittest.TestCase):
         self.assertEqual(ts.row_stop_minutes({"TH": "10", "THS": "2.5", "TH5": "x"}), Decimal("12.5"))
 
 
+class RestTests(unittest.TestCase):
+    """1直 12:00〜13:00 / 2直 18:00〜19:00 / 3直 02:00〜03:00 を飛ばす(v4.31.0)。"""
+
+    def test_直ごとの休憩(self) -> None:
+        self.assertEqual(ts.break_window("1直", ts.parse_hhmm("07:00"), 480), (300, 60))
+        self.assertEqual(ts.break_window("2直", ts.parse_hhmm("15:00"), 470), (180, 60))
+        self.assertEqual(ts.break_window("3直", ts.parse_hhmm("22:50"), 490), (190, 60))
+        self.assertEqual(ts.break_window("日勤", ts.parse_hhmm("07:00"), 600), (300, 60))
+        self.assertIsNone(ts.break_window("1直", ts.parse_hhmm("13:00"), 120), "直の外の休憩は飛ばさない")
+
+    def test_休憩にかかる行は60分のばす_後ろはずらす(self) -> None:
+        """例: 11:40 12:20 となっていた場合は 60分追加として 11:40 13:20 になる"""
+        start = ts.parse_hhmm("07:00")
+        plan = ts.split([Decimal(0)] * 22, 480, rest=ts.break_window("1直", start, 480))
+        got = times(plan, start)
+        crossing = got[plan.break_index]
+        self.assertLess(crossing[0], "12:00")
+        self.assertGreaterEqual(crossing[1], "13:00")
+        self.assertEqual(got[-1][1], "15:00")
+        for (a, b), (c, _d) in zip(got, got[1:]):
+            self.assertEqual(b, c, "行はつながったまま")
+        clock = [t for pair in got for t in pair]
+        self.assertFalse([t for t in clock if "12:00" < t < "13:00"], "12:00〜13:00 の中に区切りを置かない")
+        # 割り振るのは 420 分(480 − 60)
+        spans = [b - a for a, b in plan.slots]
+        self.assertEqual(sum(spans) - 60, 420)
+
+    def test_例の形(self) -> None:
+        """休憩をまたぐ行は 60 分のばす(例 11:40〜12:20 → 11:40〜13:20 と同じ決まり)。
+
+        4行・休憩を除いて 420 分 → 1行 105 分。3行目は 10:30〜12:15 になるところが、
+        12:00 をまたぐので 10:30〜13:15。4行目は 13:15〜15:00。
+        """
+        start = ts.parse_hhmm("07:00")
+        plan = ts.split([Decimal(0)] * 4, 480, rest=ts.break_window("1直", start, 480))
+        self.assertEqual(times(plan, start), [("07:00", "08:45"), ("08:45", "10:30"),
+                                              ("10:30", "13:15"), ("13:15", "15:00")])
+        self.assertEqual(plan.break_index, 2)
+
+    def test_3直は2時から3時を飛ばす(self) -> None:
+        start = ts.parse_hhmm("22:50")
+        plan = ts.split([Decimal(0)] * 10, 490, rest=ts.break_window("3直", start, 490))
+        got = times(plan, start)
+        a, b = got[plan.break_index]
+        self.assertTrue(a < "02:00" and b >= "03:00", (a, b))
+        self.assertEqual(got[-1][1], "07:00")
+
+
 def row(lot: str, **extra) -> dict:
     values = {"LOT": lot, "MAI": "10", "TUT": "1"}
     values.update(extra)
@@ -172,6 +220,48 @@ class DistributeWebTests(WebTestCase):
                   "header": {"worker": "山田"}}
         plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
         self.assertEqual([r["row"] for r in plan["rows"]], [1, 4])
+
+    def test_休憩をまたぐ行に休憩0を60分入れる(self) -> None:
+        self.enable()
+        day, line, shift = self.key()
+        if shift not in ts.BREAKS:
+            self.skipTest(f"{shift} には休憩の決まりが無い")
+        screen = {"rows": {str(n): row(f"L{n}") for n in range(1, 13)}, "header": {"worker": "山田"}}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        rest = plan["rest"]
+        self.assertEqual((rest["start"], rest["end"], rest["minutes"]), (*ts.BREAKS[shift], 60))
+        self.assertEqual(rest["slot"], ["S", "TH"])
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        crossing = body["rows"][str(rest["row"])]
+        self.assertEqual((crossing["S"], crossing["TH"]), ("0", "60"))
+        self.assertIn("休憩", body["message"])
+        # 作業時間は休憩ぶん引かれる(12行の作業時間の合計が 直の長さ − 60)
+        start, end = self.bounds(shift)
+        total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
+        tim = sum(Decimal(body["rows"][str(n)]["TIM"] or 0) for n in range(1, 13))
+        self.assertEqual(tim, total - 60)
+
+    def test_休憩0がもう入っていれば足さない(self) -> None:
+        self.enable()
+        _day, _line, shift = self.key()
+        if shift not in ts.BREAKS:
+            self.skipTest(f"{shift} には休憩の決まりが無い")
+        screen = {"rows": {"1": row("A"), "2": row("B", S="0", TH="60"), "3": row("C")},
+                  "header": {"worker": "山田"}}
+        rest = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()["rest"]
+        self.assertIsNone(rest["slot"])
+        self.assertIn("もう入っている", rest["note"])
+
+    def test_昼稼働なら休憩を飛ばさない(self) -> None:
+        self.enable()
+        _day, _line, shift = self.key()
+        start, end = self.bounds(shift)
+        screen = {"rows": {"1": row("A"), "2": row("B")}, "header": {"worker": "山田"},
+                  "day_shift": True}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
+        self.assertEqual(plan["rows"][0]["end"], ":".join(ts.clock(ts.parse_hhmm(start), total // 2 // 5 * 5
+                                                                 if (total / 2) % 5 < 2.5 else (total // 2 // 5 + 1) * 5)))
 
     def test_割り振れなければ理由を返す(self) -> None:
         self.enable()

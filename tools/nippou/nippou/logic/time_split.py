@@ -24,6 +24,19 @@
 1 行に 5 分も渡らないときは 1 分刻み、1 分も渡らないとき・停止の合計が直より長いときは
 割り振りません(理由を返す)。
 
+【休憩の時間を飛ばす(v4.31.0)】
+
+    1直 12:00〜13:00 / 2直 18:00〜19:00 / 3直 02:00〜03:00 この時間を加味した割り振りに
+    例: 11:40 12:20 となっていた場合は 60分追加として 11:40 13:20 になる
+
+割り振るのは**休憩を除いた長さ**(1直なら 480 − 60 = 420 分)。行の時刻を並べたあとで、
+休憩の始まりにかかる行(始まり < 12:00 ≦ 終わり)の終わりを 60 分のばし、それより後の行は
+まるごと 60 分うしろへずらします(行はつながったまま。最後の行は直の終わりちょうど)。
+のばした行には、休憩を停止の記号「0」(休憩食事)60 分として入れます ── 入れないと、その行の
+作業時間が休憩ぶん多くなり、保存前の確かめも「休憩が足りません」と言います(入れるのは
+`app/routes/entry.distribute_times`。直の中にもう「0」の停止があれば入れない)。
+昼稼働(有)の直は、休憩を飛ばしません(休憩の確かめと同じ)。日勤は 1直と同じ 12:00〜13:00。
+
 ここは計算だけ。どの行を数えるか・ページをまたいで書くのは `app/routes/entry.distribute_times`。
 """
 from __future__ import annotations
@@ -43,6 +56,36 @@ FILLED_FAMILIES: tuple[str, ...] = (
 
 #: 停止の分の欄(①〜⑤)
 STOP_MINUTE_FAMILIES: tuple[str, ...] = ("TH", "THS", "THT", "TH4", "TH5")
+
+#: 停止の(記号, 分)の欄の組(①〜⑤)。休憩を入れる空きを探す
+STOP_SLOTS: tuple[tuple[str, str], ...] = (
+    ("S", "TH"), ("SS", "THS"), ("STH", "THT"), ("S4", "TH4"), ("S5", "TH5"))
+
+#: 休憩を入れる停止の記号(`作業停止時間内訳_1` の「休憩食事」。`save_checks.REST_STOP_CODE` と同じ)
+REST_CODE = "0"
+
+#: 直ごとの休憩(始まり, 終わり)。割り振りではこの時間を飛ばす
+BREAKS: dict[str, tuple[str, str]] = {
+    "1直": ("12:00", "13:00"),
+    "2直": ("18:00", "19:00"),
+    "3直": ("02:00", "03:00"),
+    "日勤": ("12:00", "13:00"),
+}
+
+
+def break_window(shift: str, start: int, total: int) -> Optional[tuple[int, int]]:
+    """その直の休憩を(直の始めから何分目, 長さ)で。直の中に収まらなければ None。"""
+    found = BREAKS.get(shift)
+    if not found:
+        return None
+    b_start, b_end = parse_hhmm(found[0]), parse_hhmm(found[1])
+    if b_start is None or b_end is None:
+        return None
+    offset = (b_start - start) % (24 * 60)
+    length = (b_end - b_start) % (24 * 60)
+    if length <= 0 or offset <= 0 or offset + length >= total:
+        return None
+    return offset, length
 
 
 def is_filled(values: dict[str, str]) -> bool:
@@ -84,10 +127,33 @@ class Plan:
     slots: list[tuple[int, int]] = field(default_factory=list)
     message: str = ""
     step: int = STEP
+    #: 休憩にかかって終わりをのばした行(`slots` の何番目か)。休憩を飛ばさなければ None
+    break_index: Optional[int] = None
 
 
-def split(stops: Sequence[Decimal], total: int, *, step: int = STEP) -> Plan:
-    """`stops`(行ごとの停止の分)の行へ、`total` 分を割り振る。"""
+def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
+          rest: Optional[tuple[int, int]] = None) -> Plan:
+    """`stops`(行ごとの停止の分)の行へ、`total` 分を割り振る。
+
+    `rest` は休憩(直の始めから何分目, 長さ)。その長さを除いて割り振り、休憩にかかる行の
+    終わりをのばし、後ろの行をずらす(`break_window`)。
+    """
+    if rest is not None:
+        at, length = rest
+        plan = split(stops, total - length, step=step)
+        if not plan.ok:
+            return plan
+        moved: list[tuple[int, int]] = []
+        for index, (a, b) in enumerate(plan.slots):
+            if a >= at:
+                moved.append((a + length, b + length))
+            elif b >= at:
+                moved.append((a, b + length))
+                plan.break_index = index
+            else:
+                moved.append((a, b))
+        plan.slots = moved
+        return plan
     n = len(stops)
     if n == 0:
         return Plan(False, message="割り振る行がありません(ロット№・枚数・停止などを打った行が1つもありません)")

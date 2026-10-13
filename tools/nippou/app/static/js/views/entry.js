@@ -2796,6 +2796,15 @@ export function start() {
       `${plan.shift} ${plan.start}〜${plan.end}(${plan.minutes}分)を、打った ${plan.count} 行に割り振ります。`,
       `${pages}/最初の行 ${plan.first} 〜 最後の行 ${plan.last}/${plan.step === 5 ? "5分" : "1分"}刻み`,
     ];
+    // 休憩の時間は飛ばす(v4.31.0)。どの行にかかって、休憩を入れるのかも先に言う
+    const rest = plan.rest;
+    if (rest?.skipped) {
+      lines.push("", rest.skipped);
+    } else if (rest) {
+      lines.push("", `休憩 ${rest.start}〜${rest.end}(${rest.minutes}分)は飛ばします。` +
+        `${rest.page}ページ ${rest.row}行目が休憩をまたぎます。`);
+      lines.push(rest.slot ? `その行に休憩(停止の記号「0」${rest.minutes}分)を入れます。` : rest.note);
+    }
     if (plan.overwrite) lines.push("", `開始・終了の時刻が入っている ${plan.overwrite} 行も書き換えます。`);
     lines.push("", "よろしいですか?");
     if (!confirm(lines.join("\n"))) return;
