@@ -19,6 +19,9 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
     RESULT <key> <hex>  … 結果(item.1.code など)
     PNGDATA <base64>    … グラフ経由で書き出したプレビュー画像(クリップボードが使えないとき)
     WORD <hwnd>         … Word の PID を記録(Word の点検表を開いたとき)
+    WORDPID <pid>       … 起動した Word の PID(文書を開く前。WMI で見つけたもの)
+    STAGE <name>        … いまから始める段階(word.open など)。応答が無くなったとき
+                          「どこで止まったか」を言うため
     WORDBYE 1|0         … Word を終えた / 利用者の文書が開いているので残した
     EMFDATA <base64> …  EMFDONE 1  → OK / COPY
                         … Word の1ページ目(拡張メタファイル)。描けなければ COPY で
@@ -63,7 +66,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from app.services import clipboard_image
 from core import event_log
 from core.process_tracking import (ProcessIdentity, TrackedProcessRegistry, get_process_identity,
-                                   pid_from_hwnd, terminate_verified, wait_for_exit)
+                                   pid_from_hwnd, terminate_verified, wait_for_exit, window_texts)
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER_VBS = os.path.join(APP_DIR, "vbscript", "excel_worker.vbs")
@@ -110,6 +113,60 @@ def message_for(code: str) -> str:
     return ERROR_MESSAGES.get(code, "Excel・Wordの処理でエラーが発生しました。")
 
 
+#: 処理プログラムの段階(`STAGE <name>`)→ 画面・記録に出す言葉。応答が無くなったとき
+#: 「どこで止まったか」、失敗したとき「どこで失敗したか」(`item.<i>.step`)に使う
+STAGE_LABELS: Dict[str, str] = {
+    "excel.create": "Excel を起動する所",
+    "excel.open": "Excel で点検表を開く所(Workbooks.Open)",
+    "excel.copy": "Excel で範囲を画像にする所(CopyPicture)",
+    "excel.export": "Excel のグラフ機能で画像を書き出す所",
+    "excel.print": "Excel で印刷する所(PrintOut)",
+    "word.pid": "起動した Word を探す所(WMI)",
+    "word.create": "Word を起動する所(CreateObject)",
+    "word.setup": "起動した Word の設定",
+    "word.open": "Word で文書を開く所(Documents.Open)",
+    "word.page": "Word の1ページ目を絵にする所(EnhMetaFileBits)",
+    "word.copy": "Word の1ページ目をコピーする所",
+    "word.print": "Word で印刷する所(PrintOut)",
+    "word.quit": "Word を終える所(Quit)",
+}
+
+
+def stage_label(stage: str) -> str:
+    return STAGE_LABELS.get(stage or "", stage or "")
+
+
+#: よく出るエラー番号の手がかり。VBScript からは 0x800A<番号> の形で届く
+#: (Word・Excel・VBScript の実行時エラー)。番号の意味が分かるものだけ添える
+_ERRNO_HINTS: Dict[int, str] = {
+    0x800A01AD: "ActiveX コンポーネントを作成できない ── この PC に Word・Excel が入っていない・登録が壊れている",
+    0x800A01A8: "オブジェクトが無い ── 処理プログラムの不具合の可能性",
+    0x800A1520: "Word 5408: パスワードが正しくない ── パスワード付きの文書",
+    0x800A1436: "Word 5174: ファイルが見つからない・開けない(パス・権限)",
+    0x800A16A0: "Word 5792: ファイルが壊れている可能性",
+    0x800A1066: "Word 4198: 命令が失敗した(印刷ではプリンター・ドライバーの問題が多い)",
+    0x800A11FD: "Word 4605: この状態では使えない命令(文書の窓が無いなど)",
+    0x800A1735: "Word 5941: 指定したもの(ページ・窓)が無い",
+    0x80080005: "サーバーの実行に失敗 ── 止まった WINWORD.EXE / EXCEL.EXE が残っている可能性",
+    0x800706BA: "RPC サーバーを利用できない ── Word / Excel が途中で終わった",
+    0x80010108: "呼び出し先が切断された ── Word / Excel が途中で終わった",
+    0x80010001: "呼び出しが拒否された ── Word / Excel が忙しい",
+    0x8001010A: "呼び出し先が忙しい ── Word / Excel が別の処理中",
+    0x80070005: "アクセスが拒否された(権限)",
+}
+
+
+def explain_errno(errno_text: str) -> str:
+    """"0x800A1520" → "0x800A1520 = Word 5408: …"。分からない番号はそのまま。"""
+    text = (errno_text or "").strip()
+    try:
+        number = int(text, 16) & 0xFFFFFFFF
+    except ValueError:
+        return text
+    hint = _ERRNO_HINTS.get(number)
+    return f"{text} = {hint}" if hint else text
+
+
 class ExcelError(Exception):
     def __init__(self, code: str, detail: str = "", message: Optional[str] = None):
         self.code = code
@@ -149,6 +206,10 @@ class JobOutcome:
     timed_out: bool = False
     stderr: str = ""
     elapsed_ms: int = 0
+    #: 最後に始めた段階(`STAGE`)。応答が無くなったとき、どこで止まったか
+    stage: str = ""
+    #: 応答が無くなったとき Excel / Word が出していた窓(確認の窓の題名と文)
+    windows: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
         """画面とログに出す「なぜ失敗したか」の手がかり(細部が何も無いとき用)。"""
@@ -158,10 +219,23 @@ class JobOutcome:
             parts.append(fatal)
         if self.finish_code is not None:
             parts.append(f"VBScript 終了コード {self.finish_code}")
+        elif self.stage:
+            parts.append(f"止まった所: {stage_label(self.stage)}")
         if self.logs:
             parts.append(self.logs[-1])
         if self.stderr:
             parts.append(self.stderr[:300])
+        return " / ".join(parts)
+
+    def stuck_detail(self) -> str:
+        """応答が無くなったときの手がかり: 止まった所と、そのとき出ていた窓。"""
+        parts = []
+        if self.stage:
+            parts.append(f"止まった所: {stage_label(self.stage)}")
+        if self.windows:
+            parts.append("出ていた窓: " + " ／ ".join(self.windows))
+        elif self.timed_out:
+            parts.append("出ていた窓: (見つからず)")
         return " / ".join(parts)
 
 
@@ -414,7 +488,8 @@ class VbsExcelBackend:
                 raise ExcelError("PREVIEW_FAILED", f"書き出した画像を読めませんでした: {exc}")
             return PreviewImage(data, "image/png", method="chart-export", **meta)
         if outcome.timed_out:
-            raise ExcelError("TIMEOUT", self._detail(res, 1))
+            raise ExcelError("TIMEOUT", " / ".join(
+                p for p in (outcome.stuck_detail(), self._detail(res, 1)) if p))
         if state["owner_error"]:
             raise ExcelError("CLIPBOARD_BUSY", state["clip_error"])
         if res.get("fatal.code") == "JOB_READ_FAILED":
@@ -468,6 +543,8 @@ class VbsExcelBackend:
                     item.code = "WORKER_FAILED"
                 item.detail = self._detail(res, index) or (
                     "" if item.code == "STOPPED" else outcome.summary())
+                if item.code == "TIMEOUT":
+                    item.detail = " / ".join(p for p in (outcome.stuck_detail(), item.detail) if p)
             else:
                 item.code = res.get(f"item.{index}.code") or "PRINT_FAILED"
                 item.detail = self._detail(res, index)
@@ -543,6 +620,7 @@ class VbsExcelBackend:
         job_keys: Optional[int] = None
         results: Dict[str, str] = {}
         logs: List[str] = []
+        stage = ""
         self.log.info("Excel処理開始 mode=%s 件数=%s %s", mode, params.get("count", "-"),
                       "(起動済みの Excel を使用)" if reused else "")
         for key, value in job.items():
@@ -565,15 +643,18 @@ class VbsExcelBackend:
                 if session.excel and excel and session.excel.pid != excel.pid:
                     self.registry.remove(session.excel.pid)     # 前の Excel は終わっていた
                 session.excel = excel or session.excel
+            elif command == "STAGE":
+                stage = parts[1] if len(parts) > 1 else ""
+            elif command == "WORDPID" and len(parts) > 1:
+                self._adopt_word(session, self._identify_word(_int(parts[1])))
             elif command == "WORD" and len(parts) > 1:
-                word = self._track_app(parts[1], "word")
-                if session.word and word and session.word.pid != word.pid:
-                    self.registry.remove(session.word.pid)
-                session.word = word or session.word
+                if not (session.word and pid_from_hwnd(_int(parts[1])) == session.word.pid):
+                    self._adopt_word(session, self._track_app(parts[1], "word"))
             elif command == "WORDBYE":
                 self._word_closed(session, quit_=len(parts) < 2 or parts[1] != "0")
             elif command == "FINISH":
                 finish_code = _int(parts[1]) if len(parts) > 1 else 0
+                stage = ""
                 break
             elif command == "RESULT" and len(parts) > 1:
                 value = decode_hex_utf16(parts[2]) if len(parts) > 2 else ""
@@ -594,6 +675,12 @@ class VbsExcelBackend:
             results["fatal.message"] = f"処理の指示が {job_keys}/{expected} 項目しか届きませんでした"
         broken = timed_out or ended or finish_code is None or results.get("fatal.code") == "JOB_READ_FAILED"
         stderr = ""
+        windows: List[str] = []
+        word_pid = session.word.pid if session.word else None     # 後始末で消える前に
+        if timed_out:
+            # 止める前に、Excel / Word が出していた窓(隠れた確認の窓)を読んでおく
+            windows = self._windows_of(session)
+            self.log.error("止まった所: %s 出ていた窓: %s", stage_label(stage) or "(不明)", windows or "(見つからず)")
         if broken:
             # 途中で止まった・応答が無い処理プログラムは使い回さない
             self._close_session(session, force=timed_out, reason="処理の途中で止まった")
@@ -606,7 +693,7 @@ class VbsExcelBackend:
         for entry in logs:
             self.log.debug("worker log: %s", entry)
         outcome = JobOutcome(results, logs, finish_code, timed_out, stderr,
-                             int((time.perf_counter() - started) * 1000))
+                             int((time.perf_counter() - started) * 1000), stage=stage, windows=windows)
         if timed_out or finish_code not in (0, None) or stderr or finish_code is None:
             self.log.warning("Excel処理結果 mode=%s finish=%s timeout=%s 結果=%s 指示=%s stderr=%s",
                              mode, finish_code, timed_out, results, job, stderr[:500])
@@ -614,9 +701,12 @@ class VbsExcelBackend:
             event_log.record(
                 "excel.job", event_log.NG, code=results.get("fatal.code", "") or
                 ("TIMEOUT" if timed_out else "WORKER_FAILED"),
-                message=results.get("fatal.message", "") or ("Excel が応答しませんでした" if timed_out
+                message=results.get("fatal.message", "") or ("Excel・Word が応答しませんでした" if timed_out
                                                              else "処理プログラムが途中で終わりました"),
-                detail=stderr[:2000], mode=mode, finish_code=finish_code, timed_out=timed_out,
+                detail=" / ".join(p for p in (outcome.stuck_detail(), stderr[:2000]) if p),
+                mode=mode, finish_code=finish_code, timed_out=timed_out,
+                stage=stage_label(stage), windows=windows,
+                word_pid=word_pid,
                 reused_excel=reused, excel_pid=session.excel.pid if session.excel else None,
                 printer=session.printer, elapsed_ms=outcome.elapsed_ms,
                 results={k: v for k, v in results.items() if not k.startswith("png")},
@@ -715,6 +805,39 @@ class VbsExcelBackend:
             self.log.warning("%s の PID を取得できませんでした hwnd=%s", label, hwnd_text)
         return identity
 
+    def _identify_word(self, pid: int) -> Optional[ProcessIdentity]:
+        """`WORDPID` の PID。**確かに WINWORD.EXE のときだけ**使う(止めることがあるため)。"""
+        identity = get_process_identity(pid) if pid > 0 else None
+        if identity is None:
+            self.log.warning("Word の PID を確かめられませんでした pid=%s", pid)
+            return None
+        if IS_WINDOWS and os.path.basename(identity.exe or "").lower() != "winword.exe":
+            self.log.warning("Word の PID が WINWORD.EXE ではないため使いません pid=%s exe=%s", pid, identity.exe)
+            return None
+        self.registry.add(identity, "word")
+        self.log.info("Wordを起動しました pid=%s", identity.pid)
+        event_log.record("word.open", event_log.INFO, word_pid=identity.pid, printer=self._current_printer())
+        return identity
+
+    def _adopt_word(self, session: "_Session", word: Optional[ProcessIdentity]) -> None:
+        if word is None:
+            return
+        if session.word and session.word.pid != word.pid:
+            self.registry.remove(session.word.pid)      # 前の Word は終わっていた
+        session.word = word
+
+    def _windows_of(self, session: "_Session") -> List[str]:
+        """応答しない Excel / Word が出している窓(題名・種類・中の文)。"""
+        found: List[str] = []
+        for proc, label in ((session.word, "Word"), (session.excel, "Excel")):
+            if proc is None:
+                continue
+            try:
+                found += [f"{label} {text}" for text in window_texts(proc.pid)]
+            except Exception as exc:                  # noqa: BLE001 - 手がかり集めの失敗で後始末を止めない
+                self.log.warning("%s の窓を読めませんでした: %s", label, exc)
+        return found
+
     def _word_closed(self, session: "_Session", *, quit_: bool) -> None:
         """処理の終わりに Word を終えた(`WORDBYE 1`)/ 利用者の文書があるので残した(`0`)。"""
         word, session.word = session.word, None
@@ -744,7 +867,11 @@ class VbsExcelBackend:
 
     @staticmethod
     def _detail(results: Dict[str, str], index: int) -> str:
-        parts = [results.get(f"item.{index}.message", ""), results.get(f"item.{index}.errno", "")]
+        """Excel / Word の返答(文・エラー番号とその意味)と、失敗した所。"""
+        errno = results.get(f"item.{index}.errno", "")
+        step = results.get(f"item.{index}.step", "")
+        parts = [results.get(f"item.{index}.message", ""), explain_errno(errno) if errno else "",
+                 f"(失敗した所: {stage_label(step)})" if step else ""]
         return " ".join(p for p in parts if p).strip()
 
 

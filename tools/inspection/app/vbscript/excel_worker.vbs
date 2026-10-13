@@ -29,6 +29,11 @@
 '     READY <mode>
 '     EXCEL <hwnd>            (Python records the Excel PID from this)
 '     WORD <hwnd>             (Python records the Word PID from this)
+'     WORDPID <pid>           (the Word just started, found before any document
+'                              is opened; Python can end it if it hangs)
+'     STAGE <name>            (the step that starts now: word.create, word.open,
+'                              word.page, word.print, excel.open, ... Python
+'                              tells where it stopped when nothing comes back)
 '     WORDBYE 1|0             (Word quit / left running for the user's documents)
 '     OPENED <i>
 '     COPIED 1                              ->  OK | EXPORT | RECOPY | SKIP
@@ -45,7 +50,8 @@
 '     FINISH <rc>             (end of one job; Excel stays for the next one)
 '     BYE                     (Excel has quit; the worker ends)
 '     JOB <n>                 (number of job keys read)
-'     RESULT <key> <hex>      (item.<i>.code, item.<i>.message, ...)
+'     RESULT <key> <hex>      (item.<i>.code, item.<i>.errno, item.<i>.message,
+'                              item.<i>.step, ...)
 '     PNGDATA <base64>        (chart export fallback, several lines)
 '     EMFDATA <base64>        (Word page 1 as an enhanced metafile, several lines)
 '   <hex> = UTF-16 code units as 4 hex digits each ("AB" -> "00410042")
@@ -71,13 +77,15 @@ Const wdPrintView = 3
 Const wdGoToPage = 1
 Const wdGoToAbsolute = 1
 Const wdStatisticPages = 2
+Const wdOpenFormatAuto = 0
+Const msoFeatureInstallNone = 0
 
 Const RC_OK = 0
 Const RC_ARGS = 2
 Const RC_EXCEL = 3
 Const RC_ITEM = 4
 
-Dim gFso, gJob, gXl, gWd, gWordReported, gMode, gLastErrNumber, gLastErrDesc, gJobError
+Dim gFso, gJob, gXl, gWd, gWordReported, gMode, gLastErrNumber, gLastErrDesc, gJobError, gStage
 
 Set gFso = CreateObject("Scripting.FileSystemObject")
 Set gXl = Nothing
@@ -86,6 +94,7 @@ gWordReported = False
 gLastErrNumber = 0
 gLastErrDesc = ""
 gJobError = ""
+gStage = ""
 
 WScript.Quit Main()
 
@@ -98,6 +107,9 @@ Function Main()
     Main = RC_OK
     Do
         gJobError = ""
+        gStage = ""
+        gLastErrNumber = 0
+        gLastErrDesc = ""
         Set gJob = ReadJob()
         If Len(gJobError) > 0 And gJob.Count = 0 Then Exit Do   ' stdin closed: no more jobs
         gMode = LCase(JobValue("mode", ""))
@@ -303,6 +315,7 @@ Function CopyRangePicture(ws, rng)
 
     CopyRangePicture = False
     appearance = CInt(JobValue("appearance", "1"))
+    Stage "excel.copy"
     On Error Resume Next
     ' Same as the VBA version: screen updating on, activate sheet, select range
     gXl.ScreenUpdating = True
@@ -333,6 +346,7 @@ Function ExportViaChart(rng)
     Dim tmpWb, co, exported, outPath
 
     ExportViaChart = False
+    Stage "excel.export"
     On Error Resume Next
     outPath = gFso.BuildPath(gFso.GetSpecialFolder(TemporaryFolder).Path, _
                              "isp_" & Replace(gFso.GetTempName(), ".tmp", ".png"))
@@ -364,6 +378,29 @@ Function ExportViaChart(rng)
         gFso.DeleteFile outPath, True
         Err.Clear
     End If
+End Function
+
+
+' Send bytes (Variant Byte()) as base64 lines: "<prefix> <chunk>".
+' MSXML is part of Windows. No file is needed.
+Function EmitBytesBase64(bytes, prefix)
+    Dim doc, el, b64, i
+
+    EmitBytesBase64 = False
+    On Error Resume Next
+    Set doc = CreateObject("MSXML2.DOMDocument")
+    Set el = doc.createElement("b")
+    el.dataType = "bin.base64"
+    el.nodeTypedValue = bytes
+    b64 = Replace(Replace(el.Text, vbCr, ""), vbLf, "")
+    If Err.Number <> 0 Then
+        LogErr "base64 (MSXML)"
+        Exit Function
+    End If
+    For i = 1 To Len(b64) Step 3000
+        Emit prefix & " " & Mid(b64, i, 3000)
+    Next
+    EmitBytesBase64 = (Len(b64) > 0)
 End Function
 
 
@@ -495,6 +532,7 @@ End Function
 
 
 Function DoPrintOut(ws, copies, number, description)
+    Stage "excel.print"
     On Error Resume Next
     Err.Clear
     ws.PrintOut , , copies
@@ -521,6 +559,13 @@ End Function
 '   Preview: page 1 of the print layout as an enhanced metafile (EMFDATA).
 '            If Python cannot draw it, page 1 is copied to the clipboard
 '            and read the same way as an Excel range (COPIED).
+'
+' Diagnostics (added after VER2.3.0): Word was never run here before release, so every
+' step says where it is (STAGE <name>) and every failure leaves
+' item.<i>.code / errno / message / step. A hidden Word that shows a dialog
+' blocks forever: Python then knows the step, reads the dialog's text from
+' the Word process (WORDPID, found before any document is opened) and ends
+' that Word.
 ' ============================================================================
 Function IsWord(index)
     IsWord = (LCase(JobValue("kind." & index, "excel")) = "word")
@@ -539,6 +584,7 @@ Function RunPreviewWord()
     If Not StartWord() Then
         WriteResult "fatal.code", "WORD_CREATE_FAILED"
         If Len(gLastErrDesc) > 0 Then WriteResult "fatal.message", gLastErrDesc
+        SetItemError 1, "WORD_CREATE_FAILED", gLastErrNumber, gLastErrDesc
         RunPreviewWord = RC_EXCEL
         Exit Function
     End If
@@ -562,6 +608,7 @@ Function RunPreviewWord()
 
     ' Fallback: copy page 1 to the clipboard
     WriteResult "log", "Word page picture not used; copy page 1 to the clipboard"
+    Stage "word.copy"
     Set rng = FirstPageRange(doc)
     If rng Is Nothing Then
         SetItemError 1, "RANGE_FAILED", gLastErrNumber, gLastErrDesc
@@ -592,37 +639,56 @@ Function RunPreviewWord()
     ElseIf cmd = "EXPORT" Then
         ' The chart export is an Excel feature; Word has nothing like it
         Emit "EXPORT_FAILED 1"
-        SetItemError 1, "COPY_FAILED", 0, "No image on the clipboard (Word)"
+        SetItemError 1, "COPY_FAILED", gLastErrNumber, "No image on the clipboard (Word). " & gLastErrDesc
     End If
     CloseDoc doc
 End Function
 
 
-' Page 1 of the print layout as an EMF file -> EMFDATA lines
+' Page 1 of the print layout as an EMF -> EMFDATA lines.
+' The bytes go to base64 directly (MSXML); a temporary file is only the
+' fallback. Each failing step is written to the log with its error.
 Function EmitPageEmf(doc)
-    Dim win, bits, stm, outPath
+    Dim win, bits, size, stm, outPath
 
     EmitPageEmf = False
+    Stage "word.page"
     On Error Resume Next
     Set win = Nothing
     Set win = doc.Windows(1)
     If Err.Number <> 0 Or win Is Nothing Then
-        Err.Clear
+        LogErr "Document.Windows(1)"
+        Set win = Nothing
         Set win = doc.ActiveWindow
+        LogErr "Document.ActiveWindow"
+    End If
+    If win Is Nothing Then
+        WriteResult "log", "Word page picture: the document has no window"
+        Exit Function
     End If
     Err.Clear
     win.View.Type = wdPrintView
-    Err.Clear
+    LogErr "Window.View.Type = print layout"
     doc.Repaginate
-    Err.Clear
+    LogErr "Document.Repaginate"
+    bits = Empty
     bits = win.Panes(1).Pages(1).EnhMetaFileBits
     If Err.Number <> 0 Then
-        gLastErrNumber = Err.Number
-        gLastErrDesc = Err.Description
-        WriteResult "log", "EnhMetaFileBits failed: " & gLastErrDesc
-        Err.Clear
+        LogErr "Pages(1).EnhMetaFileBits"
         Exit Function
     End If
+    size = -1
+    size = UBound(bits) - LBound(bits) + 1
+    Err.Clear
+    WriteResult "log", "EnhMetaFileBits: " & size & " bytes (" & TypeName(bits) & ")"
+    If size <= 0 Then Exit Function
+
+    If EmitBytesBase64(bits, "EMFDATA") Then
+        EmitPageEmf = True
+        Exit Function
+    End If
+
+    ' Fallback: through a file in this script's own TEMP folder
     outPath = gFso.BuildPath(gFso.GetSpecialFolder(TemporaryFolder).Path, _
                              "isp_" & Replace(gFso.GetTempName(), ".tmp", ".emf"))
     Set stm = CreateObject("ADODB.Stream")
@@ -631,12 +697,7 @@ Function EmitPageEmf(doc)
     stm.Write bits
     stm.SaveToFile outPath, adSaveCreateOverWrite
     stm.Close
-    If Err.Number <> 0 Then
-        gLastErrNumber = Err.Number
-        gLastErrDesc = Err.Description
-        WriteResult "log", "EMF save failed: " & gLastErrDesc
-        Err.Clear
-    End If
+    LogErr "EMF save (ADODB.Stream)"
     If gFso.FileExists(outPath) Then
         If gFso.GetFile(outPath).Size > 0 Then EmitPageEmf = EmitFileBase64(outPath, "EMFDATA")
         gFso.DeleteFile outPath, True
@@ -664,9 +725,7 @@ Function FirstPageRange(doc)
     Err.Clear
     Set FirstPageRange = doc.Range(0, endPos)
     If Err.Number <> 0 Then
-        gLastErrNumber = Err.Number
-        gLastErrDesc = Err.Description
-        Err.Clear
+        LogErr "Document.Range"
         Set FirstPageRange = Nothing
     End If
 End Function
@@ -681,17 +740,14 @@ Function CopyWordRange(rng)
         Err.Clear
         rng.CopyAsPicture
         If Err.Number <> 0 Then
-            Err.Clear
+            LogErr "Range.CopyAsPicture"
             rng.Copy
         End If
         If Err.Number = 0 Then
             CopyWordRange = True
             Exit Function
         End If
-        gLastErrNumber = Err.Number
-        gLastErrDesc = Err.Description
-        WriteResult "log", "Word copy retry " & attempt & ": " & gLastErrDesc
-        Err.Clear
+        LogErr "Range.Copy (retry " & attempt & ")"
         WScript.Sleep 300 * attempt
     Next
 End Function
@@ -707,6 +763,7 @@ Function PrintOneWord(index, path, copies)
 
     number = 0
     description = ""
+    Stage "word.print"
     On Error Resume Next
     Err.Clear
     ' PrintOut(Background, Append, Range, OutputFileName, From, To, Item, Copies)
@@ -736,7 +793,7 @@ End Function
 
 
 Function StartWord()
-    Dim number, description
+    Dim number, description, before, pid, attempt
 
     StartWord = False
     On Error Resume Next
@@ -744,6 +801,10 @@ Function StartWord()
         StartWord = True
         Exit Function
     End If
+    Stage "word.pid"
+    Set before = WordProcessIds()
+    Stage "word.create"
+    Err.Clear
     Set gWd = CreateObject("Word.Application")
     If Err.Number <> 0 Then
         number = Err.Number
@@ -759,20 +820,107 @@ Function StartWord()
     End If
     If gWd Is Nothing Then
         gLastErrNumber = 0
-        gLastErrDesc = ""
+        gLastErrDesc = "CreateObject(Word.Application) returned Nothing"
         Exit Function
     End If
     gWordReported = False
-    gWd.Visible = False
-    gWd.DisplayAlerts = wdAlertsNone
+    ' The PID first, so that Python can always clean up - also when Word
+    ' blocks on a dialog before any document window exists.
+    Stage "word.pid"
+    pid = NewWordProcessId(before)
+    If pid > 0 Then Emit "WORDPID " & pid
+
+    ' Settings of this Word instance only (nothing that Word saves).
+    ' A Word that has just started may reject calls for a moment: retry.
+    Stage "word.setup"
+    For attempt = 1 To 5
+        Err.Clear
+        gWd.DisplayAlerts = wdAlertsNone
+        number = Err.Number
+        description = Err.Description
+        Err.Clear
+        If number = 0 Then Exit For
+        If Not IsBusyError(number) Then Exit For
+        WScript.Sleep 500
+    Next
+    If number <> 0 Then NoteError "Word DisplayAlerts", number, description
     Err.Clear
+    gWd.Visible = False
+    LogErr "Word Visible"
+    gWd.FeatureInstall = msoFeatureInstallNone
+    LogErr "Word FeatureInstall"
     If JobValue("disable_macros", "1") = "1" Then
         gWd.AutomationSecurity = msoAutomationSecurityForceDisable
-        Err.Clear
+        LogErr "Word AutomationSecurity"
+        gWd.WordBasic.DisableAutoMacros 1
+        LogErr "WordBasic.DisableAutoMacros"
     End If
     WriteResult "word.version", gWd.Version
     Err.Clear
     StartWord = True
+End Function
+
+
+' WINWORD.EXE processes that are running now ("pid" -> True). WMI is part
+' of Windows; if it cannot be used, the list is empty.
+Function WordProcessIds()
+    Dim d, svc, procs, p
+    Set d = CreateObject("Scripting.Dictionary")
+    Set WordProcessIds = d
+    On Error Resume Next
+    Set svc = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+    If Err.Number <> 0 Then
+        LogErr "WMI (before CreateObject)"
+        Exit Function
+    End If
+    Set procs = svc.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name = 'WINWORD.EXE'")
+    If Err.Number <> 0 Then
+        LogErr "WMI query (before CreateObject)"
+        Exit Function
+    End If
+    For Each p In procs
+        d(CStr(p.ProcessId)) = True
+    Next
+    LogErr "WMI (WINWORD.EXE before CreateObject)"
+End Function
+
+
+' The Word that CreateObject has just started: a WINWORD.EXE that was not
+' there before and was started for automation ("/Automation -Embedding").
+' 0 = not sure (never guess: Python may end this process).
+Function NewWordProcessId(before)
+    Dim svc, procs, p, found, count, cmdLine
+
+    NewWordProcessId = 0
+    found = 0
+    count = 0
+    On Error Resume Next
+    Set svc = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+    If Err.Number <> 0 Then
+        LogErr "WMI (after CreateObject)"
+        Exit Function
+    End If
+    Set procs = svc.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'WINWORD.EXE'")
+    If Err.Number <> 0 Then
+        LogErr "WMI query (after CreateObject)"
+        Exit Function
+    End If
+    For Each p In procs
+        If Not before.Exists(CStr(p.ProcessId)) Then
+            cmdLine = ""
+            cmdLine = LCase(p.CommandLine & "")
+            If InStr(cmdLine, "embedding") > 0 Or InStr(cmdLine, "automation") > 0 Then
+                found = p.ProcessId
+                count = count + 1
+            End If
+        End If
+    Next
+    LogErr "WMI (WINWORD.EXE after CreateObject)"
+    If count = 1 Then
+        NewWordProcessId = found
+    Else
+        WriteResult "log", "Word PID not identified (" & count & " candidates)"
+    End If
 End Function
 
 
@@ -797,11 +945,12 @@ End Function
 Sub FinishWord()
     Dim openDocs
     If gWd Is Nothing Then Exit Sub
+    Stage "word.quit"
     On Error Resume Next
     openDocs = -1
     openDocs = gWd.Documents.Count
     If Err.Number <> 0 Then
-        Err.Clear
+        LogErr "Word Documents.Count (Word has gone)"
         Set gWd = Nothing
         Emit "WORDBYE 1"
         Exit Sub
@@ -810,7 +959,7 @@ Sub FinishWord()
         gWd.NormalTemplate.Saved = True
         Err.Clear
         gWd.Quit wdDoNotSaveChanges
-        Err.Clear
+        LogErr "Word Quit"
         Emit "WORDBYE 1"
     Else
         gWd.Visible = True
@@ -826,7 +975,11 @@ End Sub
 ' Documents.Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles,
 '   PasswordDocument, PasswordTemplate, Revert, WritePasswordDocument,
 '   WritePasswordTemplate, Format, Encoding, Visible)
-' The dummy password makes a protected document fail instead of asking.
+' The dummy password makes a protected document fail (Word error 5408)
+' instead of asking; Word ignores it for a document without a password.
+' ConfirmConversions = False: no "Convert File" dialog. ReadOnly = True: no
+' "File in Use" dialog. Arguments after Visible are left out on purpose:
+' their order differs between Word versions.
 Function OpenDoc(index, path)
     Dim doc, pwd, attempt, number, description
 
@@ -838,24 +991,29 @@ Function OpenDoc(index, path)
     pwd = JobValue("open_password", "")
     number = 0
     description = ""
+    Stage "word.open"
     On Error Resume Next
     For attempt = 1 To 3
         Err.Clear
         Set doc = Nothing
         If Len(pwd) > 0 Then
-            Set doc = gWd.Documents.Open(path, False, True, False, pwd, pwd, False, , , 0, , False)
+            Set doc = gWd.Documents.Open(path, False, True, False, pwd, pwd, False, , , wdOpenFormatAuto, , False)
         Else
-            Set doc = gWd.Documents.Open(path, False, True, False, , , False, , , 0, , False)
+            Set doc = gWd.Documents.Open(path, False, True, False, , , False, , , wdOpenFormatAuto, , False)
         End If
         number = Err.Number
         description = Err.Description
         Err.Clear
         If number = 0 Then Exit For
+        WriteResult "log", "Documents.Open failed (" & attempt & "): 0x" & Hex(number) & " " & description
         If Not IsBusyError(number) Then Exit For
         WScript.Sleep 1000 * attempt
     Next
     If number = 0 Then
-        If doc Is Nothing Then number = -1
+        If doc Is Nothing Then
+            number = -1
+            description = "Documents.Open returned Nothing"
+        End If
     End If
     If number <> 0 Then
         If IsBusyError(number) Then
@@ -910,6 +1068,8 @@ Function StartExcel()
         StartExcel = True
         Exit Function
     End If
+    Stage "excel.create"
+    Err.Clear
     Set gXl = CreateObject("Excel.Application")
     If Err.Number <> 0 Then
         ' Copy the error first: WriteResult clears Err (On Error Resume Next)
@@ -1015,6 +1175,7 @@ Function OpenBook(index, path)
     pwd = JobValue("open_password", "")
     number = 0
     description = ""
+    Stage "excel.open"
     On Error Resume Next
     For attempt = 1 To 3
         Err.Clear
@@ -1176,10 +1337,40 @@ Sub WriteResult(key, value)
 End Sub
 
 
+' code + error number + description + the step it failed at (STAGE name)
 Sub SetItemError(index, code, number, description)
     WriteResult "item." & index & ".code", code
     If number <> 0 Then WriteResult "item." & index & ".errno", "0x" & Hex(number)
     If Len(description) > 0 Then WriteResult "item." & index & ".message", description
+    If Len(gStage) > 0 Then WriteResult "item." & index & ".step", gStage
+End Sub
+
+
+' The step that starts now. Python keeps the last one: when Excel / Word
+' stops answering (a hidden dialog), it can tell where.
+Sub Stage(name)
+    gStage = name
+    Emit "STAGE " & name
+End Sub
+
+
+' Keep the current error (Err) as the last error and write it to the log.
+' Call it right after the statement: any call to a procedure with
+' On Error Resume Next clears Err.
+Sub LogErr(where)
+    Dim number, description
+    number = Err.Number
+    If number = 0 Then Exit Sub
+    description = Err.Description
+    Err.Clear
+    NoteError where, number, description
+End Sub
+
+
+Sub NoteError(where, number, description)
+    gLastErrNumber = number
+    gLastErrDesc = description
+    WriteResult "log", where & " failed: 0x" & Hex(number) & " " & description
 End Sub
 
 

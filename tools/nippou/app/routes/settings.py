@@ -750,7 +750,7 @@ def _push(ctx):
                                        "通せるのは、その直の人か管理者だけです)")
                 # **どの直の話かまで書く。** 直が複数まとまって断られる
                 # ので、「1ページ 1行目」だけでは探しようがありません
-                item["where"] = f"{report.key_text} {item['where']}".strip()
+                item["where"] = f"{report.key_text} {item.get('where', '')}".strip()
                 # **そこへ行く道も一緒に。**
                 #
                 #     直してほしいといいつつないから直せないんですが

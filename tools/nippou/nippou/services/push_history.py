@@ -38,6 +38,18 @@
     送れなかった   1ページも送れなかった(共有が開けない・ロック など)
     関門で止めた   チェックに引っかかって送らなかった(直すところあり)
     送るもの無し   未送信が無かった(いまの直で1行)
+    直せないまま引き継いだ
+                   次の直の作業者が、入力画面の赤い帯で「直せないまま引き継ぐ」を
+                   押した(引き継いだ直ごとに1行。共有へは送っていない)
+
+**引き継ぎもここに残します。** 押した人・時刻・残っていた断りが、あとから
+この表(と共有の T_共有保存履歴)で見られるように:
+
+    引き継ぎ … 共有保存の履歴の表にだしてください
+    日報入力の画面の赤い帯には今まで通り出してください
+
+このときの「押した日時」は引き継いだ時刻、「押した人」は引き継いだ人、
+「担当者」は引き継がれた直の作業者、「理由」は引き継いだ時点で残っていた断りです。
 
 **書き先が Access のときは共有へ写しません**(手元にだけ残す)。集計の
 表と同じ決まりで、Access 側に表を増やさないためです。
@@ -83,6 +95,7 @@ PARTIAL = "一部送れなかった"
 FAILED = "送れなかった"
 BLOCKED = "関門で止めた"
 NOTHING = "送るもの無し"
+HANDED = "直せないまま引き継いだ"
 
 #: 押したあと、その直の中身が共有に出ているか(グラフの塗りに使う)
 REACHED = (SENT, NOTHING)
@@ -209,6 +222,24 @@ def record_blocked(repo: NippouRepository, pressed: Pressed,
                          worker=_worker(repo, report.report_date, report.line,
                                         report.shift),
                          result=BLOCKED, detail=f"{first}{more}"))
+    repo.add_push_history(rows)
+    return rows
+
+
+def record_handover(repo: NippouRepository, pressed: Pressed,
+                    taken: Iterable) -> list[dict]:
+    """「直せないまま引き継ぐ」を押したときも残す。**引き継いだ直ごとに1行。**
+
+    `taken` は `logic.handover.Left`(引き継いだ直と、そのとき残っていた断り)。
+    共有へは送っていないので、ページ数はその直のページ数・送れなかったページは0。
+    """
+    from ..logic import handover as handover_logic
+
+    rows = [_row(pressed, report_date=item.report_date, line=item.line,
+                 shift=item.shift, pages=item.pages,
+                 worker=_worker(repo, item.report_date, item.line, item.shift),
+                 result=HANDED, detail=handover_logic.summarize(item.problems))
+            for item in taken]
     repo.add_push_history(rows)
     return rows
 

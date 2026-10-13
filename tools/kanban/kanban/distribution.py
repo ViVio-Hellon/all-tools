@@ -199,9 +199,16 @@ def _clean(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def terminal_values() -> dict[str, Any]:
-    """この端末で**値が入っている**項目(組み込みの既定のままのものは入らない)。"""
+    """この端末で**値が入っている**項目(組み込みの既定のままのものは入らない)。
+
+    **設定を読むとき(``config.load_config``)と同じ読み方で数える。** 前の版は
+    設定ファイルに全項目を(既定のままの値も)書いていました。読むときはそれを
+    「この端末で選んだ値」とは数えないのに、ここで ``read_settings_file`` の
+    生の値を数えていたため、前の版を使っていた端末では取り込み間隔・自動印刷
+    などが**すべて「すでにある」になり、配布設定が読み込まれませんでした**。
+    """
     cfg = config.load_config()
-    present = dict(config.read_settings_file(Path(cfg.source_path)).values)
+    present = dict(config._read_local(Path(cfg.source_path)))
     if cfg.line:
         present["line"] = cfg.line
     return {k: v for k, v in present.items() if k in ITEM_KEYS}

@@ -115,6 +115,67 @@ if IS_WINDOWS:
         _u32.GetWindowThreadProcessId(wintypes.HWND(int(hwnd)), ctypes.byref(pid))
         return int(pid.value) or None
 
+    _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    _u32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
+    _u32.EnumWindows.restype = wintypes.BOOL
+    _u32.EnumChildWindows.argtypes = [wintypes.HWND, _WNDENUMPROC, wintypes.LPARAM]
+    _u32.EnumChildWindows.restype = wintypes.BOOL
+    _u32.IsWindowVisible.argtypes = [wintypes.HWND]
+    _u32.IsWindowVisible.restype = wintypes.BOOL
+    _u32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    _u32.GetClassNameW.restype = ctypes.c_int
+    _u32.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+                                         wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    _u32.SendMessageTimeoutW.restype = wintypes.LPARAM
+    WM_GETTEXT = 0x000D
+    SMTO_ABORTIFHUNG = 0x0002
+
+    def _class_name(hwnd: int) -> str:
+        buf = ctypes.create_unicode_buffer(256)
+        _u32.GetClassNameW(hwnd, buf, 256)
+        return buf.value
+
+    def _window_text(hwnd: int) -> str:
+        """ほかのプロセスの窓・部品の文字(WM_GETTEXT。固まっていれば待たない)。"""
+        buf = ctypes.create_unicode_buffer(512)
+        result = ctypes.c_size_t(0)
+        ok = _u32.SendMessageTimeoutW(hwnd, WM_GETTEXT, 512, ctypes.cast(buf, ctypes.c_void_p).value or 0,
+                                      SMTO_ABORTIFHUNG, 300, ctypes.byref(result))
+        return buf.value.strip() if ok else ""
+
+    def _window_texts_raw(pid: int, limit: int) -> List[str]:
+        tops: List[int] = []
+
+        def on_top(hwnd: int, _lparam: int) -> bool:
+            if hwnd and pid_from_hwnd(hwnd) == pid:
+                tops.append(hwnd)
+            return True
+
+        _u32.EnumWindows(_WNDENUMPROC(on_top), 0)
+        found: List[Any] = []
+        for hwnd in tops:
+            cls = _class_name(hwnd)
+            title = _window_text(hwnd)
+            visible = bool(_u32.IsWindowVisible(hwnd))
+            dialog = cls == "#32770" or cls.startswith(DIALOG_CLASS_PREFIXES)
+            if not (visible or dialog or (title and cls not in QUIET_CLASSES)):
+                continue
+            texts: List[str] = []
+
+            def on_child(child: int, _lparam: int) -> bool:
+                text = _window_text(child) if child else ""
+                if text and text not in texts:
+                    texts.append(text)
+                return len(texts) < 12
+
+            _u32.EnumChildWindows(hwnd, _WNDENUMPROC(on_child), 0)
+            line = f"[{cls}{'' if visible else '・隠れている'}] {title}".strip()
+            if texts:
+                line += " : " + " | ".join(texts)
+            found.append((0 if dialog else 1 if visible else 2, len(found), line[:400]))
+        # 確認の窓を先に(手がかりになるのはそれ)
+        return [line for _, _, line in sorted(found)[:limit]]
+
 else:  # ---- Windows 以外（開発・テスト用） -------------------------
     import signal
 
@@ -157,6 +218,29 @@ else:  # ---- Windows 以外（開発・テスト用） ------------------------
 
     def pid_from_hwnd(hwnd: int) -> Optional[int]:
         return None
+
+    def _window_texts_raw(pid: int, limit: int) -> List[str]:
+        return []
+
+
+#: 確認の窓・ダイアログの種類(標準の #32770 のほか、Word の bosa_sdm_*、Office の NUIDialog)
+DIALOG_CLASS_PREFIXES = ("bosa_sdm", "NUIDialog", "#32770")
+#: 題名があっても手がかりにならない裏方の窓
+QUIET_CLASSES = {"OleMainThreadWndClass", "MSCTFIME UI", "IME", "CicMarshalWndClass",
+                 "OfficePowerManagerWindow", "GDI+ Hook Window Class", "MSO_BORDEREFFECT_WINDOW_CLASS"}
+
+
+def window_texts(pid: int, limit: int = 8) -> List[str]:
+    """そのプロセスの窓(種類・題名・中の文)。**応答しない Excel / Word が何を出していたか**を残す。
+
+    非表示の Word / Excel が確認の窓(パスワード・ファイル使用中・変換・差し込み印刷の SQL など)
+    を出すと、命令は返ってこない。止める前にここで読んでおけば、次に「なぜ」が分かる。
+    窓は `[種類] 題名 : 中の文 | …`(隠れている窓は種類のあとに「・隠れている」)。
+    """
+    try:
+        return _window_texts_raw(int(pid), max(1, int(limit)))
+    except Exception:                                  # noqa: BLE001 - 手がかり集めで止めない
+        return []
 
 
 # ======================================================================
@@ -278,7 +362,9 @@ class TrackedProcessRegistry:
         return cleaned
 
 
-EXCEL_PROCESS_NAMES = ["excel.exe", "cscript.exe"]
+#: 片付けてよい実行ファイル。Word の点検表(VER2.3.0)で WINWORD.EXE も記録するので入れる
+#: (入っていないと、記録の WINWORD.EXE を「想定外」として止めずに記録だけ消していた)
+EXCEL_PROCESS_NAMES = ["excel.exe", "winword.exe", "cscript.exe"]
 
 
 def registry(path: Optional[str] = None, logger: Any = None) -> "TrackedProcessRegistry":

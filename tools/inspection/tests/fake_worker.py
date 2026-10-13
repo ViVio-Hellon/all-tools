@@ -77,12 +77,38 @@ def is_word(job, i):
 
 
 def start_word(job):
-    """本物と同じく Word は Word の点検表が来たときだけ起動し、処理の終わりに終える。"""
+    """本物と同じく Word は Word の点検表が来たときだけ起動し、処理の終わりに終える。
+
+    本物と同じく、起動したらすぐ(文書を開く前に)`WORDPID` を出す(fake_word_pid)。
+    """
+    if STATE["word"]:
+        return True
+    emit("STAGE word.create")
     if job.get("fake_no_word") == "1":
         result("word.code", "WORD_CREATE_FAILED")
+        result("word.errno", "0x800A01AD")
         return False
-    if not STATE["word"]:
-        STATE["word"] = True
+    STATE["word"] = True
+    if job.get("fake_word_pid"):
+        emit(f"WORDPID {job['fake_word_pid']}")
+    emit("STAGE word.setup")
+    return True
+
+
+def open_doc(job, i):
+    """本物の OpenDoc と同じ: STAGE word.open → 失敗なら item.<i>.code / errno / message / step。"""
+    emit("STAGE word.open")
+    if job.get("fake_word_hang") == "open":
+        time.sleep(60)                                 # 隠れた確認の窓で止まった Word
+    if job.get("fake_word_open_fail") == "1":
+        result(f"item.{i}.code", "OPEN_FAILED")
+        result(f"item.{i}.errno", "0x800A1520")
+        result(f"item.{i}.message", "パスワードが正しくありません。")
+        result(f"item.{i}.step", "word.open")
+        return False
+    emit(f"OPENED {i}")
+    if not STATE.get("word_reported"):                 # 本物と同じく、文書の窓の hwnd は1回だけ
+        STATE["word_reported"] = True
         emit("WORD 0")
     return True
 
@@ -90,6 +116,8 @@ def start_word(job):
 def finish_word(job):
     if STATE["word"]:
         STATE["word"] = False
+        STATE["word_reported"] = False
+        emit("STAGE word.quit")
         emit("WORDBYE " + ("0" if job.get("fake_user_doc") == "1" else "1"))
 
 
@@ -132,6 +160,12 @@ def run_job(job):
                 result(f"item.{i}.code", "WORD_CREATE_FAILED")
                 emit(f"END {i} NG")
                 rc = 4
+            elif is_word(job, i) and not open_doc(job, i):
+                emit(f"END {i} NG")
+                rc = 4
+            elif is_word(job, i) and job.get("fake_word_hang") == "print":
+                emit("STAGE word.print")
+                time.sleep(60)
             elif "fail" in path:
                 result(f"item.{i}.code", "PRINT_FAILED")
                 result(f"item.{i}.message", "プリンターがオフラインです")
@@ -175,10 +209,18 @@ def preview_word(job):
     """Word の1ページ目: EMFDATA → EMFDONE。COPY と言われたらクリップボード経由(COPIED)。"""
     if not start_word(job):
         result("fatal.code", "WORD_CREATE_FAILED")
+        result("fatal.message", "ActiveX コンポーネントはオブジェクトを作成できません。")
+        result("item.1.code", "WORD_CREATE_FAILED")
+        result("item.1.errno", "0x800A01AD")
+        result("item.1.message", "ActiveX コンポーネントはオブジェクトを作成できません。")
+        result("item.1.step", "word.create")
         return 3
+    if not open_doc(job, 1):
+        return 4
     result("item.1.sheet", "page 1 / 2")
     result("item.1.range", "page 1")
     result("item.1.range_source", "word_page")
+    emit("STAGE word.page")
     emf = bytes.fromhex(job.get("fake_emf_hex", "0102030405"))
     b64 = base64.b64encode(emf).decode("ascii")
     for i in range(0, len(b64), 8):
@@ -188,6 +230,7 @@ def preview_word(job):
     if cmd == "OK":
         return 0
     result("log", "Word page picture not used; copy page 1 to the clipboard")
+    emit("STAGE word.copy")
     emit("COPIED 1")
     cmd = wait_command()
     if cmd == "OK":

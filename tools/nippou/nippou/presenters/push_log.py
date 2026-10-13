@@ -25,6 +25,11 @@
             白抜き = 出ていない(関門で止めた・送れなかった)
     載せる  担当者(その直の作業者)・押した人(押したときの作業者)・時刻・結果
 
+**「直せないまま引き継いだ」行**(`push_history.HANDED`)は表と CSV にだけ
+出します。押したのは「共有へ保存」ではないので、グラフの点・「押した」の
+回数・直内/直の後には数えません(結果ごとの数には「直せないまま引き継いだ」
+として出ます)。表では「押した日時」= 引き継いだ時刻、「押した人」= 引き継いだ人。
+
 時刻そのもの(14:52)ではなく「終わりに対して何分」にしたのは、直ごとに
 終わる時刻が違うからです ── 1直の 14:52 と 2直の 22:42 は、どちらも
 「終わる少し前」で、並べて比べたいのはそちらです。直の時刻は
@@ -256,7 +261,9 @@ def build(repo, *, line: Optional[str], start: date, end: date,
         day = _in_scope(row, line, start, end)
         if day is None:
             continue
-        picked.append((day, row, minutes_after_end(row, shift_times)))
+        # 引き継ぎは「共有へ保存」を押した時刻ではない ── 直の終わりとの差は出さない
+        handed = row.get("result") == push_history.HANDED
+        picked.append((day, row, None if handed else minutes_after_end(row, shift_times)))
 
     table_rows = []
     for _, row, minutes in picked:
@@ -274,7 +281,8 @@ def build(repo, *, line: Optional[str], start: date, end: date,
         table_rows.append(cells)
 
     # 並びは決めておく: 押した回数 → 直内 → 直の後 → 結果
-    counts: dict[str, int] = {"押した": len({r["pressed_at"] for _, r, _ in picked}),
+    pushes = [r for _, r, _ in picked if r.get("result") != push_history.HANDED]
+    counts: dict[str, int] = {"押した": len({r["pressed_at"] for r in pushes}),
                               IN_SHIFT: 0, AFTER_SHIFT: 0}
     for _, row, minutes in picked:
         counts[row["result"]] = counts.get(row["result"], 0) + 1
@@ -289,7 +297,8 @@ def build(repo, *, line: Optional[str], start: date, end: date,
         numeric=[numeric for _, _, numeric in COLUMNS],
         rows=table_rows,
         empty="この期間に「共有へ保存」を押した記録はありません")
-    return PushLogView(table=table, chart=_chart(picked, start, end, line),
+    plotted = [p for p in picked if p[1].get("result") != push_history.HANDED]
+    return PushLogView(table=table, chart=_chart(plotted, start, end, line),
                        source=readout.source, warning=readout.warning,
                        counts=counts, line=line or "全ライン",
                        start=start.isoformat(), end=end.isoformat())

@@ -293,6 +293,43 @@ class HandoverGateTests(WebTestCase):
         # 引き継いだ時点で何が残っていたかも残す
         self.assertIn("梱包数", found["findings"])
 
+    def test_引き継ぎは共有保存の履歴の表に出る(self):
+        """「共有保存の履歴の表にだしてください」── 押した人・時刻・残っていた断り。"""
+        from datetime import date as _date
+
+        from nippou.presenters import push_log
+        from nippou.services import push_history as ph
+
+        day, line, shift = self.leave_behind(broken=True)
+        self.post("/api/entry/handover", {"worker": "次の人"})
+        rows = [r for r in self.repo().push_history() if r["result"] == ph.HANDED]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row["report_date"], row["line"], row["shift"]), (day, line, shift))
+        self.assertEqual(row["pressed_by"], "次の人")
+        self.assertEqual(row["worker"], "前の人")
+        self.assertIn("梱包数", row["detail"])
+        # 同じ人の押し直しでは増やさない
+        self.post("/api/entry/handover", {"worker": "次の人"})
+        self.assertEqual(sum(r["result"] == ph.HANDED for r in self.repo().push_history()), 1)
+        # 表に出る(グラフ・「押した」の回数には数えない)
+        from nippou.logic.shift import parse_business_date
+        when = parse_business_date(day)
+        view = push_log.build(self.repo(), line=line, start=when, end=when, db_path=None)
+        result = view.table.columns.index("結果")
+        self.assertEqual([r[result] for r in view.table.rows], [ph.HANDED])
+        self.assertEqual(view.chart["points"], [])
+        self.assertEqual(view.counts["押した"], 0)
+        self.assertEqual(view.counts[ph.HANDED], 1)
+        self.assertIsInstance(when, _date)
+
+    def test_引き継いでも赤い帯には今まで通り出る(self):
+        self.leave_behind(broken=True)
+        self.post("/api/entry/handover", {"worker": "次の人"})
+        body = self.post("/api/entry/state",
+                         {"rows": {}, "header": {}, "checks": {}}).get_json()
+        self.assertIn("次の人", body["handover"]["notes"][0])
+
     def test_名前が無ければ引き継げない(self):
         """**誰か分からない引き継ぎは、残す意味がありません。**"""
         self.leave_behind(broken=True)

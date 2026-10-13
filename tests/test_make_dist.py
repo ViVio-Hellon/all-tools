@@ -8,11 +8,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from typing import Callable, Optional
 
 import tests  # noqa: F401  (一時フォルダへ向ける)
 
@@ -107,6 +113,202 @@ class RuleTests(unittest.TestCase):
             dev_only = {"tests", ".gitignore", ".gitattributes"}
             with self.subTest(tool=tool_id):
                 self.assertEqual(set(include), tracked - dev_only)
+
+
+# ------------------------------------------------------------------
+# 配った先で、大設定と4ツールが配布設定を読み込む(作る → 配る → 起動する を通しで)
+# ------------------------------------------------------------------
+#: 試験の子のプロセスに持ち込まない環境変数の頭(この試験の差し替え・ほかの試験の差し替え)
+_TOOL_ENV_PREFIXES = ("ALLTOOLS_", "NIPPOU_", "KANBAN_", "CALENDAR_", "INSPECTION_")
+
+#: 一式を写すときに外すもの(開発にしか使わない・作ったもの・**本物の配布設定**)
+_COPY_SKIP = {".git", "src-tauri", "tests", "__pycache__", "logs", "配布設定", "配布設定.作成中",
+              ".github", ".pytest_cache"}
+
+
+class DeliveredTerminalTests(unittest.TestCase):
+    """配布設定を書き出した一式を make_dist で作り、**配った先の端末**で起動して読み込まれるか。
+
+        配布設定し配布設定フォルダを入れて別PCに持ち込んだが全ツールにおいて何も反映されていない
+
+    1か所でも食い違う(make_dist が写さない・ツールが別の場所を見る・起動のどこかが先に既定値を
+    書いてしまい「その端末にすでにある」になる)と、配った先では**黙って**何も読まれない。
+    外枠(日報複合ツール.exe)と同じく、各ツールの bridge.py を子として起こして確かめる。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = Path(tempfile.mkdtemp(prefix="alltools_delivered_"))
+        source = cls.tmp / "一式"
+
+        def ignore(directory: str, names: list[str]) -> set[str]:
+            return {n for n in names if n in _COPY_SKIP or n.endswith((".pyc", ".sqlite3"))}
+
+        shutil.copytree(ROOT, source, ignore=ignore)
+        # 点検表は Windows では利用者ごとの名前付きの錠(app_id から作る)で同時起動を見る。
+        # 試験を流す PC で本物の点検表が動いていても取り合わないよう、写しの名前を変えておく
+        app_json = source / "tools" / "inspection" / "config" / "app.json"
+        conf = json.loads(app_json.read_text(encoding="utf-8-sig"))
+        conf["app_id"] = f"{conf.get('app_id', 'inspection')}.delivered-test"
+        app_json.write_text(json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
+        share = cls.tmp / "共有"
+        cls.expected = {
+            "portal": str(share / "大設定"),
+            "nippou": str(share / "日報"),
+            "kanban": str(share / "看板" / "看板マスタ.sqlite3"),
+            "calendar": str(share / "カレンダー"),
+            "inspection": str(share / "点検表"),
+        }
+        # 配る元で書き出したもの(各ツールの設定画面・大設定の「配布設定を書き出す」と同じ形・同じ場所)
+        bundles = {
+            source / "配布設定" / "日報複合ツール.json": {"shared_db_dir": cls.expected["portal"]},
+            source / "tools" / "nippou" / "配布設定" / "設定.json": {"access_dir": cls.expected["nippou"]},
+            source / "tools" / "kanban" / "配布設定" / "設定.json": {"shared_db_path": cls.expected["kanban"]},
+            source / "tools" / "calendar" / "配布設定" / "設定.json": {"保存用DBフォルダ": cls.expected["calendar"]},
+            source / "tools" / "inspection" / "配布設定" / "設定.json": {"root_folder": cls.expected["inspection"]},
+        }
+        for path, settings in bundles.items():
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"format": 1, "created_at": "2026/10/13 08:00:00",
+                                        "created_on": "配る元", "settings": settings},
+                                       ensure_ascii=False, indent=2), encoding="utf-8")
+        cls.dist, cls.lines = make_dist.build(cls.tmp / "配った一式", exe=cls.tmp / "無い.exe", root=source)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    # --- 端末 -------------------------------------------------------
+    def terminal(self, name: str) -> dict[str, str]:
+        """何も設定していない端末(利用者ごとの領域を一時フォルダへ)。"""
+        base = self.tmp / "端末" / name
+        env = {k: v for k, v in os.environ.items() if not k.startswith(_TOOL_ENV_PREFIXES)}
+        env.update({
+            "LOCALAPPDATA": str(base / "Local"), "APPDATA": str(base / "Roaming"),
+            "XDG_DATA_HOME": str(base / "Local"),
+            "ALLTOOLS_LOCAL_DIR": str(base / "AllTools"),
+            "NIPPOU_LOCAL_DIR": str(base / "NippouTool"),
+            "KANBAN_LOCAL_DIR": str(base / "KanbanSystem"),
+            "KANBAN_CONFIG": str(base / "Roaming" / "KanbanSystem" / "config.json"),
+            "CALENDAR_LOCAL_DIR": str(base / "LineCalendar"),
+            "INSPECTION_LOCAL_DIR": str(base / "InspectionSheetPrint"),
+            "ALLTOOLS_LOG_QUIET": "1", "ALLTOOLS_LOGIN_ID": "tester", "ALLTOOLS_PC_NAME": "DELIVERED-PC",
+            "ALLTOOLS_SHELL": "1", "ALLTOOLS_ROOT": str(self.dist),
+            "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
+        })
+        return env
+
+    @staticmethod
+    def stored(env: dict[str, str], tool: str) -> Optional[str]:
+        """その端末の設定ファイルに入っている、配布設定の項目の値(無ければ None)。"""
+        path, key = {
+            "portal": (Path(env["ALLTOOLS_LOCAL_DIR"]) / "data" / "user_settings.json", "shared_db_dir"),
+            "nippou": (Path(env["NIPPOU_LOCAL_DIR"]) / "runtime" / "user_config.json", "access_dir"),
+            "kanban": (Path(env["KANBAN_CONFIG"]), "shared_db_path"),
+            "calendar": (Path(env["CALENDAR_LOCAL_DIR"]) / "data" / "settings.json", "保存用DBフォルダ"),
+            "inspection": (Path(env["INSPECTION_LOCAL_DIR"]) / "data" / "user_settings.json", "root_folder"),
+        }[tool]
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig")).get(key)
+        except (OSError, ValueError):
+            return None
+
+    def start_all(self, env: dict[str, str], done: Callable[[str], bool], limit: float = 90.0) -> dict[str, str]:
+        """入口と4ツールを外枠と同じ形(bridge.py・標準入出力)で起こし、``done`` になるまで待って閉じる。
+
+        戻り値は、うまくいかなかったときに見せる各プロセスの標準エラーの終わり。
+        """
+        prefixes = {"portal": "ALLTOOLS", "nippou": "NIPPOU", "kanban": "KANBAN",
+                    "calendar": "CALENDAR", "inspection": "INSPECTION"}
+        procs: dict[str, subprocess.Popen] = {}
+        errs: dict[str, Path] = {}
+        started: dict[str, threading.Event] = {}
+        watchers: list[threading.Thread] = []
+        for tool, prefix in prefixes.items():
+            folder = self.dist if tool == "portal" else self.dist / "tools" / tool
+            child = dict(env, ALLTOOLS_TOOL=tool, **{f"{prefix}_TOKEN": "delivered"})
+            if tool == "inspection":
+                child["INSPECTION_DEMO"] = "0"
+            errs[tool] = self.tmp / f"{tool}-{id(env)}-{time.monotonic_ns()}.err"
+            with errs[tool].open("wb") as err:
+                procs[tool] = subprocess.Popen([sys.executable, "bridge.py"], cwd=folder, env=child,
+                                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
+            started[tool] = threading.Event()
+
+            def watch(stream, flag=started[tool]) -> None:
+                for line in stream:
+                    if b'"started"' in line:
+                        flag.set()
+
+            watchers.append(threading.Thread(target=watch, args=(procs[tool].stdout,), daemon=True))
+            watchers[-1].start()
+        try:
+            deadline = time.monotonic() + limit
+            while time.monotonic() < deadline:
+                if all(done(tool) for tool in procs) and all(f.is_set() for f in started.values()):
+                    break
+                if any(p.poll() is not None for p in procs.values()):
+                    break
+                time.sleep(0.25)
+        finally:
+            for proc in procs.values():
+                try:
+                    proc.stdin.close()            # 外枠が閉じた = 終わってよい
+                except OSError:
+                    pass
+            for proc in procs.values():
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            for thread in watchers:
+                thread.join(timeout=5)
+            for proc in procs.values():
+                proc.stdout.close()
+        return {tool: errs[tool].read_text(encoding="utf-8", errors="replace")[-1500:] for tool in procs}
+
+    def assert_read(self, env: dict[str, str], tails: dict[str, str]) -> None:
+        for tool, value in self.expected.items():
+            with self.subTest(tool=tool):
+                self.assertEqual(self.stored(env, tool), value,
+                                 f"{tool} が配布設定を読み込んでいない。\n--- 標準エラーの終わり ---\n{tails[tool]}")
+
+    # --- 試験 -------------------------------------------------------
+    def test_配布用フォルダに大設定と4ツールの配布設定が入る(self) -> None:
+        self.assertTrue((self.dist / "配布設定" / "日報複合ツール.json").is_file())
+        for tool in ("nippou", "kanban", "calendar", "inspection"):
+            with self.subTest(tool=tool):
+                self.assertTrue((self.dist / "tools" / tool / "配布設定" / "設定.json").is_file())
+        memo = (self.dist / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn("大設定の配布設定を入れました", memo)
+        self.assertNotIn("配布設定は入れていません", memo)
+
+    def test_何も設定していない端末で起動すると全部読み込む(self) -> None:
+        env = self.terminal("新しい端末")
+        tails = self.start_all(env, lambda tool: self.stored(env, tool) == self.expected[tool])
+        self.assert_read(env, tails)
+
+    def test_配布設定を置く前に1度起動した端末でも読み込む(self) -> None:
+        """先に一式だけ置いて起動してみた端末。そのとき既定値が書かれていると「すでにある」で読まれない。"""
+        env = self.terminal("先に起動した端末")
+        hidden = self.tmp / "預かり"
+        folders = [self.dist / "配布設定"] + [self.dist / "tools" / t / "配布設定"
+                                              for t in ("nippou", "kanban", "calendar", "inspection")]
+        for folder in folders:
+            target = hidden / folder.relative_to(self.dist)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            folder.rename(target)
+        try:
+            settled = time.monotonic() + 8.0
+            self.start_all(env, lambda tool: time.monotonic() > settled)
+        finally:
+            for folder in folders:
+                (hidden / folder.relative_to(self.dist)).rename(folder)
+        for tool in self.expected:
+            self.assertIsNone(self.stored(env, tool), f"{tool}: 配布設定が無いのに値が入った")
+        tails = self.start_all(env, lambda tool: self.stored(env, tool) == self.expected[tool])
+        self.assert_read(env, tails)
 
 
 if __name__ == "__main__":

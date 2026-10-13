@@ -230,6 +230,35 @@ class LegacyTest(DistributionTestBase):
         self.assertTrue(config.verify_password("dist", cfg.admin_password_hash))
         self.assertEqual(cfg.line, "AIM")
 
+    def test_values_an_old_pc_only_dumped_do_not_hide_the_bundle(self):
+        """前の版の端末の設定ファイル(全項目を既定のまま書き出したもの)が、配布設定を覆い隠さない。
+
+            配布設定フォルダを入れて別PCに持ち込んだが全ツールにおいて何も反映されていない
+
+        読むとき(``load_config``)は「既定のままの値は選んだ値ではない」と数えるのに、
+        配布設定を読み込むときは生の値で「すでにある」と数えていた。前の版を使っていた
+        端末では、取り込み間隔・自動印刷などが黙って読み込まれなかった。
+        """
+        self.folder.mkdir(parents=True)
+        (self.folder / "設定.json").write_text(json.dumps({
+            "format": distribution.FORMAT,
+            "settings": {"import_interval_sec": 45, "auto_print": True,
+                         "shared_db_path": r"\\server\X.sqlite3"},
+        }), encoding="utf-8")
+        pc = Path(os.environ["KANBAN_CONFIG"])
+        pc.parent.mkdir(parents=True)
+        builtin = config.Config()
+        pc.write_text(json.dumps(builtin.to_dict()), encoding="utf-8")   # 前の版の全項目の書き出し
+
+        result = distribution.apply_on_start()
+        self.assertEqual(result.kept, [])
+        cfg = config.load_config()
+        self.assertEqual(cfg.import_interval_sec, 45)
+        self.assertTrue(cfg.auto_print)
+        self.assertEqual(cfg.shared_db_path, r"\\server\X.sqlite3")
+        # 次の起動では「すでにある」(読み込んだ値は端末のもの)
+        self.assertEqual(distribution.apply_on_start().applied, [])
+
 
 if __name__ == "__main__":
     unittest.main()

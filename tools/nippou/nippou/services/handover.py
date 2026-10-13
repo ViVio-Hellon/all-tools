@@ -89,6 +89,7 @@ def take_over(repo: NippouRepository, *, current_key: tuple[str, str, str],
     (`daily_header.dirty` は立ったままなので、数にも帯にも出続けます)。
     """
     left = left_behind(repo, current_key=current_key, admin=admin)
+    taken = []
     for item in left:
         if item.taken_by == worker and item.taken:
             continue                  # 押し直し。同じ人なら書き換えない
@@ -96,13 +97,33 @@ def take_over(repo: NippouRepository, *, current_key: tuple[str, str, str],
             repo.record_handover(
                 item.report_date, item.line, item.shift,
                 taken_by=worker, findings=logic.summarize(item.problems))
+            taken.append(item)
         except Exception:             # noqa: BLE001 - 入力は始めさせる
             # **書けなくても通します。** 記録は大事ですが、記録できない
             # ことを理由にラインを止めるほうが重い
             log.exception("引き継ぎを残せませんでした key=%s", item.key_text)
+    _keep_in_history(repo, current_key=current_key, worker=worker, taken=taken)
     log.info("引き継ぎました: %s ← %s",
              "、".join(i.key_text for i in left), worker or "(名前なし)")
     return gate(repo, current_key=current_key, admin=admin)
+
+
+def _keep_in_history(repo: NippouRepository, *, current_key: tuple[str, str, str],
+                     worker: str, taken: list[Left]) -> None:
+    """共有保存の履歴にも1行ずつ残す(**あとから表で見られるように**)。
+
+    共有の T_共有保存履歴 へは、次に「共有へ保存」を押したときに写ります
+    (まだ写していない行と同じ扱い)。書けなくても入力は始めさせます。
+    """
+    if not taken:
+        return
+    from . import push_history
+
+    try:
+        pressed = push_history.Pressed.now(repo, current_key, by=worker)
+        push_history.record_handover(repo, pressed, taken)
+    except Exception:                 # noqa: BLE001 - 履歴が書けないだけ
+        log.exception("引き継ぎを共有保存の履歴に残せませんでした")
 
 
 def notes(left) -> list[str]:
