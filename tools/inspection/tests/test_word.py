@@ -277,7 +277,19 @@ class WordDiagnosticsTest(unittest.TestCase):
             asked.append(pid)
             return ["[#32770・隠れている] Microsoft Word : この文書はパスワードで保護されています"]
 
-        with mock.patch.object(excel_service, "window_texts", fake_windows):
+        real_identity = excel_service.get_process_identity
+
+        def as_word(pid):
+            # 代わりの子は python.exe。Windows では WINWORD.EXE でない PID は使わないので、
+            # 名前だけ Word にする(止めるときの照合は本物の印で行う)
+            found = real_identity(pid)
+            if found is None or pid != proc.pid:
+                return found
+            return process_tracking.ProcessIdentity(found.pid, found.create_time,
+                                                    r"C:\Program Files\Microsoft Office\WINWORD.EXE")
+
+        with mock.patch.object(excel_service, "window_texts", fake_windows), \
+                mock.patch.object(excel_service, "get_process_identity", as_word):
             with self.assertRaises(ExcelError) as ctx:
                 self.backend.preview(self.word)
         self.assertEqual(ctx.exception.code, "TIMEOUT")
