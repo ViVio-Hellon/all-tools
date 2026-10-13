@@ -67,6 +67,11 @@
           <td>印刷用の紙をそのまま見る。<b>直しません</b>・刷るのは任意</td>
         </tr>
         <tr>
+          <td><b>探す</b>(ロット№から)</td>
+          <td class="this">この画面(<a href="#lot-card">ロットを探す</a>)</td>
+          <td>期間とロット№の頭の数桁で、どの直・ページの何行目かを出す。CSVにも出せる</td>
+        </tr>
+        <tr>
           <td><b>見る</b>(表)</td>
           <td><a href="/agg">集計管理</a></td>
           <td>ロット別・直別・日別の数字を表で。CSVにも出せる</td>
@@ -253,6 +258,74 @@
   <div class="msg" id="backup-note" hidden style="margin-top:var(--sp-2)"></div>
 </div>
 {% endif %}
+
+{# ---- ロットを探す (v4.33.0) ----
+
+       集計機能は充実してきたが、履歴機能としてはどうですか?
+       期間を絞ってロットNo検索したい場合に何を検索したらいいですか?
+
+   いままでは 集計管理 → 期間 → ロット一覧 → Ctrl+F → 日付を指定して見る の4手。
+   ここは1回で、当たった行から「紙を見る」「下見」「呼び出す」(管理者)へ。
+   探し方・既定の期間・上限・ボタンの行き先は `presenters/lot_search.py` が決め、
+   画面は写すだけ。ラインの欄は集計管理と同じく Administrator の PC だけ
+   (`services/line_view`。混ぜない・ほかのラインは控えから) #}
+<div class="card" id="lot-card">
+  <div class="card__head">
+    <h2>ロットを探す</h2>
+    <span class="lead">期間とロット№(頭の数桁だけでも)から、保存した行を探す</span>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="lot-start">開始日</label>
+      <input id="lot-start" type="date" value="{{ lot.start }}">
+    </div>
+    <div class="field">
+      <label for="lot-end">終了日</label>
+      <input id="lot-end" type="date" value="{{ lot.end }}">
+    </div>
+    <div class="field">
+      <label for="lot-no">ロット№</label>
+      {# 日報入力のロット欄と同じ制限(英数字・7桁。`input_rules.as_attributes`) #}
+      <input id="lot-no" type="text" size="10" placeholder="例: N71"
+             {% for name, attr in lot.attrs.items() %}{{ name }}="{{ attr }}" {% endfor %}>
+    </div>
+    {% if lot_pick.shown %}
+    <div class="field" data-line-pick>
+      <label for="lot-line">ライン</label>
+      <select id="lot-line">
+        {% for ln in lot_pick.lines %}
+        <option value="{{ ln.code }}" {% if ln.code == lot_pick.line %}selected{% endif %}>{{ ln.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <button class="btn btn--primary" type="button" id="lot-search">探す</button>
+    <button class="btn" type="button" id="lot-csv">CSVに出す</button>
+  </div>
+  {% include "_out_dir.html" %}
+  <p class="lead tip" tabindex="0">
+    <span class="tip__line">ロット№を打って <b>Enter</b> でも探せます(全角・小文字でもかまいません)。
+      既定は<b>直近{{ lot.months }}か月</b></span>
+    <span class="tip__mark" aria-hidden="true">くわしく</span>
+    <span class="tip__more">ロット№は<b>頭から</b>比べます(<code>N71</code> で <code>N7131T0</code> も
+      <code>N715C50</code> も当たります)。並びは<b>作業日 → 直 → ページ → 行</b>で、直をまたいだ
+      ロットはまたいだ直の行が全部出ます。出すのは<b>{{ lot.limit }}行まで</b>で、超えたら
+      「多すぎるので絞ってください」と出ます。探すのは<b>保存してある行</b>(自動保存を含む)で、
+      いま打っていてまだ保存されていない行は出ません。「紙を見る」はその行のあるページの紙、
+      「下見」は下の「中身の下見」に出します。{% if admin %}「呼び出す」はそのページを日報入力に開きます。{% else %}
+      「呼び出す」は管理者モードのときだけ出ます。{% endif %}
+      期間は欄で広げられます(上の「保存した直」に載らない古い直もここで探せます)。</span>
+  </p>
+  <div class="msg" id="lot-note" hidden style="margin-top:var(--sp-2)"></div>
+  <div class="scroll-x" style="margin-top:var(--sp-2)">
+    <table class="list list--nowrap" id="lot-table">
+      <thead id="lot-head"></thead>
+      <tbody id="lot-rows">
+        <tr><td class="empty">ロット№を入れて「探す」を押すと、ここに出ます。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 
 {# ---- 一覧に無いものを、日付から探す ---- #}
 <div class="card">

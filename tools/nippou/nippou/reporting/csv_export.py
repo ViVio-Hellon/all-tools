@@ -856,3 +856,16 @@ def agg_output_path(base_dir: Path, key: str, start, end, line: str) -> Path:
                         if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
     return base_dir / (f"集計_{names.get(key, key)}_{start}_{end}"
                        f"_{safe_line}.csv")
+
+
+def lot_search_output_path(base_dir: Path, lot: str, start, end, line: str) -> Path:
+    """例: ``ロットを探す_N71_2026-08-01_2026-10-13_L-1.csv``(記録を見る、v4.33.0)
+
+    集計管理の4本と同じ出力先・同じ並び(期間 → ライン)で、頭に探したロット№を
+    入れます ── 別のロットを探して出し直しても、前のファイルを上書きしない。
+    同じロット・同じ期間なら同じ名前(出し直せば新しい中身に置き換わる)。
+    """
+    safe_lot = "".join(ch for ch in lot if ch not in _UNSAFE_FILENAME_CHARS).strip() or "-"
+    safe_line = "".join(ch for ch in line
+                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
+    return base_dir / f"ロットを探す_{safe_lot}_{start}_{end}_{safe_line}.csv"

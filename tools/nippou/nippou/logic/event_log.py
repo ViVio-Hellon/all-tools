@@ -292,6 +292,8 @@ ACTION_LABELS: dict[tuple[str, str], str] = {
     ("POST", "/api/master/row/delete"): "マスタの行を消す",
     ("POST", "/api/master/"): "マスタの操作",
     ("POST", "/api/print/load"): "紙を読み込む",
+    ("POST", "/api/records/lot-search"): "ロットを探す",
+    ("POST", "/api/records/lot-search/csv"): "ロットを探す: CSVに出す",
     ("POST", "/api/agg/"): "集計管理の操作",
     ("POST", "/api/graph/review/ack"): "直の実績の確認を閉じた",
     ("POST", "/api/graph/"): "集計・グラフの操作",

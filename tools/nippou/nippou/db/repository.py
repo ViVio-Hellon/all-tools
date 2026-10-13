@@ -181,20 +181,21 @@ class NippouRepository:
             saved_at=row["saved_at"] or "", dirty=bool(row["dirty"]), synced_at=row["synced_at"],
         )
 
+    @staticmethod
+    def _detail_from_row(r: sqlite3.Row) -> DetailRecord:
+        kwargs = {"report_date": r["report_date"], "line": r["line"], "shift": r["shift"],
+                  "page": r["page"], "row_no": r["row_no"]}
+        for fam in (*DETAIL_FAMILIES, "others1", "others2", "others3", "others4", "others5", "others6",
+                    "keisu", "reason", "hiki_no", "box_course"):
+            kwargs[fam] = r[fam] or ""
+        return DetailRecord(**kwargs)
+
     def _details_for(self, report_date: str, line: str, shift: str, page: int) -> list[DetailRecord]:
         detail_rows = self.conn.execute(
             "SELECT * FROM daily_detail WHERE report_date=? AND line=? AND shift=? AND page=? ORDER BY row_no",
             (report_date, line, shift, page),
         ).fetchall()
-        details = []
-        for r in detail_rows:
-            kwargs = {"report_date": r["report_date"], "line": r["line"], "shift": r["shift"],
-                      "page": r["page"], "row_no": r["row_no"]}
-            for fam in (*DETAIL_FAMILIES, "others1", "others2", "others3", "others4", "others5", "others6",
-                        "keisu", "reason", "hiki_no", "box_course"):
-                kwargs[fam] = r[fam] or ""
-            details.append(DetailRecord(**kwargs))
-        return details
+        return [self._detail_from_row(r) for r in detail_rows]
 
     def load(
         self, report_date: str, line: str, shift: str, page: int = 1
@@ -416,6 +417,35 @@ class NippouRepository:
             (header, self._details_for(header.report_date, header.line, header.shift, header.page))
             for _, header in matched
         ]
+
+    def lot_rows_between(self, start_date: date, end_date: date, line: str
+                         ) -> list[tuple[HeaderRecord, DetailRecord]]:
+        """期間(報告日・両端含む)の、**ロット№の入っている明細行**と、その行のページの見出し。
+
+        記録を見る「ロットを探す」(`presenters/lot_search.py`)の出どころです。
+        **ラインは必ず1つ** ── 混ぜて読む道を作りません(`services/line_view`)。
+
+        `list_headers_between` はページごとに明細を引くので、3か月ぶんだと
+        何百回も問い合わせます。ここは見出し1回・明細1回で済ませます。
+        並べ替えとロット№の比べ方は呼ぶ側が決めます(全角や空白を揃えてから
+        比べるので、SQL の `LIKE` では決められない)。
+        """
+        headers: dict[tuple[str, str, str, int], HeaderRecord] = {}
+        for r in self.conn.execute("SELECT * FROM daily_header WHERE line=?", (line,)):
+            parsed = parse_business_date(r["report_date"])
+            if parsed is not None and start_date <= parsed <= end_date:
+                header = self._header_from_row(r)
+                headers[header.key()] = header
+        if not headers:
+            return []
+        found: list[tuple[HeaderRecord, DetailRecord]] = []
+        for r in self.conn.execute(
+                "SELECT * FROM daily_detail WHERE line=? AND TRIM(COALESCE(lot, ''))<>''",
+                (line,)):
+            header = headers.get((r["report_date"], r["line"], r["shift"], int(r["page"])))
+            if header is not None:
+                found.append((header, self._detail_from_row(r)))
+        return found
 
     # ------------------------------------------------------------------
     # 集計フォーマット ── **打った日報からの投影**

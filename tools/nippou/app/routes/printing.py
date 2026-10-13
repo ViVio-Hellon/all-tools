@@ -7,6 +7,14 @@
                               `page=all` でその直ぜんぶを1つの窓に
     GET  /api/records/backup         控え(LocalBackup)にある直(ライン指定)
     POST /api/records/backup/open    控えの直を手元へ入れて、日報入力に呼び出す
+    POST /api/records/lot-search     ロットを探す(期間・ロット№の頭の数桁)
+    POST /api/records/lot-search/csv 同じ表を出力先のフォルダへCSVに書く
+
+【ロットを探す(v4.33.0)】
+期間とロット№(頭の数桁だけでも)から、保存した日報の行を探します。当たった行から
+「紙を見る」「下見」「呼び出す」(管理者)へは、この画面の既存の道をそのまま使います。
+探し方・出どころ・上限は `presenters/lot_search.py`、どのラインを読むかは
+集計管理と同じ `services/line_view`(Administrator の PC だけ選べる・混ぜない)。
 
 【手元に無ければ控えを見る(v4.12.0)】
 下見と紙は、手元に無い直なら控え(`services/local_backup`)から出します。
@@ -45,9 +53,10 @@ from flask import (Blueprint, Response, jsonify, redirect, render_template,
                    request)
 
 from nippou import constants, work_context
+from nippou.config import SETTINGS
 from nippou.logging_setup import get_logger, log_button_click
 from nippou.logic.shift import SHIFT_NAMES
-from nippou.reporting import print_format
+from nippou.reporting import csv_export, print_format
 
 from .. import error_body, get_repo, shell
 
@@ -253,6 +262,10 @@ def index():
     「呼び出す」は**設定・管理者の中**にありました。日々使うものが、
     めったに触らない設定と同居していると探せません。
     """
+    from nippou.presenters import lot_search
+    from nippou.presenters import settings as settings_view
+    from nippou.services import line_view
+
     ctx = work_context.get_context()
     from .entry import build_service, current_calculator
     calc = current_calculator()
@@ -315,6 +328,12 @@ def index():
         # 呼び出せるか。管理者モードか、アクセス権限の表で Administrator(v4.12.0)
         admin=ctx.editor,
         backup=_backup_view(ctx),
+        # ロットを探す(v4.33.0)。既定の期間はここで決める(`presenters/lot_search`)。
+        # ラインの欄は集計管理と同じく Administrator の PC だけ(`services/line_view`)
+        lot=lot_search.screen(ctx.business_date(calc), ctx.line),
+        lot_pick=line_view.choices(ctx.line).as_dict(),
+        # 押す前に「どこへ出るか」を出す(集計管理と同じ1行)
+        out_dir=settings_view.output_dir_view(),
         # **いまの直**。ここから紙・表・グラフへ1押しで行けるように
         current={"report_date": report_date, "line": line, "shift": shift,
                  "pages": saved},
@@ -577,6 +596,77 @@ def backup_open():
                      extra=f"{report_date}/{shift} 入れた{result.pulled}ページ")
     # 呼び出しそのものは「呼び出す」と同じ道(関門を2つ書かない)
     return recall()
+
+
+# ----------------------------------------------------------------------
+# ロットを探す (v4.33.0)
+# ----------------------------------------------------------------------
+def _lot_search(payload: dict):
+    """(結果, 断り)。**どちらか1つだけ。** ラインの決め方は集計管理と同じ。"""
+    from nippou.presenters import lot_search
+    from nippou.services import line_view
+
+    ctx = work_context.get_context()
+    # Administrator の PC だけ名指しが効く。ほかは何を送ってきてもこの端末のライン
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    try:
+        query = lot_search.LotQuery.of(payload, line)
+    except lot_search.BadRequest as exc:
+        return None, (jsonify(error_body("bad_condition", str(exc), field=exc.field)),
+                      exc.status)
+    try:
+        with line_view.repo_for(line, ctx.line, get_repo()) as repo:
+            found = lot_search.search(repo, query, own_line=ctx.line, editor=ctx.editor)
+    except line_view.NoBackup as exc:
+        return None, (jsonify(error_body("no_backup", str(exc))), 404)
+    return found, None
+
+
+@bp.post("/api/records/lot-search")
+def lot_search_view():
+    """ロットを探す。**表もボタンの行き先もサーバが決めて返す**(画面は写すだけ)。"""
+    payload = request.get_json(silent=True) or {}
+    found, err = _lot_search(payload)
+    if err:
+        return err
+    log_button_click("lot_search", line=found.query.line,
+                     extra=f"{found.query.lot} {found.query.start}~{found.query.end} "
+                           f"{found.total}行")
+    return jsonify(found.as_dict())
+
+
+@bp.post("/api/records/lot-search/csv")
+def lot_search_csv():
+    """探した表を、**画面の表そのまま**CSVにする(BOM付きUTF-8)。
+
+    ダウンロードにはしません。集計管理の「4本ともCSVに出す」と同じく、
+    出力先のフォルダ(設定・参照設定の「集計CSV・印刷用HTMLの出力パス」)へ
+    書いて、書いた場所を返します。
+    """
+    from nippou.presenters import lot_search
+
+    payload = request.get_json(silent=True) or {}
+    found, err = _lot_search(payload)
+    if err:
+        return err
+    if not found.total:
+        return jsonify({"file": "", "message": lot_search.empty_message()})
+    query = found.query
+    out = csv_export.lot_search_output_path(
+        SETTINGS.report_output_dir, query.lot, query.start.isoformat(),
+        query.end.isoformat(), query.line)
+    try:
+        count = csv_export.write_table(found.table, out)
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log.exception("ロットを探すのCSVを書けませんでした")
+        return jsonify(error_body("write_failed", f"出力に失敗しました: {exc}")), 500
+    log_button_click("lot_search_csv", line=query.line,
+                     extra=f"{query.lot} {query.start}~{query.end} {count}行")
+    message = f"{found.table.title} {count}行\n{out}"
+    if found.too_many:
+        message += (f"\n(当たった {found.total}行のうち、画面と同じ先の {count}行です。"
+                    "ロット№の桁を増やすか、期間を絞ってください)")
+    return jsonify({"file": str(out), "message": message})
 
 
 def _ribbon(ctx, calc):

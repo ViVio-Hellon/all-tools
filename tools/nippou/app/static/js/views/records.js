@@ -9,6 +9,9 @@
   「ほかのPCの日報(控え)」(v4.12.0、管理者だけ)も同じ2つです。呼び出すほうは
   控えから手元へ入れてから開きます(`/api/records/backup/open`)。
 
+  「ロットを探す」(v4.33.0)は、当たった行から**同じ2つへ**行く入口です
+  (紙を見る・下見・呼び出す。新しい道は作らない)。
+
   判断はどちらもサーバが持ちます ── 呼び出してよいか(管理者モードか)も、
   その直に何ページあるかも、ここでは決めません。
 */
@@ -44,7 +47,11 @@ function recallNote(text, kind = "info") {
   box.className = `msg msg--${kind}`;
 }
 
-function paint(rows) {
+/**
+ * 下見の表を描く。`mark` は印を付ける行の番号(「ロットを探す」の「下見」で、
+ * 当たった行がどれかを見失わないように)。0 なら付けない。
+ */
+function paint(rows, mark = 0) {
   const body = document.getElementById("preview");
   if (!body) return;
   body.replaceChildren();
@@ -60,6 +67,10 @@ function paint(rows) {
   }
   for (const r of rows) {
     const tr = document.createElement("tr");
+    if (mark && Number(r.row_no) === Number(mark)) {
+      tr.className = "row-hit";
+      tr.setAttribute("aria-current", "true");
+    }
     for (const [value, cls] of [[r.row_no, ""], [r.lot, ""], [r.zai, ""],
                                 [r.siz, ""], [r.mai, "num"], [r.wei, "num"]]) {
       const td = document.createElement("td");
@@ -69,6 +80,29 @@ function paint(rows) {
     }
     body.appendChild(tr);
   }
+}
+
+/**
+ * 「日付を指定して見る」の欄の直・ページを、下の「中身の下見」に読み込む。
+ * `mark` を渡すと、その行に印を付ける(「ロットを探す」の「下見」)。
+ */
+async function loadPreview(mark = 0) {
+  try {
+    const body = await api.post("/api/print/load", key());
+    if (!body.found) {
+      loaded = null;
+      note(body.message, "warn");
+      paint([]);
+      document.getElementById("print").disabled = true;
+      return false;
+    }
+    loaded = key();
+    note(`読み込みました: 担当者=${body.worker} / 明細${body.rows.length}行`
+         + pagesNote(body.pages) + (mark ? ` / ${mark}行目に印を付けました` : ""));
+    paint(body.rows, mark);
+    document.getElementById("print").disabled = false;
+    return true;
+  } catch (err) { toastError(err); return false; }
 }
 
 /** 紙の窓を開く。ヘッダを付けられない開き方なので、トークンはクエリに。 */
@@ -130,23 +164,7 @@ export function start() {
   loaded = null;
   wireSort(document.getElementById("records-table"));
 
-  document.getElementById("load")?.addEventListener("click", async () => {
-    try {
-      const body = await api.post("/api/print/load", key());
-      if (!body.found) {
-        loaded = null;
-        note(body.message, "warn");
-        paint([]);
-        document.getElementById("print").disabled = true;
-        return;
-      }
-      loaded = key();
-      note(`読み込みました: 担当者=${body.worker} / 明細${body.rows.length}行`
-           + pagesNote(body.pages));
-      paint(body.rows);
-      document.getElementById("print").disabled = false;
-    } catch (err) { toastError(err); }
-  });
+  document.getElementById("load")?.addEventListener("click", () => loadPreview());
 
   document.getElementById("print")?.addEventListener("click", () => {
     if (!loaded) { toast("先に「中身を見る」を押してください", "warn"); return; }
@@ -226,6 +244,7 @@ export function start() {
   }
 
   wireBackup();
+  wireLotSearch();
 
   // 呼び出しをやめて、いまの直に戻る(**戻る前に保存されます**)
   document.getElementById("back-now")?.addEventListener("click", async () => {
@@ -326,4 +345,164 @@ function wireBackup() {
   document.getElementById("backup-line")?.addEventListener("change", loadBackup);
   document.getElementById("backup-reload")?.addEventListener("click", loadBackup);
   loadBackup();
+}
+
+/* ================================================================
+   ロットを探す (v4.33.0)
+
+       期間を絞ってロットNo検索したい場合に何を検索したらいいですか?
+
+   探すのも、表の列も、ボタンの行き先(呼び出すは手元か控えか)も、
+   **サーバが決めて返します**(`presenters/lot_search.py`)。ここは写すだけ。
+   押した先はこの画面の既存の道です:
+
+       紙を見る  `/report/nippou`(その行のあるページの紙)
+       下見      「日付を指定して見る」の欄へ入れて「中身を見る」と同じ読み込み
+       呼び出す  `/api/settings/recall`(この端末のライン)か
+                 `/api/records/backup/open`(ほかのライン。控えから入れて開く)
+   ================================================================ */
+function lotNote(text, kind = "info") {
+  const box = document.getElementById("lot-note");
+  if (!box) return;
+  box.hidden = !text;
+  box.textContent = text;
+  box.className = `msg msg--${kind}`;
+}
+
+function lotSpan() {
+  const value = (id) => document.getElementById(id)?.value || "";
+  const lineSelect = document.getElementById("lot-line");
+  // ラインの欄は Administrator の PC だけにある。**無ければ送らない**(サーバがこの端末のライン)
+  return { start: value("lot-start"), end: value("lot-end"), lot: value("lot-no"),
+           ...(lineSelect ? { line: lineSelect.value } : {}) };
+}
+
+function lotButton(label, hint, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn--sm";
+  btn.textContent = label;
+  btn.dataset.hint = hint;
+  btn.setAttribute("aria-label", `${label}(${hint})`);
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+/** 当たった行の「下見」── 下の欄へ入れて、いつもの読み込みで出す。 */
+async function previewHit(hit) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  const lineSelect = document.getElementById("p-line");
+  // 欄に無いライン(ラインの表から外れたもの)でも選べるように、そのときだけ足す
+  if (lineSelect && ![...lineSelect.options].some((o) => o.value === hit.line)) {
+    lineSelect.append(new Option(lineLabel(hit.line), hit.line));
+  }
+  set("p-date", hit.report_date);
+  set("p-line", hit.line);
+  set("p-shift", hit.shift);
+  set("p-page", String(hit.page));
+  if (await loadPreview(hit.row_no)) {
+    document.getElementById("preview")?.closest(".card")
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function lotRow(cells, numeric, hit, recall) {
+  const tr = document.createElement("tr");
+  tr.dataset.where = hit.where;
+  cells.forEach((text, index) => {
+    const td = document.createElement("td");
+    if (numeric[index]) td.className = "num";
+    td.textContent = text ?? "";
+    tr.append(td);
+  });
+  const actions = document.createElement("td");
+  actions.append(
+    lotButton("紙を見る", `${hit.where} のページの紙を別の窓で開きます`, () => openPaper({
+      report_date: hit.report_date, line: hit.line, shift: hit.shift, page: hit.page })),
+    " ",
+    lotButton("下見", `${hit.where} を下の「中身の下見」に出します`, () => previewHit(hit)));
+  if (recall.allowed) {
+    actions.append(" ", lotButton("呼び出す", `${hit.where} のページを日報入力に開いて直します`,
+      async () => {
+        try {
+          const body = await api.post(recall.path, {
+            report_date: hit.report_date, line: hit.line, shift: hit.shift, page: hit.page });
+          toast(body.message, "ok");
+          location.href = body.next || "/";
+        } catch (err) { lotNote(err.message, "error"); }
+      }));
+  }
+  tr.append(actions);
+  return tr;
+}
+
+function paintLots(view) {
+  const head = document.getElementById("lot-head");
+  const body = document.getElementById("lot-rows");
+  if (!head || !body) return;
+  const { table } = view;
+  head.replaceChildren();
+  body.replaceChildren();
+  if (!table.rows.length) {
+    const tr = document.createElement("tr");
+    const td = cell(table.empty, "empty");
+    tr.append(td);
+    body.append(tr);
+    return;
+  }
+  const headRow = document.createElement("tr");
+  table.columns.forEach((label, index) => {
+    const th = document.createElement("th");
+    if (table.numeric[index]) th.className = "num";
+    th.textContent = label;
+    headRow.append(th);
+  });
+  headRow.append(document.createElement("th"));
+  head.append(headRow);
+  table.rows.forEach((cells, i) => {
+    body.append(lotRow(cells, table.numeric, view.hits[i], view.recall));
+  });
+}
+
+async function searchLots() {
+  try {
+    const view = await api.post("/api/records/lot-search", lotSpan());
+    paintLots(view);
+    // 多すぎる・何も無いときは注意の色。当たれば何行・何直か
+    if (view.warning) lotNote(view.summary ? `${view.summary}\n${view.warning}` : view.warning, "warn");
+    else lotNote(`${view.summary}(${view.start} 〜 ${view.end} / ${lineLabel(view.line)})`, "ok");
+  } catch (err) {
+    lotNote(err.message, "error");
+    // 前に探した表を、新しい条件の結果のつもりで読ませない
+    paintLots({ table: { rows: [], columns: [], numeric: [],
+                         empty: "条件を直して、もう一度「探す」を押してください" },
+                hits: [], recall: { allowed: false } });
+  }
+}
+
+function wireLotSearch() {
+  if (!document.getElementById("lot-card")) return;
+  document.getElementById("lot-search")?.addEventListener("click", searchLots);
+  // **Enter で探す**(探すボタンまで手を伸ばさせない。キーボードだけで使えるように)。
+  // かな入力の確定の Enter では探さない(全角で打っている途中に走らせない)
+  for (const id of ["lot-no", "lot-start", "lot-end"]) {
+    document.getElementById(id)?.addEventListener("keydown", (ev) => {
+      if (ev.isComposing || ev.keyCode === 229) return;
+      if (ev.key === "Enter") { ev.preventDefault(); searchLots(); }
+    });
+  }
+  // ラインを選び直したら、ロット№が入っていればそのまま探し直す(前のラインの表を残さない)
+  document.getElementById("lot-line")?.addEventListener("change", () => {
+    if (document.getElementById("lot-no")?.value.trim()) searchLots();
+  });
+  document.getElementById("lot-csv")?.addEventListener("click", async () => {
+    try {
+      const body = await api.post("/api/records/lot-search/csv", lotSpan());
+      lotNote(body.message, body.file ? "ok" : "warn");
+      if (body.file) toast("ロットを探した表をCSVに書き出しました");
+    } catch (err) {
+      lotNote(err.message, "error");
+      toastError(err.message);
+    }
+  });
 }
