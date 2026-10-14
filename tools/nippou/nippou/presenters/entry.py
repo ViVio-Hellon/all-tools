@@ -20,8 +20,8 @@ from typing import Any, Optional
 
 from .. import constants, layout
 from ..db.models import DetailRecord, HeaderRecord
-from ..logic import (calculations, etc_marks, exclusions, g_course, input_rules,
-                     navigation, reasons, work_time)
+from ..logic import (calculations, empty_pages, etc_marks, exclusions, g_course,
+                     input_rules, navigation, reasons, work_time)
 
 # 列の並びと見出しは `nippou/layout.py` が1つだけ持つ。**画面と紙で
 # 同じものを読む** ── 別々に持っていたせいで、同じ欄が画面では「材質」、
@@ -618,11 +618,15 @@ def sheet_has_anything(state: GridState) -> bool:
     こちらは「保存する中身があるか」です。停止を1つ入れただけの行も、
     理由を書いただけの行も**中身**なので、行の欄をぜんぶ見ます。
     作業者は見ません ── 作業者を選んだだけでは、まだ何もしていません。
+
+    **1行目の開始だけのページも、何も無いのと同じです**(v4.35.2 ── 前の
+    ページから写る開始)。決めるのは `logic/empty_pages.rows_are_empty` の
+    1か所で、「中身の無い紙」の片付けと同じ物差しです。
     """
-    families = tuple(ALL_FAMILIES) + tuple(EXTRA_FAMILIES) + ("reason",)
-    return any(state.value(row, family).strip()
-               for row in range(1, constants.ROW_COUNT + 1)
-               for family in families)
+    families = tuple(dict.fromkeys(tuple(ALL_FAMILIES) + tuple(EXTRA_FAMILIES) + ("reason",)))
+    return not empty_pages.rows_are_empty(
+        (row, {family: state.value(row, family) for family in families})
+        for row in range(1, constants.ROW_COUNT + 1))
 
 
 # ------------------------------------------------------------------

@@ -169,7 +169,8 @@ def carry_across_pages(
 
     返すのは ``(kz, kh)``(入れる時刻)か ``None``(入れない)。
 
-        page_is_blank … このページの12行に1文字も入っていないか
+        page_is_blank … このページを空と見るか(`logic/empty_pages` の物差し ──
+                        12行に1文字も無いか、1行目の開始だけ)
         prev_rows     … 前のページの12行(保存してある中身)
         first_row     … このページの1行目
 
@@ -179,8 +180,9 @@ def carry_across_pages(
 
     if not page_is_blank:
         return None
-    # 1行目の開始が入っていれば上書きしない(`page_is_blank` なら入っていない
-    # はずですが、決まりとしても持っておく)
+    # 1行目の開始が入っていれば上書きしない。**1行目の開始だけのページは空と
+    # 見ます**が(v4.35.2 `empty_pages`)、その開始が前に写したものか人が打った
+    # ものかは見分けられないので、ここでは触らない
     if str(first_row.get("KZ") or "").strip() or str(first_row.get("KH") or "").strip():
         return None
     last = None

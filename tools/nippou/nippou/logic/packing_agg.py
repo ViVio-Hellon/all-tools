@@ -43,6 +43,7 @@ from .aggregation import (
     ShiftAggregate,
     classify_stop_code,
 )
+from . import empty_pages
 from .numeric import is_numeric, to_float
 from .shift import parse_business_date
 
@@ -235,7 +236,15 @@ def build_row(header: HeaderRecord, d: DetailRecord,
 
 def build_rows(header: HeaderRecord, details: Iterable[DetailRecord],
                labels: Optional[dict[str, str]] = None) -> list[LotRow]:
-    """1ページぶん(`Agg_OutPut` の1回ぶん)。行番号の順に並べます。"""
+    """1ページぶん(`Agg_OutPut` の1回ぶん)。行番号の順に並べます。
+
+    **空と見るページは1行も出しません**(v4.35.2)。1行目の開始だけのページ
+    (前のページから写った開始)は空のページと同じで、開始だけのロット行を
+    集計に並べない ── 物差しは `logic/empty_pages` の1か所。
+    """
+    details = list(details)
+    if empty_pages.is_empty(details):
+        return []
     return [build_row(header, d, labels)
             for d in sorted(details, key=lambda r: r.row_no)
             if has_content(d)]

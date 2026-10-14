@@ -223,10 +223,12 @@ def run(repo: NippouRepository, report_date: str, line: str, shift: str, *,
 
 
 def _has_content(details: Sequence[DetailRecord]) -> bool:
-    from ..logic import fingerprint
+    """画面のページに中身があるか。**空と見る物差しは `logic/empty_pages` の1か所**
+    (1行目の開始だけのページも空 ── v4.35.2。前のページから写った開始だけで、
+    保存済みのページを消したことにしない・「保存していない」とも言わない)。"""
+    from ..logic import empty_pages
 
-    return any(any(fingerprint.text(getattr(d, f, "")) for f in fingerprint.DETAIL_FIELDS)
-               for d in details)
+    return not empty_pages.is_empty(details)
 
 
 def _differs(repo: NippouRepository, report_date: str, line: str, shift: str,

@@ -18,6 +18,8 @@
     ・直の終わりの時刻(15:00 / 22:50 / 07:00)なら入れない(ページの中と同じ)
     ・入れた値は画面に出るだけ。打ち始めたときの保存でほかの欄と一緒に書く
     ・判断は `logic/navigation.carry_across_pages` の1か所
+    ・何も打たずにページを切り替えると開始だけが書かれる。**1行目の開始だけのページは
+      空のページと同じに数える**(v4.35.2 `logic/empty_pages` ── `CarriedOnlyPageTests`)
 
 経路の試験は `test_scenario_shift_flow` と同じ止めた時計で、画面と同じ順に叩きます。
 最後に本物のブラウザで「次ページ発行」を押して確かめます(無い環境では飛ばします)。
@@ -33,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nippou.logic import navigation  # noqa: E402
 from tests._web import HAS_FLASK, HEADERS, SKIP_REASON  # noqa: E402
-from tests.test_scenario_shift_flow import (ScenarioCase, full_page_rows,  # noqa: E402
-                                            row, rows_of)
+from tests.test_scenario_shift_flow import (SKIP, ScenarioCase,  # noqa: E402
+                                            full_page_rows, row, rows_of)
 
 #: 現場の終了時刻(`test_same_text` と同じ)
 SITE = {"1直": ("15", "00"), "2直": ("22", "50"), "3直": ("07", "00"),
@@ -293,6 +295,112 @@ class PageCarryRouteTests(ScenarioCase):
         _header, details = self.repo().load("2026年10月5日", "L-1", "1直", 1)
         last = f"{details[11].sz}:{details[11].sh}"
         self.assertEqual(f"{body['rows']['1']['KZ']}:{body['rows']['1']['KH']}", last)
+
+
+#: 第2ページの鍵(`issue_first_page` で出すページ)
+PAGE_TWO = {"report_date": "2026年10月5日", "line": "L-1", "shift": "1直", "page": 2}
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class CarriedOnlyPageTests(ScenarioCase):
+    """**転記された開始だけのページは空** (v4.35.2)。
+
+        開始だけのページは(転記された開始)空と同じ扱いでよいです
+
+    次ページ発行のあと何も打たずにページを切り替えると、移る前の打ちかけ
+    (`saveDraft`)で1行目の開始だけが書かれ、そのページが「中身の無い紙」に
+    数えられず、片付けられませんでした。物差しは `logic/empty_pages` の1か所。
+    """
+
+    # 画面と同じ順に叩く手順は `PageCarryRouteTests` のものを借りる
+    typed = PageCarryRouteTests.typed
+    drawn = PageCarryRouteTests.drawn
+    issue_first_page = PageCarryRouteTests.issue_first_page
+    go_back_to_page_one = PageCarryRouteTests.go_back_to_page_one
+
+    def switch_without_typing(self) -> None:
+        """第2ページに何も打たずに第1ページへ切り替える(画面と同じ順: 打ちかけを置いてから移る)。"""
+        self.assertEqual(start_of(self.drawn()), "14:55")
+        res = self.typed(rows_of({"KZ": "14", "KH": "55"}))   # 描かれた開始ごと送ってくる
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.go_back_to_page_one()
+
+    def back_to_latest(self) -> None:
+        """「最新のページに戻る」(第1ページは画面の中身のまま保存してから戻る)。"""
+        res = self.post("/api/settings/back", self.sheet(full_page_rows("A", "12:55")))
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.opened = None
+        self.open_screen()
+
+    def empty_list(self) -> list[dict]:
+        return self.get("/api/settings/empty-pages").get_json()["pages"]
+
+    def test_何も打たずに切り替えた2ページ目は空のページとして片付けられる(self) -> None:
+        self.issue_first_page()
+        self.switch_without_typing()
+        _header, details = self.repo().load("2026年10月5日", "L-1", "1直", 2)
+        self.assertEqual((details[0].kz, details[0].kh), ("14", "55"))   # 開始だけは書かれている
+        # 「中身の無い紙」に出る(消せる)
+        found = self.empty_list()
+        self.assertEqual([(p["page"], p["can_delete"]) for p in found], [(2, True)])
+        # 片付ける → 未送信に数えない・共有へ送らない
+        self.admin_on()
+        res = self.post("/api/settings/empty-pages/delete", PAGE_TWO)
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.repo().saved_pages("2026年10月5日", "L-1", "1直"), [1])
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "1直", 1)})
+        self.back_to_latest()
+        self.at("2026-10-05 14:58")
+        res = self.push_now(skip=SKIP)
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1)})
+        self.assertEqual(self.dirty_keys(), set())
+
+    def test_開始だけのページは何も無いページと同じに数える(self) -> None:
+        """関門の確かめ・未送信の数・集計が、出したままの空のページと食い違わない。"""
+        self.issue_first_page()
+        self.drawn()
+        blank = (self.post("/api/entry/verify", {}).get_json()["findings"],
+                 self.dirty_keys())
+        self.switch_without_typing()
+        carried = (self.post("/api/entry/verify", {}).get_json()["findings"],
+                   self.dirty_keys())
+        self.assertEqual(carried, blank)
+        # 集計のロット行は第1ページの12行だけ(開始だけの行を並べない)
+        report = self.packing("2026年10月5日", "1直")
+        self.assertEqual(len(self.repo().packing_details(report.id)), 12)
+
+    def test_何か1つ打てば開始も一緒に保存される(self) -> None:
+        """切り替えて戻ってから打つ ── 開始は残っていて、打った欄と一緒に書かれる。"""
+        self.issue_first_page()
+        self.switch_without_typing()
+        res = self.post("/api/settings/page", {"page": 2})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.opened = None
+        self.open_screen()
+        self.assertEqual(start_of(self.drawn()), "14:55")
+        res = self.typed(rows_of({"LOT": "C01", "KZ": "14", "KH": "55"}))
+        self.assertEqual(res.status_code, 200, res.get_json())
+        _header, details = self.repo().load("2026年10月5日", "L-1", "1直", 2)
+        self.assertEqual((details[0].lot, details[0].kz, details[0].kh), ("C01", "14", "55"))
+        self.assertEqual(self.empty_list(), [])
+
+    def test_共有へ送った開始だけのページは消さない(self) -> None:
+        """一度でも共有へ渡したページは、空と見ても手元から消さない(v4.34.1)。"""
+        self.issue_first_page()
+        self.switch_without_typing()
+        self.back_to_latest()
+        self.at("2026-10-05 14:58")
+        res = self.push_now(skip=SKIP)
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn(("2026年10月5日", "1直", 2), self.shared_keys())
+        found = self.empty_list()
+        self.assertEqual([(p["page"], p["can_delete"]) for p in found], [(2, False)])
+        self.admin_on()
+        res = self.post("/api/settings/empty-pages/delete", PAGE_TWO)
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("共有へ渡してある", res.get_json()["message"])
+        self.assertEqual(self.repo().saved_pages("2026年10月5日", "L-1", "1直"), [1, 2])
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

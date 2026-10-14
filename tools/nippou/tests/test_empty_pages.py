@@ -69,6 +69,82 @@ class EmptyTests(unittest.TestCase):
         self.assertTrue(logic.is_empty(rows))
 
 
+class CarriedStartTests(unittest.TestCase):
+    """**1行目の開始だけのページは空** (v4.35.2)。
+
+        開始だけのページは(転記された開始)空と同じ扱いでよいです
+
+    2ページ目からは前のページの最後の終了が1行目の開始に入ります
+    (`navigation.carry_across_pages`)。何も打たずにページを切り替えると、
+    その開始だけが書かれていました。
+    """
+
+    def test_1行目の開始だけなら空(self) -> None:
+        rows = blank_rows()
+        rows[0] = DetailRecord(**KEY, row_no=1, kz="14", kh="55")
+        self.assertTrue(logic.is_empty(rows))
+
+    def test_1行目の開始の時だけ分だけでも空(self) -> None:
+        for kz, kh in (("14", ""), ("", "55")):
+            with self.subTest(kz=kz, kh=kh):
+                rows = blank_rows()
+                rows[0] = DetailRecord(**KEY, row_no=1, kz=kz, kh=kh)
+                self.assertTrue(logic.is_empty(rows))
+
+    def test_開始のほかに1つでも打てば空ではない(self) -> None:
+        for extra in ({"lot": "C01"}, {"sz": "15"}, {"s": "0"}, {"reason": "段取り"},
+                      {"others1": "控え"}):
+            with self.subTest(extra=extra):
+                rows = blank_rows()
+                rows[0] = DetailRecord(**KEY, row_no=1, kz="14", kh="55", **extra)
+                self.assertFalse(logic.is_empty(rows))
+
+    def test_ほかの行に何かあれば空ではない(self) -> None:
+        rows = blank_rows()
+        rows[0] = DetailRecord(**KEY, row_no=1, kz="14", kh="55")
+        rows[5] = DetailRecord(**KEY, row_no=6, lot="C06")
+        self.assertFalse(logic.is_empty(rows))
+
+    def test_2行目から下の開始だけは空ではない(self) -> None:
+        """写ってくるのは1行目だけ。2行目の開始だけは打った形なので中身です。"""
+        rows = blank_rows()
+        rows[1] = DetailRecord(**KEY, row_no=2, kz="14", kh="55")
+        self.assertFalse(logic.is_empty(rows))
+
+    def test_1行目の終了だけは空ではない(self) -> None:
+        rows = blank_rows()
+        rows[0] = DetailRecord(**KEY, row_no=1, sz="15", sh="00")
+        self.assertFalse(logic.is_empty(rows))
+
+    def test_画面の欄名でも同じに見る(self) -> None:
+        """画面の12行(`KZ`/`KH`)も DB の明細(`kz`/`kh`)も、物差しは1つ。"""
+        self.assertTrue(logic.rows_are_empty([(1, {"KZ": "14", "KH": "55", "LOT": ""})]))
+        self.assertFalse(logic.rows_are_empty([(1, {"KZ": "14", "KH": "55", "LOT": "C01"})]))
+        self.assertFalse(logic.rows_are_empty([(2, {"KZ": "14", "KH": "55"})]))
+
+    def test_保存の関門も同じ物差し(self) -> None:
+        """空の紙を作らない保存の関門(`sheet_has_anything`)も、片付けと同じに見る。"""
+        from nippou.presenters import entry as presenter
+
+        state = presenter.empty_state()
+        state.set(1, "KZ", "14")
+        state.set(1, "KH", "55")
+        self.assertFalse(presenter.sheet_has_anything(state))
+        state.set(1, "LOT", "C01")
+        self.assertTrue(presenter.sheet_has_anything(state))
+
+    def test_集計のロット行にも並べない(self) -> None:
+        """開始だけのロット行が集計(`packing_agg`)に1行出ていた。空のページと同じに出さない。"""
+        from nippou.logic import packing_agg
+
+        header = HeaderRecord(**KEY)
+        rows = blank_rows()
+        rows[0] = DetailRecord(**KEY, row_no=1, kz="14", kh="55")
+        self.assertEqual(packing_agg.build_rows(header, rows), [])
+        rows[0] = DetailRecord(**KEY, row_no=1, kz="14", kh="55", lot="C01")
+        self.assertEqual(len(packing_agg.build_rows(header, rows)), 1)
+
+
 class ViewTests(unittest.TestCase):
     def page(self, **over):
         base = dict(report_date="2026年9月17日", line="L-1", shift="1直", page=1)
