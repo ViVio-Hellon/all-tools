@@ -51,6 +51,19 @@
 このときの「押した日時」は引き継いだ時刻、「押した人」は引き継いだ人、
 「担当者」は引き継がれた直の作業者、「理由」は引き継いだ時点で残っていた断りです。
 
+**自動で送った直も残します**(v4.34.2):
+
+    5.送ったのだから履歴に載せるべきです
+
+残り5分の自動確定・次の直の画面の拾い(`services/shift_close.py`)で共有へ
+送ろうとしたときも、手で押したときと同じ `record_push`(送れた/一部送れなかった/
+送れなかった)・`record_blocked`(関門で止めた)で残します。人が押したのでは
+ないので、「押した人」は空にせず **(自動確定)**、「通し方」にどの自動の道かを
+書きます(`AUTO_PRESSED_BY` / `VIA_AUTO_CLOSE` / `VIA_SWEEP`)。送るものが無かった・
+確かめられなかった(送ろうとしていない)ときは残しません。共有の
+T_共有保存履歴 へ写すのも手で押したときと同じ `share`(送った直後に写し、届かな
+ければ次に写す)です。
+
 **書き先が Access のときは共有へ写しません**(手元にだけ残す)。集計の
 表と同じ決まりで、Access 側に表を増やさないためです。
 """
@@ -100,6 +113,23 @@ HANDED = "直せないまま引き継いだ"
 #: 押したあと、その直の中身が共有に出ているか(グラフの塗りに使う)
 REACHED = (SENT, NOTHING)
 
+#: 自動で送った行の「押した人」。**人ではないので空にせず、そう書く**(v4.34.2)
+AUTO_PRESSED_BY = "(自動確定)"
+#: 自動で送った行の「通し方」── どの自動の道か
+VIA_AUTO_CLOSE = "残り5分の自動確定"
+VIA_SWEEP = "次の直の画面が拾って送った"
+AUTO_VIAS: tuple[str, ...] = (VIA_AUTO_CLOSE, VIA_SWEEP)
+
+
+def is_auto(row: dict) -> bool:
+    """自動で送った行か。表・グラフの見分けに使う。
+
+    押した人が「(自動確定)」か、通し方が自動の道のどちらか ── 共有の表を
+    ほかの道具で直された行でも、片方が残っていれば見分けられるように。
+    """
+    return (str(row.get("pressed_by") or "").strip() == AUTO_PRESSED_BY
+            or str(row.get("via") or "").strip() in AUTO_VIAS)
+
 
 def terminal_name() -> str:
     try:
@@ -135,6 +165,19 @@ class Pressed:
         return cls(at=(at or datetime.now()).isoformat(timespec="seconds"),
                    key_text=f"{report_date} {shift}".strip(),
                    by=name, via=via)
+
+    @classmethod
+    def auto(cls, current: tuple[str, str, str], *, via: str,
+             at: Optional[datetime] = None) -> "Pressed":
+        """**自動で送ったとき**(v4.34.2)。押した人は「(自動確定)」、通し方はどの自動の道か。
+
+        `current` は、自動確定ならその確定した直、拾いなら拾った画面のいまの直
+        (「押したときの直」の欄に入る)。
+        """
+        report_date, _line, shift = current
+        return cls(at=(at or datetime.now()).isoformat(timespec="seconds"),
+                   key_text=f"{report_date} {shift}".strip(),
+                   by=AUTO_PRESSED_BY, via=via)
 
 
 def _row(pressed: Pressed, *, report_date: str, line: str, shift: str,

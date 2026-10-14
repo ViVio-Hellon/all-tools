@@ -1085,6 +1085,10 @@ function paintPrevShift(state) {
  *
  * 触れなくするのは `#main` の中の、この帯より下だけ。帯そのもの(出口の
  * 2つ)と、左の並び・帯の「終了」は残します。
+ *
+ * **直の時間が過ぎたかも、画面では決めません。** 日勤は残業の終わり(19:00)
+ * まで打てて、ほかの直は直の終わりちょうどで閉じます(v4.34.2)── その時刻を
+ * 決めるのはサーバの `anchor_standing` だけで、ここは `read_only` を写すだけ。
  */
 function paintReadOnly(view) {
   const box = document.getElementById("read-only");

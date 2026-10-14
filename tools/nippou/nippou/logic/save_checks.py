@@ -46,6 +46,7 @@ from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord
 from .numeric import is_numeric, to_float
 from .work_time import elapsed_minutes, minutes_text, shift_minutes, stop_minutes
+from .shift import normalize_hhmm
 
 #: 断りの種類。**文言から推し量らない**(`logic/work_time.py` と同じ約束)
 PACK_OVER = "pack_over"           # Number_Count
@@ -85,7 +86,30 @@ REQUIRED_BREAK_MINUTES = 60
 REST_STOP_CODE = "0"
 
 #: 日勤の残業終わり。VBA `Last_Confi` が定時の代わりに認めていた2つ
+#:
+#: **画面の固定もここを読みます**(v4.34.2 `ShiftCalculator.input_close_at`)──
+#: 日勤に固定した画面は、このうちいちばん遅い時刻(19:00)まで打てます。
+#: 確かめの側だけが残業を認めて画面が 17:00 で閉じていたので、残業の行は
+#: どうやっても保存できませんでした。
 DAY_SHIFT_OVERTIME_ENDS: tuple[str, ...] = ("18:00", "19:00")
+
+
+def is_day_shift(shift: str) -> bool:
+    """日勤(昼)の直か。残業の終わりを認めるのは日勤だけ。"""
+    return "日勤" in (shift or "") or "昼" in (shift or "")
+
+
+def latest_end(shift: str, shift_end: str) -> str:
+    """その直の最後の行が終わってよい、**いちばん遅い時刻**(`HH:MM`)。
+
+    ふつうは定時そのもの。日勤は定時と残業の終わり(`DAY_SHIFT_OVERTIME_ENDS`)の
+    うち遅いほうです。定時が読めなければ空のまま返します(上限を見ない)。
+    """
+    end = normalize_hhmm(shift_end)
+    if not end or not is_day_shift(shift):
+        return end
+    found = [normalize_hhmm(t) for t in DAY_SHIFT_OVERTIME_ENDS]
+    return max([end] + [t for t in found if t])
 
 #: 停止の記号が入る欄と、その時間の欄(紙の P:Q / R:S / T:U。④⑤は紙に無い)
 STOP_PAIRS: tuple[tuple[str, str], ...] = STOP_FIELD_PAIRS
@@ -286,7 +310,7 @@ def check_shift_end(details: Sequence[DetailRecord], shift: str,
 
     last = filled[-1]
     wanted = [end_time]
-    if "日勤" in shift or "昼" in shift:
+    if is_day_shift(shift):
         wanted.extend(DAY_SHIFT_OVERTIME_ENDS)
 
     actual = f"{_int(last.sz):02d}:{_int(last.sh):02d}"
@@ -529,8 +553,13 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
     """
     if not details:
         return []
-    # その直の長さ(分)。VBA `Opetime_Calcul` の `DateDiff` と同じ
-    available = shift_minutes(shift_start, shift_end)
+    # その直の長さ(分)。VBA `Opetime_Calcul` の `DateDiff` と同じ。
+    #
+    # **日勤は残業の終わりまでを長さにします**(v4.34.2)。最終時間の確かめ
+    # (`check_shift_end`)は最後の行が 19:00 でも通すのに、長さを定時(17:00)まで
+    # で数えると、19:00 まで打った日勤は「作業可能時間を超えています」で止まり、
+    # どうやっても保存できませんでした(画面の固定を直しても、ここで止まる)
+    available = shift_minutes(shift_start, latest_end(shift, shift_end))
     findings: list[Finding] = []
     findings += check_pack_count(details)
     findings += check_stop_codes(details, known_stop_codes)

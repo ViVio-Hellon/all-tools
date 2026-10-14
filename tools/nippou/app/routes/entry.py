@@ -647,6 +647,12 @@ def anchor_standing(ctx, calc, now: Optional[datetime] = None):
     """固定した直が、いまどうなっているか(`logic/shift_anchor.decide`)。
 
     固定していなければ「何も無い」が返るので、呼ぶ側は分岐せずに使えます。
+
+    **閉じる時刻はここ1か所で決めます**(`ShiftCalculator.input_close_at`)。
+    画面を伏せる(`_read_only_reason`)・保存を断る(`save` の 403)・1分の見張り
+    (`/api/shift/key` → `static/js/shift_end.js`)・「この直を後から作る」の
+    「この端末がまだ打てる直か」(`routes/settings`)が、みなここを通ります ── 日勤は残業の終わり(19:00)まで
+    開いていて、ほかの直は直の終わりちょうどで閉じます(v4.34.2)。
     """
     from nippou.logic import shift_anchor
 
@@ -656,9 +662,11 @@ def anchor_standing(ctx, calc, now: Optional[datetime] = None):
     business = parse_business_date(ctx.anchor.report_date)
     end = (calc.shift_end_at(ctx.anchor.shift, business)
            if business is not None else None)
+    close_at = (calc.input_close_at(ctx.anchor.shift, business)
+                if business is not None else None)
     return shift_anchor.decide(
         ctx.anchor, now=now, shift_end=end,
-        grace_minutes=SETTINGS.shift_grace_minutes)
+        grace_minutes=SETTINGS.shift_grace_minutes, close_at=close_at)
 
 
 def anchor_on_worker(ctx, calc, state, now: Optional[datetime] = None) -> bool:
@@ -720,7 +728,8 @@ def _is_read_only(ctx, calc) -> bool:
     2つあります:
 
     1. 他の直の過去データを、管理者モードでないまま開いている
-    2. **固定した直の終わりの時刻を過ぎた**(`logic/shift_anchor`)
+    2. **固定した直の終わりの時刻を過ぎた**(`logic/shift_anchor`)。
+       日勤だけは残業の終わり(19:00)を過ぎたとき(`anchor_standing`。v4.34.2)
 
     2 を入れた理由。終わりの時刻を過ぎても打てたままにすると、忘れて
     立ち去った人の紙が開いたまま残り、**次に座った人がその続きを打つ

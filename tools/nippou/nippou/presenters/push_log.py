@@ -30,6 +30,11 @@
 回数・直内/直の後には数えません(結果ごとの数には「直せないまま引き継いだ」
 として出ます)。表では「押した日時」= 引き継いだ時刻、「押した人」= 引き継いだ人。
 
+**自動で送った行**(v4.34.2。残り5分の自動確定・次の直の画面の拾い)も、送った
+事実なので表・グラフ・「押した」の回数に入れます。見分けは、表は「押した人」=
+(自動確定)と「通し方」= どの自動の道か、グラフは点に載せたときの一言
+(「自動で送った(残り5分の自動確定)」)。表の上の数には「うち自動 n」を添えます。
+
 時刻そのもの(14:52)ではなく「終わりに対して何分」にしたのは、直ごとに
 終わる時刻が違うからです ── 1直の 14:52 と 2直の 22:42 は、どちらも
 「終わる少し前」で、並べて比べたいのはそちらです。直の時刻は
@@ -84,6 +89,8 @@ Y_FLOOR, Y_CEIL = -240, 120
 
 IN_SHIFT = "直内"
 AFTER_SHIFT = "直の後"
+#: 表の上の数で「押した」のすぐ後に出す、自動で送った回数(v4.34.2。無ければ出さない)
+AUTO_COUNT = "うち自動"
 
 
 def timing_of(minutes: Optional[int]) -> str:
@@ -217,6 +224,14 @@ def _chart(rows: list[tuple[date, dict, Optional[int]]], start: date, end: date,
             continue
         mark, shape = marks.get(str(row["shift"]), ("cat-10", "circle"))
         clipped = minutes < Y_FLOOR or minutes > Y_CEIL
+        auto = push_history.is_auto(row)
+        if auto:
+            # **人が押したのではないと、点の説明で分かるように**(v4.34.2)
+            who = f"自動で送った({row.get('via') or push_history.AUTO_PRESSED_BY})"
+            verb = "送った"
+        else:
+            who = f"押した人 {row.get('pressed_by') or '(不明)'}"
+            verb = "押した"
         points.append({
             "day": index[day], "shift": row["shift"], "mark": mark, "shape": shape,
             "minutes": max(Y_FLOOR, min(Y_CEIL, minutes)), "actual": minutes,
@@ -225,11 +240,11 @@ def _chart(rows: list[tuple[date, dict, Optional[int]]], start: date, end: date,
             "clip_label": _span_text(minutes) if clipped else "",
             "tip": "\n".join([
                 f"{row['report_date']} {row['line']} {row['shift']} / {row['result']}",
-                f"押した人 {row.get('pressed_by') or '(不明)'}"
-                f" / その直の担当者 {row['worker'] or '(未入力)'}",
-                f"押した {_display_time(str(row['pressed_at']))} ・ {when_text(minutes)}",
+                f"{who} / その直の担当者 {row['worker'] or '(未入力)'}",
+                f"{verb} {_display_time(str(row['pressed_at']))} ・ {when_text(minutes)}",
             ]),
             "pressed_by": row.get("pressed_by") or "",
+            "auto": auto,
         })
     # 押した点が無くても、直内(下)と直の後(上)の両方が見える広さは取る
     low = max(Y_FLOOR, min([-60] + values))
@@ -248,6 +263,10 @@ def _chart(rows: list[tuple[date, dict, Optional[int]]], start: date, end: date,
         "below": "直内に押した(ふつう)",
         "above": "直が終わってから押した",
         "empty": "この期間に押した記録はありません",
+        # 自動で送った点があるときだけ、凡例に読み方を足す(v4.34.2)
+        "auto_note": ("「(自動確定)」の点は残り5分の自動確定・次の直の画面の拾いで"
+                      "送ったもの(点に載せると出ます)"
+                      if any(p["auto"] for p in points) else ""),
     }
 
 
@@ -280,10 +299,17 @@ def build(repo, *, line: Optional[str], start: date, end: date,
                 cells.append("" if value is None else str(value))
         table_rows.append(cells)
 
-    # 並びは決めておく: 押した回数 → 直内 → 直の後 → 結果
+    # 並びは決めておく: 押した回数 → (うち自動) → 直内 → 直の後 → 結果
+    #
+    # **自動で送ったぶんも「押した」に入れます**(送った事実なので。v4.34.2)。
+    # 1回は「押した日時 + 通し方」で数えます ── 同じ秒に人と自動が重なっても2回
     pushes = [r for _, r, _ in picked if r.get("result") != push_history.HANDED]
-    counts: dict[str, int] = {"押した": len({r["pressed_at"] for r in pushes}),
-                              IN_SHIFT: 0, AFTER_SHIFT: 0}
+    counts: dict[str, int] = {
+        "押した": len({(r["pressed_at"], push_history.is_auto(r)) for r in pushes})}
+    auto = len({r["pressed_at"] for r in pushes if push_history.is_auto(r)})
+    if auto:
+        counts[AUTO_COUNT] = auto
+    counts.update({IN_SHIFT: 0, AFTER_SHIFT: 0})
     for _, row, minutes in picked:
         counts[row["result"]] = counts.get(row["result"], 0) + 1
         when = timing_of(minutes)

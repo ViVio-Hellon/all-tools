@@ -17,6 +17,7 @@ VBA は1分タイマー(`Application.OnTime` → `CheckPrintReminder`)で
     ・**チェックで何か見つかっても止まらない**こと(VBA の自動モードと同じ)
     ・2枚のタブが同じ分に叩いても1回だけになること
     ・締めた印が立つと催促が止まり、**刷っただけでは止まらない**こと
+    ・自動で送ろうとしたことが**共有保存の履歴に残る**こと(v4.34.2)
 """
 from __future__ import annotations
 
@@ -475,6 +476,107 @@ class SweepTests(ShiftCloseTestCase):
             done = self.run_sweep()
         self.assertEqual(len(done), 2)
         push.assert_called_once()
+
+
+class AutoHistoryTests(ShiftCloseTestCase):
+    """**自動で送った直も共有保存の履歴に残す**(v4.34.2)。
+
+        5.送ったのだから履歴に載せるべきです
+
+    押した人は「(自動確定)」、通し方はどの自動の道か。数え方は手で押したときと
+    同じ `record_push`、関門で止めたときは `record_blocked`。
+    """
+
+    KEY = (DAY, LINE, SHIFT, 1)
+
+    def clean_rows(self):
+        return [detail(1, kz="8", kh="0", sz="17", sh="0", tim="480", s="0", th="60")]
+
+    def outcome(self, ok=(), ng=()):
+        from types import SimpleNamespace
+        failed = [SimpleNamespace(key=k, error=SimpleNamespace(message="ロック中です"))
+                  for k in ng]
+        return SimpleNamespace(succeeded=list(ok), failed=failed, concurrency_warning="")
+
+    def history(self) -> list[tuple]:
+        return [(h["report_date"], h["shift"], h["result"], h["pressed_by"], h["via"],
+                 h["pressed_key"]) for h in self.repo.push_history()]
+
+    def test_送れたら残る_押した人は自動確定(self) -> None:
+        self.save(rows=self.clean_rows())
+        with patch("nippou.access_bridge.pusher.push_pending",
+                   return_value=self.outcome(ok=[self.KEY])), \
+                patch("nippou.services.push_history.share") as share:
+            result = self.run_auto()
+        self.assertEqual(result.pushed, 1)
+        self.assertEqual(self.history(), [(DAY, SHIFT, "送れた", "(自動確定)",
+                                           "残り5分の自動確定", f"{DAY} {SHIFT}")])
+        row, = self.repo.push_history()
+        self.assertEqual((row["worker"], row["pages"]), ("山田", 1))
+        self.assertEqual(row["pressed_at"], NEAR_END.isoformat(timespec="seconds"))
+        share.assert_called_once()                  # 送れた直後に共有の表へ写す
+
+    def test_送れなかったぶんも手で押したときと同じに数える(self) -> None:
+        self.save(rows=self.clean_rows())
+        self.save(rows=[detail(1, page=2, kz="8", kh="0", sz="17", sh="0", tim="0")], page=2)
+        with patch("nippou.access_bridge.pusher.push_pending",
+                   return_value=self.outcome(ok=[self.KEY], ng=[(DAY, LINE, SHIFT, 2)])), \
+                patch("nippou.services.shift_check.run_pending", return_value=[]), \
+                patch("nippou.services.push_history.share"):
+            self.run_auto()
+        row, = self.repo.push_history()
+        self.assertEqual((row["result"], row["pages"], row["failed_pages"], row["detail"]),
+                         ("一部送れなかった", 2, 1, "ロック中です"))
+
+    def test_関門で止めたときも残す(self) -> None:
+        self.save(rows=[detail(1, ken="1", mai="10", tut="10")])
+        with patch("nippou.access_bridge.pusher.push_pending") as push, \
+                patch("nippou.services.push_history.share"):
+            self.run_auto()
+        push.assert_not_called()
+        self.assertEqual([(h[1], h[2], h[3], h[4]) for h in self.history()],
+                         [(SHIFT, "関門で止めた", "(自動確定)", "残り5分の自動確定")])
+
+    def test_送ろうとしていなければ残さない(self) -> None:
+        """確かめられなかった・送るものが無かった・送る途中で落ちた は「送った」ではない。"""
+        self.save(rows=self.clean_rows())
+        with patch("nippou.services.shift_check.run_pending", side_effect=RuntimeError("x")):
+            self.run_auto()
+        self.assertEqual(self.history(), [])
+        from nippou.services import shift_close
+        for head in self.repo.pending_sync_headers():
+            self.repo.mark_synced((head.report_date, head.line, head.shift, head.page))
+        shift_close.reset()
+        self.repo.conn.execute("DELETE FROM print_status")
+        with patch("nippou.access_bridge.pusher.push_pending") as push:
+            self.run_auto()
+        push.assert_not_called()
+        self.assertEqual(self.history(), [])
+
+    def test_残せなくても締めと送信の結果は変わらない(self) -> None:
+        self.save(rows=self.clean_rows())
+        with patch("nippou.access_bridge.pusher.push_pending",
+                   return_value=self.outcome(ok=[self.KEY])), \
+                patch("nippou.services.push_history.record_push",
+                      side_effect=RuntimeError("書けない")):
+            result = self.run_auto()
+        self.assertTrue(result.ran)
+        self.assertEqual(result.pushed, 1)
+        self.assertTrue(self.repo.is_shift_closed(SHIFT, BUSINESS_DATE, LINE))
+
+    def test_拾って送ったときは通し方が違う(self) -> None:
+        """翌朝の拾い。押したときの直 = 拾った画面のいまの直。"""
+        key3 = (DAY, LINE, "3直", 1)
+        self.repo.save(header(shift="3直"), [detail(1, shift="3直", kz="22", kh="0",
+                                                     sz="8", sh="0", tim="540", s="0", th="60")])
+        from nippou.services import shift_close
+        with patch("nippou.access_bridge.pusher.push_pending",
+                   return_value=self.outcome(ok=[key3])), \
+                patch("nippou.services.push_history.share"):
+            done = shift_close.sweep(self.repo, self.calc, line=LINE, now=EARLY)
+        self.assertEqual(done[-1].pushed, 1)
+        self.assertEqual(self.history(), [(DAY, "3直", "送れた", "(自動確定)",
+                                           "次の直の画面が拾って送った", f"{DAY} {SHIFT}")])
 
 
 class GateTests(ShiftCloseTestCase):

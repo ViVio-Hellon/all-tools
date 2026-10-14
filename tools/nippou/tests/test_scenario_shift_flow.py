@@ -472,14 +472,62 @@ class A2_ReminderTests(ScenarioCase):
         self.at("2026-10-05 14:57")
         self.assertIsNone(self.get("/api/sound/due").get_json()["play"])
 
-    def test_自動で送った直は共有保存の履歴に残らない(self) -> None:
-        """【要相談】履歴は「押した」記録なので、自動確定で送った直は表に出ない。"""
+    def test_自動で送った直も共有保存の履歴に残る(self) -> None:
+        """【v4.34.2 で直した】「送ったのだから履歴に載せるべきです」。
+        押した人は「(自動確定)」、通し方は「残り5分の自動確定」。共有の表へも送った直後に写る。"""
         self.start_shift("2026-10-05 07:05", "山田")
         self.at("2026-10-05 14:30")
         self.save(clean_shift_rows("1直", "A"))
         self.close_tick("2026-10-05 14:55")
-        self.assertEqual(self.history(), [])
-        self.assertEqual(self.shared_history(), [])
+        found = [(h["report_date"], h["shift"], h["result"], h["pressed_by"], h["via"],
+                  h["pages"], h["worker"], h["pressed_key"]) for h in self.history()]
+        self.assertEqual(found, [("2026年10月5日", "1直", "送れた", "(自動確定)",
+                                  "残り5分の自動確定", 1, "山田", "2026年10月5日 1直")])
+        self.assertTrue(self.history()[0]["pressed_at"].startswith("2026-10-05T14:55"))
+        shared = [(r["直"], r["結果"], r["押した人"], r["通し方"]) for r in self.shared_history()]
+        self.assertEqual(shared, [("1直", "送れた", "(自動確定)", "残り5分の自動確定")])
+
+    def test_翌朝の拾いで送った直も履歴に残り_通し方で分かれる(self) -> None:
+        """06:55 に画面が開いていなかった3直を、07:06 の1直の画面が拾って送る。"""
+        self.start_shift("2026-10-05 22:55", "夜勤")
+        self.at("2026-10-06 06:30")
+        self.save(clean_shift_rows("3直", "C"), "夜勤")
+        self.restart_app()
+        self.at("2026-10-06 07:05")
+        self.open_screen()
+        self.close_tick("2026-10-06 07:06")
+        found = [(h["report_date"], h["shift"], h["result"], h["pressed_by"], h["via"],
+                  h["pressed_key"]) for h in self.history()]
+        self.assertEqual(found, [("2026年10月5日", "3直", "送れた", "(自動確定)",
+                                  "次の直の画面が拾って送った", "2026年10月6日 1直")])
+        self.assertEqual([r["通し方"] for r in self.shared_history()],
+                         ["次の直の画面が拾って送った"])
+
+    def test_自動で送れなかったときも残り_届いてから写る(self) -> None:
+        """共有に届かない日の自動確定は「送れなかった」で残り、共有の表へは届いてから写る。"""
+        self.shared_offline()
+        self.start_shift("2026-10-05 07:05", "山田")
+        self.at("2026-10-05 14:30")
+        self.save(clean_shift_rows("1直", "A"))
+        self.close_tick("2026-10-05 14:55")
+        self.assertEqual([(h["result"], h["pressed_by"], h["shared"]) for h in self.history()],
+                         [("送れなかった", "(自動確定)", 0)])
+        self.shared_online()
+        self.assertEqual(self.push(worker="佐藤").status_code, 200)
+        self.assertEqual([(r["結果"], r["押した人"]) for r in self.shared_history()],
+                         [("送れなかった", "(自動確定)"), ("送れた", "佐藤")])
+
+    def test_自動確定が関門で止めたときも手で押したときと同じに残す(self) -> None:
+        self.start_shift("2026-10-05 07:05", "山田")
+        rows = clean_shift_rows("1直", "A")
+        rows["2"]["TH"] = "30"                         # 休憩30分
+        self.at("2026-10-05 14:30")
+        self.save(rows)
+        self.close_tick("2026-10-05 14:55")
+        self.assertEqual([(h["shift"], h["result"], h["pressed_by"], h["via"])
+                          for h in self.history()],
+                         [("1直", "関門で止めた", "(自動確定)", "残り5分の自動確定")])
+        self.assertIn("休憩", self.history()[0]["detail"])
 
     def test_自動で送った直も標準作業時間へ入る(self) -> None:
         """「共有へ保存」で送った直は標準作業時間へ写る。自動確定で送った直も同じに写ること。"""
@@ -685,21 +733,67 @@ class A5_DayShiftTests(ScenarioCase):
         self.assertEqual(res.status_code, 422)
         self.assertIn("休憩", res.get_json()["error"]["message"])
 
-    @unittest.expectedFailure
     def test_日勤の残業は17時を過ぎても打てる(self) -> None:
-        """【NG・未修正】確かめ(最終時間)は日勤の残業 18:00/19:00 を認めているのに、
-        画面の固定が 17:00 ちょうどで閉じるので、残業の行を保存できない。
-        「次の直を始める」→作業者を選び直しても同じ日勤に固定され、すぐ見るだけに戻る。"""
+        """【v4.34.2 で直した】確かめ(最終時間)は日勤の残業 18:00/19:00 を認めている。
+        画面の固定も日勤だけは残業の終わり(19:00)まで開けておくので、残業の行を保存できる。
+        「共有へ保存」も最後の行 19:00 で通る。"""
         self.start_shift("2026-10-05 08:05", "日勤者")
         self.at("2026-10-05 18:50")
-        self.assertEqual(self.save(self.day_rows("19:00")).status_code, 200)
+        res = self.save(self.day_rows("19:00"))
+        self.assertEqual(res.status_code, 200, res.get_json().get("message"))
+        self.assertEqual((res.get_json()["report_date"], res.get_json()["shift"]),
+                         ("2026年10月5日", "日勤"))
+        self.assertEqual(self.push().status_code, 200)
+        self.assertEqual(self.shared_lots("トット")[("2026年10月5日", "日勤", 1)],
+                         ["D01", "D02", "D03"])
 
-    def test_日勤の残業は17時を過ぎると保存できない_いまの動き(self) -> None:
+    def test_日勤の残業中は帯が残業の終わりまでを言い_画面とサーバがそろう(self) -> None:
+        """17:00〜19:00 は開いたまま(見るだけにしない)。1分の見張りも同じ答えで、
+        帯には「残業の行は19:00まで打てます」。19:00 ちょうどで見るだけ・保存も断る。"""
         self.start_shift("2026-10-05 08:05", "日勤者")
-        self.at("2026-10-05 18:50")
+        self.at("2026-10-05 17:30")
+        body = self.state(self.day_rows("18:00"), "日勤者")
+        watch = self.get("/api/shift/key?report_date=2026年10月5日&shift=日勤&page=1"
+                         ).get_json()
+        self.assertFalse(body["read_only"])
+        self.assertFalse(watch["anchor_standing"]["expired"])
+        self.assertEqual(watch["anchor_standing"]["minutes_left"], 90)
+        self.assertIn("残業の行は19:00まで打てます", watch["anchor_standing"]["message"])
+        self.at("2026-10-05 19:00")
+        closed = self.state(worker="日勤者")
+        self.assertTrue(closed["read_only"])
+        self.assertEqual(closed["read_only_reason"], "anchor")
+        self.assertTrue(self.get("/api/shift/key").get_json()["anchor_standing"]["expired"])
         self.assertEqual(self.save(self.day_rows("19:00")).status_code, 403)
-        again = self.next_shift("2026-10-05 18:51", "日勤者")
-        self.assertTrue(again["read_only"], "選び直すと打てるようになった(直ったなら上の試験を外す)")
+
+    def test_日勤の5分前の確定のあとに残業を打つと未送信に戻る(self) -> None:
+        """5分前の自動確定は定時(16:55)で走って送る。そのあとの残業の行は未送信に戻り、
+        翌朝の引き継ぎに「共有へ保存」1押しで出る(1直で打ち足したときと同じ)。"""
+        self.start_shift("2026-10-05 08:05", "日勤者")
+        self.at("2026-10-05 16:30")
+        self.save(self.day_rows())
+        self.assertEqual(self.close_tick("2026-10-05 16:55")["pushed"], 1)
+        self.at("2026-10-05 18:00")
+        self.assertEqual(self.save(self.day_rows("18:00")).status_code, 200)
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "日勤", 1)})
+        self.assertFalse(self.close_tick("2026-10-05 18:01")["ran"])
+        # 翌朝: 前の日の日勤はとっくに閉じている。次の直を始めると、その日の日勤
+        body = self.next_shift("2026-10-06 07:30", "日勤者")
+        self.assertEqual((body["report_date"], body["shift"]), ("2026年10月6日", "日勤"))
+        self.assertTrue(body["handover"]["blocked"])
+        self.assertTrue(body["handover"]["all_clean"])
+
+    def test_日勤ラインで17時過ぎに開き直してもその日の日勤で19時まで(self) -> None:
+        """起動し直して 17:30 に作業者を選ぶと、その日の日勤に固定され、残業の終わりまで打てる。
+        19:00 を過ぎてから選ぶと、その日の日勤に固定されてすぐ見るだけ(翌日の紙にはしない)。"""
+        self.restart_app()
+        body = self.start_shift("2026-10-05 17:30", "日勤者")
+        self.assertEqual((body["report_date"], body["shift"]), ("2026年10月5日", "日勤"))
+        self.assertFalse(body["read_only"])
+        self.restart_app()
+        late = self.start_shift("2026-10-05 19:10", "日勤者")
+        self.assertEqual((late["report_date"], late["shift"]), ("2026年10月5日", "日勤"))
+        self.assertTrue(late["read_only"])
 
 
 # ======================================================================
@@ -735,8 +829,10 @@ class B_SaveOrNotTests(ScenarioCase):
         self.assertTrue(band["any_left"])
         self.assertFalse(band["blocked"])
         self.assertIn("佐藤 が引き継ぎました", band["notes"][0])
+        # 14:55 の自動確定が関門で止めたぶんも残る(押した人「(自動確定)」。v4.34.2)
         results = [(h["shift"], h["result"], h["pressed_by"]) for h in self.history()]
-        self.assertEqual(results, [("1直", "関門で止めた", "佐藤"), ("1直", "関門で止めた", "佐藤"),
+        self.assertEqual(results, [("1直", "関門で止めた", "(自動確定)"),
+                                   ("1直", "関門で止めた", "佐藤"), ("1直", "関門で止めた", "佐藤"),
                                    ("1直", "直せないまま引き継いだ", "佐藤")])
 
     def test_B2_何も打たずに直が終わった(self) -> None:
@@ -1217,8 +1313,13 @@ class D_PushTogetherTests(ScenarioCase):
         self.assertEqual([r["shift"] for r in res.get_json()["reports"] if not r["ok"]], ["2直"])
         self.assertEqual(self.shared_keys(), set(), "止めたのに一部を送った")
         self.assertEqual({k[1] for k in self.dirty_keys()}, {"1直", "2直", "3直"})
-        self.assertEqual([(h["shift"], h["result"]) for h in self.history()
-                          if h["result"] == "関門で止めた"], [("2直", "関門で止めた")])
+        # 手で押したのは1回。06:55 の3直の自動確定と、同じ1分に拾った2直(確定し忘れ)の
+        # 送信も2直に止められて残る(v4.34.2)
+        self.assertEqual([(h["shift"], h["result"], h["pressed_by"], h["via"]) for h in self.history()
+                          if h["result"] == "関門で止めた"],
+                         [("2直", "関門で止めた", "(自動確定)", "残り5分の自動確定"),
+                          ("2直", "関門で止めた", "(自動確定)", "次の直の画面が拾って送った"),
+                          ("2直", "関門で止めた", "鈴木", "")])
         # 管理者が2直を直せば、次の1回で全部届く
         self.admin_on()
         self.recall("2026年10月5日", "2直")
@@ -1477,8 +1578,12 @@ class E_AccessTests(ScenarioCase):
         self.assertFalse(self.shared_path.exists())
         self.assertNotIn("T_日報集計", joined)
         self.assertNotIn("T_共有保存履歴", joined)
-        self.assertEqual({h["result"] for h in self.history() if h["result"] != "直せないまま引き継いだ"},
+        # 手で押したぶんは送れた。14:55 の自動確定(共有に届かない)は送れなかったで残る(v4.34.2)
+        self.assertEqual({h["result"] for h in self.history()
+                          if h["result"] != "直せないまま引き継いだ" and h["pressed_by"] != "(自動確定)"},
                          {"送れた"})
+        self.assertEqual([h["result"] for h in self.history() if h["pressed_by"] == "(自動確定)"],
+                         ["送れなかった"])
         self.assertTrue(all(not h["shared"] for h in self.history()))
         # 【注意】集計(packing_report)は Access へは送らないので、手元で未送信のまま
         self.assertTrue(self.packing("2026年10月5日", "1直").dirty)

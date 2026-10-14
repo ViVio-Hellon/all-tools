@@ -677,6 +677,13 @@ function timingLegend(chart) {
   fill.className = "timing__fill-note";
   fill.textContent = "塗り = 押したあと共有に出ている / 白抜き = 出ていない(関門で止めた・送れなかった)";
   list.append(fill);
+  // 自動で送った点の読み方(v4.34.2)。**あるときだけ** ── 文はサーバが決める
+  if (chart.auto_note) {
+    const auto = document.createElement("li");
+    auto.className = "timing__fill-note";
+    auto.textContent = chart.auto_note;
+    list.append(auto);
+  }
   return list;
 }
 

@@ -219,7 +219,9 @@ def run(repo: NippouRepository, calc: ShiftCalculator, *,
         base.reason = f"{shift} は確定済みです"
         return base
 
-    return _close(repo, base)
+    # 共有保存の履歴には「残り5分の自動確定」で送ったと残す(押したときの直 = 確定した直)
+    return _close(repo, base, sent_by=_Sender(
+        via=_history().VIA_AUTO_CLOSE, current=(report_date, line, shift), at=now))
 
 
 def sweep(repo: NippouRepository, calc: ShiftCalculator, *, line: str,
@@ -258,8 +260,10 @@ def sweep(repo: NippouRepository, calc: ShiftCalculator, *, line: str,
                                   shift=key[2], minutes_left=0)
         done.append(_close(repo, result, push=False))
     if done:
-        # 送るのは最後に1度だけ。**直の数だけ共有を開かない**
-        _push_if_clean(repo, done[-1])
+        # 送るのは最後に1度だけ。**直の数だけ共有を開かない**。共有保存の
+        # 履歴には「次の直の画面が拾って送った」(押したときの直 = 拾った画面のいまの直)
+        _push_if_clean(repo, done[-1], _Sender(
+            via=_history().VIA_SWEEP, current=current, at=now))
         log.info("終わった直を%d件あとから締めました: %s", len(done),
                  "、".join(f"{r.report_date} {r.shift}" for r in done))
     return done
@@ -284,8 +288,28 @@ def _unclosed_keys(repo: NippouRepository, *, line: str,
     return found
 
 
+@dataclass(frozen=True)
+class _Sender:
+    """自動で送るときに、共有保存の履歴へ書く「押したとき」(v4.34.2)。
+
+    `via` はどの自動の道か(`push_history.VIA_AUTO_CLOSE` / `VIA_SWEEP`)、
+    `current` は「押したときの直」の欄に入れる直、`at` は押した日時の代わり。
+    """
+
+    via: str
+    current: tuple[str, str, str]
+    at: Optional[datetime] = None
+
+
+def _history():
+    """`services/push_history`(読み込みの輪を作らないよう、使うときに読む)。"""
+    from . import push_history
+    return push_history
+
+
 def _close(repo: NippouRepository, result: ShiftCloseResult, *,
-           push: bool = True) -> ShiftCloseResult:
+           push: bool = True,
+           sent_by: Optional[_Sender] = None) -> ShiftCloseResult:
     """チェックを走らせ、集計を作り直し、締めた印を立てる。"""
     from . import shift_check, summary
 
@@ -341,7 +365,9 @@ def _close(repo: NippouRepository, result: ShiftCloseResult, *,
     # `push=False` は `sweep` から。何直ぶんも締めるときに直の数だけ
     # 共有を開かないよう、送るのは最後に1度だけにします
     if push:
-        _push_if_clean(repo, result)
+        _push_if_clean(repo, result, sent_by or _Sender(
+            via=_history().VIA_AUTO_CLOSE,
+            current=(result.report_date, result.line, result.shift)))
 
     log.info("自動確定しました key=%s 残り%d分 ページ=%d 指摘=%d 送信=%d",
              key, result.minutes_left, result.pages, len(result.findings),
@@ -349,7 +375,8 @@ def _close(repo: NippouRepository, result: ShiftCloseResult, *,
     return result
 
 
-def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult) -> None:
+def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
+                   sent_by: _Sender) -> None:
     """共有へ未送信のものが**ぜんぶ綺麗なら**送る。
 
     見るのは「送ろうとしているぶん全部」です ── 手で押す
@@ -359,6 +386,11 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult) -> None:
 
     **送れなくても締めた印は消しません。** 送るのは締めのあとの話で、
     共有が落ちている日に直の確定までできなくなるほうが重い。
+
+    **送ろうとしたことは共有保存の履歴に残します**(v4.34.2 `_keep_history`)──
+    送れた/一部送れなかった/送れなかった は手で押したときと同じ `record_push`、
+    関門で止めたときは `record_blocked`。送るものが無かった・確かめられなかった
+    (送ろうとしていない)ときは残しません。
     """
     from ..access_bridge import pusher
     from ..config import SETTINGS
@@ -377,6 +409,9 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult) -> None:
         result.push_note = (f"直すところがあるので共有へは送っていません"
                             f"({names})")
         log.info("自動送信を見送りました: %s", names)
+        # 手で押して関門で止めたときと同じに残す(止められた直ごとに1行)
+        _keep_history(repo, lambda pressed: _history().record_blocked(
+            repo, pressed, blocked), sent_by)
         return
     if not repo.pending_sync_headers():
         result.push_note = "共有へ未送信のものはありません"
@@ -392,8 +427,31 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult) -> None:
     result.pushed = len(summary_.succeeded)
     if summary_.failed:
         result.push_note = f"共有へ送れなかったものが{len(summary_.failed)}件あります"
+    if summary_.succeeded or summary_.failed:
+        # **送ったのだから履歴に載せる。** 数え方は手で押したときと同じ `record_push`
+        # (送った直ごとに1行)。何も送らなかったときは「送るもの無し」を作らない
+        _keep_history(repo, lambda pressed: _history().record_push(
+            repo, pressed, summary_, sent_by.current), sent_by)
     if summary_.succeeded:
         _after_push(repo, list(summary_.succeeded))
+
+
+def _keep_history(repo: NippouRepository, record, sent_by: _Sender) -> None:
+    """共有保存の履歴を残し、共有の T_共有保存履歴 へ写す(`routes/settings._keep_history` と同じ)。
+
+    **何が起きても締め・送信の結果は変えません。** 写せなかった行は手元に
+    `shared=0` で残り、次に誰かが送ったとき(手でも自動でも)に写ります。
+    """
+    history = _history()
+    try:
+        record(history.Pressed.auto(sent_by.current, via=sent_by.via, at=sent_by.at))
+    except Exception:                             # noqa: BLE001 - 記録で締めを止めない
+        log.exception("自動送信: 共有保存の履歴を残せませんでした")
+        return
+    try:
+        history.share(repo, SETTINGS.access_db_path)
+    except Exception:                             # noqa: BLE001 - 次の保存で写す
+        log.exception("自動送信: 共有保存の履歴を共有へ写せませんでした")
 
 
 def _after_push(repo: NippouRepository, pushed_keys: list) -> None:
@@ -403,8 +461,9 @@ def _after_push(repo: NippouRepository, pushed_keys: list) -> None:
     だけを写す作りなので、5分前の自動確定や翌朝の拾いで送られた直は
     **いつまでも標準作業時間に入りません**でした(2つ目の出力先も同じ)。
 
-    共有保存の履歴(`push_history`)には残しません ── あちらは「押した」記録です。
-    月替わりの書き出しもしません(VBA も自動印刷では飛ばしていた)。
+    共有保存の履歴(`push_history`)は `_push_if_clean` が残します(v4.34.2 から。
+    それまでは「押した記録だから」と残していませんでした)。
+    月替わりの書き出しはしません(VBA も自動印刷では飛ばしていた)。
     **どちらが失敗しても、送れたことは変わりません。**
     """
     from . import second_output, standard_time

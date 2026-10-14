@@ -48,9 +48,12 @@ function paintPushLog(view) {
   paintTimingChart(document.getElementById("push-log-chart"), view.chart);
   const counts = document.getElementById("push-log-counts");
   if (counts) {
-    // 並びはサーバが決めた順(押した回数 → 直内 → 直の後 → 結果)
+    // 並びはサーバが決めた順(押した回数 → うち自動 → 直内 → 直の後 → 結果)。
+    // 「うち自動」は残り5分の自動確定・次の直の画面の拾いで送った回数(v4.34.2。
+    // 自動で送ったぶんも「押した」に入っている)
     counts.textContent = (view.counts || [])
-      .map(([label, n]) => (label === "押した" ? `押した ${n}回` : `${label} ${n}`))
+      .map(([label, n]) => (label === "押した" ? `押した ${n}回`
+        : label === "うち自動" ? `うち自動 ${n}回` : `${label} ${n}`))
       .join(" / ");
   }
   const source = document.getElementById("push-log-source");

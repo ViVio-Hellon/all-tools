@@ -165,6 +165,21 @@ class ShiftEndTests(unittest.TestCase):
             self.assertEqual(save_checks.check_shift_end(
                 [row(1, sz=end, sh="0")], "日勤", "17:00"), [], end)
 
+    def test_日勤の残業は作業可能時間も残業の終わりまで(self) -> None:
+        """最終時間は 19:00 を通すのに、長さを定時(17:00)までで数えると
+        「作業可能時間を超えています」で止まり、19:00 まで打った日勤は保存できなかった(v4.34.2)。"""
+        rows = [row(1, shift="日勤", lot="A", kz="8", kh="0", sz="12", sh="0", tim="240"),
+                row(2, shift="日勤", kz="12", kh="0", sz="13", sh="0", s="0", th="60", tim="0"),
+                row(3, shift="日勤", lot="B", kz="13", kh="0", sz="19", sh="0", tim="360")]
+        found = save_checks.run_all(rows, shift="日勤", shift_start="08:00", shift_end="17:00")
+        self.assertNotIn(save_checks.OVER_SHIFT_TOTAL, {f.code for f in found})
+        self.assertNotIn(save_checks.SHIFT_END, {f.code for f in found})
+        self.assertEqual(save_checks.latest_end("日勤", "17:00"), "19:00")
+        # 1直は定時まで(変えない)
+        self.assertEqual(save_checks.latest_end("1直", "15:00"), "15:00")
+        over = save_checks.run_all(rows, shift="1直", shift_start="08:00", shift_end="17:00")
+        self.assertIn(save_checks.OVER_SHIFT_TOTAL, {f.code for f in over})
+
     def test_日勤以外の残業は通さない(self) -> None:
         found = save_checks.check_shift_end(
             [row(1, sz="18", sh="0")], "1直", "17:00")

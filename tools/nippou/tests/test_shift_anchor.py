@@ -36,6 +36,7 @@ import sys
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -157,6 +158,88 @@ class DecideTests(unittest.TestCase):
             found = shift_anchor.decide(_anchor(), now=now,
                                         shift_end=self.end1())
             self.assertNotIn("**", found.message)
+
+
+class DayShiftOvertimeTests(unittest.TestCase):
+    """**日勤だけは残業の終わり(19:00)で閉じる**(v4.34.2)。
+
+        「1.直してください」(日勤ラインの残業 17:00 以降が打てない)
+
+    確かめの側(`save_checks.DAY_SHIFT_OVERTIME_ENDS`)が残業の終わり 18:00 / 19:00 を
+    認めているのに、固定が 17:00 ちょうどで閉じていた。閉じる時刻は確かめの側が
+    認める最大の終わり。**1直・2直・3直の境は変えない。**
+    """
+
+    def setUp(self) -> None:
+        self.calc = ShiftCalculator(TIMES)
+        self.day = date(2026, 10, 5)
+
+    def day_anchor(self) -> Anchor:
+        return Anchor(active=True, report_date="2026年10月5日", line="トット",
+                      shift="日勤", started_at="2026-10-05T08:05:00")
+
+    def decide(self, hour, minute=0, day=5, anchor=None, shift="日勤"):
+        business = self.day
+        return shift_anchor.decide(
+            anchor or self.day_anchor(), now=datetime(2026, 10, day, hour, minute),
+            shift_end=self.calc.shift_end_at(shift, business),
+            close_at=self.calc.input_close_at(shift, business))
+
+    def test_閉じる時刻は日勤だけ残業の終わり(self) -> None:
+        self.assertEqual(self.calc.input_close_at("日勤", self.day),
+                         datetime(2026, 10, 5, 19, 0))
+        for shift in ("1直", "2直", "3直"):
+            self.assertEqual(self.calc.input_close_at(shift, self.day),
+                             self.calc.shift_end_at(shift, self.day), shift)
+        self.assertIsNone(self.calc.input_close_at("4直", self.day))
+
+    def test_定時が残業の終わりより遅ければ定時(self) -> None:
+        late = ShiftCalculator(ShiftTimes(start_day="10:00", end_day="20:00"))
+        self.assertEqual(late.input_close_at("日勤", self.day), datetime(2026, 10, 5, 20, 0))
+
+    def test_確かめの側の定数を読む(self) -> None:
+        from nippou.logic import save_checks
+        with patch.object(save_checks, "DAY_SHIFT_OVERTIME_ENDS", ("18:30",)):
+            self.assertEqual(self.calc.input_close_at("日勤", self.day),
+                             datetime(2026, 10, 5, 18, 30))
+
+    def test_定時を過ぎても残業の終わりまでは打てる_言うことも言う(self) -> None:
+        found = self.decide(18, 50)
+        self.assertTrue(found.open)
+        self.assertFalse(found.expired)
+        self.assertEqual((found.minutes_left, found.minutes_over), (10, 110))
+        self.assertIn("定時(17:00)を過ぎています", found.message)
+        self.assertIn("残業の行は19:00まで打てます", found.message)
+        self.assertIn("共有へ保存", found.message)
+        self.assertNotIn("**", found.message)
+
+    def test_定時の前は何も言わない(self) -> None:
+        found = self.decide(16, 0)
+        self.assertTrue(found.open)
+        self.assertEqual(found.message, "")
+        self.assertEqual(found.minutes_left, 180, "見るだけになるまで = 19:00 まで")
+
+    def test_残業の終わりちょうどで見るだけ(self) -> None:
+        for hour, minute in ((19, 0), (21, 0)):
+            found = self.decide(hour, minute)
+            self.assertTrue(found.expired, (hour, minute))
+            self.assertIn("見るだけです", found.message)
+
+    def test_翌朝は前の日の日勤はとっくに閉じている(self) -> None:
+        self.assertTrue(self.decide(7, 30, day=6).expired)
+
+    def test_猶予は残業の終わりから数える(self) -> None:
+        found = shift_anchor.decide(
+            self.day_anchor(), now=datetime(2026, 10, 5, 19, 10),
+            shift_end=datetime(2026, 10, 5, 17, 0), grace_minutes=30,
+            close_at=datetime(2026, 10, 5, 19, 0))
+        self.assertTrue(found.open)
+        self.assertEqual(found.minutes_left, 20)
+
+    def test_1直は15時ちょうどで閉じたまま(self) -> None:
+        """ほかの直の境は変えない(閉じる時刻 = 直の終わり)。"""
+        self.assertTrue(self.decide(15, 0, anchor=_anchor(), shift="1直").expired)
+        self.assertFalse(self.decide(14, 59, anchor=_anchor(), shift="1直").expired)
 
 
 class GraceDefaultTests(unittest.TestCase):

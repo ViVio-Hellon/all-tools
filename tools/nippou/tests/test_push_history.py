@@ -12,6 +12,8 @@
        足りなければ足す**。既存の日報の表には列を足さない
     3. 共有に届かなかった行は手元に残り、次の保存で写す。ファイルは作らない
     4. 表・グラフ(直の終わりから何分後)・CSV
+    5. 自動で送った直も残す(v4.34.2「送ったのだから履歴に載せるべきです」)。
+       押した人は「(自動確定)」、通し方はどの自動の道か。表の上の数に「うち自動」
 """
 from __future__ import annotations
 
@@ -138,6 +140,51 @@ class PressedByTests(RepoCase):
         """設定画面・確認画面から押したとき。"""
         self.save("2直", "佐藤")
         self.assertEqual(ph.Pressed.now(self.repo, (DAY, "L-1", "2直")).by, "佐藤")
+
+
+class AutoPressedTests(RepoCase):
+    """**自動で送ったとき**(v4.34.2)── 押した人は空にせず「(自動確定)」。"""
+
+    def test_押した人と通し方(self) -> None:
+        from datetime import datetime
+        pressed = ph.Pressed.auto((DAY, "L-1", "1直"), via=ph.VIA_AUTO_CLOSE,
+                                  at=datetime(2026, 9, 25, 14, 55))
+        self.assertEqual((pressed.by, pressed.via, pressed.key_text, pressed.at),
+                         ("(自動確定)", "残り5分の自動確定", f"{DAY} 1直",
+                          "2026-09-25T14:55:00"))
+        self.assertTrue(pressed.terminal is not None)
+
+    def test_数え方は手で押したときと同じ(self) -> None:
+        """送れた/一部送れなかった/送れなかった は `record_push` の同じ道。"""
+        a = self.save("1直", "山田")
+        b = self.save("2直", "佐藤", page=1)
+        c = self.save("2直", "佐藤", page=2)
+        pressed = ph.Pressed.auto((DAY, "L-1", "2直"), via=ph.VIA_SWEEP)
+        rows = {r["shift"]: r for r in ph.record_push(
+            self.repo, pressed, self.summary(ok=[a, b], ng=[c]), (DAY, "L-1", "2直"))}
+        self.assertEqual((rows["1直"]["result"], rows["2直"]["result"]), (ph.SENT, ph.PARTIAL))
+        self.assertEqual({r["pressed_by"] for r in rows.values()}, {"(自動確定)"})
+        self.assertEqual({r["via"] for r in rows.values()}, {"次の直の画面が拾って送った"})
+        self.assertEqual(rows["1直"]["worker"], "山田")
+
+    def test_自動の行を見分ける(self) -> None:
+        self.assertTrue(ph.is_auto({"pressed_by": "(自動確定)"}))
+        self.assertTrue(ph.is_auto({"pressed_by": "", "via": ph.VIA_SWEEP}))
+        self.assertFalse(ph.is_auto({"pressed_by": "佐藤", "via": "設備移動のため保存"}))
+        self.assertFalse(ph.is_auto({}))
+
+    def test_共有の表へも同じ列で写る(self) -> None:
+        self.make_shared()
+        a = self.save("1直", "山田")
+        ph.record_push(self.repo, ph.Pressed.auto((DAY, "L-1", "1直"), via=ph.VIA_AUTO_CLOSE),
+                       self.summary(ok=[a]), (DAY, "L-1", "1直"))
+        self.assertEqual(ph.share(self.repo, self.shared), 1)
+        conn = sqlite3.connect(self.shared)
+        try:
+            got = conn.execute(f'SELECT 押した人, 通し方, 結果 FROM "{ph.SHARED_TABLE}"').fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(got, [("(自動確定)", "残り5分の自動確定", ph.SENT)])
 
 
 class SharedTableTests(RepoCase):
@@ -355,6 +402,53 @@ class ViewTests(RepoCase):
         self.assertIn("その直の担当者 山田", point["tip"])
         self.assertIn("直の終わりの10分前(直内)", point["tip"])
 
+    def auto_rows(self) -> None:
+        """14:55 の自動確定(1直)と、翌朝の拾い(2直)を足す。"""
+        self.repo.add_push_history([
+            {"id": "auto1", "pressed_at": "2026-09-25T14:55:00", "report_date": DAY,
+             "line": "L-1", "shift": "1直", "worker": "山田", "pressed_by": ph.AUTO_PRESSED_BY,
+             "via": ph.VIA_AUTO_CLOSE, "result": ph.SENT, "pages": 1},
+            {"id": "auto2", "pressed_at": "2026-09-26T07:06:00", "report_date": DAY,
+             "line": "L-1", "shift": "2直", "worker": "佐藤", "pressed_by": ph.AUTO_PRESSED_BY,
+             "via": ph.VIA_SWEEP, "result": ph.FAILED, "pages": 1}])
+
+    def test_自動で送った行は押した数に入り_うち自動を添える(self) -> None:
+        """送った事実なので「押した」に入れる。表の上の数は 押した → うち自動 → 直内 の順。"""
+        self.seed()
+        self.auto_rows()
+        counts = self.view().counts
+        self.assertEqual(counts["押した"], 5)
+        self.assertEqual(counts[push_log.AUTO_COUNT], 2)
+        self.assertEqual(list(counts)[:4], ["押した", "うち自動", "直内", "直の後"])
+        # 自動が無ければ「うち自動」は出さない
+        self.repo.conn.execute("DELETE FROM push_history WHERE id LIKE 'auto%'")
+        self.assertNotIn(push_log.AUTO_COUNT, self.view().counts)
+
+    def test_表の通し方と押した人で自動が分かる(self) -> None:
+        self.seed()
+        self.auto_rows()
+        table = self.view().table
+        via = table.columns.index("通し方")
+        by = table.columns.index("押した人")
+        autos = [(r[3], r[by], r[via]) for r in table.rows if r[by] == ph.AUTO_PRESSED_BY]
+        self.assertEqual(autos, [("1直", "(自動確定)", "残り5分の自動確定"),
+                                 ("2直", "(自動確定)", "次の直の画面が拾って送った")])
+
+    def test_点の説明で自動が分かる(self) -> None:
+        self.seed()
+        self.auto_rows()
+        chart = self.view().chart
+        auto = next(p for p in chart["points"] if p["auto"] and p["shift"] == "1直")
+        self.assertIn("自動で送った(残り5分の自動確定)", auto["tip"])
+        self.assertIn("送った 2026-09-25 14:55:00", auto["tip"])
+        self.assertNotIn("押した人", auto["tip"])
+        self.assertIn("自動確定", chart["auto_note"])
+        manual = next(p for p in chart["points"] if not p["auto"])
+        self.assertIn("押した人", manual["tip"])
+        # 自動の点が無ければ凡例の一行も出さない
+        self.repo.conn.execute("DELETE FROM push_history WHERE id LIKE 'auto%'")
+        self.assertEqual(self.view().chart["auto_note"], "")
+
     def test_ふつうは直内_線の下と読む(self) -> None:
         """「共有は普通直内に押すはずです」── 題も目盛りも、過ぎる前提にしない。"""
         self.seed()
@@ -458,6 +552,34 @@ class FlowTests(WebTestCase):
         text = out.read_text(encoding="utf-8-sig")
         self.assertTrue(text.startswith("押した日時,報告日,ライン,直,担当者,結果"))
         self.assertIn("全ライン", out.name)
+
+    def test_残り5分の自動確定で送ると手元と共有に残る(self) -> None:
+        """`/api/entry/close` の自動確定で共有へ送れたら、手で押したときと同じに残り、
+        送れた直後に共有の T_共有保存履歴 へ写る(v4.34.2)。"""
+        from datetime import timedelta
+
+        from nippou.logic.shift import calculator_from_master, parse_business_date
+        from nippou.services import shift_close
+        from tests.test_auto_export import payload
+        shift_close.reset()
+        self.addCleanup(shift_close.reset)
+        self.assertTrue(self.post("/api/entry/save", payload()).get_json()["saved"])
+        header = self.repo().pending_sync_headers()[0]
+        self.repo().replace_shift_times({"1": ("07:00", "15:00"), "2": ("15:00", "22:50"),
+                                         "3": ("22:50", "07:00")})
+        calc = calculator_from_master(self.repo().get_shift_times())
+        # 保存した直(時計しだい)の終わりの5分前に、自動確定を走らせる
+        at = calc.shift_end_at(header.shift, parse_business_date(header.report_date)) \
+            - timedelta(minutes=5)
+        with patch("nippou.services.shift_check.run_pending", return_value=[]):
+            result = shift_close.run(self.repo(), calc, line=header.line, now=at)
+        self.assertTrue(result.ran, result.reason)
+        self.assertEqual(result.pushed, 1)
+        row, = self.repo().push_history()
+        self.assertEqual((row["result"], row["pressed_by"], row["via"], row["worker"]),
+                         (ph.SENT, "(自動確定)", "残り5分の自動確定", "山田"))
+        self.assertTrue(row["shared"])
+        self.assertEqual(self.shared_rows(), [(header.shift, "山田", ph.SENT, "残り5分の自動確定")])
 
     def test_画面にカードがある(self) -> None:
         html = self.get("/agg").get_data(as_text=True)

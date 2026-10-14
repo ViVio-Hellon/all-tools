@@ -105,6 +105,12 @@ async function shiftWatch() {
     // 時計が 15:00 を越えても書き先は動きません ── 「直が変わりました」
     // ではなく「1直は終わっています。この画面は見るだけです」のほうが、
     // いま起きていることです。
+    //
+    // **日勤は残業の終わり(19:00)まで閉じません**(v4.34.2)。定時(17:00)から
+    // 残業の終わりまでは「定時を過ぎています。残業の行は19:00まで打てます」が
+    // 来ます。閉じる時刻を決めるのはサーバの1か所(`routes/entry.anchor_standing`
+    // → `ShiftCalculator.input_close_at`)で、ここは時刻を持ちません ── 画面が
+    // 17:00 を自分で持つと、サーバは打たせるのに画面だけ閉じる、が起きます。
     const standing = body.anchor_standing || {};
     if (standing.message) showShiftMoved(standing.message);
     else showShiftMoved(moved && moved.crossed ? moved.message : "");

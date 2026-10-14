@@ -465,6 +465,47 @@ class ShiftCalculator:
             end_dt += timedelta(days=1)
         return end_dt
 
+    def input_close_at(self, shift: str,
+                       business_date: date) -> Optional[datetime]:
+        """**固定した直の画面が閉じる時刻**(日付つき)。分からなければ None。
+
+        ふつうは直の終わり(`shift_end_at`)そのものです。**日勤だけは
+        残業の終わり**まで開けておきます(v4.34.2):
+
+            確かめの側(`logic/save_checks.check_shift_end`)は、日勤の最後の行が
+            定時(17:00)のほか、残業の終わり 18:00 / 19:00 でも通す
+              → なのに画面の固定が 17:00 ちょうどで閉じていた
+              → 残業の行は保存できず、選び直してもすぐ見るだけに戻る
+
+        閉じる時刻は「確かめの側が認める最大の終わり」です ── 定時と
+        `save_checks.DAY_SHIFT_OVERTIME_ENDS` のうち遅いほう(いまは 19:00)。
+        報告日はその日のまま(日勤は日をまたがない)なので、**翌朝には前の日の
+        日勤はとっくに閉じています**(翌朝に作業者を選べば、その日の日勤)。
+
+        **1直・2直・3直は変えません。** 残業の終わりを認めているのは日勤だけで、
+        ほかの直の境は次の直の始まりでもあります(延ばすと次の直と重なる)。
+
+        `shift_end_at` そのものは変えません ── そちらは「直の定時」で、
+        共有保存の履歴の「直の終わりから何分後に押したか」(`presenters/push_log`)や
+        過去日報の取り込みも同じものを見ています。
+        """
+        end_dt = self.shift_end_at(shift, business_date)
+        if end_dt is None or shift != DAY_SHIFT:
+            return end_dt
+        # 確かめの側と同じ定数を読む(`save_checks` は `work_time` 経由でここを
+        # 読み込むので、上で読み込むと輪になる)
+        from .save_checks import DAY_SHIFT_OVERTIME_ENDS
+
+        start_t = self.times.bounds(DAY_SHIFT)[0]
+        latest = end_dt
+        for text in DAY_SHIFT_OVERTIME_ENDS:
+            found = parse_hhmm(text)
+            # 始まりより前の時刻は「翌日の残業」とは読まない(日勤は日をまたがない)
+            if found is None or found <= start_t:
+                continue
+            latest = max(latest, datetime.combine(business_date, found))
+        return latest
+
 
 class ShiftCloseChecker:
     """直の終わりの催促と、自動で締める判断。

@@ -71,6 +71,9 @@ def _push_failed(repo: NippouRepository, report_date: str, line: str,
                  shift: str) -> bool:
     """その直を最後に送ろうとしたとき**届かなかった**か(共有保存の履歴から)。
 
+    手で押したときだけでなく、**自動で送ろうとしたとき**(残り5分の自動確定・
+    次の直の画面の拾い)の行も数えます(v4.34.2 から履歴に残る)。
+
     読めなければ False(これまでどおり「押すだけ」の出口)。
     """
     from . import push_history
