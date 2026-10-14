@@ -70,8 +70,13 @@ def index():
     # 1直を4ページ打っただけで「4直」になります。送るのは直の単位
     # (`shift_check.run_pending` が直でまとめる)なので、直で数えます。
     # **出し先は2つ**(面の見出しと本文)あるので、ここで1度だけ数えます
-    pending_shifts = len({(h.report_date, h.line, h.shift) for h in pending})
+    pending_keys = {(h.report_date, h.line, h.shift) for h in pending}
+    pending_shifts = len(pending_keys)
     report_date, line, shift = ctx.current_key(calc)
+    # **ボタンは2つ**(v4.35.0 ── いまの直 / 前の直、`logic/push_scope`)。
+    # それぞれのボタンで送るぶんを、押す前に読めるように
+    pending_current = (report_date, line, shift) in pending_keys
+    pending_previous = len(pending_keys - {(report_date, line, shift)})
     # **最初の描画をJSに任せない。** 開いた瞬間に、参照パスとマスタの
     # 状態が読める。ここで共有フォルダを開くことはない(`file_views` の説明)
     state = settings_presenter.to_dict()
@@ -88,6 +93,9 @@ def index():
         flow=current_flow(report_date, line, shift,
                           recall=ctx.recall.active).as_dict(),
         pending_count=pending_shifts,
+        pending_current=pending_current,
+        pending_previous=pending_previous,
+        current_text=f"{report_date} {shift}".strip(),
         # 控え(LocalBackup)に届くか・まだ写せていないページ(v4.12.0)
         backup=_backup_status(),
         shift_times=get_repo().get_shift_times(),
@@ -691,6 +699,23 @@ def push():
     止まったときの逃げ道は VBA と同じ範囲だけ ── `{"skip": "設備移動の
     ため保存"}` を添えると、最終時間と休憩の2本だけ通ります。梱包数や
     停止記号の間違いは通せません。
+
+    【どの直を送るか ── `scope`(v4.35.0、`logic/push_scope`)】
+
+        現在の直と前直は処理の違うボタンを設けたほうがいいと思うのですが...
+        ・普段の共有へ送る は現在の直用
+        ・エラー時に出ている 共有へ送る は 前直処理用
+
+        "current"   いまの直だけを確かめて送る(入力画面のふだんの「共有へ保存」)。
+                    前の直が未送信・エラーのままでも送れます(前の直は赤い帯に残る)
+        "previous"  いまの直ではない未送信の直ぜんぶ(溜まった過去分すべて・何日前
+                    でも)を、古い順に確かめて1回で送る(赤い帯の「過去分を共有へ
+                    送る」)。いまの直の途中には引っかかりません。**エラーのある直
+                    だけ送らずに残し、エラーの無い直は全部送ります**。知らせは
+                    「過去分: 送った直 n件 / エラーで残した直 m件」と、残した直の
+                    どの直・何のエラーか
+        無し        まとめて送る(前の版の画面・ほかの道具)。未送信ぜんぶを確かめ、
+                    1つでも引っかかれば止める(v4.34 までと同じ)
     """
     ctx = work_context.get_context()
     # **呼出モード中は断る**(`NippouDB_BlockIfRecallMode` 相当)。
@@ -710,6 +735,7 @@ def push():
 
 def _push(ctx):
     """`push` の本体。進み具合を置いたまま最後まで走る。"""
+    from nippou.logic import push_scope
     from nippou.services import shift_check
 
     payload = request.get_json(silent=True) or {}
@@ -717,17 +743,38 @@ def _push(ctx):
     # 「設備移動のため保存」で通せるのは**いまの直だけ**(v4.32.0)。前の直のぶんは
     # その直の人か管理者が通す ── 次の直の人が代わりに「休憩が取れなかった」と言えない
     mine = _current_key(ctx)
+    # **どの直を送るか**(v4.35.0)。いまの直のボタンは いまの直だけ、前の直の
+    # ボタンは いまの直ではない直だけを確かめて送る(`logic/push_scope`)
+    scope = push_scope.normalize(payload.get("scope"))
+    if mine is None:
+        # いまの直が読めなければ分けようがない ── まとめて送る(押した人を止めない)
+        scope = push_scope.SCOPE_ALL
+    keys = _scope_keys(scope, mine)
     reports = shift_check.run_pending(get_repo(), skip=skip, admin=ctx.editor,
-                                      skip_only=mine)
-    # **押したことを残す**(時刻・いまの直・担当者)。止めたときも送れた
-    # ときも同じ1回の「押した」から数える(`services/push_history`)
-    pressed, current = _pressed(ctx, reports, payload.get("worker"))
-    if shift_check.blocked_reports(reports):
-        log.info("共有への保存を断りました: %d直に直すところがあります",
-                 len(shift_check.blocked_reports(reports)))
-        _keep_history(lambda: push_history.record_blocked(
-            get_repo(), pressed, shift_check.blocked_reports(reports)))
-        body = error_body("check_failed", shift_check.combined_message(reports))
+                                      skip_only=mine, keys=keys)
+    # **押したことを残す**(時刻・いまの直・担当者・どちらのボタンか)。止めたときも
+    # 送れたときも同じ1回の「押した」から数える(`services/push_history`)
+    pressed, current = _pressed(ctx, reports, payload.get("worker"), scope=scope)
+    blocked = shift_check.blocked_reports(reports)
+    # **過去分のボタンは、引っかかった直だけ止めて、送れる直は送る**(`push_scope`
+    # の説明)。止めた直は手元に未送信のまま残り、赤い帯に出続けます
+    stopped = {(r.report_date, r.line, r.shift) for r in blocked}
+    sendable = [k for k in (keys or []) if k not in stopped]
+    held = blocked if (push_scope.holds_one_by_one(scope) and sendable) else []
+    if blocked and not held:
+        log.info("共有への保存を断りました(%s): %d直に直すところがあります",
+                 push_scope.label(scope) or "まとめて", len(blocked))
+        _keep_history(lambda: push_history.record_blocked(get_repo(), pressed, blocked))
+        message = shift_check.combined_message(reports)
+        if scope == push_scope.SCOPE_PREVIOUS:
+            # 過去分が**全部**エラーだった ── 送った直 0件 と先に言う
+            message = "\n".join([push_scope.tally_text([], blocked), message])
+        if scope == push_scope.SCOPE_CURRENT and _has_previous(mine):
+            # **前の直は別のボタンで送れる**と言う。直の途中で押したいまの直が
+            # 断られても、前の直まで送れないわけではありません
+            message += "\n※ " + push_scope.PREVIOUS_HINT
+        body = error_body("check_failed", message)
+        body["scope"] = scope
         body["reports"] = [r.as_dict() for r in reports]
         body["skip_phrase"] = shift_check.SKIP_PHRASE
         # **逃げ道で通せないものを、名指しで返す。**
@@ -768,7 +815,15 @@ def _push(ctx):
         # **422**(形は正しいが業務として通せない)。断りの中身も一緒に返す
         return jsonify(body), 422
 
-    log_button_click("push_to_access", line=ctx.line)
+    log_button_click("push_to_access", line=ctx.line,
+                     extra=push_scope.label(scope) or "まとめて")
+    if held:
+        # 止めた直も**押した記録**に残す(止められた直ごとに1行。手で押して
+        # 関門で止めたときと同じ `record_blocked`)
+        log.info("前の直のうち%d直は直すところがあるので止め、%d直を送ります",
+                 len(held), len(sendable))
+        _keep_history(lambda: push_history.record_blocked(get_repo(), pressed, held))
+        keys = sendable
     # **押す前に、送るものがあったかを数えておく。**
     #
     #     差分がなければやはり 共有へ保存 を何度も求める必要がないのでは
@@ -776,26 +831,39 @@ def _push(ctx):
     # 中身が変わっていなければ未送信は立ちません(`logic/fingerprint`)。
     # そのとき「共有へ保存: 0件」とだけ出ると、**押せなかった**ように
     # 読めます ── 何も起きなかったのではなく、送るものが無いのだと書きます
-    try:
-        nothing_to_send = not get_repo().pending_sync_headers()
-    except Exception:                             # noqa: BLE001 - 押せるように
-        nothing_to_send = False
+    nothing_to_send = keys is not None and not keys
+    if keys is None:
+        try:
+            nothing_to_send = not get_repo().pending_sync_headers()
+        except Exception:                         # noqa: BLE001 - 押せるように
+            nothing_to_send = False
     try:
         # **このあいだは終わらせない。** 途中で落ちると、ヘッダだけ送れて
         # 明細が送れていない状態が**共有側に**残る。手元のSQLiteと
         # 違って、そこは他のラインも読む場所(`nippou/running.py`)
         with running.running(PUSH_ACTION):
-            summary = pusher.push_pending(get_repo(), SETTINGS.access_db_path)
+            summary = pusher.push_pending(get_repo(), SETTINGS.access_db_path,
+                                          keys=keys)
     except Exception as exc:                      # noqa: BLE001 - 自ラインを落とさない
         log.exception("共有への保存で予期しないエラーが発生しました")
         return jsonify(error_body(
             "push_failed",
             f"共有への保存中に予期しないエラーが発生しました: {exc}")), 500
 
-    if nothing_to_send and not summary.succeeded and not summary.failed:
-        lines = ["共有はいまの中身と同じです ── 送るものはありませんでした"]
+    sent_shifts = _sent_shifts(summary)
+    if scope == push_scope.SCOPE_PREVIOUS and (sent_shifts or held or summary.failed):
+        # **過去分は、送った直とエラーで残した直を数で並べる。**
+        #
+        #     前の直を送る は溜まったエラー過去直全部送れると思っていいですよね?
+        #
+        # 全部送れたのか・何が残ったのかが一目で分かるように(v4.35.0)
+        lines = _tally_lines(sent_shifts, held)
+    elif nothing_to_send and not summary.succeeded and not summary.failed:
+        lines = [_nothing_text(scope, mine)]
     else:
-        lines = [f"共有へ保存: {len(summary.succeeded)}件"]
+        head = push_scope.label(scope)
+        lines = [f"共有へ保存({head}): {len(summary.succeeded)}件" if head
+                 else f"共有へ保存: {len(summary.succeeded)}件"]
     if summary.failed:
         lines.append(f"失敗: {len(summary.failed)}件")
         lines.extend(f"  {key}: {outcome.error}"
@@ -848,7 +916,14 @@ def _push(ctx):
     return jsonify({
         # **音の出来事「共有へ保存した」**(v4.4.0)。送れなかったページが
         # あるときは鳴らしません ── 済んだ音で、残りがあることを隠さない
-        "sound_cue": "" if summary.failed else sound.KEY_PUSHED,
+        # (止めた直があるときも同じ)
+        "sound_cue": "" if (summary.failed or held) else sound.KEY_PUSHED,
+        "scope": scope,
+        # 過去分のボタンで**止めた直**(送れた直とは別に)。画面は断りと同じ形で並べる
+        "held": [r.as_dict() for r in held],
+        # 過去分で**送った直**(直の名前。ページ数ではなく直で数える)
+        "sent_shifts": sent_shifts,
+        "skip_phrase": shift_check.SKIP_PHRASE,
         "succeeded": len(summary.succeeded),
         "failed": len(summary.failed),
         "stopped": summary.stopped,
@@ -871,6 +946,71 @@ def _standard_time(write) -> "standard_time.Outcome":
         return standard_time.Outcome(error=str(exc))
 
 
+def _sent_shifts(summary) -> list[str]:
+    """送り切れた直の名前(古い順)。1ページでも送れなかった直は入れない。"""
+    from nippou.logic import line_names, push_scope
+
+    failed = {tuple(o.key[:3]) for o in summary.failed}
+    keys = push_scope.oldest_first(tuple(k[:3]) for k in summary.succeeded)
+    return [f"{d} {line_names.label(ln)} {sh}" for d, ln, sh in keys
+            if (d, ln, sh) not in failed]
+
+
+def _tally_lines(sent: list[str], held) -> list[str]:
+    """過去分の知らせ ── 「送った直 n件 / エラーで残した直 m件」と、その中身。"""
+    from nippou.logic import push_scope
+
+    lines = [push_scope.tally_text(sent, held)]
+    if sent:
+        lines.append("  送った: " + "、".join(sent))
+    if held:
+        lines.append("  エラーで残した(送っていません。手元に残り、赤い帯に出たままです):")
+        for report in held:
+            more = f"(ほか{len(report.findings) - 1}件)" if len(report.findings) > 1 else ""
+            where = report.findings[0].where if report.findings else ""
+            first = report.findings[0].message if report.findings else ""
+            lines.append(f"  ■ {report.key_text}: {(where + ' ') if where else ''}{first}{more}")
+        lines.append(f"  ※ 直したら、同じ「{push_scope.BUTTON_PREVIOUS}」でもう一度押すと送れます"
+                     "(直せるのはその直の人か管理者です)")
+    return lines
+
+
+def _scope_keys(scope: str, mine):
+    """この範囲で送る直(古い順)。まとめて送るときは None(未送信ぜんぶ)。"""
+    from nippou.logic import push_scope
+
+    if scope == push_scope.SCOPE_ALL or mine is None:
+        return None
+    try:
+        pending = [(h.report_date, h.line, h.shift)
+                   for h in get_repo().pending_sync_headers()]
+    except Exception:                             # noqa: BLE001 - 押すのは止めない
+        log.exception("共有へ未送信の直を読めませんでした")
+        return None
+    return push_scope.keys_in(scope, pending, mine)
+
+
+def _has_previous(mine) -> bool:
+    """いまの直ではない未送信の直があるか(断り文に「前の直は…」を添えるか)。"""
+    from nippou.logic import push_scope
+
+    return bool(_scope_keys(push_scope.SCOPE_PREVIOUS, mine))
+
+
+def _nothing_text(scope: str, mine) -> str:
+    """送るものが無かったときの一文。**範囲ごとに言い分ける。**"""
+    from nippou.logic import push_scope
+
+    if scope == push_scope.SCOPE_CURRENT:
+        text = "いまの直は共有と同じ中身です ── 送るものはありませんでした"
+        if _has_previous(mine):
+            text += "\n※ " + push_scope.PREVIOUS_HINT
+        return text
+    if scope == push_scope.SCOPE_PREVIOUS:
+        return "共有へ出ていない過去分(前の直)はありません ── 送るものはありませんでした"
+    return "共有はいまの中身と同じです ── 送るものはありませんでした"
+
+
 def _current_key(ctx):
     """いまの直 `(報告日, ライン, 直)`。読めなければ None(そのときは前のとおり全部に効く)。"""
     from .entry import current_calculator
@@ -882,17 +1022,22 @@ def _current_key(ctx):
         return None
 
 
-def _pressed(ctx, reports, worker=None):
+def _pressed(ctx, reports, worker=None, *, scope: str = ""):
     """押したときの様子と、いまの直 `(報告日, ライン, 直)`。**読めなくても押せる。**
 
     `worker` は押した画面に出ていた作業者(日報入力が添えてくる)。
+    `scope` は**どちらのボタンで押したか**(v4.35.0)。履歴の「通し方」に
+    「いまの直」「過去分」と書きます(逃げ道の一文で通したときは「いまの直・
+    設備移動のため保存」)。まとめて送ったときは今までどおり一文だけ。
     """
+    from nippou.logic import push_scope
     from nippou.services import shift_check
 
     from .entry import current_calculator
 
-    via = (shift_check.SKIP_PHRASE
-           if any(r.skipped for r in reports) else "")
+    via = push_scope.via_text(scope or push_scope.SCOPE_ALL,
+                              skipped=any(r.skipped for r in reports),
+                              skip_phrase=shift_check.SKIP_PHRASE)
     try:
         current = ctx.current_key(current_calculator())
         return push_history.Pressed.now(get_repo(), current, via=via,
@@ -952,10 +1097,12 @@ def _rollover_after_push(summary) -> list:
     if summary.failed:
         # 送れていないページがあるうちは、まだ月を片付けない
         return []
-    return _catch_up_months()
+    # **その月に未送信の直が残っていれば書き出さない**(v4.35.0)。いまの直だけ
+    # 送れて、前の月の直がまだ止まっている、が起きるようになったので
+    return _catch_up_months(hold_pending=True)
 
 
-def _catch_up_months() -> list:
+def _catch_up_months(*, hold_pending: bool = False) -> list:
     """済んでいない月を1つ目・2つ目へ。(1つ目の結果, 2つ目の結果) の並び。"""
     from nippou.services import month_rollover
 
@@ -964,7 +1111,7 @@ def _catch_up_months() -> list:
             return []
         with running.running("月替わりの書き出し"):
             return month_rollover.catch_up(
-                get_repo(), SETTINGS.monthly_dir,
+                get_repo(), SETTINGS.monthly_dir, hold_pending=hold_pending,
                 second=lambda result: _second_output(
                     lambda: second_output.after_rollover(get_repo(), result)))
     except Exception:                             # noqa: BLE001 - 保存は成功している
@@ -1811,12 +1958,21 @@ def push_plan():
     取り込んだ過去の日報がまとめて未送信になっていると、押した瞬間に
     何百ページも送り始めていました。多いときは画面が先に数を見せて訊きます
     (`confirm_needed`)。**読むだけで、共有には触りません。**
+
+    `?scope=current|previous` を添えると、**そのボタンで送るぶんだけ**を数えます
+    (v4.35.0 ── `POST /api/settings/push` の `scope` と同じ)。
     """
+    from nippou.logic import push_scope
     from nippou.logic.shift import parse_business_date
     from nippou.services.nippou_service import format_business_date
 
     try:
         headers = list(get_repo().pending_sync_headers())
+        keys = _scope_keys(push_scope.normalize(request.args.get("scope")),
+                           _current_key(work_context.get_context()))
+        if keys is not None:
+            headers = [h for h in headers
+                       if (h.report_date, h.line, h.shift) in set(keys)]
     except Exception as exc:                      # noqa: BLE001 - 押すのは止めない
         log.exception("共有へ保存の下見ができませんでした")
         return jsonify({"pages": 0, "shifts": 0, "confirm_needed": False,

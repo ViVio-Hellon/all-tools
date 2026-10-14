@@ -103,10 +103,14 @@ export function watch(title = "") {
  * 取り込んだ過去の日報がまとめて未送信になっていると、押した瞬間に
  * 何百ページも送り始めていました。数・期間・目安の時間を出して訊きます。
  * 下見が読めなくても押せるようにします(送るのはサーバが決める)。
+ *
+ * `scope` は押したボタンの範囲(`"current"` いまの直 / `"previous"` 過去分。
+ * v4.35.0)。**そのボタンで送るぶんだけ**を数えます。
  */
-export async function confirmPush() {
+export async function confirmPush(scope = "") {
   let plan;
-  try { plan = await background.get("/api/settings/push/plan"); } catch { return true; }
+  const q = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+  try { plan = await background.get(`/api/settings/push/plan${q}`); } catch { return true; }
   if (!plan || !plan.confirm_needed) return true;
   const span = plan.first_day && plan.last_day && plan.first_day !== plan.last_day
     ? `${plan.first_day} 〜 ${plan.last_day}` : (plan.first_day || "");

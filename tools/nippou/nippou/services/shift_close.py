@@ -140,7 +140,8 @@ class ShiftCloseResult:
             head += f"。直すところが{len(self.findings)}件あります"
         if self.pushed:
             head += f"。共有へも送りました({self.pushed}件)"
-        elif self.push_note:
+        if self.push_note:
+            # 送れた直と止めた直が両方あるとき(次の直の画面の拾い)は**両方書く**
             head += f"。{self.push_note}"
         return head + "。紙が要るときは「印刷」から出してください"
 
@@ -219,7 +220,8 @@ def run(repo: NippouRepository, calc: ShiftCalculator, *,
         base.reason = f"{shift} は確定済みです"
         return base
 
-    # 共有保存の履歴には「残り5分の自動確定」で送ったと残す(押したときの直 = 確定した直)
+    # 共有保存の履歴には「残り5分の自動確定」で送ったと残す(押したときの直 = 確定した直)。
+    # 送るのは**終わる直(いまの直)だけ**(v4.35.0 ── ふだんの「共有へ保存」と同じ道)
     return _close(repo, base, sent_by=_Sender(
         via=_history().VIA_AUTO_CLOSE, current=(report_date, line, shift), at=now))
 
@@ -261,9 +263,14 @@ def sweep(repo: NippouRepository, calc: ShiftCalculator, *, line: str,
         done.append(_close(repo, result, push=False))
     if done:
         # 送るのは最後に1度だけ。**直の数だけ共有を開かない**。共有保存の
-        # 履歴には「次の直の画面が拾って送った」(押したときの直 = 拾った画面のいまの直)
+        # 履歴には「次の直の画面が拾って送った」(押したときの直 = 拾った画面のいまの直)。
+        # 送るのは**いまの直ではない直**(v4.35.0 ── 赤い帯の「過去分を共有へ送る」と
+        # 同じ道)。直すところのある直だけ止めて、ほかの直は送ります
+        from ..logic import push_scope
+
         _push_if_clean(repo, done[-1], _Sender(
-            via=_history().VIA_SWEEP, current=current, at=now))
+            via=_history().VIA_SWEEP, current=current, at=now),
+            scope=push_scope.SCOPE_PREVIOUS)
         log.info("終わった直を%d件あとから締めました: %s", len(done),
                  "、".join(f"{r.report_date} {r.shift}" for r in done))
     return done
@@ -365,9 +372,12 @@ def _close(repo: NippouRepository, result: ShiftCloseResult, *,
     # `push=False` は `sweep` から。何直ぶんも締めるときに直の数だけ
     # 共有を開かないよう、送るのは最後に1度だけにします
     if push:
+        from ..logic import push_scope
+
         _push_if_clean(repo, result, sent_by or _Sender(
             via=_history().VIA_AUTO_CLOSE,
-            current=(result.report_date, result.line, result.shift)))
+            current=(result.report_date, result.line, result.shift)),
+            scope=push_scope.SCOPE_CURRENT)
 
     log.info("自動確定しました key=%s 残り%d分 ページ=%d 指摘=%d 送信=%d",
              key, result.minutes_left, result.pages, len(result.findings),
@@ -376,13 +386,23 @@ def _close(repo: NippouRepository, result: ShiftCloseResult, *,
 
 
 def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
-                   sent_by: _Sender) -> None:
-    """共有へ未送信のものが**ぜんぶ綺麗なら**送る。
+                   sent_by: _Sender, *, scope: str) -> None:
+    """送る範囲の直が**綺麗なら**送る。
 
-    見るのは「送ろうとしているぶん全部」です ── 手で押す
-    「共有へ保存」(`/api/settings/push`)と同じ範囲・同じ関門
-    (`shift_check.run_pending`)。片方だけ緩いと、機械は送れたのに人が
-    押すと断られる(またはその逆)が起きます。
+    範囲は手で押す2つのボタンと同じです(v4.35.0、`logic/push_scope`):
+
+        残り5分の自動確定(`run`)   … いまの直(`SCOPE_CURRENT`)= 終わる直だけ。
+                                     ふだんの「共有へ保存」と同じ。前の直が
+                                     止まっていても、終わる直は送ります
+        次の直の画面の拾い(`sweep`) … 前の直(`SCOPE_PREVIOUS`)= いまの直では
+                                     ない直。赤い帯の「過去分を共有へ送る」と
+                                     同じで、直すところのある直だけ止めて、
+                                     ほかの直は送ります
+
+    関門も同じ `shift_check.run_pending`(範囲の直だけ)。片方だけ緩いと、
+    機械は送れたのに人が押すと断られる(またはその逆)が起きます。
+    前は「未送信ぜんぶが綺麗なら」でした ── 前の直が1つ止まっていると、
+    綺麗に終わった直まで自動では出ませんでした。
 
     **送れなくても締めた印は消しません。** 送るのは締めのあとの話で、
     共有が落ちている日に直の確定までできなくなるほうが重い。
@@ -394,31 +414,40 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
     """
     from ..access_bridge import pusher
     from ..config import SETTINGS
+    from ..logic import push_scope
     from . import shift_check
 
     try:
-        reports = shift_check.run_pending(repo)
+        pending = [(h.report_date, h.line, h.shift) for h in repo.pending_sync_headers()]
+        keys = push_scope.keys_in(scope, pending, sent_by.current)
+        reports = shift_check.run_pending(repo, keys=keys)
     except Exception:                             # noqa: BLE001 - 確定は済んでいる
         log.exception("自動送信の前のチェックでエラー")
         result.push_note = "共有へは送っていません(確かめられませんでした)"
         return
 
     blocked = shift_check.blocked_reports(reports)
+    stopped = {(r.report_date, r.line, r.shift) for r in blocked}
+    sendable = [k for k in keys if k not in stopped]
     if blocked:
         names = "、".join(r.key_text for r in blocked)
-        result.push_note = (f"直すところがあるので共有へは送っていません"
-                            f"({names})")
-        log.info("自動送信を見送りました: %s", names)
         # 手で押して関門で止めたときと同じに残す(止められた直ごとに1行)
         _keep_history(repo, lambda pressed: _history().record_blocked(
             repo, pressed, blocked), sent_by)
-        return
-    if not repo.pending_sync_headers():
+        if not (push_scope.holds_one_by_one(scope) and sendable):
+            result.push_note = (f"直すところがあるので共有へは送っていません"
+                                f"({names})")
+            log.info("自動送信を見送りました: %s", names)
+            return
+        # 過去分の道: 止めた直を名指しして、**送れる直は送る**
+        result.push_note = (f"直すところがある直は送っていません({names})")
+        log.info("自動送信: %s は止め、%d直を送ります", names, len(sendable))
+    if not sendable:
         result.push_note = "共有へ未送信のものはありません"
         return
 
     try:
-        summary_ = pusher.push_pending(repo, SETTINGS.access_db_path)
+        summary_ = pusher.push_pending(repo, SETTINGS.access_db_path, keys=sendable)
     except Exception as exc:                      # noqa: BLE001 - 締めは済んでいる
         log.exception("自動送信に失敗しました")
         result.push_note = f"共有へ送れませんでした({exc})"
@@ -426,7 +455,9 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
 
     result.pushed = len(summary_.succeeded)
     if summary_.failed:
-        result.push_note = f"共有へ送れなかったものが{len(summary_.failed)}件あります"
+        failed_note = f"共有へ送れなかったものが{len(summary_.failed)}件あります"
+        result.push_note = (f"{result.push_note}。{failed_note}" if result.push_note
+                            else failed_note)
     if summary_.succeeded or summary_.failed:
         # **送ったのだから履歴に載せる。** 数え方は手で押したときと同じ `record_push`
         # (送った直ごとに1行)。何も送らなかったときは「送るもの無し」を作らない

@@ -24,6 +24,17 @@
 
 【共有】
 一時フォルダの `日報データ.sqlite3`。送るのは画面と同じ `POST /api/settings/push`。
+
+【共有へ保存は2つ(v4.35.0)】
+
+    現在の直と前直は処理の違うボタンを設けたほうがいいと思うのですが...
+    ・普段の共有へ送る は現在の直用
+    ・エラー時に出ている 共有へ送る は 前直処理用
+
+    push_now()   … 入力画面のふだんの「共有へ保存」(`scope: "current"`)。いまの直だけ
+    push_past()  … 赤い帯の「過去分を共有へ送る」(`scope: "previous"`)。いまの直では
+                   ない未送信の直ぜんぶを古い順に。エラーのある直だけ残して、ほかは送る
+    push()       … 範囲を言わない(まとめて送る。前の版の画面・ほかの道具。E の Access の試験)
 """
 from __future__ import annotations
 
@@ -258,7 +269,16 @@ class ScenarioCase(WebTestCase):
         return res
 
     def push(self, **body):
+        """範囲を言わずに押す(まとめて送る ── 1つでも引っかかれば止める)。"""
         return self.post("/api/settings/push", body)
+
+    def push_now(self, **body):
+        """入力画面のふだんの「共有へ保存」── いまの直だけ。"""
+        return self.post("/api/settings/push", dict(body, scope="current"))
+
+    def push_past(self, **body):
+        """赤い帯の「過去分を共有へ送る」── いまの直ではない未送信の直ぜんぶ。"""
+        return self.post("/api/settings/push", dict(body, scope="previous"))
 
     def start_shift(self, when: str, worker: str) -> dict:
         """時計を合わせて、開いて、作業者を選ぶ(直の始まり)。"""
@@ -513,7 +533,7 @@ class A2_ReminderTests(ScenarioCase):
         self.assertEqual([(h["result"], h["pressed_by"], h["shared"]) for h in self.history()],
                          [("送れなかった", "(自動確定)", 0)])
         self.shared_online()
-        self.assertEqual(self.push(worker="佐藤").status_code, 200)
+        self.assertEqual(self.push_now(worker="佐藤").status_code, 200)
         self.assertEqual([(r["結果"], r["押した人"]) for r in self.shared_history()],
                          [("送れなかった", "(自動確定)"), ("送れた", "佐藤")])
 
@@ -599,8 +619,8 @@ class A3_RestartTests(ScenarioCase):
         res = self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤")
         self.assertEqual(res.status_code, 422)
         self.assertEqual(res.get_json()["error"]["code"], "handover_required")
-        # 「共有へ保存」1押しで通れる
-        self.assertEqual(self.push(worker="佐藤").status_code, 200)
+        # 赤い帯の「過去分を共有へ送る」1押しで通れる
+        self.assertEqual(self.push_past(worker="佐藤").status_code, 200)
         self.assertEqual(self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤").status_code, 200)
         self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1)})
 
@@ -724,12 +744,12 @@ class A5_DayShiftTests(ScenarioCase):
         rows = rows_of(row("D01", "08:00", "17:00"))
         self.at("2026-10-05 16:30")
         self.assertEqual(self.save(rows, "日勤者", day_shift=True).status_code, 200)
-        self.assertEqual(self.push().status_code, 200)
+        self.assertEqual(self.push_now().status_code, 200)
         self.assertEqual(self.shared_headers("トット")[0]["昼勤"], "有")
         # 昼稼働でなければ休憩60分が要る
         self.at("2026-10-05 16:40")
         self.save(rows, "日勤者")
-        res = self.push()
+        res = self.push_now()
         self.assertEqual(res.status_code, 422)
         self.assertIn("休憩", res.get_json()["error"]["message"])
 
@@ -743,7 +763,7 @@ class A5_DayShiftTests(ScenarioCase):
         self.assertEqual(res.status_code, 200, res.get_json().get("message"))
         self.assertEqual((res.get_json()["report_date"], res.get_json()["shift"]),
                          ("2026年10月5日", "日勤"))
-        self.assertEqual(self.push().status_code, 200)
+        self.assertEqual(self.push_now().status_code, 200)
         self.assertEqual(self.shared_lots("トット")[("2026年10月5日", "日勤", 1)],
                          ["D01", "D02", "D03"])
 
@@ -818,8 +838,8 @@ class B_SaveOrNotTests(ScenarioCase):
         self.assertIn("最終時間まで入力がない", joined)
         self.assertIn("休憩", joined)
         # 押しても通らない(前の直のぶんは「設備移動のため保存」でも通せない)
-        self.assertEqual(self.push(worker="佐藤").status_code, 422)
-        self.assertEqual(self.push(worker="佐藤", skip=SKIP).status_code, 422)
+        self.assertEqual(self.push_past(worker="佐藤").status_code, 422)
+        self.assertEqual(self.push_past(worker="佐藤", skip=SKIP).status_code, 422)
         # 引き継げば始められる。1直は手元に未送信のまま残る
         self.take_over("佐藤")
         self.assertEqual(self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤").status_code, 200)
@@ -904,13 +924,16 @@ class B_SaveOrNotTests(ScenarioCase):
         fixed["3"]["LOT"] = "A09"
         self.assertEqual(self.save(fixed, "山田").status_code, 200)
         self.assertIn(("2026年10月5日", "1直", 1), self.dirty_keys())
-        self.assertEqual(self.push().status_code, 422, "呼出中は共有へ保存を断る")
+        self.assertEqual(self.push_past().status_code, 422, "呼出中は共有へ保存を断る")
         self.back()
         band = self.state(worker="佐藤")["handover"]
         self.assertTrue(band["any_left"])
-        res = self.push(worker="佐藤", skip=SKIP)              # 2直は途中なので一文を添える
+        # 「過去分を共有へ送る」は いまの2直(途中)に引っかからない ── 一文は要らない(v4.35.0)
+        res = self.push_past(worker="佐藤")
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(self.shared_lots()[("2026年10月5日", "1直", 1)], ["A01", "A09"])
+        self.assertNotIn(("2026年10月5日", "2直", 1), self.shared_keys(), "途中の2直まで出た")
+        self.assertIn(("2026年10月5日", "2直", 1), self.dirty_keys())
         shared = {d["行番号"]: d for d in self.shared_details()
                   if (d["報告日"], d["直"]) == ("2026年10月5日", "1直")}
         self.assertEqual(len(shared), 12, "行が増えた・減った")
@@ -954,8 +977,8 @@ class C_ErrorTests(ScenarioCase):
         self.assertTrue(all(p.startswith("2026年10月5日 L-1 1直") for p in gate["problems"]))
         # 保存(確定)・次ページ発行は止まる
         self.assertEqual(self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤").status_code, 422)
-        # 「共有へ保存」は断る。断りには直す場所(どの直の何ページ)と開く道が付く
-        res = self.push(worker="佐藤")
+        # 「過去分を共有へ送る」は断る。断りには直す場所(どの直の何ページ)と開く道が付く
+        res = self.push_past(worker="佐藤")
         self.assertEqual(res.status_code, 422)
         blockers = res.get_json()["skip_blockers"]
         self.assertEqual({b["code"] for b in blockers},
@@ -973,7 +996,9 @@ class C_ErrorTests(ScenarioCase):
         self.assertTrue(band["any_left"])
         self.assertFalse(band["blocked"])
 
-    def test_C2_設備移動のため保存はいまの直だけ_管理者は全部(self) -> None:
+    def test_C2_設備移動のため保存はいまの直のボタンだけ_過去分は管理者(self) -> None:
+        """【v4.35.0】ふだんの「共有へ保存」は いまの直だけを確かめるので、一文で通すのも
+        いまの直だけ。過去分(1直)の休憩・最終時間は、その直の人か管理者でないと通せない。"""
         # 1直: 休憩と最終時間だけが足りない(通せる種類だけ)
         self.start_shift("2026-10-05 07:05", "山田")
         self.at("2026-10-05 12:00")
@@ -984,63 +1009,109 @@ class C_ErrorTests(ScenarioCase):
         # 2直: 途中まで(18:00まで)保存
         self.at("2026-10-05 18:00")
         self.save(rows_of(row("B01", "15:00", "18:00")), "佐藤")
-        # 一文なし → 2直(いまの直)も1直も断る
-        res = self.push(worker="佐藤")
+        # ふだんの「共有へ保存」: 確かめるのは いまの2直だけ(1直は見ない)。途中なので断る
+        res = self.push_now(worker="佐藤")
         self.assertEqual(res.status_code, 422)
-        blocked = {r["shift"] for r in res.get_json()["reports"] if not r["ok"]}
-        self.assertEqual(blocked, {"1直", "2直"})
-        # 一文あり → 断るのは前の直(1直)だけ。**全体が止まる**ので2直も送らない
-        res = self.push(worker="佐藤", skip=SKIP)
-        self.assertEqual(res.status_code, 422)
-        blocked = {r["shift"] for r in res.get_json()["reports"] if not r["ok"]}
-        self.assertEqual(blocked, {"1直"})
-        self.assertTrue(any("前の直のぶんです" in b["message"]
-                            for b in res.get_json()["skip_blockers"]))
-        self.assertEqual(self.shared_keys(), set())
-        # 管理者なら前の直のぶんも一文で通せる
-        self.admin_on()
-        res = self.push(worker="佐藤", skip=SKIP)
+        self.assertEqual([r["shift"] for r in res.get_json()["reports"]], ["2直"])
+        self.assertIn("赤い帯の「過去分を共有へ送る」から送れます", res.get_json()["error"]["message"])
+        # 一文を添えれば いまの2直だけ通る。1直は送らない
+        res = self.push_now(worker="佐藤", skip=SKIP)
         self.assertEqual(res.status_code, 200, res.get_json())
-        self.assertEqual(res.get_json()["skipped"], 4)
+        self.assertEqual(res.get_json()["skipped"], 2)
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "2直", 1)})
+        # 「過去分を共有へ送る」: 1直のぶんは一文でも通せない(その直の人か管理者だけ)
+        for extra in ({}, {"skip": SKIP}):
+            res = self.push_past(worker="佐藤", **extra)
+            self.assertEqual(res.status_code, 422)
+            self.assertEqual([r["shift"] for r in res.get_json()["reports"] if not r["ok"]], ["1直"])
+            self.assertTrue(any("前の直のぶんです" in b["message"]
+                                for b in res.get_json()["skip_blockers"]))
+            self.assertIn("過去分: 送った直 0件 / エラーで残した直 1件",
+                          res.get_json()["error"]["message"])
+        # 管理者なら過去分のぶんも一文で通せる
+        self.admin_on()
+        res = self.push_past(worker="佐藤", skip=SKIP)
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["skipped"], 2)
         self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1), ("2026年10月5日", "2直", 1)})
-        self.assertEqual({h["via"] for h in self.history() if h["result"] == "送れた"}, {SKIP})
+        # 共有保存の履歴の「通し方」で、どちらのボタンで押したか分かる
+        self.assertEqual([(h["shift"], h["via"]) for h in self.history() if h["result"] == "送れた"],
+                         [("2直", "いまの直・設備移動のため保存"), ("1直", "過去分・設備移動のため保存")])
+        self.assertEqual([r["通し方"] for r in self.shared_history() if r["結果"] == "送れた"],
+                         ["いまの直・設備移動のため保存", "過去分・設備移動のため保存"])
 
-    def test_C2_打ち始めてから前の直を共有へ保存すると_いまの直の途中が引っかかる(self) -> None:
-        """【要相談】共有に届かない日に1直(綺麗)を引き継いで2直を始め、あとで届くように
-        なった。帯は「押せば済みます」と言うが、押すと**いまの2直が途中**(最終時間・休憩が
-        まだ)なので断られる。一文を添えると通り、2直の途中までも一緒に共有へ出る
-        (2直の終わりに送り直される)。"""
+    def test_C2_共有に届かず引き継いだあと_1直は過去分のボタン_2直はふだんのボタンで送れる(self) -> None:
+        """【v4.35.0 で直した】共有に届かない日に1直(綺麗)を引き継いで2直を始め、18:00 に
+        届くようになった。前は帯の「共有へ保存する」を押すと**いまの2直が途中**(最終時間・
+        休憩がまだ)なので断られ、1直も送れなかった。いまは赤い帯の「過去分を共有へ送る」で
+        1直だけが送れ、2直は直の終わりにふだんの「共有へ保存」で送れる。"""
         self.start_shift("2026-10-05 07:05", "山田")
         self.at("2026-10-05 14:30")
         self.save(clean_shift_rows("1直", "A"))
         self.shared_offline()
         self.next_shift("2026-10-05 15:05", "佐藤")
-        self.assertEqual(self.push(worker="佐藤").get_json()["failed"], 1)
+        self.assertEqual(self.push_past(worker="佐藤").get_json()["failed"], 1)
         self.take_over("佐藤")
         self.at("2026-10-05 16:00")
         self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤")
+        self.at("2026-10-05 18:00")
         self.shared_online()
         band = self.state(worker="佐藤")["handover"]
         self.assertFalse(band["blocked"])
-        self.assertIn("押せば済みます", band["message"])
-        res = self.push(worker="佐藤")
+        self.assertIn("「過去分を共有へ送る」を押せば済みます", band["message"])
+        # 赤い帯のボタン: 1直だけ送る。途中の2直には引っかからず、2直は送らない
+        res = self.push_past(worker="佐藤")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn("過去分: 送った直 1件 / エラーで残した直 0件", res.get_json()["message"])
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1)})
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "2直", 1)})
+        self.assertFalse(self.state(worker="佐藤")["handover"]["any_left"], "1直が帯に残っている")
+        # 集計も1直のぶんだけ(途中の2直の数を共有へ出さない)
+        self.assertEqual([r["直"] for r in self.shared_rows("T_日報集計_L-1")], ["1直"])
+        # ふだんのボタンを直の途中で押すと、いまの2直の最終時間・休憩で今までどおり断る
+        res = self.push_now(worker="佐藤")
         self.assertEqual(res.status_code, 422)
-        self.assertEqual([r["shift"] for r in res.get_json()["reports"] if not r["ok"]], ["2直"])
-        res = self.push(worker="佐藤", skip=SKIP)
-        self.assertEqual(res.status_code, 200)
+        codes = {f["code"] for r in res.get_json()["reports"] for f in r["findings"]}
+        self.assertEqual(codes, {"shift_end", "short_break"})
+        self.assertNotIn("過去分を共有へ送る", res.get_json()["error"]["message"],
+                         "前の直はもう無いのに案内している")
+        # 2直の終わりに打ち終えて押せば送れる
+        self.at("2026-10-05 22:30")
+        self.save(clean_shift_rows("2直", "B"), "佐藤")
+        res = self.push_now(worker="佐藤")
+        self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1), ("2026年10月5日", "2直", 1)})
+        self.assertEqual([(h["shift"], h["via"]) for h in self.history() if h["result"] == "送れた"],
+                         [("1直", "過去分"), ("2直", "いまの直")])
+
+    def test_C2_いまの直のボタンは過去分のエラーに止められない(self) -> None:
+        """【v4.35.0】前の直が未送信・エラーのままでも、いまの直は送れる(前の直は帯に残る)。"""
+        self.leave_errors()
+        self.next_shift("2026-10-05 15:05", "佐藤")
+        self.take_over("佐藤")
+        self.at("2026-10-05 22:30")
+        self.assertEqual(self.save(clean_shift_rows("2直", "B"), "佐藤").status_code, 200)
+        res = self.push_now(worker="佐藤")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn("共有へ保存(いまの直): 1件", res.get_json()["message"])
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "2直", 1)})
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "1直", 1)})
+        band = self.state(worker="佐藤")["handover"]
+        self.assertEqual([x["shift"] for x in band["left"]], ["1直"])
 
     def test_C2_通せない間違いは管理者の一文でも通らない(self) -> None:
         self.leave_errors()
         self.next_shift("2026-10-05 15:05", "佐藤")
         self.admin_on()
-        res = self.push(skip=SKIP)
+        res = self.push_past(skip=SKIP)
         self.assertEqual(res.status_code, 422)
         codes = {b["code"] for b in res.get_json()["skip_blockers"]}
         self.assertEqual(codes, {"pack_over", "unknown_stop"})
 
-    def test_C3_エラーのある直が積み重なる(self) -> None:
-        """3直(10/4)が梱包数と休憩を残し、1直も最終時間を残し、2直が来た。"""
+    def test_C3_エラーのある直が積み重なっても_綺麗な直は出る(self) -> None:
+        """3直(10/4)が梱包数と休憩を残し、1直も最終時間を残し、2直が来た。
+        【v4.35.0 で直した】前は綺麗に打った2直も古い直に止められて共有へ出なかった。
+        いまは残り5分の自動確定が終わる直(いまの2直)だけを確かめて送る。"""
         self.start_shift("2026-10-04 22:55", "夜勤")
         bad3 = clean_shift_rows("3直", "C")
         bad3["1"].update(KEN="5", MAI="10", TUT="1")
@@ -1051,7 +1122,7 @@ class C_ErrorTests(ScenarioCase):
         # 1直: 3直を引き継いで始める
         body = self.next_shift("2026-10-05 07:05", "山田")
         self.assertTrue(body["handover"]["blocked"])
-        self.assertEqual(self.push(worker="山田").status_code, 422)
+        self.assertEqual(self.push_past(worker="山田").status_code, 422)
         self.take_over("山田")
         bad1 = clean_shift_rows("1直", "A")
         bad1["3"].update(SZ="14", SH="00")                    # 14:00 で終わっている
@@ -1059,7 +1130,8 @@ class C_ErrorTests(ScenarioCase):
         self.assertEqual(self.save(bad1).status_code, 200)
         closed = self.close_tick("2026-10-05 14:55")
         self.assertEqual(closed["pushed"], 0)
-        self.assertIn("2026年10月4日 L-1 3直、2026年10月5日 L-1 1直", closed["push_note"])
+        self.assertIn("(2026年10月5日 L-1 1直)", closed["push_note"])
+        self.assertNotIn("3直", closed["push_note"], "終わる直の自動確定が前の直まで見ている")
         # 2直: 2直ぶんが並んで出る
         body = self.next_shift("2026-10-05 15:05", "佐藤")
         gate = body["handover"]
@@ -1068,21 +1140,21 @@ class C_ErrorTests(ScenarioCase):
         self.assertIn("(2直ぶん)", gate["message"])
         self.assertIn("直すところが 3件", gate["message"])
         self.assertEqual(len(gate["notes"]), 1, "引き継ぎ済みの3直の一行")
-        res = self.push(worker="佐藤")
+        res = self.push_past(worker="佐藤")
         self.assertEqual(res.status_code, 422)
-        self.assertIn("■ 2026年10月4日 L-1 3直", res.get_json()["error"]["message"])
-        self.assertIn("■ 2026年10月5日 L-1 1直", res.get_json()["error"]["message"])
+        message = res.get_json()["error"]["message"]
+        self.assertIn("過去分: 送った直 0件 / エラーで残した直 2件", message)
+        self.assertIn("■ 2026年10月4日 L-1 3直", message)
+        self.assertIn("■ 2026年10月5日 L-1 1直", message)
         self.take_over("佐藤")
-        # 2直は綺麗に打っても、古い直に止められて共有へ出ない
+        # 2直は綺麗に打てば、古い直に止められずに残り5分の自動確定で共有へ出る
         self.at("2026-10-05 22:30")
         self.assertEqual(self.save(clean_shift_rows("2直", "B"), "佐藤").status_code, 200)
         closed = self.close_tick("2026-10-05 22:45")
         self.assertEqual(closed["findings"], [])
-        self.assertEqual(closed["pushed"], 0)
-        self.assertEqual(self.push(worker="佐藤").status_code, 422)
-        self.assertEqual(self.dirty_keys(), {("2026年10月4日", "3直", 1), ("2026年10月5日", "1直", 1),
-                                             ("2026年10月5日", "2直", 1)})
-        self.assertEqual(self.shared_keys(), set())
+        self.assertEqual(closed["pushed"], 1)
+        self.assertEqual(self.dirty_keys(), {("2026年10月4日", "3直", 1), ("2026年10月5日", "1直", 1)})
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "2直", 1)})
         # 引き継ぎは**最後に引き継いだ人**だけが残る(3直は 山田 → 佐藤 に替わる)
         self.assertEqual(self.repo().handover_of("2026年10月4日", "L-1", "3直")["taken_by"], "佐藤")
         self.assertEqual(self.repo().handover_of("2026年10月5日", "L-1", "1直")["taken_by"], "佐藤")
@@ -1093,10 +1165,12 @@ class C_ErrorTests(ScenarioCase):
                                   ("2026年10月5日", "1直", "佐藤")])
         blocked = [h for h in self.history() if h["result"] == "関門で止めた"]
         self.assertEqual({h["shift"] for h in blocked}, {"3直", "1直"})
-        self.assertNotIn("2直", {h["shift"] for h in self.history()})
-        # 共有へ一度も届いていないので、共有の履歴の表もまだ無い(手元に溜まっている)
-        self.assertFalse(self.shared_path.exists())
-        self.assertTrue(all(not h["shared"] for h in self.history()))
+        self.assertEqual([(h["shift"], h["pressed_by"], h["via"]) for h in self.history()
+                          if h["result"] == "送れた"],
+                         [("2直", "(自動確定)", "残り5分の自動確定")])
+        # 共有に届いたので、溜まっていた履歴の行もまとめて共有の表へ写る
+        self.assertTrue(all(h["shared"] for h in self.history()))
+        self.assertEqual(len(self.shared_history()), len(self.history()))
 
     def test_C4_引き継いだあとに直して共有へ保存(self) -> None:
         self.start_shift("2026-10-04 22:55", "夜勤")
@@ -1119,15 +1193,20 @@ class C_ErrorTests(ScenarioCase):
         self.back()
         band = self.state(worker="山田")["handover"]
         self.assertTrue(band["all_clean"], "直したのに断りが残っている")
-        res = self.push(worker="山田")
+        # 「過去分を共有へ送る」で送るのは3直だけ。いまの1直は直の終わりに
+        res = self.push_past(worker="山田")
         self.assertEqual(res.status_code, 200, res.get_json())
-        self.assertEqual(self.dirty_keys(), set())
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "1直", 1)})
         self.assertFalse(self.state(worker="山田")["handover"]["any_left"], "帯が消えない")
-        self.assertEqual(self.shared_keys(), {("2026年10月4日", "3直", 1), ("2026年10月5日", "1直", 1)})
+        self.assertEqual(self.shared_keys(), {("2026年10月4日", "3直", 1)})
         # 引き継ぎの記録は消さない(誰が何を残して引き継いだか)
         self.assertEqual(self.repo().handover_of("2026年10月4日", "L-1", "3直")["taken_by"], "山田")
-        shared = [(r["直"], r["結果"]) for r in self.shared_history()]
-        self.assertEqual(shared, [("3直", "直せないまま引き継いだ"), ("3直", "送れた"), ("1直", "送れた")])
+        self.at("2026-10-05 14:40")
+        self.assertEqual(self.push_now(worker="山田").status_code, 200)
+        self.assertEqual(self.dirty_keys(), set())
+        shared = [(r["直"], r["結果"], r["通し方"]) for r in self.shared_history()]
+        self.assertEqual(shared, [("3直", "直せないまま引き継いだ", ""), ("3直", "送れた", "過去分"),
+                                  ("1直", "送れた", "いまの直")])
 
 
 # ======================================================================
@@ -1212,9 +1291,10 @@ class D_PushTogetherTests(ScenarioCase):
         self.assertTrue(gate["blocked"], "直前の3直はまだ誰も引き継いでいない")
         self.assertTrue(gate["all_clean"])
         self.assertEqual(len(gate["notes"]), 5, "引き継ぎ済みの5直ぶんの一行")
-        res = self.push(worker="山田")                    # 関門の「共有へ保存」1押し
+        res = self.push_past(worker="山田")               # 赤い帯の「過去分を共有へ送る」1押し
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(res.get_json()["succeeded"], 10)
+        self.assertIn("過去分: 送った直 6件 / エラーで残した直 0件", res.get_json()["message"])
         self.assertEqual(res.get_json()["failed"], 0)
         # 全部の直・全ページ・全行が、正しい鍵で、重ならず欠けずに入る
         self.assertEqual(self.shared_lots(), expected)
@@ -1259,7 +1339,7 @@ class D_PushTogetherTests(ScenarioCase):
             self.assertEqual(int(summaries[(report, shift)]["ページ数"]), len(pages))
             self.assertFalse(local.dirty)
         # もう1回押しても増えない
-        again = self.push(worker="山田")
+        again = self.push_past(worker="山田")
         self.assertEqual(again.get_json()["succeeded"], 0)
         self.assertIn("送るものはありませんでした", again.get_json()["message"])
         self.assertEqual(len(self.shared_details()), 120)
@@ -1284,7 +1364,7 @@ class D_PushTogetherTests(ScenarioCase):
         self.shared_offline()
         body = self.next_shift("2026-10-05 15:05", "佐藤")
         self.assertTrue(body["handover"]["blocked"])
-        res = self.push(worker="佐藤")
+        res = self.push_past(worker="佐藤")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.get_json()["failed"], 1)
         gate = self.open_screen()["handover"]
@@ -1294,7 +1374,9 @@ class D_PushTogetherTests(ScenarioCase):
         self.take_over("佐藤")
         self.assertEqual(self.save(rows_of(row("B01", "15:00", "16:00")), "佐藤").status_code, 200)
 
-    def test_D2_エラーのある直が混ざると全体が止まる(self) -> None:
+    def test_D2_エラーの直が混ざっても_送れる直は送り_エラーの直だけ残す(self) -> None:
+        """【v4.35.0 で直した】前は2直のエラー1つで、1直・3直まで共有へ出なかった。
+        「過去分を共有へ送る」は、エラーのある2直だけ帯に残して、ほかの直を送る。"""
         self.shared_offline()
         self.work("2026-10-05", "1直", "山田", [clean_shift_rows("1直", "A")], first=True)
         # 2直: 記号がマスタに無い停止を残して(自動保存だけ)帰る
@@ -1308,27 +1390,101 @@ class D_PushTogetherTests(ScenarioCase):
         self.shared_online()
         self.next_shift("2026-10-06 07:05", "鈴木")
         self.take_over("鈴木")
-        res = self.push(worker="鈴木")
-        self.assertEqual(res.status_code, 422)
-        self.assertEqual([r["shift"] for r in res.get_json()["reports"] if not r["ok"]], ["2直"])
-        self.assertEqual(self.shared_keys(), set(), "止めたのに一部を送った")
-        self.assertEqual({k[1] for k in self.dirty_keys()}, {"1直", "2直", "3直"})
-        # 手で押したのは1回。06:55 の3直の自動確定と、同じ1分に拾った2直(確定し忘れ)の
-        # 送信も2直に止められて残る(v4.34.2)
+        res = self.push_past(worker="鈴木")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body["succeeded"], 2)
+        self.assertEqual(body["sent_shifts"], ["2026年10月5日 L-1 1直", "2026年10月5日 L-1 3直"])
+        self.assertEqual([r["shift"] for r in body["held"]], ["2直"])
+        self.assertIn("過去分: 送った直 2件 / エラーで残した直 1件", body["message"])
+        self.assertIn("■ 2026年10月5日 L-1 2直", body["message"])
+        self.assertIn("停止内訳にない記号です", body["message"])
+        self.assertEqual(body["sound_cue"], "", "残した直があるのに済んだ音")
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1), ("2026年10月5日", "3直", 1)})
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "2直", 1)})
+        self.assertEqual({r["直"] for r in self.shared_rows("T_日報集計_L-1")}, {"1直", "3直"})
+        self.assertEqual([x["shift"] for x in self.state(worker="鈴木")["handover"]["left"]], ["2直"])
+        # 06:55 の3直の自動確定は終わる3直だけを見る(2直に止められない)。同じ1分に
+        # 拾った2直(確定し忘れ)は過去分の道で、2直だけ止めて残る。手で押した1回も同じ
         self.assertEqual([(h["shift"], h["result"], h["pressed_by"], h["via"]) for h in self.history()
                           if h["result"] == "関門で止めた"],
-                         [("2直", "関門で止めた", "(自動確定)", "残り5分の自動確定"),
-                          ("2直", "関門で止めた", "(自動確定)", "次の直の画面が拾って送った"),
-                          ("2直", "関門で止めた", "鈴木", "")])
-        # 管理者が2直を直せば、次の1回で全部届く
+                         [("2直", "関門で止めた", "(自動確定)", "次の直の画面が拾って送った"),
+                          ("2直", "関門で止めた", "鈴木", "過去分")])
+        # 管理者が2直を直せば、同じボタンで残りが届く
         self.admin_on()
         self.recall("2026年10月5日", "2直")
         self.assertEqual(self.save(clean_shift_rows("2直", "B"), "佐藤").status_code, 200)
         self.back()
-        res = self.push(worker="鈴木")
+        res = self.push_past(worker="鈴木")
         self.assertEqual(res.status_code, 200, res.get_json())
-        self.assertEqual(res.get_json()["succeeded"], 3)
+        self.assertEqual(res.get_json()["succeeded"], 1)
+        self.assertIn("過去分: 送った直 1件 / エラーで残した直 0件", res.get_json()["message"])
         self.assertEqual(self.dirty_keys(), set())
+        self.assertFalse(self.state(worker="鈴木")["handover"]["any_left"])
+
+    def test_D2_溜まった過去分5直のうち2直がエラー_3直送れて2直残り_直せば同じボタンで送れる(self) -> None:
+        """【v4.35.0】「前の直を送る は溜まったエラー過去直全部送れると思っていいですよね?」
+        ── 「過去分を共有へ送る」は、いまの直ではない未送信の直ぜんぶ(何日前でも)を1回で
+        古い順に送る。エラーのある直は送らずに帯に残し、直したあと同じボタンで送れる。"""
+        self.shared_offline()
+        self.work("2026-10-05", "1直", "山田", [clean_shift_rows("1直", "A")], first=True)
+        # 10/5 2直: 停止の記号がマスタに無い(自動保存だけ)
+        self.next_shift("2026-10-05 15:05", "佐藤")
+        self.take_over("佐藤")
+        bad2 = clean_shift_rows("2直", "B")
+        bad2["1"].update(S="Z", TH="5")
+        self.at("2026-10-05 22:00")
+        self.autosave(bad2, "佐藤")
+        self.work("2026-10-05", "3直", "夜勤", [clean_shift_rows("3直", "C")])
+        # 10/6 1直: 梱包数が検入枚数を超えている(自動保存だけ)
+        self.next_shift("2026-10-06 07:05", "鈴木")
+        self.take_over("鈴木")
+        bad1 = clean_shift_rows("1直", "E")
+        bad1["1"].update(KEN="5", MAI="10", TUT="1")
+        self.at("2026-10-06 14:00")
+        self.autosave(bad1, "鈴木")
+        self.work("2026-10-06", "2直", "高橋", [clean_shift_rows("2直", "F")])
+        # 10/7 の朝に共有へ届くようになった。いまの直(10/7 1直)はまだ何も打っていない
+        self.shared_online()
+        body = self.next_shift("2026-10-07 07:05", "田中")
+        self.assertEqual(len(body["handover"]["left"]), 5)
+        self.assertIn("直すところの無い3直は「過去分を共有へ送る」で送れます", body["handover"]["message"])
+        res = self.push_past(worker="田中")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        got = res.get_json()
+        self.assertEqual(got["sent_shifts"], ["2026年10月5日 L-1 1直", "2026年10月5日 L-1 3直",
+                                              "2026年10月6日 L-1 2直"])
+        self.assertEqual([(r["report_date"], r["shift"]) for r in got["held"]],
+                         [("2026年10月5日", "2直"), ("2026年10月6日", "1直")])
+        self.assertIn("過去分: 送った直 3件 / エラーで残した直 2件", got["message"])
+        self.assertIn("■ 2026年10月5日 L-1 2直", got["message"])
+        self.assertIn("停止内訳にない記号です", got["message"])
+        self.assertIn("■ 2026年10月6日 L-1 1直", got["message"])
+        self.assertIn("梱包数", got["message"])
+        self.assertIn("同じ「過去分を共有へ送る」でもう一度押すと送れます", got["message"])
+        self.assertEqual(self.shared_keys(), {("2026年10月5日", "1直", 1), ("2026年10月5日", "3直", 1),
+                                              ("2026年10月6日", "2直", 1)})
+        self.assertEqual(self.dirty_keys(), {("2026年10月5日", "2直", 1), ("2026年10月6日", "1直", 1)})
+        band = self.state(worker="田中")["handover"]
+        self.assertEqual([(x["report_date"], x["shift"]) for x in band["left"]],
+                         [("2026年10月5日", "2直"), ("2026年10月6日", "1直")])
+        # 管理者が2直ぶんを直して、同じボタンをもう一度
+        self.admin_on()
+        self.recall("2026年10月5日", "2直")
+        self.assertEqual(self.save(clean_shift_rows("2直", "B"), "佐藤").status_code, 200)
+        self.recall("2026年10月6日", "1直")
+        self.assertEqual(self.save(clean_shift_rows("1直", "E"), "鈴木").status_code, 200)
+        self.back()
+        res = self.push_past(worker="田中")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        got = res.get_json()
+        self.assertEqual(got["sent_shifts"], ["2026年10月5日 L-1 2直", "2026年10月6日 L-1 1直"])
+        self.assertEqual(got["held"], [])
+        self.assertIn("過去分: 送った直 2件 / エラーで残した直 0件", got["message"])
+        self.assertEqual(self.dirty_keys(), set())
+        self.assertEqual(len(self.shared_keys()), 5)
+        self.assertFalse(self.state(worker="田中")["handover"]["any_left"])
+        self.assertEqual(self.shared_lots()[("2026年10月5日", "2直", 1)], ["B01", "B02"])
 
     def three_shifts(self) -> None:
         """共有に届かないまま 1直(1ページ)・2直(2ページ)・3直(1ページ) を溜める。"""
@@ -1351,7 +1507,7 @@ class D_PushTogetherTests(ScenarioCase):
             return real(conn, header, *args, **kwargs)
 
         with patch.object(sqlite_backend, "_write_records", side_effect=locked_on_2nd_page):
-            res = self.push(worker="鈴木")
+            res = self.push_past(worker="鈴木")
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
         self.assertEqual((body["succeeded"], body["failed"]), (3, 1))
@@ -1370,7 +1526,7 @@ class D_PushTogetherTests(ScenarioCase):
         # 帯は2直が残る
         self.assertEqual([x["shift"] for x in self.state(worker="鈴木")["handover"]["left"]], ["2直"])
         # 送り直し
-        res = self.push(worker="鈴木")
+        res = self.push_past(worker="鈴木")
         self.assertEqual(res.get_json()["succeeded"], 1)
         self.assertEqual(self.dirty_keys(), set())
         self.assertEqual(len(self.shared_headers()), 4)
@@ -1380,7 +1536,7 @@ class D_PushTogetherTests(ScenarioCase):
     def test_D3_共有のフォルダに届かない_書けない(self) -> None:
         self.three_shifts()
         self.shared_offline()
-        res = self.push(worker="鈴木")
+        res = self.push_past(worker="鈴木")
         self.assertEqual(res.status_code, 200)
         self.assertEqual((res.get_json()["succeeded"], res.get_json()["failed"]), (0, 4))
         self.assertEqual(len(self.dirty_keys()), 4)
@@ -1392,22 +1548,22 @@ class D_PushTogetherTests(ScenarioCase):
         self.shared_online()
         with patch("nippou.access_bridge.sqlite_backend._write_records",
                    side_effect=sqlite3.OperationalError("attempt to write a readonly database")):
-            res = self.push(worker="鈴木")
+            res = self.push_past(worker="鈴木")
         self.assertEqual(res.get_json()["failed"], 4)
         self.assertEqual(len(self.dirty_keys()), 4)
-        self.assertEqual(self.push(worker="鈴木").get_json()["succeeded"], 4)
+        self.assertEqual(self.push_past(worker="鈴木").get_json()["succeeded"], 4)
 
     def test_D3_共有のファイルだけ無いときは新しく作る(self) -> None:
         """【注意】フォルダがあってファイルが無いと、空のファイルを作って書く(届いたことになる)。"""
         self.three_shifts()
         self.assertFalse(self.shared_path.exists())
-        res = self.push(worker="鈴木")
+        res = self.push_past(worker="鈴木")
         self.assertEqual(res.get_json()["succeeded"], 4)
         self.assertTrue(self.shared_path.exists())
 
     def test_D4_送った直を直して送り直すと置き換わる(self) -> None:
         self.three_shifts()
-        self.push(worker="鈴木")
+        self.push_past(worker="鈴木")
         self.assertEqual(len(self.shared_lots()[("2026年10月5日", "2直", 1)]), 12)
         self.admin_on()
         # 1ページ目の11・12行目を消す
@@ -1425,7 +1581,7 @@ class D_PushTogetherTests(ScenarioCase):
         self.assertIn("共有へ渡してある", refused.get_json()["message"])
         self.back()
         self.assertEqual(self.dirty_keys(), {("2026年10月5日", "2直", 1), ("2026年10月5日", "2直", 2)})
-        res = self.push(worker="鈴木", skip=SKIP)
+        res = self.push_past(worker="鈴木", skip=SKIP)
         self.assertEqual(res.status_code, 200, res.get_json())
         lots = self.shared_lots()
         self.assertEqual(lots[("2026年10月5日", "2直", 1)][:2], ["BX01", "BP102"])
@@ -1453,7 +1609,7 @@ class D_PushTogetherTests(ScenarioCase):
         self.start_shift("2026-10-05 07:05", "山田")
         self.at("2026-10-05 14:30")
         self.save(clean_shift_rows("1直", "A"))
-        self.assertEqual(self.push(worker="山田").status_code, 200)
+        self.assertEqual(self.push_now(worker="山田").status_code, 200)
         self.assertEqual(self.shared_lots("LVC"), {("2026年10月5日", "1直", 1): ["LVC01"]})
         lots = self.shared_lots()
         self.assertEqual(lots[("2026年10月1日", "1直", 1)], ["OLD01"])
@@ -1469,16 +1625,21 @@ class D_PushTogetherTests(ScenarioCase):
         self.at("2026-10-01 14:30")
         self.save(clean_shift_rows("1直", "A"))
         self.shared_online()
-        res = self.push(worker="山田")
+        # 過去分(9月の2直・3直)を送ると、9月に残りが無くなるので書き出す
+        res = self.push_past(worker="山田")
         self.assertEqual(res.status_code, 200, res.get_json())
         body = res.get_json()
-        self.assertEqual(body["succeeded"], 3)
+        self.assertEqual(body["succeeded"], 2)
         months = [r["decision"]["label"] for r in body["rollovers"]]
         self.assertEqual(months, ["2026年9月"])
         folder = self.tmp / "monthly" / "L-1" / "2026.09"
         self.assertTrue(any(folder.glob("*.csv")), "9月を書き出していない")
         self.assertFalse((self.tmp / "monthly" / "L-1" / "2026.10").exists())
         self.assertIn((2026, 9), self.repo().settled_months())
+        # いまの1直はふだんのボタンで。9月は済んでいるので書き出し直さない
+        now = self.push_now(worker="山田").get_json()
+        self.assertEqual(now["succeeded"], 1)
+        self.assertEqual(now["rollovers"], [])
         # 9月の直をあとから直して送ると、9月を書き出し直す
         self.admin_on()
         self.recall("2026年9月30日", "2直")
@@ -1486,7 +1647,7 @@ class D_PushTogetherTests(ScenarioCase):
         fixed["1"]["MAI"] = "30"
         self.save(fixed, "佐藤")
         self.back()
-        again = self.push(worker="山田").get_json()
+        again = self.push_past(worker="山田").get_json()
         self.assertEqual([r["decision"]["label"] for r in again["rollovers"]], ["2026年9月"])
 
     def test_D6_前の月の直が止まっていると月の書き出しもしない(self) -> None:
@@ -1497,10 +1658,43 @@ class D_PushTogetherTests(ScenarioCase):
         self.autosave(bad, "佐藤")
         self.next_shift("2026-10-01 07:05", "山田")
         self.take_over("山田")
-        res = self.push(worker="山田")
+        res = self.push_past(worker="山田")
         self.assertEqual(res.status_code, 422)
         self.assertFalse((self.tmp / "monthly").exists())
         self.assertNotIn((2026, 9), self.repo().settled_months())
+
+    def test_D6_いまの直だけ送れても_前の月の残りがあれば月を書き出さない(self) -> None:
+        """【v4.35.0】ふだんの「共有へ保存」は前の月の直が止まっていても いまの直を送れる。
+        そのときも、前の月にまだ共有へ出ていない直があるうちは月を書き出さない(見送ったと言う)。"""
+        self.start_shift("2026-09-30 15:05", "佐藤")
+        bad = clean_shift_rows("2直", "S")
+        bad["1"].update(KEN="1")
+        self.at("2026-09-30 22:00")
+        self.autosave(bad, "佐藤")
+        self.next_shift("2026-10-01 07:05", "山田")
+        self.take_over("山田")
+        self.at("2026-10-01 14:30")
+        self.save(clean_shift_rows("1直", "A"))
+        res = self.push_now(worker="山田")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body["succeeded"], 1)
+        self.assertEqual(self.shared_keys(), {("2026年10月1日", "1直", 1)})
+        self.assertEqual([(r["decision"]["label"], r["held"], r["ran"]) for r in body["rollovers"]],
+                         [("2026年9月", True, False)])
+        self.assertIn("2026年9月 の書き出しは見送りました", body["message"])
+        self.assertFalse((self.tmp / "monthly").exists())
+        self.assertNotIn((2026, 9), self.repo().settled_months())
+        # 管理者が9月の2直を直して過去分を送れば、9月を書き出す
+        self.admin_on()
+        self.recall("2026年9月30日", "2直")
+        self.assertEqual(self.save(clean_shift_rows("2直", "S"), "佐藤").status_code, 200)
+        self.back()
+        body = self.push_past(worker="山田").get_json()
+        self.assertEqual([(r["decision"]["label"], r["held"]) for r in body["rollovers"]],
+                         [("2026年9月", False)])
+        self.assertTrue(any((self.tmp / "monthly" / "L-1" / "2026.09").glob("*.csv")))
+        self.assertIn((2026, 9), self.repo().settled_months())
 
     def test_D_ページを出したまま空の最終ページでも最終時間を見る(self) -> None:
         """次ページ発行で空の2ページ目ができたまま、1ページ目は 9:50 で終わっている。
@@ -1513,7 +1707,7 @@ class D_PushTogetherTests(ScenarioCase):
         self.assertEqual(self.new_page(rows_of(*items)).status_code, 200)
         checked = self.post("/api/entry/verify", {}).get_json()
         self.assertIn("shift_end", [f["code"] for f in checked["findings"]], checked["message"])
-        self.assertEqual(self.push().status_code, 422)
+        self.assertEqual(self.push_now().status_code, 422)
 
 
 # ======================================================================

@@ -3041,15 +3041,31 @@ export function start() {
     通す判断は、書き先のパスや未保存の数を見ながらするものなので、
     設定画面の側に残します。断り文からそちらへ誘導します。
   */
+  // 最後に押した共有へ保存のボタンの範囲(逃げ道の欄はこちらで押し直す)
+  let lastScope = "current";
+
   /**
    * 共有へ保存する。`skip` は「設備移動のため保存」の打ち込み。
+   *
+   * `scope` は**どちらのボタンか**(v4.35.0、`logic/push_scope`):
+   *
+   *     "current"  … ふだんの「共有へ保存」。いまの直だけを確かめて送る
+   *     "previous" … 赤い帯の「過去分を共有へ送る」。いまの直ではない未送信の
+   *                  直を古い順に確かめて送る(いまの直の途中には引っかからない)。
+   *                  直すところのある直だけ止めて、ほかは送る
+   *
+   *     現在の直と前直は処理の違うボタンを設けたほうがいいと思うのですが...
+   *
+   * 逃げ道の欄(「このまま共有へ保存」)は、**断られたほうのボタン**の範囲で
+   * 押し直します(`lastScope`)。
    *
    * **断りは、この画面で完結させます。** 以前は「逃げ道は設定・管理者へ」
    * と誘導していましたが、**設定画面まで歩かせておいて、そこで同じ物を
    * もう1度読ませる**ことになります。打つ欄はこの下にあります。
    */
-  async function pushShared(skip = "") {
-    if (!(await confirmPush())) return;
+  async function pushShared(skip = "", scope = lastScope) {
+    lastScope = scope;
+    if (!(await confirmPush(scope))) return;
     const note = document.getElementById("save-note");
     // **送るのは DB の中身なので、打ちかけを先に置く**(v4.24.0)。前は画面に
     // しか無い行(自動保存の前に打った行)を置かずに送り、共有には1つ前の
@@ -3066,23 +3082,25 @@ export function start() {
       // (いま欄に出ている作業者。前の直の残りを送るときは担当者と違う)
       const worker = document.querySelector('[data-header="worker"]')?.value || "";
       const body = await api.post("/api/settings/push",
-                                  skip ? { skip, worker } : { worker });
+                                  skip ? { skip, worker, scope } : { worker, scope });
       document.getElementById("check-panel").hidden = true;
       hideSkipBox();
       if (note) note.textContent = body.message || "";
-      toast(body.message || "共有へ保存しました", body.failed ? "warn" : "ok");
-      refresh();
+      const held = body.held || [];
+      toast(body.message || "共有へ保存しました",
+            (body.failed || held.length) ? "warn" : "ok");
+      await refresh();
+      // **止めた直を、断りと同じ形で並べる**(過去分のボタン)。送れた直は
+      // 共有へ出て、止めた直は手元に残り赤い帯に出たままです。塗り直した
+      // あとに出す(先に出すと塗り直しで消えます)
+      if (held.length) {
+        showFindings(String(body.message || "").split("\n")[0], false, heldFindings(held));
+      }
     } catch (err) {
       if (err.status === 422 && err.body && err.body.reports) {
         // 直が複数まとまって断られることがある(共有へ未保存が溜まって
         // いるとき)。**どの直の話かを付けて**並べないと直しようがない
-        const findings = [];
-        for (const report of err.body.reports.filter((r) => !r.ok)) {
-          const shift = `${report.report_date} ${lineLabel(report.line)} ${report.shift}`;
-          for (const f of withAt(report.findings, report)) {
-            findings.push({ ...f, where: `${shift} ${f.where || ""}`.trim() });
-          }
-        }
+        const findings = heldFindings(err.body.reports.filter((r) => !r.ok));
         showFindings(err.message.split("\n")[0], false, findings);
         // **欄はいつでも出します。**
         //
@@ -3104,6 +3122,18 @@ export function start() {
     } finally {
       stop();                 // **必ず消す**(枠が出たままになる)
     }
+  }
+
+  /** 止められた直の断りを、**どの直の話か**を付けて1列に。 */
+  function heldFindings(reports) {
+    const findings = [];
+    for (const report of reports) {
+      const shift = `${report.report_date} ${lineLabel(report.line)} ${report.shift}`;
+      for (const f of withAt(report.findings, report)) {
+        findings.push({ ...f, where: `${shift} ${f.where || ""}`.trim() });
+      }
+    }
+    return findings;
   }
 
   function hideSkipBox() {
@@ -3159,8 +3189,9 @@ export function start() {
     if (input && !blocked) input.focus();
   }
 
+  // ふだんの「共有へ保存」── **いまの直だけ**(v4.35.0)
   document.getElementById("push-shared")?.addEventListener("click", () => {
-    pushShared().catch(toastError);
+    pushShared("", "current").catch(toastError);
   });
 
   /*
@@ -3168,15 +3199,18 @@ export function start() {
 
     出口は2つ。**どちらも1押し**で、どちらも「直す」ことはしません。
 
-      共有へ保存する      … 中身が綺麗なときはこれで済みます。
-                            押すことは直すことではないので、誰でも押せます
+      過去分を共有へ送る  … 中身が綺麗な前の直は、これで済みます。
+                            押すことは直すことではないので、誰でも押せます。
+                            送るのは**いまの直ではない**未送信の直だけで、
+                            いまの直の途中(最終時間・休憩がまだ)には
+                            引っかかりません(v4.35.0)
       直せないまま引き継ぐ … 誰が・いつ・何を残したまま引き継いだかを
                             記録して、入力を始められるようにします
 
     引き継ぎは片付けではありません ── 共有へ出るまで帯は残ります。
   */
   document.getElementById("handover-push")?.addEventListener("click", () => {
-    pushShared().catch(toastError);
+    pushShared("", "previous").catch(toastError);
   });
 
   document.getElementById("handover-take")?.addEventListener("click", async () => {
@@ -3202,8 +3236,9 @@ export function start() {
       return;
     }
     // **合っているかを決めるのはサーバ**(`shift_check.normalize_skip`)。
-    // ここで突き合わせると、言い回しを変えたときに2か所直すことになる
-    pushShared(typed).catch(toastError);
+    // ここで突き合わせると、言い回しを変えたときに2か所直すことになる。
+    // 押し直すのは**断られたほうのボタン**の範囲(`lastScope`)
+    pushShared(typed, lastScope).catch(toastError);
   });
 
   /*

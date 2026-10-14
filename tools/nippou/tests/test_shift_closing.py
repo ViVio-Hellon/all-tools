@@ -46,6 +46,20 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(got.label, "共有へ保存して終わる")
         self.assertTrue(got.can_push)
 
+    def test_締めくくる直がいまの直なら_ふだんの共有へ保存の範囲(self) -> None:
+        """v4.35.0: 押したときに送るのは いまの直だけ(`logic/push_scope`)。"""
+        got = shift_closing.build(shift="1直", pages=3, unsynced=3)
+        self.assertEqual(got.push_scope, "current")
+        self.assertEqual(got.as_dict()["push_scope"], "current")
+
+    def test_締めくくる直が前の直なら_過去分を共有へ送る範囲(self) -> None:
+        """終わったのに渡していない前の直を締めくくるときは、過去分のボタンと同じ道。
+        いまの直の途中(最終時間・休憩がまだ)に引っかからないように。"""
+        got = shift_closing.build(shift="1直", pages=3, unsynced=3, current=False)
+        self.assertEqual(got.push_scope, "previous")
+        self.assertEqual(got.label, "過去分を共有へ送って終わる")
+        self.assertIn("いまの直の途中には引っかかりません", got.note)
+
     def test_渡してあれば見て終わるだけ(self) -> None:
         got = shift_closing.build(shift="1直", pages=3, unsynced=0)
         self.assertEqual(got.action, shift_closing.ACT_DONE)

@@ -642,10 +642,15 @@ def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False):
         shown = format_business_date(ctx.business_date(current_calculator()))
     except Exception:                             # noqa: BLE001 - 日を添えないだけ
         shown = ""
+    # **いまの直か、終わった前の直か**(v4.35.0)── 押したときに送る範囲が変わる
+    # (いまの直 = ふだんの「共有へ保存」/ 前の直 = 「過去分を共有へ送る」)
+    from .settings import _current_key
+    mine = _current_key(ctx)
+    current = mine is None or tuple(mine) == (report_date, ctx.line, shift)
     return shift_closing.build(
         report_date=report_date, line=ctx.line, shift=shift, pages=pages,
         unsynced=unsynced, findings=findings, counted=counted,
-        just_pushed=just_pushed, shown_date=shown)
+        just_pushed=just_pushed, shown_date=shown, current=current)
 
 
 @bp.get("/api/graph/review/closing")

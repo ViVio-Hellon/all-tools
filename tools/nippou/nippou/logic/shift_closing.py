@@ -69,6 +69,16 @@ class Closing:
     #: 直の名前だけでは**いまの直と見分けられない**ので日も添えます
     #: (後から作った前日の1直を、今日の1直に締めくくる、など)
     shown_date: str = ""
+    #: 締めくくる直が**いまの直**か(v4.35.0)。いまの直ならふだんの「共有へ保存」
+    #: (いまの直だけ)、終わったのに渡していない前の直なら「過去分を共有へ送る」の
+    #: 道で送ります(`logic/push_scope`)── いまの直の途中に引っかからないように
+    current: bool = True
+
+    @property
+    def push_scope(self) -> str:
+        """押したときに送る範囲(`logic/push_scope` の字)。"""
+        from .push_scope import SCOPE_CURRENT, SCOPE_PREVIOUS
+        return SCOPE_CURRENT if self.current else SCOPE_PREVIOUS
 
     @property
     def who(self) -> str:
@@ -89,6 +99,8 @@ class Closing:
 
     @property
     def label(self) -> str:
+        if self.action == ACT_PUSH and not self.current:
+            return "過去分を共有へ送って終わる"
         return _LABELS[self.action]
 
     @property
@@ -122,9 +134,12 @@ class Closing:
         """一行の下に添える説明。**次に何が起きるかを書く。**"""
         if self.action == ACT_FIX:
             return "直すところを直してから、もう一度ここへ戻ってきてください"
+        if self.action == ACT_PUSH and not self.current:
+            return ("押すと、共有へ出ていない過去分(前の直)ぜんぶを古い順に共有の日報管理へ"
+                    "書き写します(いまの直の途中には引っかかりません)")
         if self.action == ACT_PUSH:
-            return ("押すと、この端末に溜まっているぶんをまとめて共有の"
-                    "日報管理へ書き写します")
+            return ("押すと、この直を共有の日報管理へ書き写します"
+                    "(共有へ出ていない前の直は、入力画面の赤い帯から)")
         if self.action == ACT_DONE:
             return "この直でやることは残っていません"
         return ""
@@ -144,13 +159,15 @@ class Closing:
             "headline": self.headline, "note": self.note,
             "shown_date": self.shown_date, "who": self.who,
             "can_push": self.can_push,
+            "current": self.current, "push_scope": self.push_scope,
         }
 
 
 def build(*, report_date: str = "", line: str = "", shift: str = "",
           pages: int = 0, unsynced: int = 0,
           findings: list | tuple = (), counted: bool = True,
-          just_pushed: bool = False, shown_date: str = "") -> Closing:
+          just_pushed: bool = False, shown_date: str = "",
+          current: bool = True) -> Closing:
     """成り行きを組み立てる。
 
     ``findings`` は**この直のぶんだけ**(`services/shift_check` の結果)。
@@ -164,4 +181,5 @@ def build(*, report_date: str = "", line: str = "", shift: str = "",
     return Closing(report_date=report_date, line=line, shift=shift,
                    pages=max(0, pages), unsynced=max(0, unsynced),
                    findings=tuple(findings), counted=counted,
-                   just_pushed=just_pushed, shown_date=shown_date)
+                   just_pushed=just_pushed, shown_date=shown_date,
+                   current=current)

@@ -133,11 +133,13 @@ class PushProgressTests(WebTestCase):
 
     def test_画面は押す前に下見を見る(self) -> None:
         progress_js = (JS / "progress.js").read_text(encoding="utf-8")
-        self.assertIn("export async function confirmPush()", progress_js)
+        # 下見は押したボタンの範囲ぶん(いまの直 / 過去分。v4.35.0)
+        self.assertIn('export async function confirmPush(scope = "")', progress_js)
+        self.assertIn("/api/settings/push/plan${q}", progress_js)
         self.assertIn('"/api/progress/stop"', progress_js)
         for view in ("views/entry.js", "views/settings.js", "views/review.js"):
             text = (JS / view).read_text(encoding="utf-8")
-            self.assertIn("if (!(await confirmPush())) return;", text, view)
+            self.assertIn("if (!(await confirmPush(scope))) return;", text, view)
 
     def test_idle_answer(self) -> None:
         body = self.get("/api/progress").get_json()
@@ -171,7 +173,7 @@ class PushProgressTests(WebTestCase):
                 mock.patch.object(shift_check, "run", fake_run), \
                 mock.patch.object(pusher, "_push_one", fake_push), \
                 mock.patch.object(pusher, "is_sqlite_target", lambda path: False), \
-                mock.patch.object(pusher, "_push_summaries", lambda repo, path: 0):
+                mock.patch.object(pusher, "_push_summaries", lambda repo, path, **kw: 0):
             res = self.post("/api/settings/push", {})
         self.assertEqual(res.status_code, 200, res.get_json())
         checks = [s for s in seen if s[1] == logic.PHASE_CHECK]

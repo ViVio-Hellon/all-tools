@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from ..config import SETTINGS
 from ..db.models import DetailRecord, HeaderRecord
@@ -159,11 +159,19 @@ def push_pending(
     repo: NippouRepository,
     accdb_path: Path,
     runner: Optional[ScriptRunner] = None,
+    *,
+    keys: Optional[Iterable[tuple[str, str, str]]] = None,
 ) -> PushSummary:
     """Port of the write side of ``NippouDB_Save`` + ``ExecuteSQLTransaction``,
     replayed against every locally dirty header. Returns a summary the UI
-    can surface (e.g. "3 saved, 1 failed: 現在他の人が使用中です")."""
+    can surface (e.g. "3 saved, 1 failed: 現在他の人が使用中です").
+
+    `keys` を渡すと、**その直 (報告日, ライン, 直) のページだけ**を送ります
+    (v4.35.0 ── いまの直 / 過去分のボタン、`logic/push_scope`)。送らなかった
+    直の集計も送りません(:func:`_push_summaries`)。渡さなければ未送信ぜんぶ。
+    """
     summary = PushSummary()
+    wanted = None if keys is None else {tuple(k) for k in keys}
 
     # **`.laccdb` は Access のしくみ。** sqlite3 にそれは無く、同時に書こうと
     # しても待てば通る(`busy_timeout`)ので、ここで警告を出す意味がない ──
@@ -179,7 +187,12 @@ def push_pending(
     from .. import job_progress
     from ..logic import progress
 
-    headers = list(repo.pending_sync_headers())
+    pending = list(repo.pending_sync_headers())
+    headers = [h for h in pending
+               if wanted is None or (h.report_date, h.line, h.shift) in wanted]
+    # 範囲の外で未送信のまま残す直。**その直の集計も共有へ出さない**
+    held = {(h.report_date, h.line, h.shift) for h in pending} - (
+        {(h.report_date, h.line, h.shift) for h in headers})
     job_progress.step(phase=progress.PHASE_SEND, total=len(headers), done=0)
     sqlite_target = is_sqlite_target(accdb_path)
     size = BATCH_PAGES if sqlite_target else 1
@@ -200,7 +213,7 @@ def push_pending(
         job_progress.step(done=done)
 
     if not summary.stopped:
-        summary.summaries = _push_summaries(repo, accdb_path)
+        summary.summaries = _push_summaries(repo, accdb_path, held=held)
     return summary
 
 
@@ -275,7 +288,8 @@ def _push_batch(repo: NippouRepository, accdb_path: Path,
         _push_guarded(repo, accdb_path, header, None, summary)
 
 
-def _push_summaries(repo: NippouRepository, accdb_path: Path) -> int:
+def _push_summaries(repo: NippouRepository, accdb_path: Path, *,
+                    held: Optional[set] = None) -> int:
     """直ごとの集計も共有へ置く。**送れた数を返す。**
 
     VBA には無い表です ── あちらは集計を Excel のシートに書いていました。
@@ -286,6 +300,10 @@ def _push_summaries(repo: NippouRepository, accdb_path: Path) -> int:
     **日報の反映が主で、こちらは従。** 集計は明細から何度でも作り直せる
     ので、ここで失敗しても日報の反映結果は返します(記録だけ残す)。
     書き先が Access のときは飛ばします(あちらに表を増やしません)。
+
+    `held` は**今回は送らなかった直**(範囲の外・関門で止めた)。その直の集計も
+    出しません ── 日報は手元に残したのに、集計だけ共有へ出ると食い違います
+    (いまの直の途中の数が、過去分のボタンで共有へ出てしまう、など)。
     """
     if not is_sqlite_target(accdb_path):
         return 0
@@ -293,7 +311,8 @@ def _push_summaries(repo: NippouRepository, accdb_path: Path) -> int:
     from ..logic import progress
     from . import sqlite_backend
 
-    reports = list(repo.pending_packing_reports())
+    reports = [r for r in repo.pending_packing_reports()
+               if not held or tuple(r.key()) not in held]
     job_progress.step(phase=progress.PHASE_SEND_SUMMARY, total=len(reports), done=0)
     sent = 0
     for start in range(0, len(reports), BATCH_SHIFTS):

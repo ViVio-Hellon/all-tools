@@ -107,13 +107,16 @@ export function start() {
 
   /** 共有へ渡して、**その場で画面を「渡しました」に変える。** */
   async function pushAndPaint() {
-    if (!(await confirmPush())) return;
+    // **送る範囲は締めくくる直で決まる**(v4.35.0)── いまの直なら いまの直だけ、
+    // 終わったのに渡していない前の直なら前の直だけ(`logic/shift_closing.push_scope`)
+    const scope = closing.push_scope || "current";
+    if (!(await confirmPush(scope))) return;
     const btn = document.getElementById("review-act");
     if (btn) btn.disabled = true;
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");
     try {
-      const body = await api.post("/api/settings/push", {});
+      const body = await api.post("/api/settings/push", { scope });
       toast(body.message || "共有へ保存しました", body.failed ? "warn" : "ok");
       await refreshClosing(true);
     } catch (err) {

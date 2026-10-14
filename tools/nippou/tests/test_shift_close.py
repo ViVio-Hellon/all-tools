@@ -478,6 +478,77 @@ class SweepTests(ShiftCloseTestCase):
         push.assert_called_once()
 
 
+class ScopeTests(ShiftCloseTestCase):
+    """**自動で送る範囲も、手で押す2つのボタンと同じ**(v4.35.0、`logic/push_scope`)。
+
+        残り5分の自動確定      … 終わる直(いまの直)だけ = ふだんの「共有へ保存」
+        次の直の画面が拾って送る … いまの直ではない直      = 「過去分を共有へ送る」
+
+    前は「未送信ぜんぶが綺麗なら」送っていたので、前の直が1つ止まっていると、
+    綺麗に終わった直まで自動では出ませんでした。
+    """
+
+    def sent(self, *keys):
+        return type("S", (), {"succeeded": list(keys), "failed": [],
+                              "concurrency_warning": ""})()
+
+    def broken_3rd(self) -> None:
+        """前の3直に、直せない間違い(梱包数 > 検入枚数)を残して未送信のまま置く。"""
+        self.repo.save(header(shift="3直"),
+                       [detail(1, shift="3直", kz="22", kh="0", sz="8", sh="0", tim="540",
+                               s="0", th="60", ken="1", mai="10", tut="10")])
+
+    def clean_2nd(self) -> None:
+        self.repo.save(header(shift="2直"),
+                       [detail(1, shift="2直", kz="17", kh="0", sz="22", sh="0",
+                               tim="240", s="0", th="60")])
+
+    def test_残り5分の自動確定は終わる直だけを確かめて送る(self) -> None:
+        self.broken_3rd()
+        self.save(rows=[detail(1, kz="8", kh="0", sz="17", sh="0", tim="480", s="0", th="60")])
+        with patch("nippou.access_bridge.pusher.push_pending") as push, \
+                patch("nippou.services.push_history.share"):
+            push.return_value = self.sent((DAY, LINE, SHIFT, 1))
+            result = self.run_auto()
+        push.assert_called_once()
+        self.assertEqual(push.call_args.kwargs["keys"], [(DAY, LINE, SHIFT)])
+        self.assertEqual(result.pushed, 1)
+        self.assertEqual(result.push_note, "", "終わる直の自動確定が前の直に止められた")
+
+    def test_次の直の画面の拾いは_直すところのある直だけ止めて_ほかは送る(self) -> None:
+        from nippou.services import push_history as ph
+
+        self.broken_3rd()
+        self.clean_2nd()
+        with patch("nippou.access_bridge.pusher.push_pending") as push, \
+                patch("nippou.services.push_history.share"):
+            push.return_value = self.sent((DAY, LINE, "2直", 1))
+            done = shift_close_sweep(self)
+        push.assert_called_once()
+        self.assertEqual(push.call_args.kwargs["keys"], [(DAY, LINE, "2直")])
+        self.assertEqual(done[-1].pushed, 1)
+        self.assertIn("3直", done[-1].push_note)
+        self.assertIn("送っていません", done[-1].push_note)
+        self.assertIn("共有へも送りました(1件)", done[-1].message)
+        blocked = [(h["shift"], h["result"], h["via"]) for h in self.repo.push_history()]
+        self.assertEqual(blocked, [("3直", ph.BLOCKED, ph.VIA_SWEEP), ("2直", ph.SENT, ph.VIA_SWEEP)])
+
+    def test_拾った直がぜんぶ止まっていれば送らない(self) -> None:
+        self.broken_3rd()
+        with patch("nippou.access_bridge.pusher.push_pending") as push, \
+                patch("nippou.services.push_history.share"):
+            done = shift_close_sweep(self)
+        push.assert_not_called()
+        self.assertIn("共有へは送っていません", done[-1].push_note)
+
+
+def shift_close_sweep(case: ShiftCloseTestCase, now=EARLY):
+    """いまの直(16:00 の1直)の画面が、終わった直を拾う。"""
+    from nippou.services import shift_close
+
+    return shift_close.sweep(case.repo, case.calc, line=LINE, now=now)
+
+
 class AutoHistoryTests(ShiftCloseTestCase):
     """**自動で送った直も共有保存の履歴に残す**(v4.34.2)。
 

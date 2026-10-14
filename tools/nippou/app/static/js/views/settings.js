@@ -1458,16 +1458,33 @@ export function start() {
     box.hidden = false;
   }
 
-  async function pushToShared(skip) {
-    if (!(await confirmPush())) return;
+  /*
+    ---- 共有へ保存は2つ(v4.35.0)── いまの直 / 前の直 ----
+
+    入力画面と同じ2つです(`logic/push_scope`)。「いまの直」は いまの直だけを、
+    「過去分を共有へ送る」は いまの直ではない未送信の直を、確かめて送ります。
+    逃げ道の一文(「設備移動のため保存」)は**最後に押したほうのボタン**に添えます
+    ── 断られたボタンと別の範囲で通してしまわないように。
+  */
+  let lastScope = "current";
+
+  async function pushToShared(skip, scope = lastScope) {
+    lastScope = scope;
+    if (!(await confirmPush(scope))) return;
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");
     try {
-      const body = await api.post("/api/settings/push", skip ? { skip } : {});
+      const body = await api.post("/api/settings/push",
+                                  skip ? { skip, scope } : { scope });
       document.getElementById("push-check").hidden = true;
+      // 過去分のボタンで**止めた直**があれば、断りと同じ形で並べたままにする
+      if (body.held && body.held.length) {
+        showCheck({ reports: body.held, skip_phrase: body.skip_phrase,
+                    error: { message: body.message } });
+      }
       // **結果はトーストへ。** このあと画面を塗り直すので、本文の中に
       // 書くと一緒に消えます(トーストは外枠なので残ります)
-      toast(body.message, body.failed ? "warn" : "ok");
+      toast(body.message, (body.failed || (body.held && body.held.length)) ? "warn" : "ok");
       // 月替わりが一緒に走ったら、その結果も知らせる
       if (body.rollover) toast(body.rollover.message, "ok");
       // **塗り直す。**
@@ -1489,14 +1506,17 @@ export function start() {
     }
   }
 
-  document.getElementById("push")?.addEventListener("click", () => pushToShared(""));
+  document.getElementById("push")?.addEventListener("click",
+    () => pushToShared("", "current"));
+  document.getElementById("push-prev")?.addEventListener("click",
+    () => pushToShared("", "previous"));
   document.getElementById("push-skip")?.addEventListener("click", () => {
     const text = (document.getElementById("skip-phrase")?.value || "").trim();
     if (!text) {
       note("通すには、上に書いてある一文をそのまま打ってください", "error");
       return;
     }
-    pushToShared(text);
+    pushToShared(text, lastScope);
   });
 
   // ---- 月替わり ----

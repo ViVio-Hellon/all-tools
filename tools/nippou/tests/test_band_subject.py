@@ -108,7 +108,10 @@ class PrevBandTests(unittest.TestCase):
         """「直せないまま引き継ぐ…ボタンの意味は？」への答え。"""
         body = handover.decide([left()], started=False).as_dict()
         self.assertIn("1ページでも保存したあとは", body["why_more"])
-        self.assertIn("共有へ保存する", body["why_more"])
+        # 帯のボタンは前の直の処理用(v4.35.0)── いまの直の途中には引っかからない
+        self.assertIn("過去分を共有へ送る", body["why_more"])
+        self.assertIn("いまの直の途中", body["why_more"])
+        self.assertEqual(body["push_label"], "過去分を共有へ送る")
         self.assertIn("直せないまま引き継ぐ", body["why_more"])
         self.assertTrue(body["why_line"])
 

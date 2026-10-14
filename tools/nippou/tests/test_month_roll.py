@@ -184,6 +184,26 @@ class CatchUpTests(RepoCase):
         self.assertEqual(self.months(self.roll(date(2026, 9, 2))), [AUG])
         self.assertIn(AUG, self.repo.settled_months())
 
+    def test_共有へ保存の直後は_未送信の残る月を書き出さずに見送る(self) -> None:
+        """v4.35.0: いまの直だけ送れて前の月の直が止まっている、が起きるようになった。
+        共有へ保存の直後(`hold_pending`)は、送っていない直のある月を書き出さない。"""
+        self.sent(self.save("2026年8月20日"))
+        self.save("2026年8月20日", shift="2直")          # 送っていない
+        rolls = month_rollover.catch_up(self.repo, self.tmp / "月別", today=date(2026, 9, 1),
+                                        hold_pending=True)
+        self.assertEqual([(r.decision.year, r.decision.month, r.held, r.ran) for r, _ in rolls],
+                         [(2026, 8, True, False)])
+        self.assertIn("書き出しは見送りました", rolls[0][0].message)
+        self.assertTrue(rolls[0][0].as_dict()["held"])
+        self.assertFalse((self.tmp / "月別").exists())
+        self.assertNotIn(AUG, self.repo.settled_months())
+        # 送り終えたら書き出す
+        self.sent(("2026年8月20日", "L-1", "2直", 1))
+        rolls = month_rollover.catch_up(self.repo, self.tmp / "月別", today=date(2026, 9, 1),
+                                        hold_pending=True)
+        self.assertEqual(self.months(rolls), [AUG])
+        self.assertIn(AUG, self.repo.settled_months())
+
     def test_済ませられない月があればそこで止める(self) -> None:
         """次の月へ進むと、古い月を置き去りにしたまま済んだ扱いが増える。"""
         self.save("2026年7月20日")                       # 送っていない

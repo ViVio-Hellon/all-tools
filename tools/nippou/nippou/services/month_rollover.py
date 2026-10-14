@@ -47,6 +47,9 @@ class RolloverResult:
     exports: list[MonthExport] = field(default_factory=list)
     failed: bool = False
     pending: bool = False          # まだ共有へ送っていないページが残っている
+    #: **書き出さずに見送った**(その月にまだ共有へ送っていない直がある)。
+    #: 共有へ保存の直後だけ(`catch_up(hold_pending=True)`。v4.35.0)
+    held: bool = False
 
     @property
     def ran(self) -> bool:
@@ -56,6 +59,10 @@ class RolloverResult:
     def message(self) -> str:
         if not self.decision.due:
             return f"月替わりではありません（{self.decision.reason}）"
+        if self.held:
+            return (f"{self.decision.label} の書き出しは見送りました ── その月の直に、"
+                    "まだ共有へ送っていないものがあります"
+                    "(送り終えたあとの共有へ保存で書き出します)")
         if not self.exports:
             return f"{self.decision.label}: 書き出すデータがありませんでした"
         where = self.exports[0].folder.parent
@@ -76,7 +83,7 @@ class RolloverResult:
         return {"decision": self.decision.as_dict(), "ran": self.ran,
                 "exports": [e.as_dict() for e in self.exports],
                 "failed": self.failed, "pending": self.pending,
-                "message": self.message}
+                "held": self.held, "message": self.message}
 
 
 def check(repo: NippouRepository, today: Optional[date] = None) -> RollDecision:
@@ -114,12 +121,21 @@ def settle(repo: NippouRepository, result: "RolloverResult",
 
 def catch_up(repo: NippouRepository, base_dir: Path, *,
              second: Optional[Callable[["RolloverResult"], Any]] = None,
-             today: Optional[date] = None) -> list[tuple["RolloverResult", Any]]:
+             today: Optional[date] = None,
+             hold_pending: bool = False) -> list[tuple["RolloverResult", Any]]:
     """**済んでいない月を、古い順にぜんぶ**書き出す(共有へ保存の直後・押したとき)。
 
     1か月ずつ: 1つ目へ書く → `second` で2つ目へ出す → 済んだと覚える。
     済ませられなかった月(未送信が残る・書けなかった)があれば、そこで
     止めます ── 次の「共有へ保存」でその月からやり直します。
+
+    `hold_pending` は共有へ保存の直後から(v4.35.0)。**その月にまだ共有へ
+    送っていない直があれば、書き出さずに見送ります**(`held` の結果を1つ返して
+    止める)。共有へ保存を「いまの直」と「過去分」に分けたので、いまの直だけ
+    送れて前の月の直が残っている、が起きます ── 送っていない直を抜いたまま
+    月を書き出さない(前は保存ぜんぶが止まっていたので、ここまで来ませんでした)。
+    押して走らせたとき(`hold_pending` なし)は今までどおり書き出して、
+    未送信が残ることを知らせます。
 
     `second` の戻りは `ok` を持つもの(`second_output.Outcome`)。
     返すのは (1つ目の結果, 2つ目の結果) の並び。
@@ -128,6 +144,11 @@ def catch_up(repo: NippouRepository, base_dir: Path, *,
     for _ in range(MAX_MONTHS_PER_RUN):
         decision = check(repo, today)
         if not decision.due:
+            break
+        if hold_pending and repo.month_has_pending(decision.year, decision.month):
+            log.info("月替わり: %s に未送信の直があるので、書き出しを見送ります",
+                     decision.label)
+            done.append((RolloverResult(decision, held=True), None))
             break
         result = run(repo, base_dir, decision=decision)
         extra = second(result) if second is not None else None

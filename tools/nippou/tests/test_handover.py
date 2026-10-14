@@ -96,8 +96,18 @@ class ActionsTests(unittest.TestCase):
         gate = handover.decide([_left()], started=False)
         self.assertEqual(gate.actions, [handover.ACTION_PUSH])
         self.assertTrue(gate.all_clean)
-        self.assertIn("「共有へ保存」を押せば済みます", gate.message)
+        # 帯のボタンは前の直の処理用(v4.35.0)。ふだんの「共有へ保存」とは名前で分ける
+        self.assertIn("「過去分を共有へ送る」を押せば済みます", gate.message)
         self.assertIn("誰でも押せます", gate.message)
+        self.assertIn("いまの直の途中には引っかかりません", gate.message)
+
+    def test_直すところのある直と無い直が混ざれば_送れる直は送れると言う(self):
+        """v4.35.0: 前の直のボタンは、直すところのある直だけ止めて、ほかの直は送る。"""
+        gate = handover.decide([_left(shift="1直"),
+                                _left(shift="2直", problems=["1ページ 1行目 だめ"])],
+                               started=False)
+        self.assertIn("直すところの無い1直は「過去分を共有へ送る」で送れます", gate.message)
+        self.assertIn("この帯に残します", gate.message)
 
     def test_直すところがあれば引き継ぎも出す(self):
         gate = handover.decide([_left(problems=["1ページ 1行目 だめ"])],
@@ -382,6 +392,9 @@ class HandoverGateTests(WebTestCase):
         self.assertIn('id="handover"', html)
         self.assertIn('data-blocked="1"', html)
         self.assertIn("直せないまま引き継ぐ", html)
+        # 帯のボタンは「過去分を共有へ送る」。ふだんの「共有へ保存」と名前で分ける(v4.35.0)
+        self.assertRegex(html, r'id="handover-push"[^>]*>\s*過去分を共有へ送る</button>')
+        self.assertRegex(html, r'id="push-shared"[^>]*>\s*共有へ保存</button>')
 
     def test_残っていなければ伏せてある(self):
         html = self.get("/").get_data(as_text=True)

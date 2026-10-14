@@ -293,7 +293,8 @@ def run_for_save(repo: NippouRepository, report_date: str, line: str,
 
 def run_pending(repo: NippouRepository, *, skip: bool = False,
                 admin: bool = False,
-                skip_only: Optional[tuple[str, str, str]] = None) -> list[CheckReport]:
+                skip_only: Optional[tuple[str, str, str]] = None,
+                keys: Optional[Sequence[tuple[str, str, str]]] = None) -> list[CheckReport]:
     """これから共有へ送る直を、ぜんぶ確かめる。
 
     送るのは「まだ送っていないページ」(`pending_sync_headers`)で、日も直も
@@ -307,12 +308,19 @@ def run_pending(repo: NippouRepository, *, skip: bool = False,
     前は打つと、未送信の直**ぜんぶ**の休憩・最終時間が通っていました ── 次の直の人が、
     前の直の「休憩が取れなかった」を代わりに言えてしまう。前の直のぶんを通せるのは
     管理者(`admin`)だけです。
+
+    `keys` を渡すと、**その直だけ**を確かめます(v4.35.0 ── 共有へ保存の範囲、
+    `logic/push_scope`)。いまの直のボタンは前の直の間違いに、過去分のボタンは
+    いまの直の途中に止められません。渡さなければ未送信ぜんぶ(まとめて送る)。
     """
-    keys: list[tuple[str, str, str]] = []
-    for header in repo.pending_sync_headers():
-        key = (header.report_date, header.line, header.shift)
-        if key not in keys:
-            keys.append(key)
+    if keys is None:
+        keys = []
+        for header in repo.pending_sync_headers():
+            key = (header.report_date, header.line, header.shift)
+            if key not in keys:
+                keys.append(key)
+    else:
+        keys = [tuple(k) for k in keys]
     # 同じマスタを直の数だけ読み直さない(共有に何度も取りに行くことになる)
     codes = list(known_stop_codes())
     # **進み具合を置く**(共有へ保存の棒。走っていなければ何もしない)

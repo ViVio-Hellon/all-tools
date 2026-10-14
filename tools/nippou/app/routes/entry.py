@@ -1935,8 +1935,9 @@ def handover_take():
     引き継いだか」の3つで、直ったことにはしません。
 
     中身が綺麗(押し忘れだけ)なら、そもそもこちらは要りません ──
-    「共有へ保存」を押せば済みます(`/api/settings/push`)。押すことは
-    直すことではないので、誰でも押せます。
+    帯の「過去分を共有へ送る」を押せば済みます(`/api/settings/push` の
+    `scope: "previous"`。v4.35.0 から いまの直の途中には引っかかりません)。
+    押すことは直すことではないので、誰でも押せます。
     """
     from nippou.logic import handover as handover_logic
     from nippou.services import handover
