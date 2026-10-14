@@ -615,8 +615,20 @@ class WordGoneTest(_FakeWordCase):
             adopted.append(word.pid if word else None)
             real_adopt(session, word)
 
+        real_identity = excel_service.get_process_identity
+
+        def as_word(pid):
+            # 代わりの子は python.exe。Windows では WINWORD.EXE でない PID は使わないので、
+            # 名前だけ Word にする(止めるときの照合は本物の印で行う)
+            found = real_identity(pid)
+            if found is None or pid not in (first.pid, second.pid):
+                return found
+            return process_tracking.ProcessIdentity(found.pid, found.create_time,
+                                                    r"C:\Program Files\Microsoft Office\WINWORD.EXE")
+
         _png, patch = self.clipboard_png()
-        with patch, mock.patch.object(self.backend, "_adopt_word", spy):
+        with patch, mock.patch.object(self.backend, "_adopt_word", spy), \
+                mock.patch.object(excel_service, "get_process_identity", as_word):
             self.backend.preview(self.word)
         self.assertEqual([pid for pid in adopted if pid], [first.pid, second.pid])
         self.assertEqual([e for e in self.registry.entries() if e.get("label") == "word"], [])
