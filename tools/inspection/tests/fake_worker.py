@@ -80,6 +80,8 @@ def start_word(job):
     """本物と同じく Word は Word の点検表が来たときだけ起動し、処理の終わりに終える。
 
     本物と同じく、起動したらすぐ(文書を開く前に)`WORDPID` を出す(fake_word_pid)。
+    起こし直した2回目は fake_word_pid2。fake_user_word = 1 なら、CreateObject が利用者の
+    Word を返した場合(本物は WORDSHARED を出し、WORDPID・窓を出さない)。
     """
     if STATE["word"]:
         return True
@@ -89,10 +91,63 @@ def start_word(job):
         result("word.errno", "0x800A01AD")
         return False
     STATE["word"] = True
-    if job.get("fake_word_pid"):
-        emit(f"WORDPID {job['fake_word_pid']}")
+    STATE["word_starts"] = STATE.get("word_starts", 0) + 1
+    if job.get("fake_user_word") == "1":
+        STATE["shared"] = True
+        emit("WORDSHARED 1")
+    else:
+        pid = job.get("fake_word_pid2") if STATE["word_starts"] > 1 else job.get("fake_word_pid")
+        if pid:
+            emit(f"WORDPID {pid}")
     emit("STAGE word.setup")
     return True
+
+
+def lose_word(stage):
+    """本物の LoseWord: Word が途中で終わった(462)。"""
+    result("log", f"Word is gone (at {stage})")
+    emit(f"WORDLOST {stage}")
+    STATE["word"] = False
+    STATE["shared"] = False
+    STATE["word_reported"] = False
+
+
+def clear_item_error(i):
+    for key in ("code", "errno", "message", "step"):
+        result(f"item.{i}.{key}", "")
+
+
+def gone_error(i, code, stage):
+    """462(0x1CE)で失敗した、の結果(本物の SetItemError と同じ形)。"""
+    result(f"item.{i}.code", code)
+    result(f"item.{i}.errno", "0x1CE")
+    result(f"item.{i}.message", "リモート サーバー マシンが存在しないか、利用できません。")
+    result(f"item.{i}.step", stage)
+
+
+def gone_at(job, attempt):
+    """fake_word_gone = "<段階>"(1回目だけ)/ "<段階>:twice"(2回とも)。その回に終わる段階。"""
+    spec = job.get("fake_word_gone", "")
+    if not spec:
+        return ""
+    stage, _, times = spec.partition(":")
+    return stage if attempt == 1 or times == "twice" else ""
+
+
+def close_open_copies(job, indexes):
+    """本物の CloseOpenCopy: close_open_copy = 1 のときだけ、この PC で開いたままのものを閉じる。
+
+    fake_open_here = "1,3" … その番号の点検表が、この PC の Excel・Word で開いたままだった。
+    """
+    if job.get("close_open_copy") != "1":
+        return
+    here = {s for s in job.get("fake_open_here", "").split(",") if s}
+    for i in indexes:
+        app = "Word" if is_word(job, i) else "Excel"
+        emit(f"STAGE {app.lower()}.close")
+        if str(i) in here:
+            result("log", f"Closed the copy left open in the user's {app} (not saved)")
+            result(f"item.{i}.closed_open", app)
 
 
 def open_doc(job, i):
@@ -107,9 +162,12 @@ def open_doc(job, i):
         result(f"item.{i}.step", "word.open")
         return False
     emit(f"OPENED {i}")
-    if not STATE.get("word_reported"):                 # 本物と同じく、文書の窓の hwnd は1回だけ
+    # 本物と同じく、文書の窓の hwnd は1回だけ。利用者の Word(WORDSHARED)の窓は出さない
+    # (fake_shared_window = 1 なら、それでも出す: Python の側でも覚えないことを確かめる)
+    shared_hides = STATE.get("shared") and job.get("fake_shared_window") != "1"
+    if not STATE.get("word_reported") and not shared_hides:
         STATE["word_reported"] = True
-        emit("WORD 0")
+        emit(f"WORD {job.get('fake_word_hwnd', '0')}")
     return True
 
 
@@ -118,7 +176,9 @@ def finish_word(job):
         STATE["word"] = False
         STATE["word_reported"] = False
         emit("STAGE word.quit")
-        emit("WORDBYE " + ("0" if job.get("fake_user_doc") == "1" else "1"))
+        user = job.get("fake_user_doc") == "1" or STATE.get("shared")
+        STATE["shared"] = False
+        emit("WORDBYE " + ("0" if user else "1"))
 
 
 def run(job):
@@ -133,6 +193,8 @@ def run_job(job):
     if mode == "preview" and is_word(job, 1):
         return preview_word(job)
     count = int(job.get("count", "0") or 0)
+    if mode in ("print", "preview"):
+        close_open_copies(job, range(1, (count if mode == "print" else 1) + 1))
     all_word = mode == "print" and count > 0 and all(is_word(job, i) for i in range(1, count + 1))
     if not all_word and not start_excel(job):
         return 3
@@ -156,7 +218,11 @@ def run_job(job):
             if job.get("fake_hang_at") == str(i):
                 time.sleep(60)
             path = job.get(f"file.{i}", "")
-            if is_word(job, i) and not start_word(job):
+            if is_word(job, i) and job.get("fake_word_gone"):
+                ok = print_word_item(job, i)
+                emit(f"END {i} {'OK' if ok else 'NG'}")
+                rc = rc if ok else 4
+            elif is_word(job, i) and not start_word(job):
                 result(f"item.{i}.code", "WORD_CREATE_FAILED")
                 emit(f"END {i} NG")
                 rc = 4
@@ -205,7 +271,64 @@ def run_job(job):
     return rc
 
 
+def print_word_item(job, i):
+    """本物の PrintWordItem: 文書を開く所で Word が終わったら起こし直して1回だけやり直す。
+    印刷の途中で終わったら、紙に出ているかもしれないのでやり直さない。"""
+    for attempt in (1, 2):
+        start_word(job)
+        stage = gone_at(job, attempt)
+        if not stage:
+            if open_doc(job, i):
+                result(f"item.{i}.sheet", "pages 1")
+                return True
+            return False
+        emit(f"STAGE word.{stage}")
+        gone_error(i, "OPEN_FAILED" if stage == "open" else "PRINT_FAILED", f"word.{stage}")
+        lose_word(f"word.{stage}")
+        if stage == "print":
+            result("log", "Word ended while printing; not printed again (it may be on paper)")
+            gone_error(i, "WORD_GONE", "word.print")
+            return False
+        if attempt == 2:
+            gone_error(i, "WORD_GONE", f"word.{stage}")
+            return False
+        clear_item_error(i)
+        emit(f"RETRY {i}")
+    return False
+
+
 def preview_word(job):
+    """本物の RunPreviewWord: Word が途中で終わったら起こし直して1回だけやり直す。
+    1ページ目の絵で終わったなら、2回目はクリップボード経由。"""
+    close_open_copies(job, [1])
+    rc, stage = preview_word_once(job, 1, True)
+    if rc == 0 or not stage:
+        return rc
+    clear_item_error(1)
+    emit("RETRY 1")
+    rc, stage = preview_word_once(job, 2, stage != "word.page")
+    if rc != 0 and stage:
+        gone_error(1, "WORD_GONE", stage)
+    return rc
+
+
+def preview_word_once(job, attempt, use_emf):
+    """(終了コード, Word が終わった段階)。"""
+    gone = gone_at(job, attempt)
+    if gone == "open":
+        start_word(job)
+        emit("STAGE word.open")
+        gone_error(1, "OPEN_FAILED", "word.open")
+        lose_word("word.open")
+        return 4, "word.open"
+    rc = preview_word_body(job, gone == "page" or not use_emf, gone)
+    if gone == "page" and rc != 0:
+        lose_word("word.page")
+        return rc, "word.page"
+    return rc, ""
+
+
+def preview_word_body(job, skip_emf=False, gone=""):
     """Word の1ページ目: EMFDATA → EMFDONE。COPY と言われたらクリップボード経由(COPIED)。"""
     if not start_word(job):
         result("fatal.code", "WORD_CREATE_FAILED")
@@ -220,15 +343,23 @@ def preview_word(job):
     result("item.1.sheet", "page 1 / 2")
     result("item.1.range", "page 1")
     result("item.1.range_source", "word_page")
-    emit("STAGE word.page")
-    emf = bytes.fromhex(job.get("fake_emf_hex", "0102030405"))
-    b64 = base64.b64encode(emf).decode("ascii")
-    for i in range(0, len(b64), 8):
-        emit(f"EMFDATA {b64[i:i + 8]}")
-    emit("EMFDONE 1")
-    cmd = wait_command()
-    if cmd == "OK":
-        return 0
+    if gone == "page":
+        emit("STAGE word.page")                        # EnhMetaFileBits で Word が落ちた
+        result("log", "Pages(1).EnhMetaFileBits failed: 0x800706BE")
+        gone_error(1, "COPY_FAILED", "word.page")
+        return 4
+    if skip_emf:
+        result("log", "Word page picture skipped (Word ended at it in the first try)")
+    else:
+        emit("STAGE word.page")
+        emf = bytes.fromhex(job.get("fake_emf_hex", "0102030405"))
+        b64 = base64.b64encode(emf).decode("ascii")
+        for i in range(0, len(b64), 8):
+            emit(f"EMFDATA {b64[i:i + 8]}")
+        emit("EMFDONE 1")
+        cmd = wait_command()
+        if cmd == "OK":
+            return 0
     result("log", "Word page picture not used; copy page 1 to the clipboard")
     emit("STAGE word.copy")
     emit("COPIED 1")

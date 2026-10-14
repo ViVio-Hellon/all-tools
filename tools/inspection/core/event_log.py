@@ -43,11 +43,12 @@ current_ref: contextvars.ContextVar[str] = contextvars.ContextVar("event_ref", d
 current_screen: contextvars.ContextVar[str] = contextvars.ContextVar("event_screen", default="")
 
 _lock = threading.Lock()
-# エラーの種類 → (何が起きたか, 確かめること)。アプリが入れる(`app/why_hints.py`)
-_hints: Callable[[str], Tuple[str, List[str]]] = lambda code: ("", [])
+# エラーの種類 → (何が起きたか, 確かめること)。アプリが入れる(`app/why_hints.py`)。
+# 記録に `app`(点検表の種類: Excel / Word)があれば2つ目に渡す(Word なら Word の言い方にする)
+_hints: Callable[..., Tuple[str, List[str]]] = lambda code, app="": ("", [])
 
 
-def set_hints(func: Callable[[str], Tuple[str, List[str]]]) -> None:
+def set_hints(func: Callable[..., Tuple[str, List[str]]]) -> None:
     global _hints
     _hints = func
 # 読み違えやすい文字(0/O・1/I/L)を使わない
@@ -91,6 +92,15 @@ def _clip(value: Any) -> Any:
     return value
 
 
+def _hint_for(code: str, app: str) -> Tuple[str, List[str]]:
+    if app:
+        try:
+            return _hints(code, app)
+        except TypeError:                          # 種類を受け取らない手がかり(古い形)
+            pass
+    return _hints(code)
+
+
 def why_chain(*steps: Any) -> List[str]:
     """「現象 → 原因 → その奥」を空でないものだけ並べる。"""
     out: List[str] = []
@@ -122,7 +132,7 @@ def record(op: str, result: str = INFO, *, ref: str = "", message: str = "", cod
         entry["message"] = _clip(message)
     if detail:
         entry["detail"] = _clip(detail)
-    meaning, checks = _hints(code) if code else ("", [])
+    meaning, checks = _hint_for(code, str(fields.get("app") or "")) if code else ("", [])
     if why is not None:
         chain = list(why)
     elif result in (NG, REFUSED):

@@ -126,6 +126,53 @@ def _load_state(report_date: str, line: str, shift: str, page: int):
     return presenter.from_records(header, details)
 
 
+def _carry_from_previous_page(state, ctx, calc, key) -> bool:
+    """**前のページの最後の終了を、このページの1行目の開始へ**(v4.35.1)。
+
+        日報入力:ページを追加した場合に前ページの最終行の終了が開始に引き継がれていない
+        例:1ページ12行目終了14:55
+          2ページ1行目開始14:55
+
+    ページの中では、終了を打つと次の行の開始へ入ります(`/api/entry/state` の
+    `Same_Text`)。12行目からは写す先が無いので、**ページの変わり目だけ
+    途切れていました** ── 次ページ発行は次のページを空で作るだけでした。
+
+    【ページを描くときに入れる ── 書くのは画面の保存】
+    ページの中の引き継ぎと同じ形です: 決めるのはサーバ
+    (`logic/navigation.carry_across_pages`)、入れた値は**画面に出るだけ**で、
+    そのページを打ち始めたときの自動保存・「保存(確定)」でほかの欄と一緒に
+    書かれます。次ページ発行の経路(`new_page`)では入れません ── 入れるのは
+    ここ1か所で、出したばかりのページも、開き直したページも同じ道を通ります。
+
+    次ページ発行で作ったときに書いてしまうと、出したまま使わなかったページが
+    「中身の無い紙」(`logic/empty_pages`)に数えられなくなり、片付けられません。
+    描くときなら、前のページを直してから戻ったときも、まだ何も打っていなければ
+    直したあとの終了が入ります。
+
+    【前のページは保存してある中身で見る】
+    ページを移る道はどれも、移る前にいまのページを書きます ── 次ページ発行は
+    第1ページを保存してから第2ページを作り(`new_page`)、ページの切り替えと
+    「最新のページに戻る」は打ちかけを置いてから移ります(`entry.js` の
+    `saveDraft`・`settings._save_recalled`)。なので描く時点で、前のページは
+    画面に出ていた中身のとおり保存されています。
+
+    入れないのは:
+        第1ページ        … 前のページが無い
+        見るだけの画面   … 保存できない画面に、保存していない値を出さない
+        何か打ってある   … 1行目の開始が空でも触らない(人が消したのかもしれない)
+        前のページの最後の行が打ちかけ(終了がまだ)・直の終わりの時刻
+    """
+    report_date, line, shift, page = key
+    if page <= 1 or _is_read_only(ctx, calc):
+        return False
+    loaded = get_repo().load(report_date, line, shift, page - 1)
+    if loaded is None:
+        return False
+    previous = presenter.from_records(*loaded)
+    return presenter.carry_from_previous_page(
+        state, previous, day_temp=shift, shift_end_times=_shift_end_times(calc))
+
+
 def _stop_choices() -> list:
     """停止理由の一覧。**1リクエストにつき1度だけマスタを引きます。**
 
@@ -937,6 +984,9 @@ def index():
     from nippou import awake_clock
     tab_loaded_at = awake_clock.now()
     state = _load_state(report_date, line, shift, page)
+    # 2ページ目から: まだ何も打っていないページなら、前のページの最後の終了を
+    # 1行目の開始へ(v4.35.1 `_carry_from_previous_page`)
+    _carry_from_previous_page(state, ctx, calc, (report_date, line, shift, page))
     choices = presenter.stop_choices()
     others = presenter.other_stop_codes(choices)
     from nippou.logic import input_shortcuts

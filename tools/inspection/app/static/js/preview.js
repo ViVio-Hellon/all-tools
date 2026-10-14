@@ -1,7 +1,7 @@
 /*
   preview.js — 点検表のプレビュー(VBA版 UFPreview)
 
-  Excel で点検表を開き、CopyPicture で作った画像を出す。
+  Excel で点検表を開き、CopyPicture で作った画像を出す(Word の点検表は Word で1ページ目)。
   画像はサーバが控えるので、2回目からはすぐに出る。
 */
 
@@ -72,7 +72,8 @@ async function show(item, force, settleMs = 0) {
   img.hidden = true;
   img.removeAttribute("src");
   $("pv-status").textContent = "プレビューを作成しています...";
-  message([el("span", "spinner"), el("b", null, "Excel で画像を作成しています"),
+  // 点検表の種類で言い分ける(Word の点検表なのに「Excel で…」と出ていた)
+  message([el("span", "spinner"), el("b", null, `${sheet.appOf(item)} で画像を作成しています`),
            el("span", null, "初回は数秒～十数秒かかります(2回目からはすぐに表示されます)")]);
   if (settleMs) {
     await sleep(settleMs);
@@ -91,6 +92,8 @@ async function show(item, force, settleMs = 0) {
     if (data.range) info.push(`範囲: ${data.range}`);
     if (data.cached) info.push("控えの画像");
     $("pv-status").textContent = `表示中: ${item.name}${info.length ? `(${info.join(" / ")})` : ""}`;
+    // 開いたままだったのを閉じた・ほかの人が開いている(サーバの文をそのまま出す)
+    if (data.notice) toast(data.notice, "info");
   } catch (err) {
     if (no === view.req) fail(item, err.message, err.detail, err.ref);
   } finally {

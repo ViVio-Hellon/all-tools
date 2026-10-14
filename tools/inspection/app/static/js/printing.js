@@ -1,7 +1,7 @@
 /*
   printing.js — 印刷と進み具合(VBA版 DoPrint / PrintWorkbooksFromFolder)
 
-  選んだ順に Excel から印刷し、「2 / 5 点検表Bを印刷しています」を出す。
+  選んだ順に Excel・Word から印刷し、「2 / 5 点検表Bを印刷しています」を出す。
   印刷は裏で進むので、画面を閉じて開き直しても続きから見える。
 */
 
@@ -75,7 +75,8 @@ function showDialog() {
 }
 
 function titleOf(job) {
-  if (job.state === "waiting") return "Excel の空き待ち...";
+  // 点検表の種類で言い分ける(サーバの job.app: Excel / Word / Excel・Word)
+  if (job.state === "waiting") return `${job.app || "Excel"} の空き待ち...`;
   if (job.state === "running") return "印刷中...";
   if (job.state === "cancelled") return "印刷を中止しました";
   if (job.state === "failed") return "印刷できませんでした";
@@ -139,6 +140,13 @@ function render(job) {
         det.textContent = item.detail;
         body.appendChild(det);
       }
+    }
+    // 知らせ(開いたままだったのを閉じた・ほかの人が開いている)。刷れたものにも出す
+    if (item.notice) {
+      const note = document.createElement("span");
+      note.className = "note";
+      note.textContent = item.notice;
+      body.appendChild(note);
     }
     li.append(mk, body);
     list.appendChild(li);

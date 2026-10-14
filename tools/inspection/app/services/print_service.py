@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from app.models.jobs import (ACTIVE_STATES, CANCELLED, DONE, FAILED, RUNNING, WAITING, PrintItemResult,
                              PrintJob)
-from app.services.excel_service import ExcelError, ExcelService, message_for
+from app.services.excel_service import ExcelError, ExcelService, app_label, kind_of, message_for
 from app.errors import ApiError
 from core import event_log
 
@@ -85,6 +85,7 @@ class PrintService:
                 raise ApiError(409, "PRINT_RUNNING", f"{where}{now}。終わってから印刷してください。")
             job = PrintJob(job_id=uuid.uuid4().hex[:12], copies=copies, items=items, started_at=time.time(),
                            printer=self.printer_provider() or "", screen_id=screen_id,
+                           app=app_label(kind_of(p) for p in paths),
                            ref=event_log.current_ref.get() or event_log.new_ref())
             self._job = job
         self.log.info("印刷開始 job=%s 件数=%d 部数=%d プリンター=%s", job.job_id, job.total, copies, job.printer)
@@ -121,7 +122,8 @@ class PrintService:
             with self.excel.acquire("print", timeout=600):
                 with self._lock:
                     job.state = RUNNING
-                    job.message = "Excelを起動しています..."
+                    # 点検表の種類で言い分ける(Word だけの印刷で「Excel」と出していた)
+                    job.message = f"{job.app}を起動しています..."
                 outcomes = self.excel.print_files(paths, job.copies, on_event, should_continue)
         except ExcelError as exc:
             with self._lock:
@@ -156,8 +158,9 @@ class PrintService:
                     item.status, item.code, item.message = "skipped", outcome.code, outcome.message
                 else:
                     item.status, item.code = "error", outcome.code or "PRINT_FAILED"
-                    item.message = outcome.message or message_for(item.code)
+                    item.message = outcome.message or message_for(item.code, kind_of(paths[item.index - 1]))
                 item.detail = outcome.detail
+                item.notice = outcome.notice
             job.finished_at = time.time()
             if job.cancel_requested and any(i.status == "skipped" for i in job.items):
                 job.state = CANCELLED
@@ -183,6 +186,7 @@ class PrintService:
                 event_log.record(
                     "print.item", result, ref=job.ref, job=job.job_id, index=item.index,
                     target=item.label, file=path, sheet=getattr(item, "sheet", ""), copies=job.copies,
+                    app=app_label([kind_of(path)]), notice=item.notice,
                     printer=job.printer or "(既定のプリンターを取得できず)", code=item.code if result != event_log.OK else "",
                     message=item.message if result != event_log.OK else "",
                     detail=item.detail if result != event_log.OK else "", screen=job.screen_id)

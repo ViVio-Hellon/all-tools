@@ -23,6 +23,10 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
     STAGE <name>        … いまから始める段階(word.open など)。応答が無くなったとき
                           「どこで止まったか」を言うため
     WORDBYE 1|0         … Word を終えた / 利用者の文書が開いているので残した
+    WORDSHARED 1        … CreateObject が利用者のすでに動いている Word を返した。その Word は
+                          隠さず・終えず、こちらは**決して止めない**(PID を覚えない)
+    WORDLOST <stage>    … Word が途中で終わった(VBScript 462・RPC のエラー)。残りを片付ける
+    RETRY <i>           … Word を起こし直して、その点検表を**1回だけ**やり直す(VER2.3.2)
     EMFDATA <base64> …  EMFDONE 1  → OK / COPY
                         … Word の1ページ目(拡張メタファイル)。描けなければ COPY で
                           クリップボード経由(COPIED)に切り替えさせる
@@ -33,6 +37,18 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
 プレビューは1ページ目。Word は Excel と違って利用者がダブルクリックした文書を
 こちらの Word で開いてしまうことがあるので、**処理のたびに終える**(利用者の文書が
 開いていれば Word を見せて残す)。
+
+【Word が途中で終わったとき(VER2.3.2)】
+    印刷範囲の取得に失敗しました。リモート サーバー マシンが存在しないか、利用できません。 0x1CE
+つかんでいた Word が終わっていた(落ちた・閉じられた)ときの VBScript のエラー 462。処理プログラムが
+Word を起こし直して**1回だけ**やり直す(1ページ目の絵で落ちたなら、2回目はクリップボード経由)。
+印刷の途中で落ちたときは、紙に出ているかもしれないのでやり直さない。2回とも駄目なら WORD_GONE。
+
+【この PC で開いたままの点検表(VER2.3.2)】
+点検表は原紙で印刷するだけなので、この PC の Excel・Word で**その点検表が**開いたままなら、処理
+プログラムが保存せずに閉じてから開く(`close_open_copy`。ほかのブック・文書・アプリは触らない)。
+ほかの PC で開かれているものは閉じられないが、読み取り専用で開くので印刷できる。共有フォルダの
+所有者ファイル(`~$…`)から誰が開いているかを読んで知らせる(消さない)。
 
 <hex> は UTF-16 の1単位を4桁の16進にしたもの。日本語を含む値(ファイルパス・
 エラー内容)もこれで送るので、標準入出力は ASCII だけで済む(文字化けしない)。
@@ -83,6 +99,17 @@ def kind_of(path: str) -> str:
     ext = os.path.splitext(path or "")[1][1:].lower()
     return "word" if ext in WORD_EXTENSIONS else "excel"
 
+
+def app_label(kinds: Any) -> str:
+    """点検表の種類(kind_of の値の並び)→ 画面・記録に出すアプリの名前。
+
+    Word だけなら "Word"、Excel だけ(・何も無い)なら "Excel"、混ざっていれば "Excel・Word"。
+    """
+    found = set(kinds or ())
+    if found == {"word"}:
+        return "Word"
+    return "Excel・Word" if "word" in found else "Excel"
+
 # 利用者に表示するメッセージ（要件定義書 16. エラー処理）
 ERROR_MESSAGES: Dict[str, str] = {
     "FILE_NOT_FOUND": "対象の点検表ファイルが見つかりません。",
@@ -106,10 +133,29 @@ ERROR_MESSAGES: Dict[str, str] = {
                       "もう一度プレビューしてください。",
     "SUPERSEDED": "次の要求に切り替えたため、この要求は取りやめました。",
     "APP_UPDATED": "アプリが新しい版に入れ替えられました。いったん「終了」して、起動し直してください。",
+    # VER2.3.2: つかんでいた Word が終わっていた(462)。起こし直して1回やり直しても駄目だったとき
+    "WORD_GONE": "Word が途中で終わりました。この PC で Word を開いているなら閉じてから、もう一度押してください。",
 }
 
+#: Word の点検表のときの言い方(Excel の言葉のままだと、利用者が Excel を探してしまう)
+WORD_MESSAGES: Dict[str, str] = {
+    "WORKER_FAILED": "Word処理プログラム（VBScript）の実行に失敗しました。",
+    "JOB_READ_FAILED": "Word処理プログラム（VBScript）が処理の指示を読み込めませんでした。",
+    "UNSUPPORTED": "この環境ではWordを操作できません（Windows専用の機能です）。",
+    "RANGE_FAILED": "Word の1ページ目を取得できませんでした。",
+    "TIMEOUT": "Wordが応答しませんでした。パスワード付きの文書や、確認メッセージが表示される"
+               "文書の可能性があります。",
+}
 
-def message_for(code: str) -> str:
+#: 印刷の途中で Word が終わったとき。紙に出ているかもしれないので、やり直していない
+WORD_GONE_PRINTING = ("Word が印刷の途中で終わりました。プリンターに出ていないか確かめてから、"
+                      "もう一度押してください。この PC で Word を開いているなら閉じてください。")
+
+
+def message_for(code: str, kind: str = "") -> str:
+    """利用者に出す文。`kind`(kind_of の値)が word なら Word の言い方にする。"""
+    if kind == "word" and code in WORD_MESSAGES:
+        return WORD_MESSAGES[code]
     return ERROR_MESSAGES.get(code, "Excel・Wordの処理でエラーが発生しました。")
 
 
@@ -129,6 +175,8 @@ STAGE_LABELS: Dict[str, str] = {
     "word.copy": "Word の1ページ目をコピーする所",
     "word.print": "Word で印刷する所(PrintOut)",
     "word.quit": "Word を終える所(Quit)",
+    "word.close": "この PC で開いたままの同じ文書を閉じる所",
+    "excel.close": "この PC で開いたままの同じブックを閉じる所",
 }
 
 
@@ -136,9 +184,12 @@ def stage_label(stage: str) -> str:
     return STAGE_LABELS.get(stage or "", stage or "")
 
 
-#: よく出るエラー番号の手がかり。VBScript からは 0x800A<番号> の形で届く
-#: (Word・Excel・VBScript の実行時エラー)。番号の意味が分かるものだけ添える
+#: よく出るエラー番号の手がかり。Word・Excel のエラーは 0x800A<番号> の形で届き、
+#: VBScript 自身の実行時エラーは番号だけ(462 → "0x1CE")で届く(どちらも 0x800A<番号> で引く)。
+#: 番号の意味が分かるものだけ添える
 _ERRNO_HINTS: Dict[int, str] = {
+    0x800A01CE: "VBScript 462: リモート サーバー マシンが存在しないか、利用できない ── つかんでいた "
+                "Word / Excel が途中で終わった(落ちた・閉じられた・止められた)",
     0x800A01AD: "ActiveX コンポーネントを作成できない ── この PC に Word・Excel が入っていない・登録が壊れている",
     0x800A01A8: "オブジェクトが無い ── 処理プログラムの不具合の可能性",
     0x800A1520: "Word 5408: パスワードが正しくない ── パスワード付きの文書",
@@ -150,6 +201,8 @@ _ERRNO_HINTS: Dict[int, str] = {
     0x80080005: "サーバーの実行に失敗 ── 止まった WINWORD.EXE / EXCEL.EXE が残っている可能性",
     0x800706BA: "RPC サーバーを利用できない ── Word / Excel が途中で終わった",
     0x80010108: "呼び出し先が切断された ── Word / Excel が途中で終わった",
+    0x800706BE: "リモート プロシージャ コールに失敗 ── Word / Excel が命令の途中で落ちた",
+    0x80010105: "呼び出し先が例外を出した ── Word / Excel が命令の途中で落ちた可能性",
     0x80010001: "呼び出しが拒否された ── Word / Excel が忙しい",
     0x8001010A: "呼び出し先が忙しい ── Word / Excel が別の処理中",
     0x80070005: "アクセスが拒否された(権限)",
@@ -164,14 +217,73 @@ def explain_errno(errno_text: str) -> str:
     except ValueError:
         return text
     hint = _ERRNO_HINTS.get(number)
+    if hint is None and number < 0x10000:
+        hint = _ERRNO_HINTS.get(0x800A0000 | number)       # VBScript の番号だけ(0x1CE = 462)
     return f"{text} = {hint}" if hint else text
 
 
+def _owner_name(data: bytes) -> str:
+    """所有者ファイル(`~$…`)の中身 → 開いている人の名前(Office のユーザー名)。
+
+    先頭1バイトが名前の長さ、続けて ANSI の名前。54 バイト目のあたりに同じ名前の
+    UTF-16 がある(Word・Excel で位置が1つ前後する)。読めなければ空。
+    """
+    if len(data) < 2:
+        return ""
+    size = data[0]
+    if size == 0:
+        return ""
+    for offset in (53, 54, 55, 56):
+        end = offset + 2 + size * 2
+        if len(data) >= end and data[offset] == size:
+            try:
+                text = data[offset + 2:end].decode("utf-16-le").strip()
+            except UnicodeDecodeError:
+                continue
+            if text and text.isprintable():
+                return text
+    raw = data[1:1 + size]
+    for encoding in ("mbcs", "cp932"):
+        try:
+            text = raw.decode(encoding).strip("\x00 ").strip()
+        except (LookupError, UnicodeDecodeError):
+            continue
+        if text and text.isprintable():
+            return text
+    return ""
+
+
+def owner_of(path: str) -> str:
+    """ほかの人(ほかの PC)が開いている点検表なら、その人の名前。開かれていなければ空。
+
+    Word・Excel は開いた文書の隣に所有者ファイルを作る(Excel は「~$」+名前、Word は名前の
+    先頭1・2文字を「~$」に置き換えることがある)。**読むだけで、消さない**(相手が開いている
+    あいだは相手のもの。開いたまま落ちた PC の残りでも、消すのは相手の Word に任せる)。
+    """
+    folder, name = os.path.split(path or "")
+    if not name:
+        return ""
+    candidates = ["~$" + name]
+    for cut in (1, 2):
+        if len(name) > cut + 1:
+            candidates.append("~$" + name[cut:])
+    for candidate in candidates:
+        try:
+            with open(os.path.join(folder, candidate), "rb") as fp:
+                data = fp.read(512)
+        except OSError:
+            continue
+        who = _owner_name(data)
+        if who:
+            return who
+    return ""
+
+
 class ExcelError(Exception):
-    def __init__(self, code: str, detail: str = "", message: Optional[str] = None):
+    def __init__(self, code: str, detail: str = "", message: Optional[str] = None, kind: str = ""):
         self.code = code
         self.detail = detail
-        self.message = message or message_for(code)
+        self.message = message or message_for(code, kind)
         super().__init__(f"{code}: {self.message} {detail}".strip())
 
 
@@ -185,6 +297,8 @@ class PreviewImage:
     method: str = ""
     width: int = 0
     height: int = 0
+    #: 知らせ(開いたままだったのを閉じた・ほかの人が開いている)。無ければ空
+    notice: str = ""
 
 
 @dataclass
@@ -196,6 +310,7 @@ class ItemOutcome:
     detail: str = ""
     sheet: str = ""
     processed: bool = False
+    notice: str = ""
 
 
 @dataclass
@@ -365,6 +480,8 @@ class _Session:
         self.excel: Optional[ProcessIdentity] = None
         # Word は処理のたびに終える(`WORDBYE`)。いま開いている Word だけ
         self.word: Optional[ProcessIdentity] = None
+        # いまの Word は利用者がすでに開いていたもの(`WORDSHARED`)。PID を覚えない・止めない
+        self.word_shared = False
         self.jobs = 0
         self.printer = ""
 
@@ -402,12 +519,31 @@ class VbsExcelBackend:
         return {
             "disable_macros": 1 if e.disable_macros else 0,
             "open_password": DUMMY_PASSWORD if e.block_password_prompt else "",
+            # この PC で開いたままのその点検表を、保存せずに閉じてから開く(原紙・印刷だけ)
+            "close_open_copy": 1 if getattr(e, "close_open_copy", True) else 0,
         }
+
+    def _notice(self, results: Dict[str, str], index: int, path: str, owner: str, verb: str) -> str:
+        """開いたままだったのを閉じた / ほかの人が開いている、の知らせ(記録にも残す)。"""
+        name = os.path.splitext(os.path.basename(path))[0]
+        closed = results.get(f"item.{index}.closed_open", "")
+        if closed:
+            self.log.info("この PC の %s で開いたままだった点検表を、保存せずに閉じました: %s", closed, path)
+            event_log.record(f"{'word' if closed == 'Word' else 'excel'}.close_open", event_log.INFO,
+                             file=path, app=closed)
+            return f"開いたままだった「{name}」を閉じてから{verb}しました(この PC の {closed}。保存はしていません)"
+        if owner:
+            self.log.info("ほかの人が開いている点検表(読み取り専用で開きました): %s 開いている人=%s", path, owner)
+            event_log.record("file.in_use", event_log.INFO, file=path, owner=owner, app=app_label([kind_of(path)]))
+            return f"{owner}さんが「{name}」を開いたままです(印刷はできます)"
+        return ""
 
     # ---- プレビュー -----------------------------------------------
     def preview(self, path: str) -> PreviewImage:
         e = self.excel_cfg
-        word = kind_of(path) == "word"
+        kind = kind_of(path)
+        word = kind == "word"
+        owner = owner_of(path)          # ほかの PC が開いているか(所有者ファイルを読むだけ)
         params = {
             **self._base_params(),
             "count": 1,
@@ -425,7 +561,10 @@ class VbsExcelBackend:
                                  "method": ""}
 
         def handler(cmd: str, args: List[str], worker: _WorkerProcess) -> None:
-            if cmd == "EMFDATA" and args:
+            if cmd == "RETRY":
+                # Word を起こし直して2回目。1回目の書きかけは捨てる
+                state.update(emf=[], chunks=[], exported=None, recopies=0, clip_error="", owner_error=False)
+            elif cmd == "EMFDATA" and args:
                 state["emf"].append(args[0])
             elif cmd == "EMFDONE":
                 # Word の1ページ目。描けなければクリップボード経由に切り替えさせる
@@ -474,7 +613,8 @@ class VbsExcelBackend:
         outcome = self._run_job("preview", params, handler, e.preview_timeout_sec)
         res = outcome.results
         meta = dict(sheet=res.get("item.1.sheet", ""), range_address=res.get("item.1.range", ""),
-                    range_source=res.get("item.1.range_source", ""))
+                    range_source=res.get("item.1.range_source", ""),
+                    notice=self._notice(res, 1, path, owner, "プレビュー"))
         if state["png"]:
             # 画像取得後に Excel の終了で止まった場合も、画像は使える（Excel は強制終了済み）
             info = state["info"]
@@ -485,20 +625,20 @@ class VbsExcelBackend:
             try:
                 data = base64.b64decode("".join(state["chunks"]))
             except (ValueError, binascii.Error) as exc:
-                raise ExcelError("PREVIEW_FAILED", f"書き出した画像を読めませんでした: {exc}")
+                raise ExcelError("PREVIEW_FAILED", f"書き出した画像を読めませんでした: {exc}", kind=kind)
             return PreviewImage(data, "image/png", method="chart-export", **meta)
         if outcome.timed_out:
             raise ExcelError("TIMEOUT", " / ".join(
-                p for p in (outcome.stuck_detail(), self._detail(res, 1)) if p))
+                p for p in (outcome.stuck_detail(), self._detail(res, 1)) if p), kind=kind)
         if state["owner_error"]:
-            raise ExcelError("CLIPBOARD_BUSY", state["clip_error"])
+            raise ExcelError("CLIPBOARD_BUSY", state["clip_error"], kind=kind)
         if res.get("fatal.code") == "JOB_READ_FAILED":
             # 指示が届いていなければ、ほかの断り(「ファイルが見つかりません」)は結果にすぎない
-            raise ExcelError("JOB_READ_FAILED", outcome.summary())
+            raise ExcelError("JOB_READ_FAILED", outcome.summary(), kind=kind)
         code = res.get("item.1.code") or res.get("fatal.code") or ("WORKER_FAILED" if outcome.finish_code is None
                                                                     else "PREVIEW_FAILED")
         detail = self._detail(res, 1) or state["clip_error"] or outcome.summary()
-        raise ExcelError(code, detail)
+        raise ExcelError(code, detail, kind=kind)
 
     # ---- 印刷 -----------------------------------------------------
     def print_files(self, files: List[str], copies: int, on_event: Callable[..., None],
@@ -507,6 +647,7 @@ class VbsExcelBackend:
         for index, path in enumerate(files, 1):
             params[f"file.{index}"] = path
             params[f"kind.{index}"] = kind_of(path)
+        owners = {i: owner_of(path) for i, path in enumerate(files, 1)}
         outcomes = {i: ItemOutcome(i) for i in range(1, len(files) + 1)}
         current = {"index": 0, "stop_sent": False}
 
@@ -528,6 +669,9 @@ class VbsExcelBackend:
         res = outcome.results
         for index, item in outcomes.items():
             item.sheet = res.get(f"item.{index}.sheet", "")
+            kind = kind_of(files[index - 1])
+            if item.processed or res.get(f"item.{index}.closed_open"):
+                item.notice = self._notice(res, index, files[index - 1], owners[index], "印刷")
             if item.ok:
                 continue
             if not item.processed:
@@ -548,7 +692,9 @@ class VbsExcelBackend:
             else:
                 item.code = res.get(f"item.{index}.code") or "PRINT_FAILED"
                 item.detail = self._detail(res, index)
-            item.message = message_for(item.code)
+            item.message = message_for(item.code, kind)
+            if item.code == "WORD_GONE" and res.get(f"item.{index}.step") == "word.print":
+                item.message = WORD_GONE_PRINTING
         return [outcomes[i] for i in sorted(outcomes)]
 
     # ---- 動作確認 -------------------------------------------------
@@ -613,6 +759,8 @@ class VbsExcelBackend:
             session = self._session = self._open_session()
         reused = session.jobs > 0
         session.jobs += 1
+        session.word_shared = False
+        app = app_label(v for k, v in job.items() if k.startswith("kind."))
         worker = session.worker
         finish_code: Optional[int] = None
         timed_out = False
@@ -645,13 +793,25 @@ class VbsExcelBackend:
                 session.excel = excel or session.excel
             elif command == "STAGE":
                 stage = parts[1] if len(parts) > 1 else ""
+            elif command == "WORDSHARED":
+                self._word_shared(session)
             elif command == "WORDPID" and len(parts) > 1:
-                self._adopt_word(session, self._identify_word(_int(parts[1])))
+                if not session.word_shared:
+                    self._adopt_word(session, self._identify_word(_int(parts[1])))
             elif command == "WORD" and len(parts) > 1:
-                if not (session.word and pid_from_hwnd(_int(parts[1])) == session.word.pid):
+                # 利用者の Word(WORDSHARED)の窓は覚えない。覚えると後始末で止めてしまう
+                if not session.word_shared and not (
+                        session.word and pid_from_hwnd(_int(parts[1])) == session.word.pid):
                     self._adopt_word(session, self._track_app(parts[1], "word"))
             elif command == "WORDBYE":
                 self._word_closed(session, quit_=len(parts) < 2 or parts[1] != "0")
+                session.word_shared = False
+            elif command == "WORDLOST":
+                self._word_lost(session, parts[1] if len(parts) > 1 else stage)
+            elif command == "RETRY":
+                self.log.warning("Word が途中で終わったため、起こし直して %s 件目をもう一度やります",
+                                 parts[1] if len(parts) > 1 else "?")
+                handler(command, parts[1:], worker)
             elif command == "FINISH":
                 finish_code = _int(parts[1]) if len(parts) > 1 else 0
                 stage = ""
@@ -697,14 +857,15 @@ class VbsExcelBackend:
         if timed_out or finish_code not in (0, None) or stderr or finish_code is None:
             self.log.warning("Excel処理結果 mode=%s finish=%s timeout=%s 結果=%s 指示=%s stderr=%s",
                              mode, finish_code, timed_out, results, job, stderr[:500])
-            # なぜなぜ用: 処理プログラム(VBScript)と Excel が何を返したかを丸ごと残す
+            # なぜなぜ用: 処理プログラム(VBScript)と Excel が何を返したかを丸ごと残す。
+            # **途中で終わった(WORKER_FAILED)と言うのは FINISH が来なかったときだけ。** 以前は
+            # 点検表1件の失敗(終了コード 4)まで「処理プログラムが途中で終わった」と記録していて、
+            # ログの「なぜ」が本当の原因(0x1CE = Word が終わっていた)からずれていた
+            code, message = self._job_failure(results, timed_out, finish_code, app)
             event_log.record(
-                "excel.job", event_log.NG, code=results.get("fatal.code", "") or
-                ("TIMEOUT" if timed_out else "WORKER_FAILED"),
-                message=results.get("fatal.message", "") or ("Excel・Word が応答しませんでした" if timed_out
-                                                             else "処理プログラムが途中で終わりました"),
+                "excel.job", event_log.NG, code=code, message=message,
                 detail=" / ".join(p for p in (outcome.stuck_detail(), stderr[:2000]) if p),
-                mode=mode, finish_code=finish_code, timed_out=timed_out,
+                app=app, mode=mode, finish_code=finish_code, timed_out=timed_out,
                 stage=stage_label(stage), windows=windows,
                 word_pid=word_pid,
                 reused_excel=reused, excel_pid=session.excel.pid if session.excel else None,
@@ -714,6 +875,25 @@ class VbsExcelBackend:
         else:
             self.log.info("Excel処理終了 mode=%s %d ms", mode, outcome.elapsed_ms)
         return outcome
+
+    @staticmethod
+    def _job_failure(results: Dict[str, str], timed_out: bool, finish_code: Optional[int],
+                     app: str) -> Tuple[str, str]:
+        """記録に残す、処理全体の失敗の種類と文。"""
+        kind = "word" if app == "Word" else "excel"
+        if results.get("fatal.code"):
+            code = results["fatal.code"]
+            return code, results.get("fatal.message", "") or message_for(code, kind)
+        if timed_out:
+            return "TIMEOUT", f"{app} が応答しませんでした"
+        if finish_code is None:
+            return "WORKER_FAILED", f"{app} を操作する処理プログラムが途中で終わりました"
+        items = sorted((k for k in results if k.startswith("item.") and k.endswith(".code") and results[k]),
+                       key=lambda k: _int(k.split(".")[1]))
+        if items:
+            code = results[items[0]]
+            return code, message_for(code, kind)
+        return "WORKER_FAILED", f"処理プログラムが失敗を返しました(終了コード {finish_code})"
 
     def _current_printer(self) -> str:
         try:
@@ -837,6 +1017,34 @@ class VbsExcelBackend:
             except Exception as exc:                  # noqa: BLE001 - 手がかり集めの失敗で後始末を止めない
                 self.log.warning("%s の窓を読めませんでした: %s", label, exc)
         return found
+
+    def _word_shared(self, session: "_Session") -> None:
+        """CreateObject が、利用者がすでに開いていた Word を返した(`WORDSHARED`)。
+
+        その Word は利用者のもの。PID を覚えない(覚えていれば手放す)ので、時間切れの後始末・
+        起動時の片付けでも止めない。処理プログラムも隠さず・終えない。
+        """
+        session.word_shared = True
+        word, session.word = session.word, None
+        if word is not None:
+            self.registry.remove(word.pid)
+        self.log.warning("Word: 利用者がすでに開いていた Word につながりました。隠さず・終えず・止めません")
+        event_log.record("word.shared", event_log.INFO, printer=self._current_printer())
+
+    def _word_lost(self, session: "_Session", where: str) -> None:
+        """Word が途中で終わった(`WORDLOST`)。処理プログラムが起こし直して1回だけやり直す。
+
+        残っていれば片付けるのは、こちらが起こした Word(WORDPID・窓で覚えたもの)だけ。
+        利用者の Word(WORDSHARED)は覚えていないので触らない。
+        """
+        word, session.word = session.word, None
+        shared, session.word_shared = session.word_shared, False
+        self.log.warning("Word が途中で終わりました(%s) pid=%s", stage_label(where) or where or "(不明)",
+                         word.pid if word else "-")
+        event_log.record("word.lost", event_log.INFO, stage=stage_label(where) or where,
+                         word_pid=word.pid if word else None, shared=shared)
+        if word is not None:
+            self._ensure_exit(word, force=False, exe="winword.exe", label="Word")
 
     def _word_closed(self, session: "_Session", *, quit_: bool) -> None:
         """処理の終わりに Word を終えた(`WORDBYE 1`)/ 利用者の文書があるので残した(`0`)。"""

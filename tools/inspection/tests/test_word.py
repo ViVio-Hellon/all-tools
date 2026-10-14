@@ -29,7 +29,8 @@ from app.services.inspection_service import scan_folder
 from app.services.png_encoder import encode_rgb
 from app.services.settings_service import (DEFAULT_EXTENSIONS, InspectionConfig,
                                            load_inspection_config)
-from core import process_tracking
+from app import why_hints
+from core import event_log, process_tracking
 from core.process_tracking import TrackedProcessRegistry, get_process_identity
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -447,8 +448,9 @@ class WorkerSourceTest(unittest.TestCase):
         for needle in ("gWd.DisplayAlerts = wdAlertsNone", "gWd.AutomationSecurity = msoAutomationSecurityForceDisable",
                        "gWd.FeatureInstall = msoFeatureInstallNone"):
             self.assertIn(needle, start)
-        for header, use in (("Function RunPreviewWord(", "OpenDoc(1, path)"),
-                            ("Function RunPrint(", "PrintOneWord(i, path, copies)")):
+        # VER2.3.2: 1回の試しは PreviewWordOnce / TryPrintWord(Word が終わったら2回目がある)
+        for header, use in (("Function PreviewWordOnce(", "OpenDoc(1, path)"),
+                            ("Function TryPrintWord(", "PrintOneWord(index, path, copies)")):
             body = self.body(header)
             self.assertLess(body.index("StartWord()"), body.index(use), header)
 
@@ -499,6 +501,423 @@ def _undeclared(text):
                     found.append(f"{proc['name']}: {name} ({code})")
     return found
 
+
+
+# ======================================================================
+# VER2.3.2
+#   印刷範囲の取得に失敗しました。リモート サーバー マシンが存在しないか、利用できません。 0x1CE
+#   (失敗した所: Word の1ページ目をコピーする所)
+#   これ例えばどこかで開きっぱなしにしていた場合にもこのエラーになるのでは?
+#   docのときはWordを読んでいますと出したほうがいい
+#
+#   もしエクセル、ワードが開いている場合は(他PCで)強制で閉じてもよいです。点検表原紙なので
+#   編集する必要のないもので印刷オンリーです。開いたままになっているのがおかしいです
+# ======================================================================
+WORD_GONE_TEXT = "Word が途中で終わりました。この PC で Word を開いているなら閉じてから、もう一度押してください。"
+
+
+def _vbs_text():
+    with open(os.path.join(ROOT, "app", "vbscript", "excel_worker.vbs"), "rb") as fp:
+        return fp.read().decode("ascii")
+
+
+def _vbs_body(text, header):
+    start = text.index(header)
+    kind = "Function" if header.startswith("Function") else "Sub"
+    return text[start:text.index(f"End {kind}", start)]
+
+
+class _FakeWordCase(unittest.TestCase):
+    files = ["a/b/a_b_手順.docx", "a/b/a_b_one.xlsx", "a/b/a_b_二.doc"]
+
+    def setUp(self):
+        self._tmp = temp_dir()
+        tmp = self._tmp.name
+        self.config = make_cfg(print_item_timeout_sec=3, preview_timeout_sec=3, excel_exit_grace_sec=1)
+        self.registry = TrackedProcessRegistry(os.path.join(tmp, "tracked.json"), quiet_logger())
+        self.backend = FakeBackend(self.config, os.path.join(tmp, "work"), self.registry, quiet_logger())
+        FakeBackend.extra = {}
+        self.root = os.path.join(tmp, "root")
+        make_tree(self.root, self.files)
+        self.paths = [os.path.join(self.root, *f.split("/")) for f in self.files]
+        self.word, self.excel, self.word2 = self.paths
+        self.ref = "1014-1236-" + os.urandom(2).hex().upper()
+        token = event_log.current_ref.set(self.ref)
+        self.addCleanup(event_log.current_ref.reset, token)
+        event_log.set_hints(why_hints.hint)
+        self.addCleanup(event_log.set_hints, lambda code, app="": ("", []))
+
+    def tearDown(self):
+        FakeBackend.extra = {}
+        self.backend.shutdown("試験の後片付け")
+        self._tmp.cleanup()
+
+    def records(self, op):
+        return [e for e in reversed(event_log.read(ref=self.ref, limit=200)) if e.get("op") == op]
+
+    @staticmethod
+    def clipboard_png():
+        png = encode_rgb(2, 2, bytes([0, 128, 255] * 4))
+        return png, mock.patch.object(clipboard_image, "read_image_png",
+                                      lambda *a, **k: (png, {"format": "emf", "width": 2, "height": 2}))
+
+
+class WordGoneTest(_FakeWordCase):
+    """0x1CE(VBScript 462)= つかんでいた Word が途中で終わった。起こし直して1回だけやり直す。"""
+
+    def test_1ページ目の絵でWordが落ちても_起こし直してクリップボード経由で出す(self):
+        FakeBackend.extra = {"fake_word_gone": "page"}
+        png, patch = self.clipboard_png()
+        with patch:
+            image = self.backend.preview(self.word)
+        self.assertEqual(image.data, png)
+        self.assertEqual(image.method, "clipboard-emf")
+        lost = self.records("word.lost")
+        self.assertEqual(len(lost), 1)
+        self.assertIn("1ページ目を絵にする所", lost[0]["stage"])
+
+    def test_開く所でWordが終わっても_起こし直して1ページ目の絵を出す(self):
+        FakeBackend.extra = {"fake_word_gone": "open", "fake_emf_hex": "0a0b0c"}
+        png = encode_rgb(2, 2, bytes([9, 9, 9] * 4))
+        got = []
+
+        def fake_emf(data, scale, max_pixels):
+            got.append(data)
+            return png, {"format": "emf", "width": 2, "height": 2}
+
+        with mock.patch.object(clipboard_image, "emf_to_png", fake_emf):
+            image = self.backend.preview(self.word)
+        self.assertEqual(image.method, "word-page")
+        self.assertEqual(got, [bytes.fromhex("0a0b0c")], "1回目の書きかけを混ぜない")
+
+    def test_2回とも終わったら_利用者がすることの分かる文で断る(self):
+        FakeBackend.extra = {"fake_word_gone": "page:twice"}
+        with self.assertRaises(ExcelError) as ctx:
+            self.backend.preview(self.word)
+        self.assertEqual(ctx.exception.code, "WORD_GONE")
+        self.assertEqual(ctx.exception.message, WORD_GONE_TEXT)
+        for needle in ("0x1CE", "VBScript 462", "途中で終わった", "失敗した所: Word の1ページ目を絵にする所"):
+            self.assertIn(needle, ctx.exception.detail)
+
+    def test_起こし直したWordを覚え直し_終わったWordの記録は消す(self):
+        """1回目の Word(WORDPID)は WORDLOST で手放し、2回目の Word を覚える。最後は Word を終えて記録も空。"""
+        first = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        second = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        for proc in (first, second):
+            self.addCleanup(proc.wait)
+            self.addCleanup(proc.kill)
+        FakeBackend.extra = {"fake_word_gone": "page", "fake_word_pid": str(first.pid),
+                             "fake_word_pid2": str(second.pid)}
+        adopted = []
+        real_adopt = self.backend._adopt_word
+
+        def spy(session, word):
+            adopted.append(word.pid if word else None)
+            real_adopt(session, word)
+
+        _png, patch = self.clipboard_png()
+        with patch, mock.patch.object(self.backend, "_adopt_word", spy):
+            self.backend.preview(self.word)
+        self.assertEqual([pid for pid in adopted if pid], [first.pid, second.pid])
+        self.assertEqual([e for e in self.registry.entries() if e.get("label") == "word"], [])
+        self.assertEqual(self.records("word.lost")[0]["word_pid"], first.pid)
+
+    def test_印刷も開く所で終わったら1回だけやり直して刷る(self):
+        FakeBackend.extra = {"fake_word_gone": "open"}
+        events = []
+        outcomes = self.backend.print_files([self.word, self.excel], 1, lambda *a: events.append(a), lambda: True)
+        self.assertEqual([o.ok for o in outcomes], [True, True])
+        self.assertEqual(outcomes[0].detail, "")
+        self.assertEqual([e for e in events if e[0] == "end"], [("end", 1, True), ("end", 2, True)])
+
+    def test_印刷も2回とも終わったら分かる文で断る(self):
+        FakeBackend.extra = {"fake_word_gone": "open:twice"}
+        outcomes = self.backend.print_files([self.word, self.excel], 1, lambda *a: None, lambda: True)
+        self.assertEqual([o.ok for o in outcomes], [False, True])
+        self.assertEqual(outcomes[0].code, "WORD_GONE")
+        self.assertEqual(outcomes[0].message, WORD_GONE_TEXT)
+        self.assertIn("0x1CE = VBScript 462", outcomes[0].detail)
+
+    def test_印刷の途中で終わったら二重に刷らないためにやり直さない(self):
+        FakeBackend.extra = {"fake_word_gone": "print"}
+        outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertEqual(outcomes[0].code, "WORD_GONE")
+        self.assertIn("プリンターに出ていないか確かめて", outcomes[0].message)
+        self.assertEqual(outcomes[0].message, excel_service.WORD_GONE_PRINTING)
+        self.assertEqual(len(self.records("word.lost")), 1, "起こし直していない")
+
+    def test_記録の種類は本当の原因にする_途中で終わったとは言わない(self):
+        """利用者の報告では、ログの「なぜ」が「Excel を操作する処理プログラム(VBScript)が途中で
+        終わった(WORKER_FAILED)」になっていた(実際は FINISH 4 = 点検表1件の失敗)。"""
+        FakeBackend.extra = {"fake_word_gone": "page:twice"}
+        with self.assertRaises(ExcelError):
+            self.backend.preview(self.word)
+        job = self.records("excel.job")[-1]
+        self.assertEqual(job["code"], "WORD_GONE")
+        self.assertEqual(job["app"], "Word")
+        self.assertEqual(job["finish_code"], 4)
+        self.assertNotIn("Excel", "".join(job["why"]))
+        self.assertIn("つかんでいた Word が途中で終わった", job["why"][1])
+
+    def test_処理プログラムが本当に途中で終わったときも_Wordの点検表ならWordと言う(self):
+        FakeBackend.extra = {"fake_die_after": "1"}
+        outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertTrue(outcomes[0].ok)      # 刷り終えてから落ちた
+        job = self.records("excel.job")[-1]
+        self.assertEqual(job["code"], "WORKER_FAILED")
+        self.assertIn("Word を操作する処理プログラム(VBScript)が途中で終わった", job["why"][1])
+        self.assertNotIn("Excel を操作する", "".join(job["why"]))
+
+    def test_エラー番号_0x1CEの意味(self):
+        for text in ("0x1CE", "0x800A01CE"):
+            self.assertIn("VBScript 462", explain_errno(text))
+            self.assertIn("途中で終わった", explain_errno(text))
+        self.assertIn("命令の途中で落ちた", explain_errno("0x800706BE"))
+        self.assertEqual(explain_errno("0x1"), "0x1")             # 意味を知らない番号はそのまま
+
+    def test_Excelの点検表はこれまでどおりExcelの言葉(self):
+        self.assertEqual(why_hints.hint("WORKER_FAILED", "Excel")[0],
+                         "Excel を操作する処理プログラム(VBScript)が途中で終わった")
+        self.assertEqual(why_hints.hint("WORKER_FAILED", "Word")[0],
+                         "Word を操作する処理プログラム(VBScript)が途中で終わった")
+        self.assertEqual(why_hints.hint("WORKER_FAILED")[0],
+                         "Excel を操作する処理プログラム(VBScript)が途中で終わった")
+        self.assertEqual(why_hints.hint("OPEN_FAILED", "Word")[0], "Word が点検表のファイルを開けなかった")
+        self.assertEqual(excel_service.message_for("WORKER_FAILED", "word"),
+                         "Word処理プログラム（VBScript）の実行に失敗しました。")
+        self.assertEqual(excel_service.message_for("WORKER_FAILED", "excel"),
+                         "Excel処理プログラム（VBScript）の実行に失敗しました。")
+
+
+class UserWordTest(_FakeWordCase):
+    """利用者の Word(この PC で開いている文書がある Word)を、こちらの後始末で止めない。"""
+
+    def test_CreateObjectが利用者のWordを返しても_時間切れの後始末で止めない(self):
+        user_word = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(user_word.wait)
+        self.addCleanup(user_word.kill)
+        # 利用者の Word の窓が届いても(fake_shared_window)、WORDSHARED の後は覚えない
+        FakeBackend.extra = {"fake_user_word": "1", "fake_shared_window": "1", "fake_word_hwnd": "4242",
+                             "fake_word_hang": "open"}
+        with mock.patch.object(excel_service, "pid_from_hwnd",
+                               lambda hwnd: user_word.pid if hwnd == 4242 else None):
+            with self.assertRaises(ExcelError) as ctx:
+                self.backend.preview(self.word)
+        self.assertEqual(ctx.exception.code, "TIMEOUT")
+        self.assertIsNone(user_word.poll(), "利用者の Word を止めてはいけない")
+        self.assertNotIn(user_word.pid, [e.get("pid") for e in self.registry.entries()])
+        self.assertTrue(self.records("word.shared"))
+
+    def test_利用者のWordで刷っても_終えずに残す(self):
+        FakeBackend.extra = {"fake_user_word": "1"}
+        closed = []
+        real = self.backend._word_closed
+        with mock.patch.object(self.backend, "_word_closed",
+                               lambda session, quit_: (closed.append(quit_), real(session, quit_=quit_))):
+            outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertTrue(outcomes[0].ok)
+        self.assertEqual(closed, [False], "WORDBYE 0: 利用者の Word は終えない")
+
+    def test_処理プログラムは利用者のWordを隠さず_設定を戻し_終えない(self):
+        text = _vbs_text()
+        start = _vbs_body(text, "Function StartWord(")
+        self.assertIn('Emit "WORDSHARED 1"', start)
+        self.assertIn("If vis Or docs > 0 Then gWdShared = True", start)
+        self.assertLess(start.index("If Not gWdShared Then"), start.index("gWd.Visible = False"))
+        self.assertIn("gSavedAlerts = gWd.DisplayAlerts", start)
+        finish = _vbs_body(text, "Sub FinishWord(")
+        shared = finish[finish.index("If gWdShared Then"):finish.index("ElseIf openDocs = 0 Then")]
+        self.assertIn('Emit "WORDBYE 0"', shared)
+        self.assertIn("gWd.DisplayAlerts = gSavedAlerts", shared)
+        self.assertIn("gWd.AutomationSecurity = gSavedSecurity", shared)
+        self.assertNotIn(".Quit", shared)
+        self.assertIn("gWdShared", _vbs_body(text, "Sub ReportWordWindow("), "利用者の Word の窓は知らせない")
+
+    def test_やり直しは1回だけ(self):
+        text = _vbs_text()
+        preview = _vbs_body(text, "Function RunPreviewWord(")
+        self.assertEqual(preview.count("PreviewWordOnce("), 2)
+        self.assertIn('lostAt <> "word.page"', preview, "絵で落ちたら2回目はクリップボード経由")
+        item = _vbs_body(text, "Function PrintWordItem(")
+        self.assertEqual(item.count("TryPrintWord("), 2)
+        self.assertIn('If lostAt = "word.print" Then', item, "印刷の途中で終わったら刷り直さない")
+        gone = _vbs_body(text, "Function IsWordGoneError(")
+        for number in ("462", "-2146827826", "-2147023174", "-2147023170", "-2147417848"):
+            self.assertIn(number, gone)
+
+
+class OpenElsewhereTest(_FakeWordCase):
+    """この PC で開いたままのその点検表は閉じてから。ほかの PC のものは読み取り専用で開いて刷る。"""
+
+    def test_閉じる指示が処理プログラムへ渡る(self):
+        self.assertEqual(self.backend._base_params()["close_open_copy"], 1)
+        off = FakeBackend(make_cfg(close_open_copy=False), os.path.join(self._tmp.name, "w2"),
+                          self.registry, quiet_logger())
+        self.assertEqual(off._base_params()["close_open_copy"], 0)
+
+    def test_設定ファイルで止められる(self):
+        path = os.path.join(self._tmp.name, "inspection.json")
+        with open(path, "w", encoding="utf-8") as fp:
+            json.dump({"excel": {"close_open_copy": False}}, fp)
+        self.assertFalse(load_inspection_config(path).excel.close_open_copy)
+        self.assertTrue(load_inspection_config(os.path.join(ROOT, "config", "inspection.json")).excel.close_open_copy)
+
+    def test_この_PCで開いたままだったら閉じてからプレビューしたと知らせる(self):
+        FakeBackend.extra = {"fake_open_here": "1"}
+        with mock.patch.object(clipboard_image, "emf_to_png",
+                               lambda *a: (b"png", {"format": "emf", "width": 1, "height": 1})):
+            image = self.backend.preview(self.word)
+        self.assertEqual(image.notice, "開いたままだった「a_b_手順」を閉じてからプレビューしました"
+                                       "(この PC の Word。保存はしていません)")
+        self.assertEqual(self.records("word.close_open")[0]["file"], self.word)
+
+    def test_印刷では閉じたものにだけ知らせを付ける(self):
+        FakeBackend.extra = {"fake_open_here": "1,2"}
+        outcomes = self.backend.print_files([self.word, self.excel, self.word2], 1, lambda *a: None, lambda: True)
+        self.assertEqual([o.ok for o in outcomes], [True, True, True])
+        self.assertIn("開いたままだった「a_b_手順」を閉じてから印刷しました", outcomes[0].notice)
+        self.assertIn("この PC の Excel", outcomes[1].notice)
+        self.assertEqual(outcomes[2].notice, "")
+
+    def test_閉じない設定なら閉じない(self):
+        self.backend.excel_cfg.close_open_copy = False
+        FakeBackend.extra = {"fake_open_here": "1"}
+        outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertEqual(outcomes[0].notice, "")
+
+    def write_owner(self, owner_file, name, utf16_at):
+        """Word・Excel の所有者ファイルの形: 長さ1バイト + ANSI の名前 …(utf16_at)長さ + UTF-16 の名前。"""
+        data = bytearray(b" " * 162)
+        ansi = name.encode("cp932")
+        data[0] = len(name)
+        data[1:1 + len(ansi)] = ansi
+        data[utf16_at] = len(name)
+        data[utf16_at + 1] = 0
+        data[utf16_at + 2:utf16_at + 2 + len(name) * 2] = name.encode("utf-16-le")
+        path = os.path.join(os.path.dirname(self.word), owner_file)
+        with open(path, "wb") as fp:
+            fp.write(bytes(data))
+        return path
+
+    def test_所有者ファイルから開いている人の名前を読む(self):
+        word_owner = self.write_owner("~$b_手順.docx", "山田 太郎", 54)       # Word: 先頭2文字を置き換え
+        excel_owner = self.write_owner("~$a_b_one.xlsx", "suzuki", 55)       # Excel: 名前の前に足す
+        self.assertEqual(excel_service.owner_of(self.word), "山田 太郎")
+        self.assertEqual(excel_service.owner_of(self.excel), "suzuki")
+        self.assertEqual(excel_service.owner_of(self.word2), "")
+        self.assertTrue(os.path.exists(word_owner) and os.path.exists(excel_owner))
+
+    def test_ほかの人が開いていても刷れて_名前を知らせ_所有者ファイルは消さない(self):
+        owner = self.write_owner("~$b_手順.docx", "山田 太郎", 54)
+        outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertTrue(outcomes[0].ok)
+        self.assertEqual(outcomes[0].notice, "山田 太郎さんが「a_b_手順」を開いたままです(印刷はできます)")
+        self.assertTrue(os.path.exists(owner), "~$ ファイルは消さない")
+        self.assertEqual(self.records("file.in_use")[0]["owner"], "山田 太郎")
+
+    def test_この_PCで閉じたなら_閉じたことだけを言う(self):
+        self.write_owner("~$b_手順.docx", "山田 太郎", 54)            # この PC で開いていた分
+        FakeBackend.extra = {"fake_open_here": "1"}
+        outcomes = self.backend.print_files([self.word], 1, lambda *a: None, lambda: True)
+        self.assertIn("閉じてから印刷しました", outcomes[0].notice)
+        self.assertNotIn("山田", outcomes[0].notice)
+
+    def test_処理プログラムは_そのファイルだけを保存せずに閉じる(self):
+        text = _vbs_text()
+        for header, close, app in (("Sub CloseOpenWordCopy(", "d.Close wdDoNotSaveChanges", '"Word.Application"'),
+                                   ("Sub CloseOpenExcelCopy(", "wb.Close False", '"Excel.Application"')):
+            body = _vbs_body(text, header)
+            self.assertIn(f"GetObject(, {app})", body, header)
+            self.assertEqual(body.count(".Close"), 1, header)
+            self.assertLess(body.index("If same Then"), body.index(close), "同じファイルのときだけ閉じる")
+            self.assertIn("same = SameFile(name, path)", body)
+            self.assertNotIn("Quit", body, "アプリごと止めない")
+            self.assertNotIn(".Save", body, "保存しない")
+        self.assertIn("mine = (app.Hwnd = gXl.Hwnd)", _vbs_body(text, "Sub CloseOpenExcelCopy("),
+                      "こちらの隠れた Excel は調べない")
+        self.assertIn('If JobValue("close_open_copy", "0") <> "1" Then Exit Sub',
+                      _vbs_body(text, "Sub CloseOpenCopy("))
+        # 開く前に閉じる(Word を起動する前・Excel を起動する前)
+        for header, before in (("Function RunPreviewWord(", "PreviewWordOnce("),
+                               ("Function RunPreview(", "StartExcel()"),
+                               ("Function RunPrint(", "StartExcel()")):
+            body = _vbs_body(text, header)
+            self.assertLess(body.index("CloseOpenCopy "), body.index(before), header)
+
+    def test_ほかのPCで開かれていても_読み取り専用で確認の窓を出さずに開く(self):
+        text = _vbs_text()
+        for call in re.findall(r"gWd\.Documents\.Open\((.*)\)\r?$", text, re.M):
+            args = [a.strip() for a in call.split(",")]
+            self.assertEqual(args[2], "True", "ReadOnly")
+            self.assertEqual(args[1], "False", "ConfirmConversions")
+        calls = re.findall(r"gXl\.Workbooks\.Open\((.*)\)\r?$", text, re.M)
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            args = [a.strip() for a in call.split(",")]
+            self.assertEqual(args[2], "True", "ReadOnly")
+            self.assertEqual(args[6], "True", "IgnoreReadOnlyRecommended")
+            self.assertEqual(args[10], "False", "Notify: 使えるようになったら知らせる窓を出さない")
+        self.assertIn("gWd.DisplayAlerts = wdAlertsNone", _vbs_body(text, "Function StartWord("))
+        self.assertIn("gXl.DisplayAlerts = False", _vbs_body(text, "Function StartExcel("))
+
+
+class WordWordingTest(unittest.TestCase):
+    """Word の点検表のときは「Word を…」と出す(画面とサーバの両方)。"""
+
+    def read(self, *parts):
+        with open(os.path.join(ROOT, *parts), encoding="utf-8") as fp:
+            return fp.read()
+
+    def test_プレビューの読み込み中は点検表の種類で言い分ける(self):
+        js = self.read("app", "static", "js", "preview.js")
+        self.assertIn("${sheet.appOf(item)} で画像を作成しています", js)
+        self.assertNotIn('"Excel で画像を作成しています"', js)
+        self.assertIn("data.notice", js)
+        inspection = self.read("app", "static", "js", "inspection.js")
+        self.assertIn('const WORD_EXTS = new Set(["doc", "docx", "docm"]);', inspection)
+        self.assertEqual(set(WORD_EXTENSIONS), {"doc", "docx", "docm"}, "画面とサーバで同じ拡張子")
+
+    def test_印刷の待ちと知らせ(self):
+        js = self.read("app", "static", "js", "printing.js")
+        self.assertIn('${job.app || "Excel"} の空き待ち...', js)
+        self.assertNotIn('"Excel の空き待ち..."', js)
+        self.assertIn("item.notice", js)
+
+    def test_種類の名前(self):
+        self.assertEqual(excel_service.app_label(["word"]), "Word")
+        self.assertEqual(excel_service.app_label(["word", "word"]), "Word")
+        self.assertEqual(excel_service.app_label(["excel"]), "Excel")
+        self.assertEqual(excel_service.app_label([]), "Excel")
+        self.assertEqual(excel_service.app_label(["excel", "word"]), "Excel・Word")
+
+    def test_印刷の進み具合もWordならWordと言う(self):
+        from app.services.excel_service import ExcelService, ItemOutcome
+        from app.services.print_service import PrintService
+        tmp = temp_dir()
+        self.addCleanup(tmp.cleanup)
+        root = os.path.join(tmp.name, "root")
+        make_tree(root, ["c/s/c_s_手順.docx"])
+        path = os.path.join(root, "c", "s", "c_s_手順.docx")
+        item = mock.Mock(id="1", category="c", subcategory="s", path=path)
+        item.name = "手順"
+        inspection = mock.Mock(get_item=lambda _id: item)
+        excel = ExcelService(make_cfg(backend="dummy"), quiet_logger(),
+                             TrackedProcessRegistry(os.path.join(tmp.name, "t.json")), os.path.join(tmp.name, "w"))
+        seen = {}
+
+        def fake_print(files, copies, on_event, should_continue):
+            seen["message"] = service.status()["message"]
+            on_event("begin", 1)
+            on_event("end", 1, True)
+            return [ItemOutcome(1, ok=True, processed=True, notice="山田さんが「手順」を開いたままです(印刷はできます)")]
+
+        excel.print_files = fake_print
+        service = PrintService(inspection, excel, lambda: "", quiet_logger())
+        job = service.start(["1"], "1")
+        self.assertEqual(job["app"], "Word")
+        self.assertTrue(service.wait_idle(10))
+        self.assertEqual(seen["message"], "Wordを起動しています...")
+        self.assertEqual(service.status()["items"][0]["notice"], "山田さんが「手順」を開いたままです(印刷はできます)")
 
 if __name__ == "__main__":
     unittest.main()

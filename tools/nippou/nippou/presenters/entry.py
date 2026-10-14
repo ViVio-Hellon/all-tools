@@ -567,7 +567,8 @@ def page_guide(state: GridState, *, page: int, page_count: int, recall: bool,
         out.update(
             mode=GUIDE_READY, ready=True, reason="",
             text=f"12行目まで埋まりました ─「次ページ発行」で第{next_page}ページへ({CARRIED_OVER})",
-            detail=(f"押すと第{page}ページを保存して、空の第{next_page}ページを開きます。"
+            detail=(f"押すと第{page}ページを保存して、空の第{next_page}ページを開きます"
+                    "(1行目の開始には、このページの最後の終了が入ります)。"
                     "直すところが残っていると出せません"),
             action="goto-new-page",
             confirm=_new_page_confirm(page, next_page, check))
@@ -727,6 +728,24 @@ def carry_end_time(state: GridState, row: int, *, day_temp: str,
         state.set(decision.row, "KH", "")
         marks.discard(decision.row)
     return marks
+
+
+def carry_from_previous_page(state: GridState, previous: GridState, *, day_temp: str,
+                             shift_end_times: dict[str, tuple[str, str]]) -> bool:
+    """前のページの最後の終了を、このページの1行目の開始へ入れる(v4.35.1)。
+
+    入れたかどうかを返します。入れるかどうかの判断は
+    `logic/navigation.carry_across_pages` ── ここは写すだけです。
+    """
+    carried = navigation.carry_across_pages(
+        previous.rows, state.rows.get(1, {}),
+        page_is_blank=not sheet_has_anything(state),
+        day_temp=day_temp, shift_end_times=shift_end_times)
+    if carried is None:
+        return False
+    state.set(1, "KZ", carried[0])
+    state.set(1, "KH", carried[1])
+    return True
 
 
 # ------------------------------------------------------------------

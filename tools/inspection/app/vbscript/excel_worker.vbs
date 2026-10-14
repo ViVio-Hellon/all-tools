@@ -15,6 +15,17 @@
 '     end of every job (Word has no IgnoreRemoteRequests: a document the user
 '     double-clicks may open in our hidden Word, so it is not kept running).
 '     If the user's own document is open in it, Word is shown and left alone.
+'     If CreateObject hands back a Word that was already running (the user's),
+'     it is used as it is: not hidden, its settings given back, never quit.
+'   * Word ended under us (VBScript error 462 / RPC errors: it crashed, the
+'     user closed it, or something ended it): Word is started again and the
+'     job (preview) or the document (print) is tried ONCE more. Not when
+'     Word ended while printing (part of it may be on paper already).
+'   * This PC: an inspection sheet left open in the user's Excel / Word is
+'     closed WITHOUT SAVING first (close_open_copy = 1; the sheets are
+'     originals, printed only). Only that file: other workbooks / documents
+'     and the application stay. A file open on another PC cannot be closed
+'     from here; every file is opened read-only, so it prints anyway.
 '   * NO FILES are exchanged with Python. Python from the Microsoft Store
 '     writes %LOCALAPPDATA% / %TEMP% to a private copy that cscript and
 '     Excel cannot see ("path not found", 0x4C). Everything goes through
@@ -35,6 +46,11 @@
 '                              word.page, word.print, excel.open, ... Python
 '                              tells where it stopped when nothing comes back)
 '     WORDBYE 1|0             (Word quit / left running for the user's documents)
+'     WORDSHARED 1            (CreateObject returned the user's running Word:
+'                              Python must never end that process)
+'     WORDLOST <stage>        (Word ended under us at that step; Python ends what
+'                              is left of the Word this worker started)
+'     RETRY <i>               (Word was started again; item <i> is tried once more)
 '     OPENED <i>
 '     COPIED 1                              ->  OK | EXPORT | RECOPY | SKIP
 '                                               (RECOPY: someone else replaced the
@@ -51,7 +67,8 @@
 '     BYE                     (Excel has quit; the worker ends)
 '     JOB <n>                 (number of job keys read)
 '     RESULT <key> <hex>      (item.<i>.code, item.<i>.errno, item.<i>.message,
-'                              item.<i>.step, ...)
+'                              item.<i>.step, item.<i>.closed_open = Excel|Word
+'                              when a copy open on this PC was closed, ...)
 '     PNGDATA <base64>        (chart export fallback, several lines)
 '     EMFDATA <base64>        (Word page 1 as an enhanced metafile, several lines)
 '   <hex> = UTF-16 code units as 4 hex digits each ("AB" -> "00410042")
@@ -86,11 +103,14 @@ Const RC_EXCEL = 3
 Const RC_ITEM = 4
 
 Dim gFso, gJob, gXl, gWd, gWordReported, gMode, gLastErrNumber, gLastErrDesc, gJobError, gStage
+Dim gWdShared, gWordLostStage, gSavedAlerts, gSavedSecurity
 
 Set gFso = CreateObject("Scripting.FileSystemObject")
 Set gXl = Nothing
 Set gWd = Nothing
 gWordReported = False
+gWdShared = False
+gWordLostStage = ""
 gLastErrNumber = 0
 gLastErrDesc = ""
 gJobError = ""
@@ -161,6 +181,7 @@ Function RunPreview()
         SetItemError 1, "FILE_NOT_FOUND", 0, path
         Exit Function
     End If
+    CloseOpenCopy 1, path
     If Not StartExcel() Then
         RunPreview = RC_EXCEL
         Exit Function
@@ -454,6 +475,11 @@ Function RunPrint()
         RunPrint = RC_ARGS
         Exit Function
     End If
+    ' This PC: inspection sheets left open in the user's Excel / Word are closed
+    ' (without saving) before anything is started here.
+    For i = 1 To count
+        CloseOpenCopy i, JobValue("file." & i, "")
+    Next
     ' Excel is started first as before (only when an Excel workbook is in the job).
     ' Word starts at the first Word document (StartWord).
     excels = 0
@@ -482,11 +508,7 @@ Function RunPrint()
         path = JobValue("file." & i, "")
         ok = False
         If IsWord(i) Then
-            If StartWord() Then
-                ok = PrintOneWord(i, path, copies)
-            Else
-                SetItemError i, "WORD_CREATE_FAILED", gLastErrNumber, gLastErrDesc
-            End If
+            ok = PrintWordItem(i, path, copies)
         ElseIf excelReady Then
             ok = PrintOne(i, path, copies)
         Else
@@ -572,8 +594,11 @@ Function IsWord(index)
 End Function
 
 
+' Preview of a Word document. When Word ends under it (462 / RPC errors),
+' Word is started again and the preview is tried ONCE more. If Word ended
+' while drawing page 1 (EnhMetaFileBits), the second try copies page 1.
 Function RunPreviewWord()
-    Dim path, doc, rng, cmd, attempt
+    Dim path, rc, lostAt
 
     RunPreviewWord = RC_ITEM
     path = JobValue("file.1", "")
@@ -581,11 +606,38 @@ Function RunPreviewWord()
         SetItemError 1, "FILE_NOT_FOUND", 0, path
         Exit Function
     End If
+    CloseOpenCopy 1, path
+    rc = PreviewWordOnce(path, True)
+    If rc <> RC_OK Then
+        If WordWasLost() Then
+            lostAt = gWordLostStage
+            WriteResult "log", "Word ended during the preview (" & lostAt & "); start Word again and try once more"
+            ClearItemError 1
+            Emit "RETRY 1"
+            rc = PreviewWordOnce(path, lostAt <> "word.page")
+            If rc <> RC_OK Then
+                If WordWasLost() Then SetWordGone 1
+            End If
+        End If
+    End If
+    RunPreviewWord = rc
+End Function
+
+
+' One try of the Word preview. useEmf = False: copy page 1 to the clipboard
+' without trying the page picture.
+Function PreviewWordOnce(path, useEmf)
+    Dim doc, rng, cmd, attempt
+
+    PreviewWordOnce = RC_ITEM
+    gWordLostStage = ""
+    gLastErrNumber = 0
+    gLastErrDesc = ""
     If Not StartWord() Then
         WriteResult "fatal.code", "WORD_CREATE_FAILED"
         If Len(gLastErrDesc) > 0 Then WriteResult "fatal.message", gLastErrDesc
         SetItemError 1, "WORD_CREATE_FAILED", gLastErrNumber, gLastErrDesc
-        RunPreviewWord = RC_EXCEL
+        PreviewWordOnce = RC_EXCEL
         Exit Function
     End If
 
@@ -596,12 +648,21 @@ Function RunPreviewWord()
     WriteResult "item.1.range_source", "word_page"
 
     cmd = "COPY"
-    If EmitPageEmf(doc) Then
-        Emit "EMFDONE 1"
-        cmd = WaitCommand()
+    If useEmf Then
+        If EmitPageEmf(doc) Then
+            Emit "EMFDONE 1"
+            cmd = WaitCommand()
+        ElseIf Len(gWordLostStage) > 0 Then
+            ' Word ended while drawing the page: copying needs Word too
+            SetItemError 1, "COPY_FAILED", gLastErrNumber, gLastErrDesc
+            CloseDoc doc
+            Exit Function
+        End If
+    Else
+        WriteResult "log", "Word page picture skipped (Word ended at it in the first try)"
     End If
     If cmd = "OK" Then
-        RunPreviewWord = RC_OK
+        PreviewWordOnce = RC_OK
         CloseDoc doc
         Exit Function
     End If
@@ -635,7 +696,7 @@ Function RunPreviewWord()
         cmd = WaitCommand()
     Loop
     If cmd = "OK" Then
-        RunPreviewWord = RC_OK
+        PreviewWordOnce = RC_OK
     ElseIf cmd = "EXPORT" Then
         ' The chart export is an Excel feature; Word has nothing like it
         Emit "EXPORT_FAILED 1"
@@ -675,6 +736,10 @@ Function EmitPageEmf(doc)
     bits = win.Panes(1).Pages(1).EnhMetaFileBits
     If Err.Number <> 0 Then
         LogErr "Pages(1).EnhMetaFileBits"
+        ' Word may have crashed inside the call (0x80010105 and the like): ask it
+        If Len(gWordLostStage) = 0 Then
+            If WordGoneNow() Then gWordLostStage = "word.page"
+        End If
         Exit Function
     End If
     size = -1
@@ -753,6 +818,47 @@ Function CopyWordRange(rng)
 End Function
 
 
+' One Word document of a print job. When Word ends under it before printing
+' (462 / RPC errors), Word is started again and the document is tried ONCE
+' more. Not when Word ended while printing: part of it may be on paper.
+Function PrintWordItem(index, path, copies)
+    Dim ok, lostAt
+
+    ok = TryPrintWord(index, path, copies)
+    If Not ok Then
+        If WordWasLost() Then
+            lostAt = gWordLostStage
+            If lostAt = "word.print" Then
+                WriteResult "log", "Word ended while printing; not printed again (it may be on paper)"
+                SetWordGone index
+            Else
+                WriteResult "log", "Word ended (" & lostAt & "); start Word again and print once more"
+                ClearItemError index
+                Emit "RETRY " & index
+                ok = TryPrintWord(index, path, copies)
+                If Not ok Then
+                    If WordWasLost() Then SetWordGone index
+                End If
+            End If
+        End If
+    End If
+    PrintWordItem = ok
+End Function
+
+
+Function TryPrintWord(index, path, copies)
+    TryPrintWord = False
+    gWordLostStage = ""
+    gLastErrNumber = 0
+    gLastErrDesc = ""
+    If StartWord() Then
+        TryPrintWord = PrintOneWord(index, path, copies)
+    Else
+        SetItemError index, "WORD_CREATE_FAILED", gLastErrNumber, gLastErrDesc
+    End If
+End Function
+
+
 Function PrintOneWord(index, path, copies)
     Dim doc, number, description
 
@@ -793,13 +899,16 @@ End Function
 
 
 Function StartWord()
-    Dim number, description, before, pid, attempt
+    Dim number, description, before, pid, attempt, vis, docs
 
     StartWord = False
     On Error Resume Next
-    If WordAlive() Then
-        StartWord = True
-        Exit Function
+    If Not gWd Is Nothing Then
+        If Not WordGoneNow() Then
+            StartWord = True
+            Exit Function
+        End If
+        LoseWord                ' the Word of the previous document has ended
     End If
     Stage "word.pid"
     Set before = WordProcessIds()
@@ -830,6 +939,28 @@ Function StartWord()
     pid = NewWordProcessId(before)
     If pid > 0 Then Emit "WORDPID " & pid
 
+    ' A Word that was already running (the user's) instead of a new one? Word
+    ' normally starts a new WINWORD.EXE for CreateObject, but that is not
+    ' promised. Such a Word is not hidden, its settings are given back at the
+    ' end and it is never quit (FinishWord); Python never ends it (WORDSHARED).
+    gWdShared = False
+    If pid = 0 Then
+        vis = False
+        vis = gWd.Visible
+        docs = 0
+        docs = gWd.Documents.Count
+        Err.Clear
+        If vis Or docs > 0 Then gWdShared = True
+    End If
+    If gWdShared Then
+        WriteResult "log", "CreateObject returned a Word that was already running (" & docs & _
+                    " document(s), visible " & vis & "): not hidden, not quit"
+        Emit "WORDSHARED 1"
+        gSavedAlerts = gWd.DisplayAlerts
+        gSavedSecurity = gWd.AutomationSecurity
+        Err.Clear
+    End If
+
     ' Settings of this Word instance only (nothing that Word saves).
     ' A Word that has just started may reject calls for a moment: retry.
     Stage "word.setup"
@@ -845,8 +976,10 @@ Function StartWord()
     Next
     If number <> 0 Then NoteError "Word DisplayAlerts", number, description
     Err.Clear
-    gWd.Visible = False
-    LogErr "Word Visible"
+    If Not gWdShared Then
+        gWd.Visible = False
+        LogErr "Word Visible"
+    End If
     gWd.FeatureInstall = msoFeatureInstallNone
     LogErr "Word FeatureInstall"
     If JobValue("disable_macros", "1") = "1" Then
@@ -924,20 +1057,76 @@ Function NewWordProcessId(before)
 End Function
 
 
-Function WordAlive()
-    Dim v
-    WordAlive = False
+' Word no longer answers (it ended or crashed). A busy Word is not gone.
+Function WordGoneNow()
+    Dim v, attempt, number
+    WordGoneNow = True
     If gWd Is Nothing Then Exit Function
     On Error Resume Next
-    v = ""
-    v = gWd.Version
-    If Err.Number = 0 And Len(v) > 0 Then
-        WordAlive = True
-    Else
-        Set gWd = Nothing
-    End If
-    Err.Clear
+    For attempt = 1 To 3
+        Err.Clear
+        v = ""
+        v = gWd.Version
+        number = Err.Number
+        Err.Clear
+        If number = 0 And Len(v) > 0 Then
+            WordGoneNow = False
+            Exit Function
+        End If
+        If Not IsBusyError(number) Then Exit Function
+        WScript.Sleep 500
+    Next
+    WordGoneNow = False
 End Function
+
+
+' After a failed Word step: did Word end under us? Either a call failed with
+' 462 / RPC errors (NoteGone kept the step) or Word no longer answers.
+Function WordWasLost()
+    WordWasLost = False
+    If gWd Is Nothing Then Exit Function
+    If WordGoneNow() Then
+        If Len(gWordLostStage) = 0 Then gWordLostStage = gStage
+        LoseWord
+        WordWasLost = True
+    ElseIf Len(gWordLostStage) > 0 Then
+        WriteResult "log", "Word answers again after the connection was lost (" & gWordLostStage & ")"
+        WordWasLost = True
+    End If
+End Function
+
+
+' Word ended under us (crashed, closed by the user, or ended by someone else).
+' The object is dropped; Python ends what is left of the Word this worker started.
+Sub LoseWord()
+    Dim where
+    where = gWordLostStage
+    If Len(where) = 0 Then where = gStage
+    WriteResult "log", "Word is gone (at " & where & ")"
+    Emit "WORDLOST " & where
+    Set gWd = Nothing
+    gWdShared = False
+    gWordReported = False
+End Sub
+
+
+' The item failed twice because Word ended: WORD_GONE at the step it ended at.
+Sub SetWordGone(index)
+    Dim keep
+    keep = gStage
+    If Len(gWordLostStage) > 0 Then gStage = gWordLostStage
+    SetItemError index, "WORD_GONE", gLastErrNumber, gLastErrDesc
+    gStage = keep
+End Sub
+
+
+' Before a second try: the first try's error is not the answer any more.
+Sub ClearItemError(index)
+    WriteResult "item." & index & ".code", ""
+    WriteResult "item." & index & ".errno", ""
+    WriteResult "item." & index & ".message", ""
+    WriteResult "item." & index & ".step", ""
+End Sub
 
 
 ' End of a job: quit Word. If the user's own document opened in it, show Word
@@ -955,7 +1144,15 @@ Sub FinishWord()
         Emit "WORDBYE 1"
         Exit Sub
     End If
-    If openDocs = 0 Then
+    If gWdShared Then
+        ' The user's Word: give its settings back, keep it as it is
+        gWd.DisplayAlerts = gSavedAlerts
+        gWd.AutomationSecurity = gSavedSecurity
+        If JobValue("disable_macros", "1") = "1" Then gWd.WordBasic.DisableAutoMacros 0
+        Err.Clear
+        WriteResult "log", "Word left running: it was running before this job (the user's Word)"
+        Emit "WORDBYE 0"
+    ElseIf openDocs = 0 Then
         gWd.NormalTemplate.Saved = True
         Err.Clear
         gWd.Quit wdDoNotSaveChanges
@@ -968,6 +1165,7 @@ Sub FinishWord()
         Emit "WORDBYE 0"
     End If
     Set gWd = Nothing
+    gWdShared = False
     gWordReported = False
 End Sub
 
@@ -1032,7 +1230,7 @@ End Function
 ' Word has no Application.Hwnd; the document window has one (Word 2013+)
 Sub ReportWordWindow(doc)
     Dim hwnd
-    If gWordReported Then Exit Sub
+    If gWordReported Or gWdShared Then Exit Sub     ' the user's Word is not ours to track
     gWordReported = True
     On Error Resume Next
     hwnd = 0
@@ -1052,6 +1250,140 @@ Sub CloseDoc(doc)
     If Not doc Is Nothing Then doc.Close wdDoNotSaveChanges
     Err.Clear
 End Sub
+
+' ----------------------------------------------------------------------------
+' The same inspection sheet left open on this PC (the user's Excel / Word).
+' The sheets are originals for printing only, so that one file is closed
+' WITHOUT SAVING before it is opened here (job value close_open_copy = 1).
+' Other workbooks / documents and the application itself are left alone.
+' Only the Excel / Word that GetObject finds (the first one running) is
+' looked at. A file open on another PC cannot be closed from here: it is
+' opened read-only (no "File in Use" dialog) and prints anyway.
+' ----------------------------------------------------------------------------
+Sub CloseOpenCopy(index, path)
+    If JobValue("close_open_copy", "0") <> "1" Then Exit Sub
+    If Len(path) = 0 Then Exit Sub
+    If IsWord(index) Then
+        CloseOpenWordCopy index, path
+    Else
+        CloseOpenExcelCopy index, path
+    End If
+End Sub
+
+
+Sub CloseOpenWordCopy(index, path)
+    Dim app, d, i, count, name, same, closed
+
+    Stage "word.close"
+    closed = 0
+    On Error Resume Next
+    Set app = Nothing
+    Set app = GetObject(, "Word.Application")
+    If Err.Number <> 0 Then
+        Err.Clear               ' no Word is running on this PC
+        Exit Sub
+    End If
+    If app Is Nothing Then Exit Sub
+    count = 0
+    count = app.Documents.Count
+    Err.Clear
+    For i = count To 1 Step -1
+        Set d = Nothing
+        Set d = app.Documents(i)
+        name = ""
+        If Not d Is Nothing Then name = d.FullName
+        Err.Clear
+        ' (never test a call that can fail inside If: with Resume Next it runs Then)
+        same = False
+        same = SameFile(name, path)
+        If same Then
+            Err.Clear
+            d.Close wdDoNotSaveChanges
+            If Err.Number = 0 Then
+                closed = closed + 1
+            Else
+                LogErr "Close the copy open in the user's Word"
+            End If
+        End If
+    Next
+    Err.Clear
+    If closed > 0 Then
+        WriteResult "log", "Closed the copy left open in the user's Word (not saved): " & path
+        WriteResult "item." & index & ".closed_open", "Word"
+    End If
+End Sub
+
+
+Sub CloseOpenExcelCopy(index, path)
+    Dim app, wb, i, count, name, same, closed, mine
+
+    Stage "excel.close"
+    closed = 0
+    On Error Resume Next
+    Set app = Nothing
+    Set app = GetObject(, "Excel.Application")
+    If Err.Number <> 0 Then
+        Err.Clear               ' no Excel is running on this PC
+        Exit Sub
+    End If
+    If app Is Nothing Then Exit Sub
+    ' The hidden Excel of this worker (kept between jobs) has nothing open now
+    mine = False
+    If Not gXl Is Nothing Then mine = (app.Hwnd = gXl.Hwnd)
+    Err.Clear
+    If mine Then Exit Sub
+    count = 0
+    count = app.Workbooks.Count
+    Err.Clear
+    For i = count To 1 Step -1
+        Set wb = Nothing
+        Set wb = app.Workbooks(i)
+        name = ""
+        If Not wb Is Nothing Then name = wb.FullName
+        Err.Clear
+        same = False
+        same = SameFile(name, path)
+        If same Then
+            Err.Clear
+            wb.Close False
+            If Err.Number = 0 Then
+                closed = closed + 1
+            Else
+                LogErr "Close the copy open in the user's Excel"
+            End If
+        End If
+    Next
+    Err.Clear
+    If closed > 0 Then
+        WriteResult "log", "Closed the copy left open in the user's Excel (not saved): " & path
+        WriteResult "item." & index & ".closed_open", "Excel"
+    End If
+End Sub
+
+
+' The same file: the same path, or (a mapped drive and the UNC path) the same
+' name, size and time of the last change.
+Function SameFile(a, b)
+    Dim fa, fb, okFlag
+    SameFile = False
+    If Len(a) = 0 Or Len(b) = 0 Then Exit Function
+    If LCase(a) = LCase(b) Then
+        SameFile = True
+        Exit Function
+    End If
+    On Error Resume Next
+    If LCase(gFso.GetFileName(a)) <> LCase(gFso.GetFileName(b)) Then Exit Function
+    Set fa = gFso.GetFile(a)
+    Set fb = gFso.GetFile(b)
+    okFlag = (Err.Number = 0)
+    Err.Clear
+    If Not okFlag Then Exit Function
+    okFlag = False
+    okFlag = (fa.Size = fb.Size And fa.DateLastModified = fb.DateLastModified)
+    Err.Clear
+    SameFile = okFlag
+End Function
+
 
 ' ----------------------------------------------------------------------------
 ' Excel application
@@ -1261,6 +1593,24 @@ Function IsBusyError(number)
 End Function
 
 
+' The Word / Excel behind the object has ended: VBScript 462 "The remote server
+' machine does not exist or is unavailable" (462 / 0x800A01CE),
+' RPC_S_SERVER_UNAVAILABLE (0x800706BA), RPC_S_CALL_FAILED (0x800706BE),
+' RPC_E_DISCONNECTED (0x80010108)
+Function IsWordGoneError(number)
+    IsWordGoneError = (number = 462 Or number = -2146827826 Or number = -2147023174 Or _
+                       number = -2147023170 Or number = -2147417848)
+End Function
+
+
+' A Word call failed because Word is gone: keep the step it happened at.
+Sub NoteGone(number)
+    If Len(gWordLostStage) > 0 Then Exit Sub
+    If Left(gStage, 5) <> "word." Then Exit Sub
+    If IsWordGoneError(number) Then gWordLostStage = gStage
+End Sub
+
+
 ' ----------------------------------------------------------------------------
 ' Communication with Python
 ' ----------------------------------------------------------------------------
@@ -1339,6 +1689,11 @@ End Sub
 
 ' code + error number + description + the step it failed at (STAGE name)
 Sub SetItemError(index, code, number, description)
+    If number <> 0 Then
+        gLastErrNumber = number
+        gLastErrDesc = description
+    End If
+    NoteGone number
     WriteResult "item." & index & ".code", code
     If number <> 0 Then WriteResult "item." & index & ".errno", "0x" & Hex(number)
     If Len(description) > 0 Then WriteResult "item." & index & ".message", description
@@ -1370,6 +1725,7 @@ End Sub
 Sub NoteError(where, number, description)
     gLastErrNumber = number
     gLastErrDesc = description
+    NoteGone number
     WriteResult "log", where & " failed: 0x" & Hex(number) & " " & description
 End Sub
 

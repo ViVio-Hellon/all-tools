@@ -10,6 +10,10 @@
 が入り、設定の「ログ」タブと「文にして写す」に出る。
 
 新しいエラーの種類を作ったら、ここにも1行足す(無くても記録は残る)。
+
+**点検表の種類で言い分ける(VER2.3.2)。** 記録に `app`(Excel / Word / Excel・Word)があれば、
+Word の点検表のときは Word の言葉で出す(`WORD_HINTS`。Word のプレビューの失敗が
+「Excel を操作する処理プログラムが…」と出ていて、利用者が Excel を探していた)。
 """
 from __future__ import annotations
 
@@ -49,6 +53,12 @@ HINTS: Dict[str, Tuple[str, List[str]]] = {
         "タスクマネージャーに止まった Word(WINWORD.EXE)が残っていないか"]),
     "WORD_BUSY": ("Word が忙しく、命令を受け付けなかった", [
         "同じ時刻に、この PC で Word の別の文書を開いて作業していなかったか"]),
+    # VER2.3.2: VBScript 462(0x1CE)「リモート サーバー マシンが存在しないか、利用できません」
+    "WORD_GONE": ("つかんでいた Word が途中で終わった(起こし直して1回やり直しても終わった)", [
+        "「処理プログラムの記録」の Word is gone (at …) ── どの段階で終わったか(1ページ目の絵・印刷 など)",
+        "その時刻に、この PC で Word を閉じた・Word が「応答なし」になっていなかったか",
+        "同じ文書を手で Word で開くと、Word が落ちないか(壊れた図・埋め込み)",
+        "タスクマネージャーに止まった Word(WINWORD.EXE)が残っていないか"]),
     "TIMEOUT": ("Excel・Word が決めた時間内に返事をしなかった", [
         "「詳しい原因」の「止まった所」と「出ていた窓」(隠れた確認の窓の題名と文)",
         "そのファイルを手で開くと、確認の窓(パスワード・書き込みパスワード・リンクの更新・マクロ・"
@@ -100,6 +110,32 @@ HINTS: Dict[str, Tuple[str, List[str]]] = {
 }
 
 
-def hint(code: str) -> Tuple[str, List[str]]:
-    """(何が起きたか, 確かめること)。知らない種類なら空。"""
-    return HINTS.get(code or "", ("", []))
+#: Word の点検表のときの言い方(`app` = "Word")。無いものは HINTS の「Excel・Word」を「Word」に読み替える
+WORD_HINTS: Dict[str, Tuple[str, List[str]]] = {
+    "WORKER_FAILED": ("Word を操作する処理プログラム(VBScript)が途中で終わった", [
+        "「処理プログラムの記録」と「Excel・Word の返答」",
+        "ウイルス対策ソフトが cscript.exe を止めていないか"]),
+    "RANGE_FAILED": ("Word の1ページ目の範囲を読み取れなかった", [
+        "「詳しい原因」のエラー番号(0x1CE = つかんでいた Word が途中で終わった)",
+        "同じ文書を手で Word で開くと、1ページ目が出るか"]),
+    "COPY_FAILED": ("Word が点検表の1ページ目を画像にできなかった", [
+        "文書が空・1ページ目が描けない形(埋め込みの図など)になっていないか",
+        "「詳しい原因」のエラー番号とその意味"]),
+    "PREVIEW_FAILED": ("プレビュー画像を作れなかった", ["「詳しい原因」の Word の返答"]),
+}
+
+
+def hint(code: str, app: str = "") -> Tuple[str, List[str]]:
+    """(何が起きたか, 確かめること)。知らない種類なら空。
+
+    `app` は点検表の種類("Excel" / "Word" / "Excel・Word")。Word なら Word の言い方にする。
+    """
+    if app == "Word" and code in WORD_HINTS:
+        return WORD_HINTS[code]
+    meaning, checks = HINTS.get(code or "", ("", []))
+    if app in ("Excel", "Word"):
+        meaning = meaning.replace("Excel・Word", app)
+        checks = [c.replace("Excel・Word", app) for c in checks]
+    elif app == "Excel・Word":
+        meaning = meaning.replace("Excel を操作する", "Excel・Word を操作する")
+    return meaning, checks

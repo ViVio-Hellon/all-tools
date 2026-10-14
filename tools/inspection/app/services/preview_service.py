@@ -23,7 +23,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Dict, Iterator, Tuple
 
 from app.repositories.preview_cache import PreviewCache
-from app.services.excel_service import ExcelError, ExcelService
+from app.services.excel_service import ExcelError, ExcelService, app_label, kind_of
 from app.errors import ApiError
 from core import event_log
 
@@ -82,7 +82,8 @@ class PreviewService:
         item = self.inspection.get_item(item_id)
         if item is None:
             raise ApiError(409, "ITEM_NOT_FOUND", "点検表が一覧に見つかりません。「再読込」してから選び直してください。")
-        context = {"target": f"[{item.category} - {item.subcategory}] {item.name}", "file": item.path}
+        context = {"target": f"[{item.category} - {item.subcategory}] {item.name}", "file": item.path,
+                   "app": app_label([kind_of(item.path)])}
         try:
             stat = os.stat(item.path)
         except OSError as exc:
@@ -134,8 +135,12 @@ class PreviewService:
                       image.range_address, image.method, elapsed)
         event_log.record("preview", event_log.OK, cached=False, elapsed_ms=elapsed, sheet=image.sheet,
                          range=image.range_address, range_source=image.range_source, method=image.method,
-                         **context)
-        return self._reply(key, meta, cached=False)
+                         notice=image.notice, **context)
+        reply = self._reply(key, meta, cached=False)
+        if image.notice:
+            # 開いたままだったのを閉じた・ほかの人が開いている(画面が知らせに出す。控えには入れない)
+            reply["notice"] = image.notice
+        return reply
 
     @staticmethod
     def _reply(key: str, meta: Dict[str, Any], cached: bool) -> Dict[str, Any]:

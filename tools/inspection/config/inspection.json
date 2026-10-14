@@ -21,7 +21,8 @@
     "preview_scale": 2.0,
     "preview_max_pixels": 3200,
     "preview_max_rows": 40,
-    "preview_max_cols": 16
+    "preview_max_cols": 16,
+    "close_open_copy": true
   },
   "print": {
     "max_copies": 100

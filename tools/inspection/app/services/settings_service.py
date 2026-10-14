@@ -66,6 +66,9 @@ class ExcelConfig:
     preview_max_pixels: int = 3200
     preview_max_rows: int = 40
     preview_max_cols: int = 16
+    # この PC の Excel・Word でその点検表が開いたままなら、保存せずに閉じてから開く
+    # (点検表は原紙で、印刷するだけ。閉じるのはそのファイルだけ。VER2.3.2)
+    close_open_copy: bool = True
 
 
 @dataclass
@@ -124,6 +127,7 @@ def load_inspection_config(path: Optional[Path] = None) -> InspectionConfig:
         preview_max_pixels=int(_clamp(ex.get("preview_max_pixels"), d.preview_max_pixels, 400, 10000)),
         preview_max_rows=int(_clamp(ex.get("preview_max_rows"), d.preview_max_rows, 1, 10000)),
         preview_max_cols=int(_clamp(ex.get("preview_max_cols"), d.preview_max_cols, 1, 1000)),
+        close_open_copy=bool(ex.get("close_open_copy", d.close_open_copy)),
     )
     printing = raw.get("print") if isinstance(raw.get("print"), dict) else {}
     cfg.max_copies = int(_clamp(printing.get("max_copies"), 100, 1, 999))

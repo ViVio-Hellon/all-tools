@@ -63,6 +63,11 @@ function normalize(text) {
 export function itemLabel(item) {
   return `[${item.category} - ${item.subcategory}] ${item.name}`;
 }
+/** その点検表を開くアプリ(サーバの kind_of と同じ決め方: 拡張子が doc / docx / docm なら Word) */
+const WORD_EXTS = new Set(["doc", "docx", "docm"]);
+export function appOf(item) {
+  return item && WORD_EXTS.has(String(item.ext || "").toLowerCase()) ? "Word" : "Excel";
+}
 export function selectedItems() {
   return state.selection.map((id) => state.items.get(id)).filter(Boolean);
 }

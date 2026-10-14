@@ -24,11 +24,12 @@ class PrintItemResult:
     message: str = ""
     detail: str = ""      # Excel / VBScript が返した原因(調べるための手がかり)
     sheet: str = ""
+    notice: str = ""      # 知らせ(開いたままだったのを閉じた・ほかの人が開いている)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"index": self.index, "id": self.item_id, "name": self.name, "label": self.label,
                 "status": self.status, "code": self.code, "message": self.message, "detail": self.detail,
-                "sheet": self.sheet}
+                "sheet": self.sheet, "notice": self.notice}
 
 
 @dataclass
@@ -46,6 +47,7 @@ class PrintJob:
     printer: str = ""
     screen_id: str = ""       # 始めた画面(同じPCで2つの画面から使うとき、誰の印刷かを示す)
     ref: str = ""             # 問い合わせ番号(印刷を受け付けた要求の番号。ログから引ける)
+    app: str = "Excel"        # 点検表の種類(Excel / Word / Excel・Word)。進み具合の言葉を言い分ける
     recording: bool = True    # 結果を記録し終えるまで True(終わった直後に止める・待つ側が記録より先に進まない)
     log: List[str] = field(default_factory=list)
 
@@ -80,6 +82,7 @@ class PrintJob:
             "printer": self.printer,
             "screen_id": self.screen_id,
             "ref": self.ref,
+            "app": self.app,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "items": [i.to_dict() for i in self.items],

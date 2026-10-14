@@ -12,7 +12,7 @@ here, on the server**.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from .. import constants
 from .numeric import is_numeric
@@ -108,12 +108,100 @@ def same_text(
     if row == 12:
         return None
 
-    if (sz_text, sh_text) in set(shift_end_times.values()):
-        return None
-    if day_temp == "日勤" and sz_text == "18" and sh_text == "00":
+    if ends_shift(sz_text, sh_text, day_temp=day_temp,
+                  shift_end_times=shift_end_times):
         return None
 
     return (sz_text, sh_text)
+
+
+def ends_shift(sz_text: str, sh_text: str, *, day_temp: str,
+               shift_end_times: dict[str, tuple[str, str]]) -> bool:
+    """その終了時刻が**直の終わりの時刻**か(写さない時刻か)。
+
+    `same_text` の止め方を、ページをまたぐとき(`carry_across_pages`)も
+    同じに使うために切り出したもの。**止める時刻を2か所に持たない。**
+    """
+    if (sz_text, sh_text) in set(shift_end_times.values()):
+        return True
+    return day_temp == "日勤" and sz_text == "18" and sh_text == "00"
+
+
+# ------------------------------------------------------------------
+# ページをまたいで写す (v4.35.1)
+#
+#     日報入力:ページを追加した場合に前ページの最終行の終了が開始に引き継がれていない
+#     例:1ページ12行目終了14:55
+#       2ページ1行目開始14:55
+#
+# `same_text` は12行目からは写しません(13行目が無いので)。ページの中では
+# 終了を打つたびに次の行の開始へ入るのに、**ページの変わり目だけ途切れて
+# いました** ── 次ページ発行は次のページを**空で**作るだけで、前のページの
+# 終わりを誰も見ていなかったためです。
+#
+# 【いつ入れるか ── ページを描くとき、まだ何も打っていないページだけ】
+# 次ページ発行で出したばかりのページも、開き直したページも、**12行に
+# 1文字も入っていなければ**、前のページの最後の終了を1行目の開始に入れます。
+# 何か入っていれば(1行目の開始が空でも)触りません ── 人が消したのか、
+# まだ打っていないのかは見分けられないので、**迷ったら入れない**ほうへ倒します
+# (`carry_decision` の「人が打った値は消さない」と同じ向き)。
+#
+# 【どの行の終了か ── 前のページで最後に打った行】
+# 12行目とは限りません。空の行・開始だけの行(上の行から写っただけ)は飛ばし、
+# **最後に打った行**(`pages.row_state` で数える行)を見ます。その行に終了が
+# 無ければ(打ちかけ)何も入れません ── 打ちかけの上の行まで遡って、古い時刻を
+# 入れることはしません。
+#
+# 【直の終わりの時刻なら入れない】
+# 前のページが 15:00 / 22:50 / 07:00 で終わっていれば、直はそこで終わって
+# います。ページの中と同じく写しません(`ends_shift`)。3直の 0 時またぎは
+# 時刻を写すだけなので、23:55 でも 00:10 でもそのまま入ります。
+# ------------------------------------------------------------------
+def carry_across_pages(
+    prev_rows: Mapping[int, Mapping[str, str]],
+    first_row: Mapping[str, str],
+    *,
+    page_is_blank: bool,
+    day_temp: str,
+    shift_end_times: dict[str, tuple[str, str]],
+) -> Optional[tuple[str, str]]:
+    """前のページの最後の終了を、このページの1行目の開始へ入れるか。
+
+    返すのは ``(kz, kh)``(入れる時刻)か ``None``(入れない)。
+
+        page_is_blank … このページの12行に1文字も入っていないか
+        prev_rows     … 前のページの12行(保存してある中身)
+        first_row     … このページの1行目
+
+    **判断はここ1か所。** 画面は描かれた値を出すだけで、自分では決めません。
+    """
+    from . import pages
+
+    if not page_is_blank:
+        return None
+    # 1行目の開始が入っていれば上書きしない(`page_is_blank` なら入っていない
+    # はずですが、決まりとしても持っておく)
+    if str(first_row.get("KZ") or "").strip() or str(first_row.get("KH") or "").strip():
+        return None
+    last = None
+    for row in range(constants.ROW_COUNT, 0, -1):
+        values = prev_rows.get(row) or {}
+        state = pages.row_state(values)
+        if pages.row_counts(state):
+            last = (state, values)
+            break
+    if last is None:
+        return None                     # 前のページに打った行が無い
+    state, values = last
+    if state != pages.ROW_FILLED:
+        return None                     # 最後の行が打ちかけ(終了がまだ)
+    sz = str(values.get("SZ") or "").strip()
+    sh = str(values.get("SH") or "").strip()
+    if len(sh) != 2:
+        return None
+    if ends_shift(sz, sh, day_temp=day_temp, shift_end_times=shift_end_times):
+        return None
+    return (sz, sh)
 
 
 #: `carry_decision` の答え。**「何もしない」を空文字にしない** ── 帰り値を
