@@ -358,6 +358,15 @@ class NippouRepository:
             "synced": not bool(r["dirty"]),
         } for r in rows]
 
+    def saved_lines(self) -> list[str]:
+        """手元に保存のあるライン(並びはここでは決めない)。
+
+        記録を見るの「保存した直」のラインの欄(v4.35.3)に出すもの。管理者の PC は
+        控えから入れた直・取り込んだ直で、ほかのラインのページも持っています。
+        """
+        rows = self.conn.execute("SELECT DISTINCT line FROM daily_header").fetchall()
+        return [str(r["line"]) for r in rows if r["line"]]
+
     def latest_page(self, report_date: str, line: str, shift: str) -> int:
         row = self.conn.execute(
             "SELECT MAX(page) AS p FROM daily_header WHERE report_date=? AND line=? AND shift=?",

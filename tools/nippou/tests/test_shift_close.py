@@ -1013,11 +1013,19 @@ class ViewPaperTests(WebTestCase):
         html = self.get("/records").get_data(as_text=True)
         self.assertIn("1・2・3ページ", html)
 
-    def test_記録画面は他のラインも出す(self) -> None:
-        """いまのライン以外が出てこないと、そこで行き止まりになる。"""
+    def test_記録画面は他のラインをラインを選んで出す(self) -> None:
+        """いまのライン以外が出てこないと、そこで行き止まりになる。
+
+        v4.35.3 から**混ぜません**(「全ライン表示している見づらい」)。ほかのラインは
+        Administrator・管理者モードがラインの欄で選んで出す(`tests/test_records_line.py`)。
+        """
         self.save("2026年8月3日", "HVC", "2直")
         html = self.get("/records").get_data(as_text=True)
-        self.assertIn("HVC", html)
+        self.assertNotIn('data-line="HVC"', html)                       # 一般の端末は出さない
+        self.post("/api/settings/admin", {"enable": True, "password": "nisk"})
+        html = self.get("/records?line=HVC").get_data(as_text=True)
+        self.assertIn('<option value="HVC" selected>', html)
+        self.assertIn('data-line="HVC"', html)
         self.assertIn('data-shift="2直"', html)
 
 

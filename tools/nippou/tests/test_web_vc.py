@@ -564,6 +564,24 @@ class SettingsTabTests(VcCase):
         vc = next(f for f in view.file_views() if f.key == "vc")
         self.assertEqual(vc.source_label, "VC計算マスタの置き場所")
 
+    def test_folder_box_is_wide(self) -> None:
+        """置き場所(フォルダ)の欄は画面の幅に合わせて伸ばす(v4.35.3)。
+
+            VC長さ計算:置き場所(フォルダ)のテキストボックスが短いです長くしてください
+
+        設定・参照設定の道の欄と同じく、行の残りいっぱいまで伸び、狭い窓では縮む(はみ出さない)。
+        """
+        page = self.get("/vc").get_data(as_text=True)
+        at = page.index('id="vc-place-dir"')
+        box = page[at:page.index(">", at)]
+        self.assertIn('class="vc-place__dir"', box)
+        self.assertNotIn('size="48"', box)                 # 短かった幅の指定は外した
+        css = (STATIC / "css" / "components.css").read_text(encoding="utf-8")
+        rule = re.search(r"\.vc-place__dir\{([^}]*)\}", css)
+        self.assertIsNotNone(rule)
+        for part in ("flex:1 1 40em", "width:100%", "min-width:0", "max-width:100%"):
+            self.assertIn(part, rule.group(1), part)
+
     def test_tab_select_is_not_shadowed(self) -> None:
         """vc.js には品種を選ぶ `select` がある。面を替える `select` と取り違えない。"""
         js = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")

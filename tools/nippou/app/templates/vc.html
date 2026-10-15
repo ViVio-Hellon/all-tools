@@ -204,9 +204,15 @@
       <div class="out-dir">
         <div>いま読むファイル: <code class="out-dir__path" id="vc-place-used">{{ place.used }}</code></div>
       </div>
+      {# 置き場所の欄は**画面の幅に合わせて伸ばす**(v4.35.3。設定・参照設定の道の欄と同じ)。
+
+             VC長さ計算:置き場所(フォルダ)のテキストボックスが短いです長くしてください
+
+         共有フォルダの道(`\\サーバ\各課共有\…`)は長いのが普通で、`size="48"` では
+         頭しか見えませんでした。伸ばし方は CSS の `.vc-place__dir`(狭い窓では行に収まる) #}
       <div class="row vc-place__edit">
         <label for="vc-place-dir">置き場所(フォルダ)</label>
-        <input id="vc-place-dir" type="text" size="48" autocomplete="off"
+        <input id="vc-place-dir" class="vc-place__dir" type="text" autocomplete="off" spellcheck="false"
                value="{{ place.value }}" placeholder="空なら参照用マスタと同じフォルダ({{ place.reference_dir }})">
         <label for="vc-place-pw" id="vc-place-pw-label" hidden>管理者パスワード</label>
         <input id="vc-place-pw" type="password" size="12" hidden>

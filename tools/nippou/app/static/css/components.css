@@ -2966,6 +2966,12 @@ body.is-viewer #main > *:not(#tab-lock){ display:none; }
 .vc-qtable thead th{ font-size:var(--fs-xs); font-weight:600; color:var(--muted); }
 .vc-qtable thead th.corner{ font-size:10px; width:100px; white-space:nowrap; }
 .vc-qtable td{ font-family:var(--mono); font-size:var(--fs-lg); color:var(--tone); font-weight:600; }
+/* マスタの置き場所(フォルダ)の欄(v4.35.3)。**画面の幅に合わせて伸ばす** ──
+   設定・参照設定の道の欄(`.field--wide` / `.path__edit`)と同じく、共有の長い道
+   (`\\サーバ\各課共有\…`)が見渡せるように。行の残りいっぱいまで伸び、狭い窓では
+   1行に収まるまで縮む(はみ出さない)。保存のボタンは入らなければ次の行へ回る */
+.vc-place__edit{ align-items:center; }
+.vc-place__dir{ flex:1 1 40em; width:100%; min-width:0; max-width:100%; }
 /* 早見表のマスをまとめて作る(管理者) */
 .vc-grid{ display:grid; gap:8px; }
 .vc-grid__form{ display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:6px 12px;

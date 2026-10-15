@@ -78,6 +78,12 @@ class WorkContext:
     terminal_line: str = constants.LINE_NAMES[0]
     terminal_maru_sub: str = ""
 
+    # 記録を見るの「保存した直」で**最後に選んだライン**(v4.35.3。Administrator・
+    # 管理者モードだけに欄が出る)。空ならこの端末のライン。日報入力や設定へ行って
+    # 戻っても選び直させないために持ちます。**保存しません**(プロセスに1つ ──
+    # 起動し直せばこの端末のラインから。`anchor` と同じ寿命)
+    records_line: str = ""
+
     @classmethod
     def from_settings(cls) -> "WorkContext":
         """**覚えておいたラインで始める。** 覚えていなければ L-1。

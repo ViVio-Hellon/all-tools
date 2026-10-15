@@ -64,10 +64,10 @@ class RecordListTests(WebTestCase):
             repo.conn.commit()
 
     def rows(self) -> list[dict]:
-        """一覧の中身。**アプリの文脈の中で**呼ぶ(DBはそこから引く)。"""
+        """一覧の中身(この端末のライン)。**アプリの文脈の中で**呼ぶ(DBはそこから引く)。"""
         from app.routes.printing import _recent_shifts
         with self.app.test_request_context(headers={"Host": "127.0.0.1"}):
-            return _recent_shifts()
+            return _recent_shifts("L-1")
 
     def test_古い未送信でも一覧に出る(self) -> None:
         """**ここが本題。** 新しい保存が20直より多くても溢れさせない。"""

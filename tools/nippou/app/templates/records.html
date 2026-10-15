@@ -121,11 +121,35 @@
 </div>
 
 {# ---- 保存した直の一覧 ── 見る / 呼び出す の入口 ---- #}
-<div class="card">
+<div class="card" id="saved-card">
   <div class="card__head">
     <h2>保存した直</h2>
     <span class="lead">共有へ未送信が先・そのあと保存の新しい順</span>
   </div>
+  {# ---- ライン(v4.35.3)──「ほかのPCの日報」と同じ形の欄 ----
+
+         記録を見る:保存した直:Administrator であれば全ラインが見れるが全ライン表示している見づらい。
+         ほかのPCの日報のようにライン選択させてください
+
+     **Administrator・管理者モードだけに出す**(ほかの PC はこの端末のラインだけ)。
+     選んだラインの直だけを出す(混ぜない。「全ライン」は無い)。既定はこの端末のライン、
+     選んだラインはサーバが覚える(`routes/printing._saved_line_view`) #}
+  {% if saved_line.shown %}
+  <div class="row" style="margin-bottom:var(--sp-2)">
+    <div class="field" data-line-pick>
+      <label for="saved-line">ライン</label>
+      <select id="saved-line">
+        {% for ln in saved_line.lines %}<option value="{{ ln.code }}" {% if ln.code == saved_line.line %}selected{% endif %}>{{ ln.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn" type="button" id="saved-reload">表示</button>
+    <span class="lead">選んだラインの直だけを出します(この端末のラインは {{ saved_line.own | line_label }})</span>
+  </div>
+  {% if saved_line.unsent %}
+  <p class="lead" id="saved-unsent">ほかのラインにも共有へ未送信の直があります:
+    <b>{{ saved_line.unsent | join("・") }}</b>(ラインを選ぶと出ます)</p>
+  {% endif %}
+  {% endif %}
   {# ---- 並びの決まりを1行で ----
 
          直してほしいといいつつないから直せないんですが
@@ -201,15 +225,18 @@
               {% for n in r.pages %}<option value="{{ n }}">ページ{{ n }}</option>{% endfor %}
             </select>
             {% endif %}
+            {# 行き先はサーバが決める(`recall_path`)。**ほかのラインの直は控えから入れて開く**
+               (ロットを探すと同じ。手元のほうが新しいページはそのまま) #}
             <button class="btn btn--sm" type="button" data-recall
                     data-date="{{ r.report_date }}" data-line="{{ r.line }}"
                     data-shift="{{ r.shift }}" data-page="{{ r.pages[0] }}"
-                    {% if not can %}disabled title="他の日・他の直を開くには管理者モードが要ります"{% endif %}
+                    data-recall-path="{{ r.recall_path }}"
+                    {% if not can %}disabled title="他の日・他の直を開くには管理者モードが要ります"{% elif "/backup/" in r.recall_path %}data-hint="ほかのラインの直です。控えからこのPCへ入れて、日報入力に開きます(このPCのほうが新しいページはそのまま)"{% endif %}
                     >{% if r.own %}ページを直す{% else %}呼び出す{% endif %}</button>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="empty">まだ保存データがありません。</td></tr>
+        <tr><td colspan="8" class="empty">{% if saved_line.shown %}{{ saved_line.line | line_label }} の{% else %}まだ{% endif %}保存データがありません。</td></tr>
         {% endfor %}
       </tbody>
     </table>

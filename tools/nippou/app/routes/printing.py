@@ -23,6 +23,23 @@
 (ほかのラインの PC が送った直・VBA の直)。紙と下見は、手元 → 控え(読めるときだけ)
 → 共有の日報データ の順に探して出します。共有は読むだけです。
 
+【保存した直はラインを選んで見る(v4.35.3)】
+
+    記録を見る:保存した直:Administrator であれば全ラインが見れるが全ライン表示している見づらい。
+    ほかのPCの日報のようにライン選択させてください
+
+「保存した直」は手元の作業用DBの直を並べます。管理者の PC は控えから入れた直・取り込んだ
+直で**ほかのラインのページも持っている**ので、全部が1つの一覧に混ざっていました。
+Administrator(アクセス権限の表)と管理者モードの PC には「ほかのPCの日報」と同じ形の
+ラインの欄を出し、**選んだラインの直だけ**を出します(混ぜない・「全ライン」は無い ──
+ほかのPCの日報の欄に無いので)。既定はこの端末のライン、選んだラインは `?line=` で受けて
+サーバが覚えます(`WorkContext.records_line`。画面を移って戻っても選び直させない)。
+ほかの PC には欄を出さず、この端末のラインの直だけです(名指しされても)。
+
+ラインで絞るのは `_page_rows` の1か所だけ(未送信も済も、20直の数え方もそこから)。
+ほかのラインの行の「呼び出す」は、ロットを探すと同じく**控えから入れて開きます**
+(`/api/records/backup/open`。手元のほうが新しいページはそのまま)。
+
 【手元に無ければ控えを見る(v4.12.0)】
 下見と紙は、手元に無い直なら控え(`services/local_backup`)から出します。
 見られる控えは**この端末のライン**のぶん。アクセス権限の表で Administrator の
@@ -102,8 +119,8 @@ def _aggregate_of(report_date: str, line: str, shift: str) -> dict:
 ALL_PAGES = "all"
 
 
-def _page_rows() -> list[dict]:
-    """一覧のもとになるページ1行ずつ。**未送信を先に、そのあと新しい順。**
+def _page_rows(line: str) -> list[dict]:
+    """一覧のもとになる**そのラインの**ページ1行ずつ。**未送信を先に、そのあと新しい順。**
 
         2026年9月15日 L-1 1直 1ページ 1行目 … 梱包数 20 が検入枚数 15 を
         超えています
@@ -116,18 +133,21 @@ def _page_rows() -> list[dict]:
 
     未送信は別に引いて先に置きます。**数は知れています**(片付ければ
     消えるものなので)。
+
+    **ラインで絞るのはここだけ**(v4.35.3)。済の200件もそのラインの中で数えるので、
+    ほかのラインの保存が多くても、選んだラインの直が溢れません。
     """
     repo = get_repo()
     unsent = sorted(
         ({"report_date": h.report_date, "line": h.line, "shift": h.shift,
           "page": int(h.page), "saved_at": h.saved_at, "synced": False}
-         for h in repo.pending_sync_headers()),
+         for h in repo.pending_sync_headers() if h.line == line),
         key=lambda r: str(r["saved_at"] or ""), reverse=True)
-    return unsent + list(repo.saved_keys())
+    return unsent + list(repo.saved_keys(line))
 
 
-def _recent_shifts(limit: int = 20) -> list[dict]:
-    """保存された直を、**ページではなく直の単位で**並べる。
+def _recent_shifts(line: str, limit: int = 20) -> list[dict]:
+    """そのラインの保存された直を、**ページではなく直の単位で**並べる。
 
     `saved_keys` はページごとに1行返すので、3ページある直は3行に見えます。
     見る人・呼び出す人が選びたいのは直なので、ここでまとめてページの一覧を
@@ -137,8 +157,10 @@ def _recent_shifts(limit: int = 20) -> list[dict]:
     そして `limit` で切るのは「済」のほうだけ:**未送信は古くても必ず
     出します**(直せと言われたものが一覧に無いと、直しようがない)。
 
-    **ラインで絞りません。** 「いまのライン以外は出てこない」と、他の
-    設備の記録を見たい人が行き止まりになります。
+    **1度に1ライン**(v4.35.3)。前は絞らずに全ラインを混ぜていましたが、管理者の
+    PC では見づらい一覧になりました。ほかのラインは、Administrator・管理者モードなら
+    ラインの欄で選んで出します(`_saved_line_view`)。ほかの PC はこの端末のラインだけ
+    ── ほかの設備の記録を見るのは「ロットを探す」(ラインを選べる・見るだけ)です。
 
     `synced` は**その直の全ページが共有へ渡ったか**。1ページでも残っていれば
     「未」です ── 「済」と出ているのに一部だけ送られていない、が
@@ -146,7 +168,7 @@ def _recent_shifts(limit: int = 20) -> list[dict]:
     """
     found: dict[tuple[str, str, str], dict] = {}
     sent_shifts = 0
-    for row in _page_rows():
+    for row in _page_rows(line):
         key = (row["report_date"], row["line"], row["shift"])
         got = found.get(key)
         if got is None:
@@ -313,7 +335,9 @@ def index():
     # どの行も押せますが、**昨日の直を「ページを直す」とは呼びません**
     now_shift, now_date = service.current_shift_info(
         datetime.now(), ctx.force_day_shift())
-    recent = _recent_shifts()
+    # どのラインの直を出すか(v4.35.3)。欄は Administrator・管理者モードだけ
+    saved_line = _saved_line_view(ctx, request.args.get("line"))
+    recent = _recent_shifts(saved_line["line"])
     # **後から作った直には印**(v4.0.0「後日作ったことがわかる」)
     from nippou.logic import backfill as backfill_rule
     try:
@@ -329,6 +353,10 @@ def index():
                   for key, info in sorted(made_later.items())
                   if key[:3] == (row["report_date"], row["line"], row["shift"])]
         row["backfill"] = " / ".join(stamps)
+        # 「呼び出す」の行き先。**この端末のラインは手元から、ほかのラインは控えから
+        # 入れて開く**(ロットを探すと同じ決まり。`presenters/lot_search`)
+        row["recall_path"] = (lot_search.RECALL_LOCAL if row["line"] == ctx.terminal_line
+                              else lot_search.RECALL_BACKUP)
     _mark_problems(recent, admin=ctx.admin)
 
     return render_template(
@@ -357,6 +385,8 @@ def index():
         # 直近に保存されたものを選びやすくする(「どれを見るか」を
         # 思い出す作業を無くす)。**直の単位で**、ページは添え物
         recent=recent,
+        # 「保存した直」のラインの欄(v4.35.3。Administrator・管理者モードだけ)
+        saved_line=saved_line,
         **shell.shell_context("records", ribbon=_ribbon(ctx, calc)))
 
 
@@ -577,6 +607,53 @@ def _backup_view(ctx) -> dict:
     return {"shown": True, "lines": lines, "line": first, "reachable": reachable,
             "root": str(local_backup.root()),
             "administrator": access_rights.is_administrator()}
+
+
+def _saved_line_view(ctx, asked: object) -> dict:
+    """「保存した直」の**ラインの欄**(v4.35.3)。出すラインもここで決める。
+
+        記録を見る:保存した直:Administrator であれば全ラインが見れるが全ライン表示している見づらい。
+        ほかのPCの日報のようにライン選択させてください
+
+    欄を出すのは「ほかのPCの日報」と同じく **Administrator・管理者モード**(`ctx.editor`)。
+    ほかの PC は欄を出さず、何を名指しされても**この端末のライン**です。
+
+    選べるのは**手元に保存のあるライン**とこの端末のライン(ラインの並びで)。「全ライン」は
+    ありません(ほかのPCの日報の欄に無いので。混ぜない)。名指しが無い・選べないラインなら、
+    前に選んだライン(`ctx.records_line`)、それも無ければこの端末のライン。
+
+    **共有へ未送信の直があるラインは、名前に数を添えます。** 一覧は1ラインずつになったので、
+    ほかのラインの未送信は欄を開かないと見えません ── 「未送信は古くても必ず出す」を、
+    欄の字で守ります(`unsent`)。
+    """
+    own = ctx.terminal_line
+    if not ctx.editor:
+        return {"shown": False, "line": own, "own": own, "lines": [], "unsent": []}
+    repo = get_repo()
+    try:
+        have = set(repo.saved_lines())
+        pending: dict[str, set] = {}
+        for h in repo.pending_sync_headers():
+            pending.setdefault(h.line, set()).add((h.report_date, h.shift))
+    except Exception:                             # noqa: BLE001 - この端末のラインだけ
+        log.exception("保存のあるラインを読めませんでした")
+        have, pending = set(), {}
+    have.add(own)
+    lines = [ln for ln in _line_codes() if ln in have]
+    lines += sorted(have - set(lines))            # 定義の表から外れたライン(そのまま出す)
+    text = str(asked or "").strip()
+    if text in lines:
+        ctx.records_line = text                   # 選んだラインを覚える
+    line = ctx.records_line if ctx.records_line in lines else own
+    return {
+        "shown": True, "line": line, "own": own,
+        "lines": [{"code": ln, "label": _line_label(ln)
+                   + (f"(未送信 {len(pending[ln])}直)" if pending.get(ln) else "")}
+                  for ln in lines],
+        # ほかのラインの未送信(いま出していないラインだけ。「ラインを選ぶと出ます」に使う)
+        "unsent": [f"{_line_label(ln)} {len(pending[ln])}直"
+                   for ln in lines if ln != line and pending.get(ln)],
+    }
 
 
 @bp.get("/api/records/backup")

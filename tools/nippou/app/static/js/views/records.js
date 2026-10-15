@@ -16,10 +16,15 @@
 
   判断はどちらもサーバが持ちます ── 呼び出してよいか(管理者モードか)も、
   その直に何ページあるかも、ここでは決めません。
+
+  「保存した直」のライン(v4.35.3、Administrator・管理者モードだけに欄が出る)も
+  サーバが決めます。選び直したら `/records?line=…` を取り直すだけ(一覧の中身・赤い行・
+  後日作成の印・呼び出すの行き先は、選んだラインでサーバが描き直す)。
 */
 import { api, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
+import { go } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 
 let loaded = null;
@@ -237,8 +242,10 @@ export function start() {
       // ボタンが持っているページ(=その1ページ)をそのまま使う
       const picker = btn.closest("td")?.querySelector("[data-recall-page]");
       const page = Number(picker?.value || btn.dataset.page) || 1;
+      // 行き先はサーバが決めた行ごとの道(ほかのラインは控えから入れて開く)
+      const path = btn.dataset.recallPath || "/api/settings/recall";
       try {
-        const body = await api.post("/api/settings/recall", {
+        const body = await api.post(path, {
           report_date: btn.dataset.date, line: btn.dataset.line,
           shift: btn.dataset.shift, page,
         });
@@ -248,6 +255,7 @@ export function start() {
     });
   }
 
+  wireSavedLine();
   wireBackup();
   wireLotSearch();
 
@@ -259,6 +267,29 @@ export function start() {
       location.href = body.next || "/";
     } catch (err) { recallNote(err.message, "error"); }
   });
+}
+
+/* ================================================================
+   保存した直のライン(v4.35.3)── Administrator・管理者モードだけに出る欄
+
+       記録を見る:保存した直:Administrator であれば全ラインが見れるが
+       全ライン表示している見づらい。ほかのPCの日報のようにライン選択させてください
+
+   「ほかのPCの日報」の欄と同じ動き(選び直す・「表示」を押す)で、選んだラインの
+   一覧をサーバから取り直します。選んだラインはサーバが覚えるので、画面を移って
+   戻っても(`?line=` の無い `/records` でも)そのラインのまま出ます。
+   ================================================================ */
+function wireSavedLine() {
+  const select = document.getElementById("saved-line");
+  if (!select) return;
+  const show = async () => {
+    await go(`/records?line=${encodeURIComponent(select.value)}`);
+    // 差し替えると頭へ戻るので、選び直した欄のところへ戻す(押した場所を見失わせない)
+    document.getElementById("saved-card")?.scrollIntoView({ block: "start" });
+    document.getElementById("saved-line")?.focus({ preventScroll: true });
+  };
+  select.addEventListener("change", show);
+  document.getElementById("saved-reload")?.addEventListener("click", show);
 }
 
 /* ================================================================
