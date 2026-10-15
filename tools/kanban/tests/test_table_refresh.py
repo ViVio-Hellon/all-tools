@@ -16,10 +16,36 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from kanban import access_control
 from kanban import table_refresh as tr
 from kanban.db.shared import SharedDb
 
 KANBAN_COLS = ("管理番号", "資材", "サイズ", "欲", "不", "更新日", "発送", "倉庫確認日時", "常設品", "保留", "注文中日時")
+
+
+#: Access のファイルの頭。**読み方は拡張子ではなく中身で決める**(``table_refresh.sniff``)ので、
+#: 偽の Access もこの頭で始める
+ACCESS_HEAD = b"\x00\x01\x00\x00Standard ACE DB\x00" + b"\x00" * 64
+
+
+def fake_access(tables):
+    """偽の Access 読み取り(内蔵リーダー ``kanban.accdb.reader.AccdbReader`` の差し替え)。
+
+    ``tables`` は ``{表: (列, 行)}`` か ``{表: (列, 行, 定義の行数)}``。定義の行数を省くと読めた行数。
+    """
+    by_name = {}
+    for name, spec in tables.items():
+        columns, rows = spec[0], spec[1]
+        table = mock.Mock()
+        table.column_names.return_value = list(columns)
+        table.rows = [dict(r) for r in rows]
+        by_name[name] = (table, spec[2] if len(spec) > 2 else len(rows))
+    reader = mock.MagicMock()
+    db = reader.__enter__.return_value
+    db.table_names.return_value = list(by_name)
+    db.read_table.side_effect = lambda name: by_name[name][0]
+    db.defined_rows.side_effect = lambda name: by_name[name][1]
+    return mock.patch("kanban.accdb.reader.AccdbReader", return_value=reader)
 
 
 def make_kanban(conn, name, rows, extra=()):
@@ -260,15 +286,10 @@ class AccessSourceTest(Fixture):
 
     def test_access_values_are_written_like_the_migration(self):
         accdb = self.dir / "看板マスタ.accdb"
-        accdb.write_bytes(b"not really access")
-        table = mock.Mock()
-        table.column_names.return_value = ["管理番号", "資材", "サイズ", "更新日"]
-        table.rows = [{"管理番号": 3, "資材": "アングル", "サイズ": "C3",
-                       "更新日": dt.datetime(2026, 9, 1, 8, 5, 0)}]
-        reader = mock.MagicMock()
-        reader.__enter__.return_value.table_names.return_value = ["看板_LVC"]
-        reader.__enter__.return_value.read_table.return_value = table
-        with mock.patch("kanban.accdb.reader.AccdbReader", return_value=reader):
+        accdb.write_bytes(ACCESS_HEAD)
+        with fake_access({"看板_LVC": (["管理番号", "資材", "サイズ", "更新日"], [
+                {"管理番号": 3, "資材": "アングル", "サイズ": "C3",
+                 "更新日": dt.datetime(2026, 9, 1, 8, 5, 0)}])}):
             plan = tr.plan(str(accdb), self.shared)
             self.assertTrue(plan.candidates[0].can_refresh, plan.message)
             source = tr.read_source(accdb)
@@ -277,15 +298,10 @@ class AccessSourceTest(Fixture):
     def test_access_internal_tables_are_not_counted(self):
         """添付ファイルの表(f_…_Data)は Access が自分のために持つ表。「Access にだけある表」に数えない。"""
         accdb = self.dir / "看板マスタ.accdb"
-        accdb.write_bytes(b"not really access")
-        table = mock.Mock()
-        table.column_names.return_value = ["管理番号", "資材"]
-        table.rows = [{"管理番号": 3, "資材": "アングル"}]
-        reader = mock.MagicMock()
-        reader.__enter__.return_value.table_names.return_value = [
-            "f_54475901977C489E9CC61748E5CDB271_Data", "看板_LVC"]
-        reader.__enter__.return_value.read_table.return_value = table
-        with mock.patch("kanban.accdb.reader.AccdbReader", return_value=reader):
+        accdb.write_bytes(ACCESS_HEAD)
+        row = {"管理番号": 3, "資材": "アングル"}
+        with fake_access({"f_54475901977C489E9CC61748E5CDB271_Data": (["管理番号", "資材"], [row]),
+                          "看板_LVC": (["管理番号", "資材"], [row])}):
             plan = tr.plan(str(accdb), self.shared)
         self.assertEqual(plan.only_in_source, [])
         self.assertEqual(plan.source_facts.tables, 1)
@@ -366,6 +382,256 @@ class NoDuplicatesTest(Fixture):
         table.rows.append(dict(table.rows[0], 管理番号="１"))
         self.assertIn("重なっています", tr.refresh_why("看板_LVC", table, list(KANBAN_COLS), 0))
 
+
+class AccessToSqliteTest(Fixture):
+    """**偽の Access 読み取りから共有DB(sqlite3)へ、通しで入れ替える。**
+
+    python-web-tools(``table_bring.refresh``)と項目ごとに突き合わせたもの: 列・件数・型が
+    合う / 同じファイルに同居する表(アクセス権限・タブ表示権限・看板履歴・看板コメント)と
+    索引が残る / 途中で失敗したら元のまま / 2 回やっても同じ / ほかの PC が開いているとき。
+    """
+
+    ACCESS_COLS = KANBAN_COLS + ("備考",)
+
+    def setUp(self) -> None:
+        super().setUp()
+        c = sqlite3.connect(str(self.shared_path))
+        # 同じファイルに同居することがある表(梱包資材マスタと看板マスタを 1 つにした PC)
+        c.execute(access_control.DDL)
+        c.executemany('INSERT INTO "アクセス権限" ("ログインID", "PC名", "権限") VALUES (?, ?, ?)',
+                      [("yamada", "PC-01", "mode:material"), ("suzuki", "", "mode:field LVC")])
+        c.execute("CREATE TABLE [タブ表示権限] ([ログインID] TEXT, [PC名] TEXT, [表示タブ] TEXT)")
+        c.execute("INSERT INTO [タブ表示権限] VALUES ('yamada', 'PC-01', 'kanban,nippou')")
+        c.execute("CREATE INDEX [idx_タブ表示権限] ON [タブ表示権限] ([ログインID])")
+        c.commit()
+        c.close()
+        self.accdb = self.dir / "看板マスタ.accdb"
+        self.accdb.write_bytes(ACCESS_HEAD)
+        # Access(内蔵リーダーが返す形): 管理番号は Double、日時は datetime、Single は短い 10 進
+        self.access_rows = [
+            self.kanban_row(1.0, "外装紙X", "A", 不="〇"),
+            self.kanban_row(3.0, "アングル", "C2", 不="〇"),
+            self.kanban_row(5.0, "テープ", "幅50", 欲="〇", 更新日=dt.datetime(2026, 10, 1, 8, 0, 0)),
+        ]
+        self.tables = {
+            "看板_LVC": (list(self.ACCESS_COLS), self.access_rows),
+            "資材一覧": (["名前", "単位"], [{"名前": "外装紙", "単位": "本"}, {"名前": "テープ", "単位": "巻"}]),
+            # Access にも同じ名前の表がある(古い中身)。入れ替えると、ここで足した行が消える
+            "アクセス権限": (["管理番号", "ログインID", "PC名", "権限"], [
+                {"管理番号": 1, "ログインID": "old", "PC名": "", "権限": "mode:field"}]),
+            "タブ表示権限": (["ログインID", "PC名", "表示タブ"], []),
+            "看板履歴": (["ID", "出来事"], []),
+        }
+
+    def kanban_row(self, key, material, size, **state):
+        row = dict.fromkeys(self.ACCESS_COLS, "")
+        row.update({"管理番号": key, "資材": material, "サイズ": size, "常設品": "〇"}, **state)
+        return row
+
+    def refresh(self, tables, shared=None):
+        with fake_access(self.tables):
+            return tr.refresh(str(self.accdb), shared or self.shared, tables, self.backup)
+
+    def plan(self):
+        with fake_access(self.tables):
+            return tr.plan(str(self.accdb), self.shared)
+
+    def snapshot(self):
+        """共有DBのすべて(表・索引・トリガーの定義と、全部の表の中身)。"""
+        c = sqlite3.connect(str(self.shared_path))
+        try:
+            master = c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+            data = {n: c.execute(f"SELECT * FROM [{n}] ORDER BY rowid").fetchall()
+                    for t, n, _s in master if t == "table"}
+        finally:
+            c.close()
+        return master, data
+
+    # -- 列・件数・型 ------------------------------------------------------
+    def test_列と件数が合い_値は移行の変換と同じ書き方(self):
+        c = sqlite3.connect(str(self.shared_path))
+        before_cols = list(c.execute("PRAGMA table_info([看板_LVC])"))
+        c.close()
+        result = self.refresh(["看板_LVC", "資材一覧"])
+        self.assertTrue(result.ok, result.message)
+        # 件数: Access の 3 枚 + Access に無いが発注中の 2 = 4。資材一覧は Access の 2 行
+        self.assertEqual(result.refreshed, [("看板_LVC", 4, 4), ("資材一覧", 1, 2)])
+        self.assertIn("ファイルを開き直して確かめました: 看板_LVC 4 行、資材一覧 2 行(中身も入れ替えたとおり)",
+                      result.verified)
+        c = sqlite3.connect(str(self.shared_path))
+        after_cols = list(c.execute("PRAGMA table_info([看板_LVC])"))
+        c.close()
+        self.assertEqual(after_cols, before_cols, "表の定義(列・型)を変えた")
+        rows = {r["管理番号"]: r for r in self.rows("看板_LVC")}
+        self.assertEqual(sorted(rows), [1, 2, 3, 5], "管理番号を 1.0 の書き方で入れた・看板を落とした")
+        self.assertEqual((rows[1]["資材"], rows[1]["欲"], rows[1]["発送"]), ("外装紙X", "〇", "〇"),
+                         "資材は Access、状態はいまのまま、になっていない")
+        self.assertEqual(rows[5]["更新日"], "2026/10/01 08:00:00", "日時の書き方が移行の変換と違う")
+        self.assertEqual(rows[5]["不"], "")
+        self.assertEqual(self.rows("資材一覧"), [{"名前": "外装紙", "単位": "本"}, {"名前": "テープ", "単位": "巻"}])
+
+    def test_読めた行数がAccessの定義と違う表は入れ替えない(self):
+        """内蔵リーダーが行を読み落とすと、その看板を「Access で消した」と取り違えて消してしまう。"""
+        self.tables["看板_LVC"] = (list(self.ACCESS_COLS), self.access_rows, 4)
+        lvc = next(c for c in self.plan().candidates if c.name == "看板_LVC")
+        self.assertFalse(lvc.can_refresh)
+        self.assertIn("定義では 4行 ですが、読めたのは 3行", lvc.refresh_why)
+        before = self.snapshot()
+        result = self.refresh(["看板_LVC"])
+        self.assertFalse(result.ok)
+        self.assertIn("何も変えていません", result.message)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_読み方は名前ではなく中身で決める(self):
+        """名前が .accdb でも中身が sqlite3 ならそのまま読む。空のファイルは理由を言って断る。"""
+        renamed = self.dir / "変換済み.accdb"
+        shutil.copyfile(self.src, renamed)
+        plan = tr.plan(str(renamed), self.shared)
+        self.assertTrue(plan.ok, plan.message)
+        self.assertIn("看板_LVC", [c.name for c in plan.candidates])
+        self.assertFalse(tr.plan_dict(plan)["access"], "中身は sqlite3 なのに Access と出した")
+        empty = self.dir / "書きかけ.accdb"
+        empty.write_bytes(b"")
+        self.assertIn("は空です", tr.plan(str(empty), self.shared).message)
+        blank = self.dir / "書きかけ.sqlite3"           # sqlite3 としては開けて「表 0 個」になる
+        blank.write_bytes(b"")
+        self.assertIn("は空です", tr.plan(str(blank), self.shared).message)
+        book = self.dir / "名前だけ.accdb"
+        book.write_bytes(b"PK\x03\x04" + b"\x00" * 60)
+        self.assertIn("zip の形", tr.plan(str(book), self.shared).message)
+
+    # -- 同居する表 --------------------------------------------------------
+    def test_同居する表は残り_Accessの中身では入れ替えない(self):
+        by = {c.name: c for c in self.plan().candidates}
+        self.assertIn("マスタ管理で直す表", by["アクセス権限"].refresh_why)
+        self.assertIn("大設定で直す表", by["タブ表示権限"].refresh_why)
+        self.assertIn("このツールが書き込む表", by["看板履歴"].refresh_why)
+        before = self.snapshot()
+        for owned in ("アクセス権限", "タブ表示権限"):
+            result = self.refresh(["看板_LVC", owned])
+            self.assertFalse(result.ok, owned)
+            self.assertIn("何も変えていません", result.message)
+        self.assertEqual(self.snapshot(), before, "断ったのに書き換えた")
+        self.assertFalse(self.backup.exists(), "断ったのに控えを取った")
+
+        self.assertTrue(self.refresh(["看板_LVC", "資材一覧"]).ok)
+        master, data = self.snapshot()
+        for table in ("アクセス権限", "タブ表示権限", "看板履歴", "看板コメント", "Form状態管理"):
+            self.assertEqual(data[table], before[1][table], f"{table} の中身が変わった")
+        indexes = {n for t, n, _s in master if t == "index"}
+        self.assertTrue({"idx_看板履歴_ID", "idx_タブ表示権限"} <= indexes, "同居する表の索引が消えた")
+        self.assertEqual([r for r in master if r[0] == "table"], [r for r in before[0] if r[0] == "table"],
+                         "表の定義が変わった")
+
+    # -- 途中で失敗したとき ------------------------------------------------
+    def test_途中で失敗したら元のまま_ほかの表は入れ替わる(self):
+        c = sqlite3.connect(str(self.shared_path))
+        # 3 枚目(テープ)を入れるところで落ちる。そこまでに 消す・2 枚入れる は済んでいる
+        c.execute("CREATE TRIGGER [落とす] BEFORE INSERT ON [看板_LVC] WHEN NEW.[管理番号] = 5"
+                  " BEGIN SELECT RAISE(ABORT, '途中で失敗しました'); END")
+        c.commit()
+        c.close()
+        _master, before = self.snapshot()
+        result = self.refresh(["看板_LVC", "資材一覧"])
+        self.assertFalse(result.ok)
+        self.assertIn("看板_LVC(途中で失敗しました)", result.message)
+        self.assertIn("元のまま", result.message)
+        _master, after = self.snapshot()
+        self.assertEqual(after["看板_LVC"], before["看板_LVC"], "途中まで消えた・入った")
+        self.assertEqual(len(after["資材一覧"]), 2, "ほかの表まで止まった")
+        self.assertTrue(Path(result.backup).is_file(), "戻すための控えが無い")
+
+    def test_書いた中身が合わなければ確定せずに戻す(self):
+        """python-web-tools の ``_verify_in``。確定する前に読み直し、入れるつもりの中身と照らし合わせる。"""
+        c = sqlite3.connect(str(self.shared_path))
+        c.execute("CREATE TRIGGER [書き換える] AFTER INSERT ON [看板_LVC] WHEN NEW.[管理番号] = 3"
+                  " BEGIN UPDATE [看板_LVC] SET [サイズ] = '別の値' WHERE rowid = NEW.rowid; END")
+        c.commit()
+        c.close()
+        before = self.snapshot()
+        result = self.refresh(["看板_LVC"])
+        self.assertFalse(result.ok)
+        self.assertIn("書く前に戻しました", result.message)
+        self.assertIn("書いた表に無い行 1行", result.message)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_確定したあと開き直して合わなければ失敗として言う(self):
+        """共有フォルダのロックが効かず、ほかの PC が同時に書いた、を見逃さない。"""
+        real = tr._refresh_one
+
+        def and_then_someone_writes(shared, src):
+            out = real(shared, src)
+            c = sqlite3.connect(str(self.shared_path))
+            c.execute("UPDATE [資材一覧] SET [単位] = '箱' WHERE [名前] = 'テープ'")
+            c.commit()
+            c.close()
+            return out
+
+        with mock.patch.object(tr, "_refresh_one", and_then_someone_writes):
+            result = self.refresh(["資材一覧"])
+        self.assertFalse(result.ok)
+        self.assertIn("書いたあと開き直すと入れ替えた中身と合いません", result.message)
+        self.assertIn("ほかの PC が同時に書いた可能性", result.message)
+        self.assertEqual(result.refreshed, [("資材一覧", 1, 2)])
+
+    # -- 2 回やっても同じ --------------------------------------------------
+    def test_2回やっても同じ(self):
+        self.assertTrue(self.refresh(["看板_LVC", "資材一覧"]).ok)
+        once = self.snapshot()
+        tr._cache.clear()
+        again = self.refresh(["看板_LVC", "資材一覧"])
+        self.assertTrue(again.ok, again.message)
+        self.assertEqual(again.refreshed, [("看板_LVC", 4, 4), ("資材一覧", 2, 2)])
+        self.assertEqual(self.snapshot(), once, "2 回目で中身が変わった・行が増えた")
+        lvc = next(c for c in self.plan().candidates if c.name == "看板_LVC")
+        self.assertEqual(lvc.preview, "看板: 変わる 0・足す 0・消す 0・残す(Access に無いが発注中など) 1 枚")
+
+    # -- ほかの PC が開いているとき -----------------------------------------
+    def short_wait(self):
+        return SharedDb(str(self.shared_path), busy_timeout_ms=300, cache_dir=str(self.dir / "cache_short"))
+
+    def test_ほかのPCが書いている最中なら待ってから断り_元のまま(self):
+        other = sqlite3.connect(str(self.shared_path), isolation_level=None)
+        self.addCleanup(other.close)
+        other.execute("BEGIN IMMEDIATE")               # ほかの PC が書き戻している最中
+        before = self.snapshot()
+        result = self.refresh(["看板_LVC"], self.short_wait())
+        self.assertFalse(result.ok)
+        self.assertIn("ほかの PC が共有DBに書いている最中で、0.3 秒待っても書けませんでした", result.message)
+        self.assertIn("共有DBは変えていません", result.message)
+        other.execute("ROLLBACK")
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(self.refresh(["看板_LVC"], self.short_wait()).ok, "書き終わったあとも入れ替えられない")
+
+    def test_ほかのPCが読んでいる最中なら確定できずに元のまま(self):
+        other = sqlite3.connect(str(self.shared_path))
+        self.addCleanup(other.close)
+        reading = other.execute("SELECT * FROM [看板_LVC]")
+        reading.fetchone()                              # 読み終わっていない(共有の鍵を持ったまま)
+        before = self.snapshot()
+        result = self.refresh(["看板_LVC"], self.short_wait())
+        self.assertFalse(result.ok)
+        self.assertIn("ほかの PC が共有DBに書いている最中", result.message)
+        reading.close()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_ほかのPCが開いているだけなら入れ替えられ_写しにも届く(self):
+        idle = sqlite3.connect(str(self.shared_path))  # 開いているだけ(読み書きしていない)
+        self.addCleanup(idle.close)
+        other_pc = SharedDb(str(self.shared_path), cache_dir=str(self.dir / "cache_other_pc"))
+        self.assertEqual(self.size_of(other_pc, 3), "C")
+        self.assertEqual(self.size_of(self.shared, 3), "C")
+        result = self.refresh(["看板_LVC"])
+        self.assertTrue(result.ok, result.message)
+        # この端末の写しは「写し直せ」(世代)ですぐ、ほかの PC の写しはファイルが変わったので次に読むとき
+        self.assertEqual(self.size_of(self.shared, 3), "C2", "入れ替えたのに古い写しを読んだ")
+        self.assertEqual(self.size_of(other_pc, 3), "C2", "ほかの PC の写しが古いまま")
+        self.assertEqual(idle.execute("SELECT [サイズ] FROM [看板_LVC] WHERE [管理番号] = 3").fetchone(),
+                         ("C2",))
+
+    @staticmethod
+    def size_of(shared, key):
+        return next(r["サイズ"] for r in shared.read_table("看板_LVC").rows if int(r["管理番号"]) == key)
 
 if __name__ == "__main__":
     unittest.main()

@@ -300,6 +300,11 @@ class AccdbReader:
         """テーブルの列定義を返す。"""
         return list(self._table_def_by_name(name).columns)
 
+    def defined_rows(self, name: str) -> int:
+        """テーブル定義に書かれた行数。**読めた行数と突き合わせる**ために使う
+        (読み落とした・余計に拾ったのに気づかないまま使わない。``tools/dump_accdb.py --check``)。"""
+        return self._table_def_by_name(name).num_rows
+
     def has_table(self, name: str) -> bool:
         return name in self._load_catalog()
 

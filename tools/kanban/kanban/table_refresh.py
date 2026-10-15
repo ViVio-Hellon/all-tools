@@ -12,19 +12,27 @@ Access をまるごと変換して共有DB(看板マスタ.sqlite3)を差し替�
 表の定義(列・索引)とほかの表には触らない。
 
 【守っていること】
-- **このツールが書き込む表は入れ替えない**(看板履歴・看板コメント・Form状態管理)
+- **このツールが書き込む表は入れ替えない**(看板履歴・看板コメント・Form状態管理)。
+  **同じファイルに同居することがある表も入れ替えない**(アクセス権限・タブ表示権限。
+  python-web-tools と同じく、マスタ管理・大設定で直す表。Access の古い中身で消さない)
 - 表の定義はそのまま。**同じ名前の列だけ**を写す。Access にしか無い列は写さない(画面に出す)
 - **看板の表(看板_<ライン>)は、状態の列をいまの値のまま残す。** 状態(欲・不・更新日・
   発送・倉庫確認日時・保留・注文中日時)は各端末が共有DBへ書いていて、Access には
   届いていない。管理番号で突き合わせ、資材・サイズなどは Access の最新に、状態は
   いまのままにする。Access に無い看板のうち、発注中・発送済み・注文中のものは消さずに残す
 - 文字化けの疑いがある表(置き換え文字 U+FFFD を含む行がある)は入れ替えない
-- 1 つの表は **消す+入れる を 1 回で確定**する。途中で落ちたら元のまま
+- **読めた行数が Access の表の定義の行数と違う表は入れ替えない**(読み落とした看板を
+  「Access で消した」と取り違えて消さない)
+- 1 つの表は **消す+入れる を 1 回で確定**する。途中で落ちたら元のまま。**確定する前に
+  書いた中身を読み直して照らし合わせ**、合わなければ書く前に戻す。確定したあとも
+  ファイルを開き直して照らし合わせる(python-web-tools の ``_verify_in`` / ``_compare``)
 - 書く前に共有DBを、この端末の ``backup`` フォルダへ写しておく
 
 【Access のままでも選べる】
-.accdb / .mdb は、移行の変換(``tools/accdb_to_sqlite.py``)と同じ内蔵リーダー
-(:mod:`kanban.accdb.reader`)で読み、値も同じ書き方にそろえる
+**拡張子ではなく中身で読み方を決める**(:func:`sniff`。名前は .accdb でも中身が sqlite3 なら
+そのまま読む。空・書きかけのファイルは理由を言って断る)。Access は、移行の変換
+(``tools/accdb_to_sqlite.py``)と同じ内蔵リーダー(:mod:`kanban.accdb.reader`)で読み、
+値も同じ書き方にそろえる
 (:func:`kanban.accdb.reader.to_sqlite_value`)。変換済みの .sqlite3 も選べる。
 """
 
@@ -33,6 +41,7 @@ from __future__ import annotations
 import re
 import shutil
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -40,7 +49,7 @@ from typing import Any, Iterable, Sequence
 
 from . import applog, config, keys
 from .domain import state
-from .db.shared import SharedDb, SharedDbError
+from .db.shared import SharedDb, SharedDbError, _looks_like_lock
 
 ACCESS_SUFFIXES = (".accdb", ".mdb")
 SQLITE_SUFFIXES = (".sqlite3", ".sqlite", ".db")
@@ -70,14 +79,25 @@ KEEPS_KANBAN = (
 
 
 def _tool_owned() -> dict[str, str]:
-    """**このツールが書き込む表。** Access の中身では入れ替えない。"""
+    """**このツールが書き込む表**と、**ほかの画面で直す表**。Access の中身では入れ替えない。"""
+    from . import access_control
     from .db import sync
 
     return {
         sync.HISTORY_TABLE: "このツールが書き込む表です(看板集計の記録)",
         sync.COMMENT_TABLE: "このツールが書き込む表です(倉庫 ⇔ 現場のコメント)",
         config.TABLE_STATE: "このツールが書き込む表です(開いている端末の印)",
+        # **同じファイルに同居することがある表。** 接続先を 1 つのファイルにまとめた PC
+        # (梱包資材マスタと看板マスタを同じ sqlite3 にした)では、看板の表と同じ所にある。
+        # python-web-tools も入れ替えない(``table_bring._tool_owned``)
+        access_control.TABLE: "マスタ管理で直す表です(書き間違えると誰も入れなくなるため)",
+        TAB_RIGHTS_TABLE: "日報複合ツールの大設定で直す表です(どのタブを出すか)",
     }
+
+
+#: 日報複合ツールの入口(大設定)が使う表(``portal/tab_rights.TABLE`` と同じ名前)。
+#: アクセス権限と同じファイルに置かれる
+TAB_RIGHTS_TABLE = "タブ表示権限"
 
 
 #: Access が自分のために持っている表。変換の仕方によっては sqlite3 にも入る
@@ -104,6 +124,8 @@ class SourceTable:
     name: str
     columns: list[str]
     rows: list[dict[str, Any]]
+    #: Access の表の定義に書かれた行数(sqlite3 から読んだときは None)。読めた行数と比べる
+    defined: int | None = None
 
 
 class SourceError(Exception):
@@ -125,10 +147,57 @@ def read_source(path: Path) -> dict[str, SourceTable]:
     hit = _cache.get(str(path))
     if hit and hit[0] == stamp:
         return hit[1]
-    tables = _read_access(path) if is_access(path) else _read_sqlite(path)
+    kind = sniff(path)
+    if kind == KIND_ACCESS:
+        tables = _read_access(path)
+    elif kind == KIND_SQLITE:
+        tables = _read_sqlite(path)
+    else:
+        # 空の .sqlite3 も sqlite3 としては開けてしまい「表 0 個」と出る。読む前に理由を言う
+        raise SourceError(kind)
     _cache.clear()                      # 大きいので 1 つだけ覚える
     _cache[str(path)] = (stamp, tables)
     return tables
+
+
+# ファイルの頭(中身の種類の見分け。python-web-tools の ``table_bring.sniff`` と同じ)
+_JET_MAGIC = b"\x00\x01\x00\x00"
+_JET_NAMES = (b"Standard Jet DB", b"Standard ACE DB")
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+KIND_ACCESS = "access"
+KIND_SQLITE = "sqlite"
+
+
+def sniff(path: Path) -> str:
+    """ファイルの頭を見て中身を言う。``"access"`` / ``"sqlite"`` / それ以外は**読めない理由の文**。
+
+    名前だけ変えたファイル・書きかけ・コピーや同期の途中で空のまま、などを
+    「Access を読めませんでした」の一言で済ませないため、読む前に見る。
+    """
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            head = fh.read(32)
+    except OSError as exc:
+        return f"{path.name} を開けませんでした({exc})。"
+    if head[:4] == _JET_MAGIC and head[4:19] in _JET_NAMES:
+        return KIND_ACCESS
+    if head.startswith(_SQLITE_MAGIC):
+        return KIND_SQLITE
+    where = f"{path.name}({size:,} バイト)"
+    if size == 0:
+        return (f"{where} は空です。書きかけか、コピー・同期に失敗したファイルです。"
+                "元の Access のファイルを選び直してください。")
+    if not head.strip(b"\x00"):
+        return (f"{where} は頭が 0 ばかりで、Access のファイルとして読めません。"
+                "壊れているか、コピー・同期の途中です。元の Access のファイルを選び直してください。")
+    if head.startswith(b"PK\x03\x04"):
+        return f"{where} の中身は Access ではなく zip の形(Excel の .xlsx など)です。"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return f"{where} の中身は Access ではなく、Office の別の形(Excel の .xls など)です。"
+    return (f"{where} の中身は Access のファイルではないようです"
+            f"(頭の16バイト: {head[:16].hex(' ')})。名前だけ .accdb / .mdb に変えたファイルかもしれません。")
 
 
 def _read_access(path: Path) -> dict[str, SourceTable]:
@@ -143,7 +212,7 @@ def _read_access(path: Path) -> dict[str, SourceTable]:
                 table = db.read_table(name)
                 columns = table.column_names()
                 rows = [{c: reader.to_sqlite_value(r.get(c)) for c in columns} for r in table.rows]
-                out[name] = SourceTable(name, columns, rows)
+                out[name] = SourceTable(name, columns, rows, defined=db.defined_rows(name))
         return out
     except Exception as exc:  # noqa: BLE001 - リーダーの失敗は理由を画面に出す
         raise SourceError(f"Access を読めませんでした: {exc}") from exc
@@ -249,6 +318,10 @@ def refresh_why(name: str, src: SourceTable, dest_columns: Sequence[str], suspec
         return owned + "。Access の中身では入れ替えません"
     if suspect:
         return f"文字化けの疑いがある行が {suspect}行 あります。Access の中身と見比べてください"
+    if src.defined is not None and src.defined != len(src.rows):
+        # 読み落とした看板を「Access で消した」と取り違えて消さない(VER3.3.0 で直した読み落としの番)
+        return (f"Access の表の定義では {src.defined:,}行 ですが、読めたのは {len(src.rows):,}行 です。"
+                "Access で「データベースの最適化/修復」をしてから選び直してください")
     if not [c for c in src.columns if c in dest_columns]:
         return "共有DBの表と、同じ名前の列が 1 つもありません"
     if is_kanban_table(name):
@@ -521,11 +594,12 @@ def refresh(source_path: str, shared: SharedDb | None, tables: Iterable[str],
     done: list[tuple[str, int, int]] = []
     notes: list[str] = []
     failed: list[str] = []
+    expected: dict[str, _Expect] = {}
     for name in wanted:
         try:
-            before, after, note = _refresh_one(shared, source[name])
+            before, after, note, expected[name] = _refresh_one(shared, source[name])
         except (sqlite3.Error, SharedDbError) as exc:
-            failed.append(f"{name}({exc})")
+            failed.append(f"{name}({_failed_text(shared, exc)})")
             applog.warning("表の中身を入れ替えられませんでした: %s: %s", name, exc)
             continue
         done.append((name, before, after))
@@ -540,40 +614,142 @@ def refresh(source_path: str, shared: SharedDb | None, tables: Iterable[str],
                + "、".join(f"{t}({b:,}行 → {a:,}行)" for t, b, a in done) + "。")
     if failed:
         message += " ただし次は入れ替えられませんでした(元のまま): " + "、".join(failed)
-    written_at, verified = _verify_written(Path(shared.path), done)
-    return RefreshResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
+    written_at, verified, unmatched = _verify_written(Path(shared.path), done, expected)
+    if unmatched:
+        # 確定したあと開き直すと合わない。共有フォルダでほかの PC が同時に書くと混ざることがある
+        # (ファイルのロックが効いていない共有フォルダ)。python-web-tools と同じく失敗として返す
+        message += (" ✕ 書いたあと開き直すと入れ替えた中身と合いません: " + "、".join(unmatched)
+                    + "。ほかの PC が同時に書いた可能性があります。もう一度入れ替えてください"
+                    f"(書く前の控え: {backup})。")
+    bad = bool(failed or unmatched)
+    return RefreshResult(not bad, message, "" if not bad else REFUSE_WRITE_FAILED,
                          refreshed=done, notes=notes, backup=str(backup),
                          written=shared.path, written_at=written_at, verified=verified)
 
 
-def _verify_written(path: Path, done: list[tuple[str, int, int]]) -> tuple[str, str]:
+def _failed_text(shared: SharedDb, exc: Exception) -> str:
+    """入れ替えられなかった理由。**ほかの PC が書いている最中**なら、そう言う。"""
+    if _looks_like_lock(str(exc)):
+        return (f"ほかの PC が共有DBに書いている最中で、{shared.busy_timeout_ms / 1000:g} 秒待っても"
+                "書けませんでした。少し待ってからもう一度入れ替えてください")
+    return str(exc)
+
+
+def _verify_written(path: Path, done: list[tuple[str, int, int]],
+                    expected: dict[str, "_Expect"] | None = None) -> tuple[str, str, list[str]]:
     """書いたあと、**共有DBのファイルを直接開き直して**確かめる(手元の写しは使わない)。
 
     画面の表示は手元の写しから出るので、「表示は変わったがファイルは?」に答えられない。
-    ファイルそのものの更新日時と、入れ替えた表の行数を読み直して返す。
+    ファイルそのものの更新日時と、入れ替えた表の行数・中身を読み直して返す。
+    ``(更新日時, 確かめた結果の一言, 合わなかった表)``。
     """
+    expected = expected or {}
     try:
         written_at = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y/%m/%d %H:%M:%S")
     except OSError:
         written_at = ""
+    unmatched: list[str] = []
     try:
         conn = sqlite3.connect(str(path))
         conn.execute("PRAGMA query_only = ON")
+        conn.row_factory = sqlite3.Row
         try:
             counts = {t: int(conn.execute(f"SELECT COUNT(*) FROM {_q(t)}").fetchone()[0]) for t, _b, _a in done}
+            for t, _b, a in done:
+                expect = expected.get(t)
+                if expect is None or counts.get(t) != a:
+                    continue
+                why = _compare(expect, [dict(r) for r in conn.execute(f"SELECT * FROM {_q(t)}")])
+                if why:
+                    unmatched.append(f"{t}({why})")
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        return written_at, f"ファイルを開き直して確かめられませんでした({exc})"
+        return written_at, f"ファイルを開き直して確かめられませんでした({exc})", []
     wrong = [f"{t}(ファイルでは {counts[t]} 行)" for t, _b, a in done if counts.get(t) != a]
     if wrong:
-        return written_at, "⚠ ファイルの中身が入れ替えた結果と合いません: " + "、".join(wrong)
+        return written_at, "⚠ ファイルの中身が入れ替えた結果と合いません: " + "、".join(wrong), wrong
+    if unmatched:
+        return written_at, "⚠ ファイルの中身が入れ替えた結果と合いません: " + "、".join(unmatched), unmatched
     return written_at, ("ファイルを開き直して確かめました: "
-                        + "、".join(f"{t} {counts[t]:,} 行" for t, _b, _a in done))
+                        + "、".join(f"{t} {counts[t]:,} 行" for t, _b, _a in done)
+                        + "(中身も入れ替えたとおり)"), []
 
 
-def _refresh_one(shared: SharedDb, src: SourceTable) -> tuple[int, int, str]:
-    """1 つの表を入れ替える(1 回で確定)。``(前の行数, 後の行数, 添える一言)``。"""
+# ------------------------------------------------------------------
+# 書いた中身を照らし合わせる(python-web-tools の ``table_bring._Expect`` / ``_compare``)
+# ------------------------------------------------------------------
+@dataclass
+class _Expect:
+    """書いたあとの表にあるはずの行。``columns`` の列だけを比べる。"""
+    table: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+def _check_value(value: Any) -> str:
+    """照らし合わせの値。**数と、数に読める文字はそろえる**(140・140.0・'140' は同じ)。
+
+    列の型(NUMERIC・TEXT)で sqlite3 が書き方を変えるのは、入れ替えの誤りではない
+    (移行の変換で書いたときも同じ)。読み落とし・取り違え・ほかの PC の書き込みを見つけるための比べ方。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    text = str(value)
+    try:
+        return str(int(text.strip()))
+    except ValueError:
+        pass
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    if number != number or number in (float("inf"), float("-inf")):
+        return text
+    return _check_value(number)
+
+
+def _check_rows(rows: list[dict[str, Any]], columns: list[str]) -> Counter:
+    return Counter(tuple(_check_value(r.get(c)) for c in columns) for r in rows)
+
+
+def _row_text(columns: list[str], values: tuple[str, ...]) -> str:
+    """合わない行を画面に出す形。先頭の列を数個。"""
+    return " ".join(f"{c}={v or '(空)'}" for c, v in list(zip(columns, values))[:6])
+
+
+def _compare(expect: _Expect, actual: list[dict[str, Any]]) -> str:
+    """書くつもりの行と、書いた表の行を**数で**突き合わせる。同じなら空、違えば理由。"""
+    want = _check_rows(expect.rows, expect.columns)
+    got = _check_rows(actual, expect.columns)
+    if want == got:
+        return ""
+    parts = [f"書くつもり {sum(want.values()):,}行 / 書いた表 {sum(got.values()):,}行"]
+    lacking, extra = want - got, got - want
+    if lacking:
+        parts.append(f"書いた表に無い行 {sum(lacking.values()):,}行"
+                     f"(例: {_row_text(expect.columns, next(iter(lacking)))})")
+    if extra:
+        parts.append(f"書くつもりの無い行 {sum(extra.values()):,}行"
+                     f"(例: {_row_text(expect.columns, next(iter(extra)))})")
+    return "、".join(parts)
+
+
+def _refresh_one(shared: SharedDb, src: SourceTable) -> tuple[int, int, str, _Expect]:
+    """1 つの表を入れ替える(1 回で確定)。``(前の行数, 後の行数, 添える一言, 照らし合わせ)``。
+
+    **確定する前に、書いた中身を読み直して照らし合わせる。** 合わなければ書く前に戻す
+    (:class:`SharedDbError`)。返す照らし合わせは、確定したあとにファイルを開き直して使う。
+    看板の表の状態の列は比べない(確定したあとは、ほかの PC が看板画面で書いてよい列)。
+    """
     name = src.name
     with shared.transaction() as conn:
         dest_cols = [r[1] for r in conn.execute(f"PRAGMA table_info({_q(name)})")]
@@ -594,7 +770,12 @@ def _refresh_one(shared: SharedDb, src: SourceTable) -> tuple[int, int, str]:
                 [row[c] for c in cols],
             )
         after = int(conn.execute(f"SELECT COUNT(*) FROM {_q(name)}").fetchone()[0])
-    return before, after, note
+        expect = _Expect(name, [c for c in common if c not in STATE_COLUMNS] if is_kanban_table(name)
+                         else common, rows)
+        why = _compare(expect, [dict(r) for r in conn.execute(f"SELECT * FROM {_q(name)}")])
+        if why:
+            raise SharedDbError(f"書いた中身が入れ替えるつもりの中身と合わないので、書く前に戻しました({why})")
+    return before, after, note, expect
 
 
 def _by_key(current: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -724,7 +905,8 @@ def _facts_dict(f: FileFacts) -> dict[str, Any]:
 def plan_dict(p: Plan) -> dict[str, Any]:
     return {
         "source": p.source, "dest": p.dest, "ok": p.ok, "message": p.message,
-        "access": is_access(Path(p.source)) if p.source else False,
+        # 名前ではなく中身で(名前は .accdb でも中身が sqlite3 なら sqlite3 と出す)
+        "access": sniff(Path(p.source)) == KIND_ACCESS if p.source else False,
         "only_in_source": p.only_in_source, "only_in_dest": p.only_in_dest,
         "hint": p.hint, "near": [list(n) for n in p.near],
         "source_facts": _facts_dict(p.source_facts), "dest_facts": _facts_dict(p.dest_facts),
