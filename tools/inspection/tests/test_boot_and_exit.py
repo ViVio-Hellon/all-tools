@@ -276,7 +276,10 @@ class IdleWatchTests(unittest.TestCase):
         time.sleep(0.1)
         self.assertEqual(self.stopped, [], "印刷中なのに止めた")
         self.busy = False
-        time.sleep(0.2)
+        # 決まった秒数では待たない ── 混んだ CI の Windows では 0.2 秒で見張りが回り切らないことがある
+        deadline = time.monotonic() + 5.0
+        while not self.stopped and time.monotonic() < deadline:
+            time.sleep(0.02)
         w.cancel()
         self.assertEqual(self.stopped, [1])
 
