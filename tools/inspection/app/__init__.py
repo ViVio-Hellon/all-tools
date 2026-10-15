@@ -217,8 +217,8 @@ def _apply_cache_policy(response) -> None:
         else:
             response.headers["Cache-Control"] = "no-cache"
         return
-    if request.path.startswith("/api/preview/image/"):
-        # 画像の名前(キー)は中身が変われば変わるので、控えてよい
+    if request.path.startswith(("/api/preview/image/", "/api/preview/pdf/")):
+        # 画像・PDF の名前(キー)は中身が変われば変わるので、控えてよい
         response.headers["Cache-Control"] = "private, max-age=86400"
         return
     response.headers["Cache-Control"] = "no-store"

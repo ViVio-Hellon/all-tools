@@ -70,6 +70,7 @@ def index():
         dark=biz.settings.dark_mode(),
         # 選んでいなければ、日報複合ツールの大設定の既定に従う(`static/js/inspection.js`)
         theme_chosen=biz.settings.theme_chosen(),
+        theme=biz.settings.theme_choice(),
         demo=biz.demo,
         max_copies=biz.cfg.max_copies,
         health_poll_ms=app_config.health_poll_seconds() * 1000,

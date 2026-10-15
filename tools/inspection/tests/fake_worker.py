@@ -5,7 +5,9 @@ Windows / Excel が無い環境で、Python 側の通信処理(excel_service)を
 動作は指示の fake_* キーで切り替える。
 """
 import base64
+import os
 import sys
+import tempfile
 import time
 
 
@@ -297,22 +299,86 @@ def print_word_item(job, i):
     return False
 
 
+def temp_folder():
+    """本物の TempFolder(%TEMP%\\isp_preview)。試験は ISP_FAKE_TEMP で差し替える。"""
+    folder = os.environ.get("ISP_FAKE_TEMP") or os.path.join(tempfile.gettempdir(), "isp_preview")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def sweep_temp_files():
+    """本物の SweepTempFiles: 処理プログラムが起きたとき、1時間より古い isp_*.pdf / isp_*.emf を消す。"""
+    folder = temp_folder()
+    removed = 0
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if name.lower().startswith("isp_") and name.lower().endswith((".pdf", ".emf")):
+            if time.time() - os.path.getmtime(path) > 3600:
+                os.remove(path)
+                removed += 1
+    if removed:
+        result("log", f"Deleted {removed} temporary file(s) left by an ended worker")
+
+
+def emit_doc_pdf(job):
+    """本物の EmitDocPdf: Word が自分の TEMP に PDF を書き、PDFDATA で送って、すぐ消す。
+
+    fake_pdf = "none" … PDF にできない(古い Word: ExportAsFixedFormat が無い)
+               "bad"  … 送ったものが PDF の形でない(Python は PAGE と答える)
+    fake_pdf_hex      … PDF の中身(既定は小さな PDF)
+    """
+    if job.get("fake_pdf") == "none":
+        emit("STAGE word.pdf")
+        result("log", "Document.ExportAsFixedFormat (PDF) failed: 0x800A01B6 "
+                      "Object doesn't support this property or method")
+        return False
+    if job.get("fake_pdf") == "bad":
+        data = b"not a pdf"
+    elif job.get("fake_pdf_hex"):
+        data = bytes.fromhex(job["fake_pdf_hex"])
+    else:
+        data = b"%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"
+    pages = int(job.get("fake_pages", "2"))
+    last = int(job.get("word_pdf_max_pages", "0") or 0)
+    if not (last > 0 and pages > last):
+        last = pages
+    emit("STAGE word.pdf")
+    fd, path = tempfile.mkstemp(prefix="isp_pv_", suffix=".pdf", dir=temp_folder())
+    with os.fdopen(fd, "wb") as fp:
+        fp.write(data)
+    with open(path, "rb") as fp:
+        b64 = base64.b64encode(fp.read()).decode("ascii")
+    for i in range(0, len(b64), 8):                # 本物は 3000 文字ずつ。分割を試すため細かく
+        emit(f"PDFDATA {b64[i:i + 8]}")
+    if job.get("fake_pdf_leave") != "1":           # 消せなかった(起動したときの片付けに任せる)
+        os.remove(path)
+    result("item.1.pages", pages)
+    result("item.1.pdf_pages", last)
+    result("item.1.range_source", "word_pdf")
+    return True
+
+
 def preview_word(job):
     """本物の RunPreviewWord: Word が途中で終わったら起こし直して1回だけやり直す。
-    1ページ目の絵で終わったなら、2回目はクリップボード経由。"""
+    PDF にする所で終わったなら2回目は1ページ目の絵、1ページ目の絵で終わったならクリップボード経由。"""
     close_open_copies(job, [1])
-    rc, stage = preview_word_once(job, 1, True)
+    way = "pdf" if job.get("word_pdf") == "1" else "page"
+    rc, stage = preview_word_once(job, 1, way)
     if rc == 0 or not stage:
         return rc
     clear_item_error(1)
     emit("RETRY 1")
-    rc, stage = preview_word_once(job, 2, stage != "word.page")
+    if stage == "word.pdf":
+        way = "page"
+    elif stage == "word.page":
+        way = "copy"
+    rc, stage = preview_word_once(job, 2, way)
     if rc != 0 and stage:
         gone_error(1, "WORD_GONE", stage)
     return rc
 
 
-def preview_word_once(job, attempt, use_emf):
+def preview_word_once(job, attempt, way):
     """(終了コード, Word が終わった段階)。"""
     gone = gone_at(job, attempt)
     if gone == "open":
@@ -321,15 +387,16 @@ def preview_word_once(job, attempt, use_emf):
         gone_error(1, "OPEN_FAILED", "word.open")
         lose_word("word.open")
         return 4, "word.open"
-    rc = preview_word_body(job, gone == "page" or not use_emf, gone)
-    if gone == "page" and rc != 0:
-        lose_word("word.page")
-        return rc, "word.page"
+    rc = preview_word_body(job, way, gone)
+    if gone in ("pdf", "page") and rc != 0:
+        lose_word(f"word.{gone}")
+        return rc, f"word.{gone}"
     return rc, ""
 
 
-def preview_word_body(job, skip_emf=False, gone=""):
-    """Word の1ページ目: EMFDATA → EMFDONE。COPY と言われたらクリップボード経由(COPIED)。"""
+def preview_word_body(job, way="page", gone=""):
+    """Word の文書: PDFDATA → PDFDONE(PAGE と言われたら1ページ目の絵)。
+    1ページ目: EMFDATA → EMFDONE。COPY と言われたらクリップボード経由(COPIED)。"""
     if not start_word(job):
         result("fatal.code", "WORD_CREATE_FAILED")
         result("fatal.message", "ActiveX コンポーネントはオブジェクトを作成できません。")
@@ -340,6 +407,20 @@ def preview_word_body(job, skip_emf=False, gone=""):
         return 3
     if not open_doc(job, 1):
         return 4
+    if way == "pdf":
+        if gone == "pdf":
+            emit("STAGE word.pdf")                     # ExportAsFixedFormat で Word が落ちた
+            result("log", "Document.ExportAsFixedFormat (PDF) failed: 0x800706BE")
+            gone_error(1, "PREVIEW_FAILED", "word.pdf")
+            return 4
+        if emit_doc_pdf(job):
+            emit("PDFDONE 1")
+            cmd = wait_command()
+            if cmd == "OK":
+                return 0
+            result("log", f"Python did not take the PDF ({cmd}); draw page 1 instead")
+        way = "page"
+    skip_emf = way != "page" or gone == "page"
     result("item.1.sheet", "page 1 / 2")
     result("item.1.range", "page 1")
     result("item.1.range_source", "word_page")
@@ -374,6 +455,7 @@ def preview_word_body(job, skip_emf=False, gone=""):
 
 
 def main():
+    sweep_temp_files()
     while True:
         job = read_job()
         if job is None:

@@ -2,7 +2,7 @@
 
 VBA版との対応:
     GetBaseFolderPath / SaveBaseFolderPath  → effective_root_folder / update(root_folder=...)
-    DarkModeEnabled(既定 True)             → dark_mode(既定 True)
+    DarkModeEnabled(既定 True)             → theme_choice(選んでいなければ大設定の既定、無ければライト)
 
 【config/inspection.json の各キー】(JSON はコメントを書けないのでここに置く)
 
@@ -25,10 +25,27 @@ VBA版との対応:
     excel.preview_appearance  screen(VBA版と同じ xlScreen)/ printer(xlPrinter)
     excel.preview_scale / preview_max_pixels  プレビュー画像の拡大率と最大辺
     excel.preview_max_rows / preview_max_cols  印刷範囲が無いときの行数・列数(40×16)
+    excel.word_preview_pdf   Word の点検表のプレビューを PDF にする(既定 true。VER2.4.0)。
+                         false にすると前の版と同じ1ページ目の絵(落ちる文書があった)
+    excel.word_preview_max_pages  PDF に入れるページ数の上限(既定 20。0 = 全ページ)。
+                         長い文書で待たせないため。超えたら先頭からこのページ数まで
+    excel.close_open_copy  この PC で開いたままの点検表を、保存せずに閉じてから開く(既定 true)
     print.max_copies     印刷部数の上限(VBA版は 100)
 
 利用者が画面の「フォルダ設定」で変えた値は、ローカル領域の
 `data/user_settings.json` に保存し、`config/inspection.json` は書き換えない。
+
+【画面の明るさ(VER2.4.0)】
+    > 大設定で ダークにしているのに ライト表示される(大設定の値がデフォルトになっていない)
+
+選んだものは `theme_choice`(light / dark)。**無ければ「既定」** ── 日報複合ツールの大設定の
+「画面の色の既定」に従う(届いていなければライト。決めるのは画面の JS。`static/js/inspection.js`)。
+前の版は `dark_mode`(真偽)に覚えていて、明暗のボタンを1度でも押した端末・配布設定で
+配られた端末は、値が入っているだけで「選んだ」扱いになり、大設定の既定を一切受けなかった
+(しかも選ばない状態へ戻る手段が無かった。看板 VER3.5.0 と同じ形)。そこで
+    ・前の版の `dark_mode` は**読み込んだときに一度だけ**移す。ライト(= 既定の値)は
+      選んだに数えずに捨てる。ダークだけ「ダークを選んだ」として `theme_choice` に移す
+    ・ボタンの回り順に「◇ 既定」(選ばない = 大設定に従う)を足した
 """
 from __future__ import annotations
 
@@ -40,6 +57,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.repositories.settings_repository import SettingsRepository
+
+#: 画面の明るさで選べるもの。`theme_choice` が無い(= "default")なら大設定の既定に従う
+THEMES = ("light", "dark")
+THEME_DEFAULT = "default"
+#: 前の版が明暗を覚えていた鍵(真偽)。読み込んだときに一度だけ `theme_choice` へ移す
+LEGACY_DARK_MODE = "dark_mode"
 
 APP_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = Path(os.environ.get("INSPECTION_BUSINESS_CONFIG",
@@ -69,6 +92,10 @@ class ExcelConfig:
     # この PC の Excel・Word でその点検表が開いたままなら、保存せずに閉じてから開く
     # (点検表は原紙で、印刷するだけ。閉じるのはそのファイルだけ。VER2.3.2)
     close_open_copy: bool = True
+    # Word の点検表のプレビューは PDF(ExportAsFixedFormat)。画面が PDF のまま出す(VER2.4.0)
+    word_preview_pdf: bool = True
+    # PDF に入れるページ数の上限(0 = 全ページ)
+    word_preview_max_pages: int = 20
 
 
 @dataclass
@@ -128,6 +155,8 @@ def load_inspection_config(path: Optional[Path] = None) -> InspectionConfig:
         preview_max_rows=int(_clamp(ex.get("preview_max_rows"), d.preview_max_rows, 1, 10000)),
         preview_max_cols=int(_clamp(ex.get("preview_max_cols"), d.preview_max_cols, 1, 1000)),
         close_open_copy=bool(ex.get("close_open_copy", d.close_open_copy)),
+        word_preview_pdf=bool(ex.get("word_preview_pdf", d.word_preview_pdf)),
+        word_preview_max_pages=int(_clamp(ex.get("word_preview_max_pages"), d.word_preview_max_pages, 0, 1000)),
     )
     printing = raw.get("print") if isinstance(raw.get("print"), dict) else {}
     cfg.max_copies = int(_clamp(printing.get("max_copies"), 100, 1, 999))
@@ -154,7 +183,27 @@ class SettingsService:
         self.log = logger
         self.forced_root_folder = normalize_folder(forced_root_folder or "")  # 模擬モード用
         self._lock = threading.Lock()
-        self._data = repository.load()
+        self._data = self._migrate_theme(repository.load())
+
+    def _migrate_theme(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """前の版の `dark_mode` を一度だけ移す(上の【画面の明るさ】)。
+
+        ライト(False)は既定の値なので「選んだ」に数えない ── 値が入っているだけで大設定の
+        既定を受けなくなっていた。ダーク(True)だけ、ダークを選んだものとして残す。
+        """
+        if LEGACY_DARK_MODE not in data:
+            return data
+        data = dict(data)
+        legacy = data.pop(LEGACY_DARK_MODE)
+        if legacy is True and data.get("theme_choice") not in THEMES:
+            data["theme_choice"] = "dark"
+        try:
+            self.repo.save(data)
+        except OSError as exc:                       # 書けなくても、この起動のあいだは移したもので動く
+            self.log.warning("前の版の明暗の設定を移せませんでした: %s", exc)
+        self.log.info("前の版の明暗の設定(dark_mode=%s)を移しました: %s", legacy,
+                      "ダークを選んだもの" if data.get("theme_choice") == "dark" else "既定(大設定に従う)")
+        return data
 
     @property
     def default_root_folder(self) -> str:
@@ -167,21 +216,25 @@ class SettingsService:
             user = normalize_folder(str(self._data.get("root_folder") or ""))
         return user or self.default_root_folder
 
-    def dark_mode(self) -> bool:
+    def theme_choice(self) -> str:
+        """この端末で選んだ明暗(light / dark)。選んでいなければ "default"(大設定の既定に従う)。"""
         with self._lock:
-            value = self._data.get("dark_mode")
+            value = self._data.get("theme_choice")
+        return value if value in THEMES else THEME_DEFAULT
+
+    def dark_mode(self) -> bool:
+        """サーバが描くときの明暗。選んでいなければライト(大設定の既定は画面が描く前に当てる)。"""
         # 既定はライト(日報複合ツールの4ツールでそろえる。VBA版の既定はダークだった)
-        return False if value is None else bool(value)
+        return self.theme_choice() == "dark"
 
     def theme_chosen(self) -> bool:
         """この端末で明暗を選んだか。選んでいなければ、日報複合ツールの大設定の既定に従う。"""
-        with self._lock:
-            return self._data.get("dark_mode") is not None
+        return self.theme_choice() != THEME_DEFAULT
 
     def to_dict(self) -> Dict[str, Any]:
         if self.forced_root_folder:
             return {"root_folder": self.forced_root_folder, "root_folder_default": self.default_root_folder,
-                    "root_folder_source": "demo", "dark_mode": self.dark_mode()}
+                    "root_folder_source": "demo", "dark_mode": self.dark_mode(), "theme": self.theme_choice()}
         with self._lock:
             user_root = normalize_folder(str(self._data.get("root_folder") or ""))
         return {
@@ -189,6 +242,7 @@ class SettingsService:
             "root_folder_default": self.default_root_folder,
             "root_folder_source": "user" if user_root else "config",
             "dark_mode": self.dark_mode(),
+            "theme": self.theme_choice(),
         }
 
     # ---- 値そのもの(管理者パスワード・配布設定が使う) -----------------
@@ -217,7 +271,10 @@ class SettingsService:
             self._data = data
 
     def update(self, root_folder: Optional[str] = None, reset_root_folder: bool = False,
-               dark_mode: Optional[bool] = None) -> Dict[str, Any]:
+               theme: Optional[str] = None) -> Dict[str, Any]:
+        """`theme` は light / dark(選んだ)か "default"(覚えを消す = 大設定の既定に従う)。"""
+        if theme is not None and theme not in THEMES + (THEME_DEFAULT,):
+            raise ValueError(f"知らない明暗です: {theme!r}")
         with self._lock:
             data = dict(self._data)
             if reset_root_folder:
@@ -227,8 +284,10 @@ class SettingsService:
                 folder = normalize_folder(root_folder)
                 data["root_folder"] = folder
                 self.log.info("点検表ルートフォルダを変更しました: %s", folder)
-            if dark_mode is not None:
-                data["dark_mode"] = bool(dark_mode)
+            if theme == THEME_DEFAULT:
+                data.pop("theme_choice", None)
+            elif theme is not None:
+                data["theme_choice"] = theme
             self.repo.save(data)
             self._data = data
         return self.to_dict()

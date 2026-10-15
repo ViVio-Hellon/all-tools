@@ -21,6 +21,13 @@
 '     user closed it, or something ended it): Word is started again and the
 '     job (preview) or the document (print) is tried ONCE more. Not when
 '     Word ended while printing (part of it may be on paper already).
+'   * Word preview = PDF (VER2.4.0): Document.ExportAsFixedFormat writes a PDF
+'     to this script's own TEMP folder (%TEMP%\isp_preview\isp_pv_*.pdf); it
+'     is sent as PDFDATA lines and deleted at once. The screen shows the PDF.
+'     Only when that is not possible (no ExportAsFixedFormat in an old Word,
+'     Word ended at it) does it fall back to page 1 as an EMF, then to the
+'     clipboard. Leftovers of a worker that was ended (older than an hour)
+'     are deleted when the worker starts.
 '   * This PC: an inspection sheet left open in the user's Excel / Word is
 '     closed WITHOUT SAVING first (close_open_copy = 1; the sheets are
 '     originals, printed only). Only that file: other workbooks / documents
@@ -29,7 +36,8 @@
 '   * NO FILES are exchanged with Python. Python from the Microsoft Store
 '     writes %LOCALAPPDATA% / %TEMP% to a private copy that cscript and
 '     Excel cannot see ("path not found", 0x4C). Everything goes through
-'     stdin / stdout instead.
+'     stdin / stdout instead (the PDF too: Word writes it, this script reads
+'     it, sends it and deletes it; Python never sees the file).
 '
 ' Protocol (repeated for each job)
 '   stdin (from Python)
@@ -56,6 +64,10 @@
 '                                               (RECOPY: someone else replaced the
 '                                                clipboard; copy again)
 '     EXPORTED 1 | EXPORT_FAILED 1
+'     PDFDONE 1                             ->  OK | PAGE
+'                                               (Word preview: the document as a
+'                                                PDF in PDFDATA lines; PAGE = not
+'                                                a PDF, draw page 1 as EMF instead)
 '     EMFDONE 1                             ->  OK | COPY
 '                                               (Word preview: page 1 as EMF in
 '                                                EMFDATA lines; COPY = could not
@@ -71,6 +83,7 @@
 '                              when a copy open on this PC was closed, ...)
 '     PNGDATA <base64>        (chart export fallback, several lines)
 '     EMFDATA <base64>        (Word page 1 as an enhanced metafile, several lines)
+'     PDFDATA <base64>        (Word document as a PDF, several lines)
 '   <hex> = UTF-16 code units as 4 hex digits each ("AB" -> "00410042")
 '
 ' Ported from the VBA version:
@@ -95,6 +108,12 @@ Const wdGoToPage = 1
 Const wdGoToAbsolute = 1
 Const wdStatisticPages = 2
 Const wdOpenFormatAuto = 0
+Const wdExportFormatPDF = 17
+Const wdExportOptimizeForOnScreen = 1
+Const wdExportAllDocument = 0
+Const wdExportFromTo = 3
+Const wdExportDocumentContent = 0
+Const wdExportCreateNoBookmarks = 0
 Const msoFeatureInstallNone = 0
 
 Const RC_OK = 0
@@ -125,6 +144,7 @@ WScript.Quit Main()
 Function Main()
     Dim rc
     Main = RC_OK
+    SweepTempFiles
     Do
         gJobError = ""
         gStage = ""
@@ -578,9 +598,11 @@ End Function
 ' ============================================================================
 ' Word documents (.doc / .docx / .docm)
 '   Print : open read-only -> PrintOut Copies (the document's own settings)
-'   Preview: page 1 of the print layout as an enhanced metafile (EMFDATA).
-'            If Python cannot draw it, page 1 is copied to the clipboard
-'            and read the same way as an Excel range (COPIED).
+'   Preview: the document as a PDF (ExportAsFixedFormat -> PDFDATA, VER2.4.0).
+'            If that is not possible: page 1 of the print layout as an
+'            enhanced metafile (EMFDATA). If Python cannot draw it, page 1
+'            is copied to the clipboard and read the same way as an Excel
+'            range (COPIED).
 '
 ' Diagnostics (added after VER2.3.0): Word was never run here before release, so every
 ' step says where it is (STAGE <name>) and every failure leaves
@@ -595,10 +617,14 @@ End Function
 
 
 ' Preview of a Word document. When Word ends under it (462 / RPC errors),
-' Word is started again and the preview is tried ONCE more. If Word ended
-' while drawing page 1 (EnhMetaFileBits), the second try copies page 1.
+' Word is started again and the preview is tried ONCE more, without the way
+' it ended at: ended while writing the PDF -> page 1 as EMF; ended while
+' drawing page 1 (EnhMetaFileBits) -> copy page 1.
+'   way = "pdf"  : PDF, then EMF, then clipboard (word_pdf = 1)
+'         "page" : EMF, then clipboard
+'         "copy" : clipboard only
 Function RunPreviewWord()
-    Dim path, rc, lostAt
+    Dim path, rc, lostAt, way
 
     RunPreviewWord = RC_ITEM
     path = JobValue("file.1", "")
@@ -607,14 +633,21 @@ Function RunPreviewWord()
         Exit Function
     End If
     CloseOpenCopy 1, path
-    rc = PreviewWordOnce(path, True)
+    way = "page"
+    If JobValue("word_pdf", "0") = "1" Then way = "pdf"
+    rc = PreviewWordOnce(path, way)
     If rc <> RC_OK Then
         If WordWasLost() Then
             lostAt = gWordLostStage
             WriteResult "log", "Word ended during the preview (" & lostAt & "); start Word again and try once more"
             ClearItemError 1
             Emit "RETRY 1"
-            rc = PreviewWordOnce(path, lostAt <> "word.page")
+            If lostAt = "word.pdf" Then
+                way = "page"
+            ElseIf lostAt = "word.page" Then
+                way = "copy"
+            End If
+            rc = PreviewWordOnce(path, way)
             If rc <> RC_OK Then
                 If WordWasLost() Then SetWordGone 1
             End If
@@ -624,9 +657,9 @@ Function RunPreviewWord()
 End Function
 
 
-' One try of the Word preview. useEmf = False: copy page 1 to the clipboard
-' without trying the page picture.
-Function PreviewWordOnce(path, useEmf)
+' One try of the Word preview from the given way ("pdf" / "page" / "copy",
+' see RunPreviewWord).
+Function PreviewWordOnce(path, way)
     Dim doc, rng, cmd, attempt
 
     PreviewWordOnce = RC_ITEM
@@ -643,12 +676,31 @@ Function PreviewWordOnce(path, useEmf)
 
     Set doc = OpenDoc(1, path)
     If doc Is Nothing Then Exit Function
+
+    If way = "pdf" Then
+        If EmitDocPdf(doc) Then
+            Emit "PDFDONE 1"
+            cmd = WaitCommand()
+            If cmd = "OK" Then
+                PreviewWordOnce = RC_OK
+                CloseDoc doc
+                Exit Function
+            End If
+            WriteResult "log", "Python did not take the PDF (" & cmd & "); draw page 1 instead"
+        ElseIf Len(gWordLostStage) > 0 Then
+            ' Word ended while writing the PDF: the page picture needs Word too
+            SetItemError 1, "PREVIEW_FAILED", gLastErrNumber, gLastErrDesc
+            CloseDoc doc
+            Exit Function
+        End If
+        way = "page"
+    End If
+
     WriteResult "item.1.sheet", "page 1 / " & PageCount(doc)
     WriteResult "item.1.range", "page 1"
     WriteResult "item.1.range_source", "word_page"
-
     cmd = "COPY"
-    If useEmf Then
+    If way = "page" Then
         If EmitPageEmf(doc) Then
             Emit "EMFDONE 1"
             cmd = WaitCommand()
@@ -706,6 +758,149 @@ Function PreviewWordOnce(path, useEmf)
 End Function
 
 
+' The document as a PDF -> PDFDATA lines (VER2.4.0). Word writes the PDF to
+' this script's own TEMP folder; it is read, sent and deleted at once.
+' word_pdf_max_pages > 0: a longer document is cut to its first pages.
+' ExportAsFixedFormat(OutputFileName, ExportFormat, OpenAfterExport,
+'   OptimizeFor, Range, From, To, Item, IncludeDocProps, KeepIRM,
+'   CreateBookmarks, DocStructureTags, BitmapMissingFonts, UseISO19005_1)
+' OpenAfterExport = False: no PDF reader is started. On screen quality is
+' enough for a preview (smaller, faster). Word 2007 without the add-in and
+' Word 2003 have no PDF export: it fails and the caller draws page 1.
+Function EmitDocPdf(doc)
+    Dim outPath, pages, lastPage, number, description, sent
+
+    EmitDocPdf = False
+    sent = False
+    On Error Resume Next
+    pages = 0
+    pages = CLng(PageCount(doc))
+    lastPage = 0
+    lastPage = CLng(JobValue("word_pdf_max_pages", "0"))
+    Err.Clear
+    outPath = NewTempPath(".pdf")
+    If Len(outPath) = 0 Then
+        WriteResult "log", "Word PDF: no temporary file name"
+        Exit Function
+    End If
+    Stage "word.pdf"
+    Err.Clear
+    If lastPage > 0 And pages > lastPage Then
+        doc.ExportAsFixedFormat outPath, wdExportFormatPDF, False, wdExportOptimizeForOnScreen, wdExportFromTo, 1, lastPage, wdExportDocumentContent, False, True, wdExportCreateNoBookmarks, False, True, False
+    Else
+        lastPage = pages
+        doc.ExportAsFixedFormat outPath, wdExportFormatPDF, False, wdExportOptimizeForOnScreen, wdExportAllDocument, 1, 1, wdExportDocumentContent, False, True, wdExportCreateNoBookmarks, False, True, False
+    End If
+    number = Err.Number
+    description = Err.Description
+    Err.Clear
+    If number <> 0 Then
+        NoteError "Document.ExportAsFixedFormat (PDF)", number, description
+        ' Word may have crashed inside the call: ask it
+        If Len(gWordLostStage) = 0 Then
+            If WordGoneNow() Then gWordLostStage = "word.pdf"
+        End If
+        DeleteTempFile outPath
+        Exit Function
+    End If
+    If gFso.FileExists(outPath) Then
+        If gFso.GetFile(outPath).Size > 0 Then sent = EmitFileBase64(outPath, "PDFDATA")
+        Err.Clear
+    End If
+    DeleteTempFile outPath
+    If Not sent Then
+        WriteResult "log", "Word PDF: the file was not written or could not be read"
+        Exit Function
+    End If
+    WriteResult "item.1.pages", CStr(pages)
+    WriteResult "item.1.pdf_pages", CStr(lastPage)
+    WriteResult "item.1.range_source", "word_pdf"
+    EmitDocPdf = True
+End Function
+
+
+' This script's own folder for temporary files: %TEMP%\isp_preview (the TEMP
+' of cscript, not of Python: see "NO FILES are exchanged with Python").
+' Falls back to %TEMP% itself when the folder cannot be made.
+Function TempFolder()
+    Dim root, folder
+    On Error Resume Next
+    root = gFso.GetSpecialFolder(TemporaryFolder).Path
+    folder = gFso.BuildPath(root, "isp_preview")
+    If Not gFso.FolderExists(folder) Then gFso.CreateFolder folder
+    Err.Clear
+    If gFso.FolderExists(folder) Then
+        TempFolder = folder
+    Else
+        TempFolder = root
+    End If
+End Function
+
+
+' A new file name in this script's own temporary folder: isp_pv_<random><ext>.
+' Several workers (two users, two editions) never get the same name: a name
+' that is there already is not used.
+Function NewTempPath(ext)
+    Dim folder, attempt, candidate
+
+    NewTempPath = ""
+    On Error Resume Next
+    folder = TempFolder()
+    For attempt = 1 To 10
+        candidate = gFso.BuildPath(folder, "isp_pv_" & Replace(gFso.GetTempName(), ".tmp", "") & ext)
+        If Not gFso.FileExists(candidate) Then
+            NewTempPath = candidate
+            Exit Function
+        End If
+    Next
+    LogErr "temporary file name"
+End Function
+
+
+' Delete a temporary file. Word may hold it a moment after writing: try again.
+Sub DeleteTempFile(path)
+    Dim attempt
+    On Error Resume Next
+    For attempt = 1 To 5
+        If Not gFso.FileExists(path) Then Exit Sub
+        Err.Clear
+        gFso.DeleteFile path, True
+        If Err.Number = 0 Then Exit Sub
+        Err.Clear
+        WScript.Sleep 200 * attempt
+    Next
+    WriteResult "log", "temporary file left (deleted when the worker starts next): " & path
+    Err.Clear
+End Sub
+
+
+' When the worker starts: delete what an ended worker left in its temporary
+' folder (isp_*.pdf / isp_*.emf older than an hour; a younger one may belong
+' to a worker that is running now: another user, the other edition).
+Sub SweepTempFiles()
+    Dim folder, f, ext, removed
+    removed = 0
+    On Error Resume Next
+    Set folder = gFso.GetFolder(TempFolder())
+    If Err.Number <> 0 Then
+        Err.Clear
+        Exit Sub
+    End If
+    For Each f In folder.Files
+        ext = LCase(gFso.GetExtensionName(f.Name))
+        If LCase(Left(f.Name, 4)) = "isp_" And (ext = "pdf" Or ext = "emf") Then
+            If DateDiff("n", f.DateLastModified, Now) > 60 Then
+                f.Delete True
+                If Err.Number = 0 Then removed = removed + 1
+                Err.Clear
+            End If
+        End If
+    Next
+    Err.Clear
+    If removed > 0 Then WriteResult "log", "Deleted " & removed & " temporary file(s) left by an ended worker"
+End Sub
+
+
 ' Page 1 of the print layout as an EMF -> EMFDATA lines.
 ' The bytes go to base64 directly (MSXML); a temporary file is only the
 ' fallback. Each failing step is written to the log with its error.
@@ -753,9 +948,9 @@ Function EmitPageEmf(doc)
         Exit Function
     End If
 
-    ' Fallback: through a file in this script's own TEMP folder
-    outPath = gFso.BuildPath(gFso.GetSpecialFolder(TemporaryFolder).Path, _
-                             "isp_" & Replace(gFso.GetTempName(), ".tmp", ".emf"))
+    ' Fallback: through a file in this script's own temporary folder
+    outPath = NewTempPath(".emf")
+    If Len(outPath) = 0 Then Exit Function
     Set stm = CreateObject("ADODB.Stream")
     stm.Type = adTypeBinary
     stm.Open
@@ -765,9 +960,9 @@ Function EmitPageEmf(doc)
     LogErr "EMF save (ADODB.Stream)"
     If gFso.FileExists(outPath) Then
         If gFso.GetFile(outPath).Size > 0 Then EmitPageEmf = EmitFileBase64(outPath, "EMFDATA")
-        gFso.DeleteFile outPath, True
         Err.Clear
     End If
+    DeleteTempFile outPath
 End Function
 
 

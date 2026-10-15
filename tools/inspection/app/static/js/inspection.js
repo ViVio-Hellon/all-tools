@@ -1,5 +1,5 @@
 /*
-  inspection.js — 点検表の一覧・選択・表示テーマ(設定の画面は settings.js)
+  inspection.js — 点検表の一覧・選択(表示テーマは theme.js、設定の画面は settings.js)
   (VBA版 UFPrintManager / ShowFolderSettings / ToggleDarkMode)
 
   選んだ順番を持つのはこの画面(印刷はその順で行う)。タブを開き直しても
@@ -8,6 +8,7 @@
 
 import { api } from "./api.js";
 import { takeCarried } from "./health.js";
+import { wireThemeToggle } from "./theme.js";
 import { toast, toastError } from "./toast.js";
 
 const $ = (id) => document.getElementById(id);
@@ -554,38 +555,6 @@ function setCopies(n) {
   $("copies").removeAttribute("aria-invalid");
 }
 
-/* ---------------------------------------------------------------- テーマ */
-function paintThemeButton() {
-  // VBA版と同じく、ボタンには「切り替え先」を出す
-  const dark = document.documentElement.dataset.theme === "dark";
-  $("btn-theme").textContent = dark ? "ライト" : "ダーク";
-}
-/** この端末で明暗を選んだか。選んでいなければ日報複合ツールの大設定の既定に従う */
-let themeChosen = Boolean(window.APP && window.APP.themeChosen);
-const SHELL_DEFAULT_KEY = "inspection.theme_default";
-
-/** 日報複合ツールの大きなタブの画面から「画面の色の既定」が届く(大設定で変えたとき・枠を開くたび) */
-function listenShellTheme() {
-  if (window.parent === window) return;
-  window.addEventListener("message", (event) => {
-    const data = event.data;
-    if (event.source !== window.parent) return;
-    if (!data || data.type !== "alltools:theme" || (data.theme !== "light" && data.theme !== "dark")) return;
-    try { localStorage.setItem(SHELL_DEFAULT_KEY, data.theme); } catch (err) { /* この画面のあいだは効く */ }
-    if (themeChosen) return;
-    document.documentElement.dataset.theme = data.theme;
-    paintThemeButton();
-  });
-}
-
-async function toggleTheme() {
-  const dark = document.documentElement.dataset.theme !== "dark";
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
-  themeChosen = true;
-  paintThemeButton();
-  try { await api.post("/api/settings", { dark_mode: dark }); } catch (err) { toastError(err); }
-}
-
 /* ---------------------------------------------------------------- 初期化 */
 export function init() {
   state.selection = load(SEL_KEY, []);
@@ -593,11 +562,10 @@ export function init() {
   const view = load(VIEW_KEY, {});
   state.activeCat = view.cat || null;
   state.activeSub = view.sub || null;
-  paintThemeButton();
-  listenShellTheme();
+  // 画面の明るさ(ライト / ダーク / 既定 = 大設定に従う)。大設定の合図は theme.js が読み込んだ時点で受ける
+  wireThemeToggle();
 
   $("btn-refresh").addEventListener("click", refresh);
-  $("btn-theme").addEventListener("click", toggleTheme);
 
   $("btn-cat-all").addEventListener("click", () => {
     const cat = currentCategory();

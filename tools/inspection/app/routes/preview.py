@@ -1,10 +1,15 @@
 """プレビュー (VBA版 UFPreview.GeneratePreview)
 
-- `POST /api/preview`             … {id, force} の点検表の画像を用意する
+- `POST /api/preview`             … {id, force, image} の点検表の画像(Word は PDF)を用意する。
+                                    image = true なら Word も画像(PDF を出せない画面から)
 - `GET  /api/preview/image/<key>` … 画像そのもの(`<img src>` なので `?t=` で認証)
+- `GET  /api/preview/pdf/<key>`   … Word の点検表の PDF(枠の src なので `?t=` で認証)。
+                                    **画面の中に出す**(Content-Disposition: inline。ダウンロードにしない)
 - `POST /api/excel/warm`          … Excel を先に起動しておく(点検表を選び始めたとき)
 """
 from __future__ import annotations
+
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -23,13 +28,25 @@ def make_preview():
     if not item_id:
         raise ApiError(400, "NO_ITEM", "プレビューする点検表を選んでください。")
     return jsonify(business().preview.get_preview(
-        item_id, force=bool(body.get("force")), screen_id=request.headers.get(SCREEN_HEADER, "")))
+        item_id, force=bool(body.get("force")), screen_id=request.headers.get(SCREEN_HEADER, ""),
+        as_image=bool(body.get("image"))))
 
 
 @bp.get("/api/preview/image/<key>")
 def preview_image(key: str):
     data, mime = business().preview.get_image(key)
     return Response(data, mimetype=mime)
+
+
+@bp.get("/api/preview/pdf/<key>")
+def preview_pdf(key: str):
+    """Word の点検表の PDF。**inline**(ブラウザ・WebView2 が枠の中に出す。保存の窓を出さない)。"""
+    data, name = business().preview.get_pdf(key)
+    response = Response(data, mimetype="application/pdf")
+    # 名前は PDF 表示の題に出る。日本語は filename*(RFC 5987)、filename は ASCII の控え
+    response.headers["Content-Disposition"] = (
+        f"inline; filename=\"preview.pdf\"; filename*=UTF-8''{quote(name + '.pdf')}")
+    return response
 
 
 @bp.post("/api/excel/warm")

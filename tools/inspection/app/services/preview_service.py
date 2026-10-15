@@ -1,4 +1,8 @@
-"""点検表プレビュー（Excel の CopyPicture → 画像 → ブラウザ）。
+"""点検表プレビュー（Excel の CopyPicture → 画像 → ブラウザ。Word の点検表は PDF → ブラウザ）。
+
+Word の点検表は VER2.4.0 から PDF(`excel_service` の【Word のプレビューは PDF】)。画面は
+`pdf_url` を枠に出す(ブラウザ・WebView2 の PDF 表示。ダウンロードにはしない)。PDF を出せない
+画面からは `as_image=True` で、これまでの1ページ目の絵を頼める(控えは別のキー)。
 
 VBA版 UFPreview.GeneratePreview と同じ判定を VBScript 側で行う:
     * 最初の表示可能なワークシートを対象にする
@@ -23,7 +27,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Dict, Iterator, Tuple
 
 from app.repositories.preview_cache import PreviewCache
-from app.services.excel_service import ExcelError, ExcelService, app_label, kind_of
+from app.services.excel_service import PDF_MIME, ExcelError, ExcelService, app_label, kind_of
 from app.errors import ApiError
 from core import event_log
 
@@ -72,12 +76,18 @@ class PreviewService:
             with self._lock:
                 self._waiters.pop(ticket, None)
 
-    def _variant(self) -> str:
+    def _variant(self, kind: str = "excel", pdf: bool = True) -> str:
         e = self.cfg.excel
-        return "|".join(str(v) for v in (self.excel.backend_name, e.preview_appearance, e.preview_scale,
-                                         e.preview_max_pixels, e.preview_max_rows, e.preview_max_cols))
+        parts = [self.excel.backend_name, e.preview_appearance, e.preview_scale,
+                 e.preview_max_pixels, e.preview_max_rows, e.preview_max_cols]
+        if kind == "word":
+            # Word は PDF か画像かで控えを分ける(Excel の控えのキーは前の版のまま)
+            parts.append(f"pdf{e.word_preview_max_pages}" if pdf and e.word_preview_pdf else "image")
+        return "|".join(str(v) for v in parts)
 
-    def get_preview(self, item_id: str, force: bool = False, screen_id: str = "") -> Dict[str, Any]:
+    def get_preview(self, item_id: str, force: bool = False, screen_id: str = "",
+                    as_image: bool = False) -> Dict[str, Any]:
+        """`as_image=True` は、Word の点検表も画像で(PDF を出せない画面から)。"""
         ticket, superseded = self._ticket(screen_id)
         item = self.inspection.get_item(item_id)
         if item is None:
@@ -89,7 +99,9 @@ class PreviewService:
         except OSError as exc:
             raise ApiError(422, "FILE_NOT_FOUND", "対象の点検表ファイルが見つかりません。", item.file_name,
                            context={**context, "os_error": f"{exc.strerror} ({exc.errno})"})
-        key = PreviewCache.make_key(item.path, stat.st_mtime_ns, stat.st_size, self._variant())
+        pdf = not as_image
+        key = PreviewCache.make_key(item.path, stat.st_mtime_ns, stat.st_size,
+                                    self._variant(kind_of(item.path), pdf))
         if not force:
             meta = self.cache.get_meta(key)
             if meta:
@@ -108,7 +120,7 @@ class PreviewService:
                     event_log.record("preview", event_log.OK, cached=True, **context)
                     return self._reply(key, meta, cached=True)
                 self.log.info("プレビュー生成開始: %s", item.path)
-                image = self.excel.preview(item.path)
+                image = self.excel.preview(item.path, pdf=pdf)
         except ExcelError as exc:
             if exc.code == "SUPERSEDED":
                 # 画面はもう次の点検表を見ている。失敗ではないので記録は控えめに
@@ -125,14 +137,15 @@ class PreviewService:
             meta = self.cache.put(key, image.data, image.mime, {
                 "item_id": item.id, "name": item.name, "sheet": image.sheet, "range": image.range_address,
                 "range_source": image.range_source, "method": image.method, "width": image.width,
-                "height": image.height, "elapsed_ms": elapsed, "source_mtime": stat.st_mtime})
+                "height": image.height, "elapsed_ms": elapsed, "source_mtime": stat.st_mtime,
+                "pages": image.pages, "pdf_pages": image.pdf_pages})
         except OSError as exc:
             self.log.warning("プレビュー画像を保存できません: %s %s", self.cache.dir, exc)
             raise ApiError(500, "CACHE_WRITE_FAILED",
                            "プレビュー画像を保存できませんでした。PCの空き容量を確認してください。", str(exc),
                            context={**context, "cache_dir": self.cache.dir})
-        self.log.info("プレビュー生成完了: %s sheet=%s range=%s method=%s %dms", item.file_name, image.sheet,
-                      image.range_address, image.method, elapsed)
+        self.log.info("プレビュー生成完了: %s sheet=%s range=%s method=%s %dms %d バイト", item.file_name,
+                      image.sheet, image.range_address, image.method, elapsed, len(image.data))
         event_log.record("preview", event_log.OK, cached=False, elapsed_ms=elapsed, sheet=image.sheet,
                          range=image.range_address, range_source=image.range_source, method=image.method,
                          notice=image.notice, **context)
@@ -144,10 +157,15 @@ class PreviewService:
 
     @staticmethod
     def _reply(key: str, meta: Dict[str, Any], cached: bool) -> Dict[str, Any]:
+        pdf = meta.get("mime") == PDF_MIME
         return {
             "ok": True,
             "key": key,
-            "image_url": f"/api/preview/image/{key}",
+            # Word の点検表は PDF(画面は枠に出す)。Excel はこれまでどおり画像
+            "format": "pdf" if pdf else "image",
+            "pdf_url": f"/api/preview/pdf/{key}" if pdf else "",
+            "pages": meta.get("pages", 0),
+            "image_url": "" if pdf else f"/api/preview/image/{key}",
             "cached": cached,
             "sheet": meta.get("sheet", ""),
             "range": meta.get("range", ""),
@@ -163,3 +181,11 @@ class PreviewService:
         if not found:
             raise ApiError(404, "PREVIEW_NOT_FOUND", "プレビュー画像が見つかりません。もう一度表示してください。")
         return found
+
+    def get_pdf(self, key: str) -> Tuple[bytes, str]:
+        """Word の点検表の PDF と、その名前(画面の PDF 表示の題に出る)。"""
+        found = self.cache.read_with_meta(key)
+        if not found or found[1] != PDF_MIME:
+            raise ApiError(404, "PREVIEW_NOT_FOUND", "プレビューの PDF が見つかりません。もう一度表示してください。")
+        data, _mime, meta = found
+        return data, str(meta.get("name") or "preview")

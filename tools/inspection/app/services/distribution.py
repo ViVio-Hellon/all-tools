@@ -69,8 +69,8 @@ def _is_folder(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _is_bool(value: Any) -> bool:
-    return isinstance(value, bool)
+def _is_theme(value: Any) -> bool:
+    return value in ("light", "dark")
 
 
 def _is_keep_days(value: Any) -> bool:
@@ -83,7 +83,8 @@ def _is_keep_days(value: Any) -> bool:
 ITEMS: tuple = (
     ("root_folder", "点検表フォルダ", True, _is_folder),
     (admin_password.KEY, "管理者パスワード", True, admin_password.looks_stored),
-    ("dark_mode", "表示(ダーク/ライト)", False, _is_bool),
+    # VER2.4.0 から `theme_choice`(light / dark)。前の版の配布設定の `dark_mode` は read() が移す
+    ("theme_choice", "表示(ダーク/ライト)", False, _is_theme),
     # 共有フォルダを指定して配れば、全ラインのログが1か所に集まる(後追いのため)
     ("log_dir", "ログの保存先", True, _is_folder),
     ("log_keep_days", "ログの保存日数", True, _is_keep_days),
@@ -145,8 +146,8 @@ def _now() -> str:
 def _show(key: str, value: Any) -> str:
     if key == admin_password.KEY:
         return "(設定済み)"                              # **値は出さない**
-    if key == "dark_mode":
-        return "ダーク" if value else "ライト"
+    if key == "theme_choice":
+        return "ダーク" if value == "dark" else "ライト"
     if key == "log_keep_days":
         return f"{value} 日"
     if isinstance(value, bool):
@@ -186,7 +187,12 @@ class Distribution:
             # 同じ名前のフォルダでも、ほかの道具(梱包資材総合ツールなど)のものは読まない
             self.log.warning("ほかの道具の配布設定なので読みません: %s", data.get("app_id"))
             return None
-        raw = data.get("settings") or {}
+        raw = dict(data.get("settings") or {})
+        # 前の版の配布設定の明暗(真偽)。ライトは既定の値なので配らない(選んだに数えない。
+        # settings_service の【画面の明るさ】と同じ決まり)。ダークだけ「ダークを選んだ」
+        legacy = raw.pop("dark_mode", None)
+        if legacy is True and "theme_choice" not in raw:
+            raw["theme_choice"] = "dark"
         settings = {k: v for k, v in raw.items()
                     if k in ITEM_KEYS and ITEM_CHECKS[k](v)}           # 知らない鍵・壊れた値は捨てる
         if not settings:

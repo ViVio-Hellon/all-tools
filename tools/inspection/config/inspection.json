@@ -22,7 +22,9 @@
     "preview_max_pixels": 3200,
     "preview_max_rows": 40,
     "preview_max_cols": 16,
-    "close_open_copy": true
+    "close_open_copy": true,
+    "word_preview_pdf": true,
+    "word_preview_max_pages": 20
   },
   "print": {
     "max_copies": 100

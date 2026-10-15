@@ -27,6 +27,9 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
                           隠さず・終えず、こちらは**決して止めない**(PID を覚えない)
     WORDLOST <stage>    … Word が途中で終わった(VBScript 462・RPC のエラー)。残りを片付ける
     RETRY <i>           … Word を起こし直して、その点検表を**1回だけ**やり直す(VER2.3.2)
+    PDFDATA <base64> …  PDFDONE 1  → OK / PAGE
+                        … Word の文書を PDF にしたもの(VER2.4.0。画面は PDF をそのまま出す)。
+                          PDF でなければ PAGE で1ページ目の絵(EMFDATA)に切り替えさせる
     EMFDATA <base64> …  EMFDONE 1  → OK / COPY
                         … Word の1ページ目(拡張メタファイル)。描けなければ COPY で
                           クリップボード経由(COPIED)に切り替えさせる
@@ -37,6 +40,18 @@ Python 側に pywin32 等を入れられないため、Excel COM は VBScript
 プレビューは1ページ目。Word は Excel と違って利用者がダブルクリックした文書を
 こちらの Word で開いてしまうことがあるので、**処理のたびに終える**(利用者の文書が
 開いていれば Word を見せて残す)。
+
+【Word のプレビューは PDF(VER2.4.0)】
+    プレビュー: Word が途中で終わりました。…(失敗した所: Word の1ページ目をコピーする所)
+    そろそろ直してください
+隠れた Word で1ページ目を絵にする(EnhMetaFileBits)・クリップボードへ写すと、Word ごと落ちる文書が
+あった(VER2.3.2 の「起こし直して1回やり直す」でも2回とも落ちた)。そこで Word のプレビューは
+**Document.ExportAsFixedFormat で PDF にして**、画面の中で PDF のまま見せる(全ページ。長い文書は
+`word_preview_max_pages` まで)。PDF は処理プログラムが**自分の TEMP に書いて、読んだらすぐ消す**
+(Python はファイルを見ない。下の「ファイルは一切受け渡さない」)。PDF にできないとき(古い Word・
+PDF にする所で落ちた)だけ、これまでの1ページ目の絵 → クリップボード経由に落とす。PDF にする所で
+落ちたなら、起こし直した2回目は1ページ目の絵から(やり直しの決まりは VER2.3.2 のまま)。
+Excel の点検表のプレビューは、これまでどおり画像。印刷は Excel・Word とも PrintOut のまま。
 
 【Word が途中で終わったとき(VER2.3.2)】
     印刷範囲の取得に失敗しました。リモート サーバー マシンが存在しないか、利用できません。 0x1CE
@@ -92,6 +107,20 @@ DUMMY_PASSWORD = "__isp_no_password__"
 
 #: Word で開く拡張子(一覧に載せるかは設定の `extensions`。ここは「どちらで開くか」だけ)
 WORD_EXTENSIONS = ("doc", "docx", "docm")
+#: Word のプレビュー(PDF)の種類
+PDF_MIME = "application/pdf"
+
+
+def looks_like_pdf(data: bytes) -> bool:
+    """PDF の形か(頭が `%PDF-`、終わり近くに `%%EOF`)。書きかけ・別のものを画面に出さない。"""
+    return data[:5] == b"%PDF-" and b"%%EOF" in data[-1024:]
+
+
+def pdf_range_label(pages: int, pdf_pages: int) -> str:
+    """画面の「範囲」に出す言い方。"""
+    if pages and pdf_pages and pdf_pages < pages:
+        return f"1～{pdf_pages} ページ(全 {pages} ページ)"
+    return f"全 {pages} ページ" if pages else "全ページ"
 
 
 def kind_of(path: str) -> str:
@@ -171,6 +200,7 @@ STAGE_LABELS: Dict[str, str] = {
     "word.create": "Word を起動する所(CreateObject)",
     "word.setup": "起動した Word の設定",
     "word.open": "Word で文書を開く所(Documents.Open)",
+    "word.pdf": "Word の文書を PDF にする所(ExportAsFixedFormat)",
     "word.page": "Word の1ページ目を絵にする所(EnhMetaFileBits)",
     "word.copy": "Word の1ページ目をコピーする所",
     "word.print": "Word で印刷する所(PrintOut)",
@@ -299,6 +329,9 @@ class PreviewImage:
     height: int = 0
     #: 知らせ(開いたままだったのを閉じた・ほかの人が開いている)。無ければ空
     notice: str = ""
+    #: PDF のとき: 文書のページ数と、PDF に入れたページ数(長い文書は先頭だけ)
+    pages: int = 0
+    pdf_pages: int = 0
 
 
 @dataclass
@@ -539,7 +572,8 @@ class VbsExcelBackend:
         return ""
 
     # ---- プレビュー -----------------------------------------------
-    def preview(self, path: str) -> PreviewImage:
+    def preview(self, path: str, pdf: bool = True) -> PreviewImage:
+        """プレビュー。Word の点検表は PDF(`pdf=False` か設定で止めていれば、これまでの画像)。"""
         e = self.excel_cfg
         kind = kind_of(path)
         word = kind == "word"
@@ -553,17 +587,39 @@ class VbsExcelBackend:
             "max_rows": e.preview_max_rows,
             "max_cols": e.preview_max_cols,
         }
+        if word:
+            # Word のプレビューは PDF にする(上の【Word のプレビューは PDF】)
+            params["word_pdf"] = 1 if pdf and getattr(e, "word_preview_pdf", True) else 0
+            params["word_pdf_max_pages"] = int(getattr(e, "word_preview_max_pages", 0) or 0)
         scale = e.preview_scale
         max_pixels = e.preview_max_pixels
         seq_before = clipboard_image.sequence_number()
         state: Dict[str, Any] = {"png": None, "info": {}, "clip_error": "", "exported": None,
                                  "chunks": [], "emf": [], "recopies": 0, "owner_error": False,
-                                 "method": ""}
+                                 "method": "", "pdf_parts": [], "pdf": None}
 
         def handler(cmd: str, args: List[str], worker: _WorkerProcess) -> None:
             if cmd == "RETRY":
                 # Word を起こし直して2回目。1回目の書きかけは捨てる
-                state.update(emf=[], chunks=[], exported=None, recopies=0, clip_error="", owner_error=False)
+                state.update(emf=[], chunks=[], exported=None, recopies=0, clip_error="", owner_error=False,
+                             pdf_parts=[], pdf=None)
+            elif cmd == "PDFDATA" and args:
+                state["pdf_parts"].append(args[0])
+            elif cmd == "PDFDONE":
+                # Word の文書を PDF にしたもの。PDF でなければ1ページ目の絵に切り替えさせる
+                try:
+                    data = base64.b64decode("".join(state["pdf_parts"]), validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    data, reason = b"", f"base64 を戻せない: {exc}"
+                else:
+                    reason = "" if looks_like_pdf(data) else f"PDF の形でない({len(data)} バイト)"
+                state["pdf_parts"] = []
+                if reason:
+                    self.log.warning("Word の PDF を使えないため、1ページ目の絵にします: %s", reason)
+                    worker.send("PAGE")
+                else:
+                    state["pdf"] = data
+                    worker.send("OK")
             elif cmd == "EMFDATA" and args:
                 state["emf"].append(args[0])
             elif cmd == "EMFDONE":
@@ -615,6 +671,12 @@ class VbsExcelBackend:
         meta = dict(sheet=res.get("item.1.sheet", ""), range_address=res.get("item.1.range", ""),
                     range_source=res.get("item.1.range_source", ""),
                     notice=self._notice(res, 1, path, owner, "プレビュー"))
+        if state["pdf"]:
+            # Word の文書の PDF。画面がそのまま出す(シート・範囲の代わりにページ数)
+            pages, pdf_pages = _int(res.get("item.1.pages", "")), _int(res.get("item.1.pdf_pages", ""))
+            return PreviewImage(state["pdf"], PDF_MIME, method="word-pdf", pages=pages, pdf_pages=pdf_pages,
+                                range_address=pdf_range_label(pages, pdf_pages), range_source="word_pdf",
+                                notice=meta["notice"])
         if state["png"]:
             # 画像取得後に Excel の終了で止まった場合も、画像は使える（Excel は強制終了済み）
             info = state["info"]
@@ -1093,11 +1155,15 @@ class DummyExcelBackend:
         self.print_delay = print_delay
         self.preview_delay = preview_delay
 
-    def preview(self, path: str) -> PreviewImage:
+    def preview(self, path: str, pdf: bool = True) -> PreviewImage:
         time.sleep(self.preview_delay)
         if not os.path.isfile(path):
             raise ExcelError("FILE_NOT_FOUND", path)
         name = os.path.splitext(os.path.basename(path))[0]
+        if pdf and kind_of(path) == "word":
+            # Word の点検表は PDF(本物と同じ見せ方を、Word 無しで確かめられるように)
+            return PreviewImage(_dummy_pdf(), PDF_MIME, method="dummy-pdf", pages=1, pdf_pages=1,
+                                range_address=pdf_range_label(1, 1), range_source="dummy")
         return PreviewImage(_dummy_svg(name).encode("utf-8"), "image/svg+xml", sheet="Sheet1",
                             range_address="A1:P40", range_source="dummy", method="dummy", width=794, height=1123)
 
@@ -1126,6 +1192,29 @@ class DummyExcelBackend:
 
     def selftest(self) -> Dict[str, Any]:
         return {"ok": True, "version": "dummy", "code": "", "detail": "模擬モード", "seconds": 0}
+
+
+def _dummy_pdf() -> bytes:
+    """模擬モードの Word のプレビュー: A4 1ページの小さな PDF(文字は ASCII だけ)。"""
+    text = b"BT /F1 28 Tf 60 760 Td (DEMO PREVIEW - Word is not used) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(text), text),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
 
 
 def _dummy_svg(title: str) -> str:
@@ -1209,10 +1298,11 @@ class ExcelService:
             self._activity = None
             self._lock.release()
 
-    def preview(self, path: str) -> PreviewImage:
+    def preview(self, path: str, pdf: bool = True) -> PreviewImage:
+        """プレビュー。Word の点検表は PDF(`pdf=False` なら、これまでの画像)。"""
         if not os.path.isfile(path):
             raise ExcelError("FILE_NOT_FOUND", path)
-        return self.backend.preview(path)
+        return self.backend.preview(path, pdf=pdf)
 
     def print_files(self, files: List[str], copies: int, on_event: Callable[..., None],
                     should_continue: Callable[[], bool]) -> List[ItemOutcome]:

@@ -284,8 +284,11 @@ class ThemeDefaultTests(unittest.TestCase):
     def test_カレンダーと点検表はライト(self) -> None:
         self.assertIn("value = get(KEY_THEME, THEME_LIGHT)",
                       self.text("tools", "calendar", "calendar_app", "settings.py"))
-        self.assertIn("return False if value is None else bool(value)",
-                      self.text("tools", "inspection", "app", "services", "settings_service.py"))
+        # 点検表は VER2.4.0 から theme_choice。選んでいなければ既定(大設定に従う)、サーバが描くのはライト
+        service = self.text("tools", "inspection", "app", "services", "settings_service.py")
+        self.assertIn('return value if value in THEMES else THEME_DEFAULT', service)
+        self.assertIn('return self.theme_choice() == "dark"', service)
+        self.assertIn('const DEFAULT = "light";', self.text("tools", "inspection", "app", "static", "js", "theme.js"))
 
 
 class LocationViewTests(unittest.TestCase):

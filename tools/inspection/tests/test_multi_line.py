@@ -243,7 +243,7 @@ class ManyTabsPreviewTest(unittest.TestCase):
         self.backend = DummyExcelBackend(print_delay=0, preview_delay=self.DELAY)
         made = []
         original = self.backend.preview
-        self.backend.preview = lambda path: (made.append(os.path.basename(path)), original(path))[1]
+        self.backend.preview = lambda path, pdf=True: (made.append(os.path.basename(path)), original(path, pdf=pdf))[1]
         self.made = made
         self.excel.backend = self.backend
         self.preview = PreviewService(make_cfg(preview_timeout_sec=30), inspection, self.excel,

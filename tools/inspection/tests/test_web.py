@@ -284,11 +284,14 @@ class PrintTests(WebTestBase):
 
 class SettingsTests(WebTestBase):
     def test_テーマを保存する(self) -> None:
-        self.assertFalse(self.get("/api/settings").get_json()["settings"]["dark_mode"], "既定はライト")
-        self.post("/api/settings", {"dark_mode": True})
+        self.addCleanup(self.post, "/api/settings", {"theme": "default"})
+        settings = self.get("/api/settings").get_json()["settings"]
+        self.assertFalse(settings["dark_mode"], "既定はライト")
+        self.assertEqual(settings["theme"], "default", "選んでいなければ既定(大設定に従う)")
+        self.post("/api/settings", {"theme": "dark"})
         self.assertTrue(self.get("/api/settings").get_json()["settings"]["dark_mode"])
         self.assertIn('data-theme="dark"', self.client.get("/").get_data(as_text=True))
-        self.post("/api/settings", {"dark_mode": False})
+        self.post("/api/settings", {"theme": "light"})
         self.assertFalse(self.get("/api/settings").get_json()["settings"]["dark_mode"])
         self.assertIn('data-theme="light"', self.client.get("/").get_data(as_text=True))
 

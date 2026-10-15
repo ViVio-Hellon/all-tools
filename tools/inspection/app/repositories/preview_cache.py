@@ -2,6 +2,10 @@
 
 キーには「ファイルのパス・更新日時・サイズ・プレビュー設定」を含めるため、
 現場で点検表 Excel を修正すると自動的に別キーになり、新しい画像が作られる。
+
+Word の点検表のプレビュー(PDF。VER2.4.0)も同じ控えに入る(`.pdf`)。画像と同じく、2回目からは
+すぐ出て、起動時の `prune` で古いもの・多すぎるものから消える。Word が書いた一時ファイルは
+処理プログラムがその場で消すので、ここに残るのは控えだけ。
 """
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-EXT_BY_MIME = {"image/png": ".png", "image/svg+xml": ".svg"}
+EXT_BY_MIME = {"image/png": ".png", "image/svg+xml": ".svg", "application/pdf": ".pdf"}
 
 
 class PreviewCache:
@@ -48,12 +52,17 @@ class PreviewCache:
         return meta
 
     def read(self, key: str) -> Optional[Tuple[bytes, str]]:
+        found = self.read_with_meta(key)
+        return (found[0], found[1]) if found else None
+
+    def read_with_meta(self, key: str) -> Optional[Tuple[bytes, str, Dict[str, Any]]]:
+        """中身・種類・控えの情報(点検表の名前など)。"""
         meta = self.get_meta(key)
         if not meta:
             return None
         try:
             with open(os.path.join(self.dir, meta["file"]), "rb") as fp:
-                return fp.read(), meta.get("mime", "application/octet-stream")
+                return fp.read(), meta.get("mime", "application/octet-stream"), meta
         except OSError:
             return None
 

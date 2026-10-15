@@ -191,7 +191,8 @@ THEME_FILES = {
     "nippou": ("app/static/js/theme.js", "app/templates/base.html"),
     "kanban": ("app/static/js/theme.js", "app/templates/base.html"),
     "calendar": ("app/static/js/theme.js", "app/templates/base.html"),
-    "inspection": ("app/static/js/inspection.js", "app/templates/base.html"),
+    # 点検表は VER2.4.0 から theme.js(選んでいなければ「◇ 既定」= 大設定に従う)
+    "inspection": ("app/static/js/theme.js", "app/templates/base.html"),
 }
 
 

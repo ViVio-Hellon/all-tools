@@ -16,7 +16,7 @@
 {% block ribbon_tools %}
 <button class="btn" type="button" id="btn-refresh" title="フォルダを読み直します"><span class="gl">↻</span>再読込</button>
 <button class="btn" type="button" id="btn-settings"><span class="gl">▤</span>設定</button>
-<button class="btn" type="button" id="btn-theme" title="表示の明るさを切り替えます">ライト</button>
+<button class="btn" type="button" id="btn-theme" title="画面の明るさを切り替えます(ライト → ダーク → 既定)">{{ {'light': '☀ ライト', 'dark': '☾ ダーク'}.get(theme, '◇ 既定') }}</button>
 {% endblock %}
 
 {% block content %}
@@ -107,7 +107,7 @@
     <h2 id="pv-title">プレビュー</h2>
     <div class="btn-row">
       <button class="btn btn--sm" type="button" id="pv-fit" aria-pressed="true">全体表示</button>
-      <button class="btn btn--sm" type="button" id="pv-regenerate" title="Excel・Wordから画像を作り直します">作り直す</button>
+      <button class="btn btn--sm" type="button" id="pv-regenerate" title="Excel・Wordから画像(Word は PDF)を作り直します">作り直す</button>
       <button class="btn btn--sm" type="button" id="pv-close">閉じる</button>
     </div>
   </header>
@@ -115,6 +115,8 @@
     <ul class="preview__list" id="pv-list" role="listbox" aria-label="選択中の点検表"></ul>
     <div class="preview__view fit" id="pv-view">
       <img id="pv-image" alt="" hidden>
+      {# Word の点検表は PDF(VER2.4.0)。サーバが inline で返し、ブラウザ・WebView2 の PDF 表示が出す #}
+      <iframe class="preview__pdf" id="pv-pdf" title="プレビュー(PDF)" hidden></iframe>
       <div class="preview__msg" id="pv-message"></div>
     </div>
   </div>

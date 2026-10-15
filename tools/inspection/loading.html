@@ -141,6 +141,18 @@ body::after{
   </div>
 </main>
 <script>
+/* 日報複合ツールの大きなタブの画面から「画面の色の既定」が届く(枠を開くたび。入口の shell.js の
+   sendTheme)。この画面の色は帯と同じで変えないが、**覚えておく** ── 次に出る点検表の画面が、
+   描く前にその色を当てられる(白く光ってから暗くならない。app/static/js/theme.js と同じ鍵) */
+(function () {
+  if (window.parent === window) return;
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (ev.source !== window.parent) return;
+    if (!d || d.type !== "alltools:theme" || (d.theme !== "light" && d.theme !== "dark")) return;
+    try { localStorage.setItem("inspection.theme_default", d.theme); } catch (e) { /* 覚えられない */ }
+  });
+})();
 function bootWatch(opt) {
   var steps = document.getElementById("steps");
   var bar = document.getElementById("bar");

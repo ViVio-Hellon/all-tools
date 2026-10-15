@@ -1,8 +1,13 @@
 /*
   preview.js — 点検表のプレビュー(VBA版 UFPreview)
 
-  Excel で点検表を開き、CopyPicture で作った画像を出す(Word の点検表は Word で1ページ目)。
-  画像はサーバが控えるので、2回目からはすぐに出る。
+  Excel で点検表を開き、CopyPicture で作った画像を出す。
+  Word の点検表は **PDF**(VER2.4.0。Word で PDF にしたものを枠の中にそのまま出す。全ページ。
+  ダウンロードにはしない)。画像も PDF もサーバが控えるので、2回目からはすぐに出る。
+
+  【PDF を出せない画面】PDF の表示が切られた WebView2・ブラウザ(`navigator.pdfViewerEnabled`
+  が false)では枠に入れない ── 入れると PDF がダウンロードされてしまう。断りを出し、
+  「画像で表示する」でこれまでの1ページ目の絵を頼めるようにする。
 */
 
 import { api, tokenUrl } from "./api.js";
@@ -11,7 +16,7 @@ import * as running from "./running.js";
 import { toast } from "./toast.js";
 
 const $ = (id) => document.getElementById(id);
-const view = { items: [], index: -1, req: 0, fit: true };
+const view = { items: [], index: -1, req: 0, fit: true, image: false };
 // ↑↓で送っているあいだは、止まってから頼む。押しっぱなしで全部の点検表を
 // Excel に作らせない(サーバも、次の要求が来た前の要求は順番待ちをやめる)
 const KEY_SETTLE_MS = 180;
@@ -66,14 +71,59 @@ function message(nodes, isError = false) {
   for (const n of nodes || []) box.appendChild(n);
 }
 
+/** この画面で PDF を出せるか。分からない(古いブラウザ)なら出せるものとして試す */
+export function canShowPdf() {
+  return navigator.pdfViewerEnabled !== false;
+}
+
+/** PDF の枠を空にする(プレビューを閉じた・次の点検表へ移った。前の PDF を出したままにしない) */
+function clearPdf() {
+  const frame = $("pv-pdf");
+  frame.hidden = true;
+  frame.removeAttribute("src");
+}
+
+function showPdf(item, data) {
+  const frame = $("pv-pdf");
+  frame.title = `${item.name} のプレビュー(PDF)`;
+  // 作り直したときに前の PDF の控えを出さない(名前は同じキー)。#view=FitH で横幅に合わせる
+  frame.src = `${tokenUrl(data.pdf_url)}&g=${encodeURIComponent(data.generated_at || "")}#view=FitH`;
+  frame.hidden = false;
+  message([]);
+}
+
+/** PDF を出せない画面の断り。これまでの画像(1ページ目)を頼めるようにする */
+function pdfUnavailable(item) {
+  $("pv-status").textContent = `PDF を表示できません: ${item.name}`;
+  const asImage = el("button", "btn btn--sm", "画像で表示する(1ページ目)");
+  asImage.type = "button";
+  asImage.addEventListener("click", () => { view.image = true; select(view.index); });
+  message([el("b", null, "この画面では PDF を表示できません。"),
+           el("span", null, "Word の点検表のプレビューは PDF で表示します。PDF の表示が切られている"
+                            + "(Edge・WebView2 の設定や会社の決まり)と、ここには出せません。"),
+           el("span", null, "「画像で表示する」で、これまでどおり1ページ目を画像にします"
+                            + "(Word が途中で終わる文書があります)。"),
+           asImage], true);
+}
+
 async function show(item, force, settleMs = 0) {
   const no = ++view.req;
   const img = $("pv-image");
   img.hidden = true;
   img.removeAttribute("src");
+  clearPdf();
+  const word = sheet.appOf(item) === "Word";
+  const image = view.image;              // 「画像で表示する」を押したとき(Word の点検表)
+  setFitShown(!word || image);
+  // PDF を出せない画面では、作る前に断る(作ってから「出せません」では待たせ損)
+  if (word && !image && !canShowPdf()) {
+    pdfUnavailable(item);
+    return;
+  }
   $("pv-status").textContent = "プレビューを作成しています...";
   // 点検表の種類で言い分ける(Word の点検表なのに「Excel で…」と出ていた)
-  message([el("span", "spinner"), el("b", null, `${sheet.appOf(item)} で画像を作成しています`),
+  const making = word && !image ? "Word で PDF を作成しています" : `${sheet.appOf(item)} で画像を作成しています`;
+  message([el("span", "spinner"), el("b", null, making),
            el("span", null, "初回は数秒～十数秒かかります(2回目からはすぐに表示されます)")]);
   if (settleMs) {
     await sleep(settleMs);
@@ -81,8 +131,15 @@ async function show(item, force, settleMs = 0) {
   }
   running.set({ label: "プレビュー", message: item.name, current: 0, total: 0 });
   try {
-    const data = await api.post("/api/preview", { id: item.id, force });
+    const data = await api.post("/api/preview", { id: item.id, force, image });
     if (no !== view.req) return;           // 別の点検表に切り替え済み
+    if (data.format === "pdf") {
+      showPdf(item, data);
+      const info = [data.range || (data.pages ? `全 ${data.pages} ページ` : ""), data.cached ? "控えの PDF" : ""];
+      $("pv-status").textContent = `表示中: ${item.name}(PDF${info.filter(Boolean).map((t) => ` / ${t}`).join("")})`;
+      if (data.notice) toast(data.notice, "info");
+      return;
+    }
     img.onload = () => { if (no === view.req) { message([]); img.hidden = false; } };
     img.onerror = () => { if (no === view.req) fail(item, "プレビュー画像を読み込めませんでした。", ""); };
     img.alt = `${item.name} のプレビュー`;
@@ -113,6 +170,11 @@ function fail(item, text, detail, ref = "") {
   message(nodes, true);
 }
 
+/** 全体表示・実寸表示は画像のときだけ(PDF は PDF の表示が拡大縮小を持つ) */
+function setFitShown(shown) {
+  $("pv-fit").hidden = !shown;
+}
+
 function setFit(fit) {
   view.fit = fit;
   $("pv-view").classList.toggle("fit", fit);
@@ -127,7 +189,12 @@ export function init() {
   $("pv-regenerate").addEventListener("click", () => select(view.index, true));
   $("pv-fit").addEventListener("click", () => setFit(!view.fit));
   $("pv-image").addEventListener("click", () => setFit(!view.fit));
-  $("preview-dialog").addEventListener("close", () => { view.req += 1; running.set(null); });
+  $("preview-dialog").addEventListener("close", () => {
+    view.req += 1;
+    view.image = false;                    // 「画像で表示する」はその回だけ
+    clearPdf();
+    running.set(null);
+  });
   $("preview-dialog").addEventListener("keydown", (ev) => {
     if (ev.key === "ArrowDown") { ev.preventDefault(); select(Math.min(view.index + 1, view.items.length - 1), false, KEY_SETTLE_MS); }
     if (ev.key === "ArrowUp") { ev.preventDefault(); select(Math.max(view.index - 1, 0), false, KEY_SETTLE_MS); }

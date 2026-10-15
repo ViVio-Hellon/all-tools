@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 {% if not theme_chosen %}
 <script>
-  /* 明暗を選んでいなければ、日報複合ツールの大設定の既定(`inspection.theme_default`。描く前に当てる) */
+  /* 明暗を選んでいなければ(「◇ 既定」)、日報複合ツールの大設定の既定(`inspection.theme_default`)、
+     それも無ければライト。**描く前に**当てる。選んだもの(`theme_choice`)はサーバが data-theme に書く
+     (js/theme.js・app/services/settings_service.py の【画面の明るさ】) */
   try {
     var shellTheme = localStorage.getItem("inspection.theme_default");
     if (shellTheme === "light" || shellTheme === "dark") document.documentElement.dataset.theme = shellTheme;
-  } catch (e) { /* 既定のまま */ }
+  } catch (e) { /* 既定のライト */ }
 </script>
 {% endif %}
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -93,7 +95,9 @@
     alivePollMs: {{ alive_poll_ms }},
     jobPollMs: {{ job_poll_ms }},
     version: {{ version | tojson }},
-    themeChosen: {{ (theme_chosen | default(true)) | tojson }}
+    themeChosen: {{ (theme_chosen | default(true)) | tojson }},
+    // 選んだ明暗(light / dark)。選んでいなければ "default"(大設定の既定に従う。js/theme.js)
+    theme: {{ (theme | default('default')) | tojson }}
   };
 </script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>

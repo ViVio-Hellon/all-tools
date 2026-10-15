@@ -4,6 +4,8 @@
   外枠(心拍・帯・終了)を繋いでから、点検表の画面を動かす。
 */
 
+// 画面の明るさ。**最初に読む** ── 大設定の「画面の色の既定」の合図を、読み込んだ時点から受ける
+import "./theme.js";
 import { api } from "./api.js";
 import * as busy from "./busy.js";
 import * as clientlog from "./clientlog.js";

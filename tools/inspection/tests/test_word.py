@@ -7,7 +7,8 @@
     ・既定の拡張子に doc / docx / docm を足す。前の版の既定(xlsm / xlsx / xls だけ)のままの
       設定ファイルは Word も足して読む。自分で決めた並びは触らない
     ・どちらで開くかは拡張子で決める(`kind.<i>` を処理プログラムへ添える)
-    ・Word のプレビューは1ページ目(EMFDATA)。描けなければクリップボード経由(COPY → COPIED)
+    ・Word のプレビューは PDF(VER2.4.0。PDFDATA。tests/test_word_pdf.py)。PDF にできない古い Word では
+      1ページ目(EMFDATA)、描けなければクリップボード経由(COPY → COPIED)
     ・Word を起動できなくても、同じ印刷の Excel の点検表は刷る
     ・Word は処理のたびに終える。利用者の文書が開いていれば残して、止めない
 """
@@ -152,9 +153,9 @@ class WordProtocolTest(unittest.TestCase):
         self.assertEqual(outcomes[1].code, "WORD_CREATE_FAILED")
         self.assertIn("Word", outcomes[1].message)
 
-    def test_Wordのプレビューは1ページ目の絵(self):
+    def test_PDFにできない古いWordなら1ページ目の絵(self):
         png = encode_rgb(2, 2, bytes([0, 0, 255] * 4))
-        FakeBackend.extra = {"fake_emf_hex": "deadbeef0102"}
+        FakeBackend.extra = {"fake_emf_hex": "deadbeef0102", "fake_pdf": "none"}
         got = {}
 
         def fake_emf_to_png(data, scale, max_pixels):
@@ -170,6 +171,7 @@ class WordProtocolTest(unittest.TestCase):
 
     def test_描けなければクリップボード経由に切り替える(self):
         png = encode_rgb(2, 2, bytes([0, 255, 0] * 4))
+        FakeBackend.extra = {"fake_pdf": "none"}
 
         def broken(data, scale, max_pixels):
             raise clipboard_image.ClipboardImageError("描けない")
@@ -184,6 +186,8 @@ class WordProtocolTest(unittest.TestCase):
         self.assertEqual(image.method, "clipboard-emf")
 
     def test_どちらも駄目なら理由を出す(self):
+        FakeBackend.extra = {"fake_pdf": "none"}
+
         def broken(*args, **kwargs):
             raise clipboard_image.ClipboardImageError("描けない")
 
@@ -465,7 +469,7 @@ _VBS_WORDS = {w.lower() for w in """
     Exit And Or Not Is Nothing True False Empty Null Call Select Case New Option Explicit On Error Resume
     GoTo ByVal ByRef In Mod Xor With ReDim Preserve
     Err WScript CreateObject GetObject Len Mid Replace LCase UCase Trim Split UBound LBound CStr CLng
-    CInt Hex AscW ChrW Right Left InStr vbCr vbLf TypeName IsObject Abs""".split()}
+    CInt Hex AscW ChrW Right Left InStr vbCr vbLf TypeName IsObject Abs DateDiff Now""".split()}
 
 
 def _undeclared(text):
@@ -566,7 +570,7 @@ class WordGoneTest(_FakeWordCase):
     """0x1CE(VBScript 462)= つかんでいた Word が途中で終わった。起こし直して1回だけやり直す。"""
 
     def test_1ページ目の絵でWordが落ちても_起こし直してクリップボード経由で出す(self):
-        FakeBackend.extra = {"fake_word_gone": "page"}
+        FakeBackend.extra = {"fake_word_gone": "page", "fake_pdf": "none"}
         png, patch = self.clipboard_png()
         with patch:
             image = self.backend.preview(self.word)
@@ -577,7 +581,7 @@ class WordGoneTest(_FakeWordCase):
         self.assertIn("1ページ目を絵にする所", lost[0]["stage"])
 
     def test_開く所でWordが終わっても_起こし直して1ページ目の絵を出す(self):
-        FakeBackend.extra = {"fake_word_gone": "open", "fake_emf_hex": "0a0b0c"}
+        FakeBackend.extra = {"fake_word_gone": "open", "fake_emf_hex": "0a0b0c", "fake_pdf": "none"}
         png = encode_rgb(2, 2, bytes([9, 9, 9] * 4))
         got = []
 
@@ -591,7 +595,7 @@ class WordGoneTest(_FakeWordCase):
         self.assertEqual(got, [bytes.fromhex("0a0b0c")], "1回目の書きかけを混ぜない")
 
     def test_2回とも終わったら_利用者がすることの分かる文で断る(self):
-        FakeBackend.extra = {"fake_word_gone": "page:twice"}
+        FakeBackend.extra = {"fake_word_gone": "page:twice", "fake_pdf": "none"}
         with self.assertRaises(ExcelError) as ctx:
             self.backend.preview(self.word)
         self.assertEqual(ctx.exception.code, "WORD_GONE")
@@ -607,7 +611,7 @@ class WordGoneTest(_FakeWordCase):
             self.addCleanup(proc.wait)
             self.addCleanup(proc.kill)
         FakeBackend.extra = {"fake_word_gone": "page", "fake_word_pid": str(first.pid),
-                             "fake_word_pid2": str(second.pid)}
+                             "fake_word_pid2": str(second.pid), "fake_pdf": "none"}
         adopted = []
         real_adopt = self.backend._adopt_word
 
@@ -661,7 +665,7 @@ class WordGoneTest(_FakeWordCase):
     def test_記録の種類は本当の原因にする_途中で終わったとは言わない(self):
         """利用者の報告では、ログの「なぜ」が「Excel を操作する処理プログラム(VBScript)が途中で
         終わった(WORKER_FAILED)」になっていた(実際は FINISH 4 = 点検表1件の失敗)。"""
-        FakeBackend.extra = {"fake_word_gone": "page:twice"}
+        FakeBackend.extra = {"fake_word_gone": "page:twice", "fake_pdf": "none"}
         with self.assertRaises(ExcelError):
             self.backend.preview(self.word)
         job = self.records("excel.job")[-1]
@@ -749,7 +753,9 @@ class UserWordTest(_FakeWordCase):
         text = _vbs_text()
         preview = _vbs_body(text, "Function RunPreviewWord(")
         self.assertEqual(preview.count("PreviewWordOnce("), 2)
-        self.assertIn('lostAt <> "word.page"', preview, "絵で落ちたら2回目はクリップボード経由")
+        # PDF にする所で落ちたら2回目は1ページ目の絵、絵で落ちたら2回目はクリップボード経由(VER2.4.0)
+        self.assertIn('If lostAt = "word.pdf" Then\r\n                way = "page"', preview)
+        self.assertIn('ElseIf lostAt = "word.page" Then\r\n                way = "copy"', preview)
         item = _vbs_body(text, "Function PrintWordItem(")
         self.assertEqual(item.count("TryPrintWord("), 2)
         self.assertIn('If lostAt = "word.print" Then', item, "印刷の途中で終わったら刷り直さない")

@@ -115,7 +115,7 @@ class ExportTests(DistributionTestCase):
 
     def test_設定していない項目は入れない(self):
         t = self.configured()
-        result = t.dist.export(NEW_PW, ["root_folder", "dark_mode"])
+        result = t.dist.export(NEW_PW, ["root_folder", "theme_choice"])
         self.assertTrue(result.ok)
         self.assertIn("既定のまま", result.message)
         data = json.loads((self.dist_dir / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))

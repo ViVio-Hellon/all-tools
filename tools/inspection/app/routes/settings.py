@@ -1,7 +1,8 @@
 """設定(点検表フォルダ・表示テーマ・管理者パスワード・配布設定)と診断情報
 
 - `GET  /api/settings`    … いまの設定(管理者パスワードは「変えてあるか」だけ。値は出さない)
-- `POST /api/settings`    … {root_folder} / {reset_root_folder} / {dark_mode}
+- `POST /api/settings`    … {root_folder} / {reset_root_folder} / {theme: light|dark|default}
+                            (前の版の画面の {dark_mode} も受ける)
 - `POST /api/settings/admin-password`         … {current, new, confirm} / {current, reset}
 - `POST /api/settings/distribution/export`    … {password, items}
 - `POST /api/settings/distribution/reapply`   … {password}
@@ -59,8 +60,14 @@ def update_settings():
                            "指定されたフォルダが見つかりません。パスを確認してください。", folder)
         biz.settings.update(root_folder=folder)
         rescan = True
-    if "dark_mode" in body:
-        biz.settings.update(dark_mode=bool(body.get("dark_mode")))
+    if "theme" in body:
+        theme = str(body.get("theme") or "")
+        if theme not in ("light", "dark", "default"):
+            raise ApiError(400, "BAD_THEME", "画面の明るさは ライト・ダーク・既定 から選んでください。", theme)
+        biz.settings.update(theme=theme)
+    elif "dark_mode" in body:
+        # 前の版の画面(入れ替えの前から開いていたタブ)から
+        biz.settings.update(theme="dark" if body.get("dark_mode") else "light")
     if rescan:
         from core import event_log
         event_log.record("settings.folder", event_log.INFO, before=before_folder,
