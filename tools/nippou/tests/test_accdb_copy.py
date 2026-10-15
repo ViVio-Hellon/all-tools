@@ -131,7 +131,12 @@ class SharedPageColumnTests(unittest.TestCase):
         self.push(page=2)
         self.assertEqual(rows(self.db, 'SELECT "頁", "ページ" FROM "T_日報明細_L-1" WHERE "直"=?',
                               "1直"), [(2, 2)])
-        page = sb.page_column(sqlite3.connect(self.db), "T_日報明細_L-1")
+        # 開いたまま捨てると、Windows では一時フォルダの後片付けで消せずに落ちる
+        conn = sqlite3.connect(self.db)
+        try:
+            page = sb.page_column(conn, "T_日報明細_L-1")
+        finally:
+            conn.close()
         self.assertEqual(page.names, ("頁", "ページ"))
         self.assertEqual(page.main, "頁")
         found = shared_reports.lot_rows(["L-1"], dt.date(2026, 7, 1), dt.date(2026, 7, 31),
