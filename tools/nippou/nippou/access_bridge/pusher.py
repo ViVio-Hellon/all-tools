@@ -26,6 +26,22 @@ Access側スキーマ変更(送信ID列+一意インデックスの追加)を本
 このモジュール(またはODBC版の :mod:`.odbc_backend`)のDELETE+INSERT方式を
 使う。``outbox_sync`` は、他のVBA移行プロジェクトで「追記専用テーブルを
 Accessへ送る」ような場面向けに ``dbkit`` 側に残してある。
+
+【書き先が Access のとき ── VBA の表に合わせて書く(v4.36.0)】
+
+    VBA の日報をまだしばらく使い続けるか → 使います
+
+書き先の .accdb は VBA が書き続けている表です。**こちらの形に表を変えません。**
+
+    ・ページの列は**その表にある名前**で書く(VBA の表は `頁`。`build_header_statements`)
+    ・作業停止④⑤(S4〜TH5)の列が無い表には④⑤を書かない。**列を ALTER TABLE で足さない**
+      (VBA が列名を書かずに INSERT していると、列が増えた表で壊れるので)。④⑤を打った
+      ページは「Access の表に作業停止④⑤の列が無いので、④⑤は共有へ出ていません」と
+      知らせる(`PushSummary.notices`)。手元には残っています
+
+表の列は、ACE を使わない内蔵の読み取り(`nippou/accdb`)で .accdb のファイルを読んで
+知ります(`access_table`)。読めなかったときは VBA の形(`頁`・④⑤なし)とみなします。
+v4.35.3 までは、送る前に明細表へ④⑤の列を ALTER TABLE で足していました(やめました)。
 """
 from __future__ import annotations
 
@@ -38,6 +54,14 @@ from ..db.models import DetailRecord, HeaderRecord
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
 from . import script_gen
+from .sqlite_backend import (
+    DETAIL_COLUMNS,
+    HEADER_COLUMNS,
+    PAGE,
+    STOP45_COLUMNS,
+    PageColumn,
+    page_names_of,
+)
 from .errors import AccessBridgeError, ErrorKind
 from .lock import check_concurrent_access
 from .runner import ScriptRunner, run_with_retry
@@ -89,52 +113,144 @@ def _lit(value: str) -> str:
     return script_gen.sql_literal(value, "TEXT")
 
 
-def build_header_statements(header: HeaderRecord) -> list[str]:
-    key_where = (
+# ------------------------------------------------------------------
+# 書き先が Access のときの表の形(v4.36.0)
+# ------------------------------------------------------------------
+@dataclass(frozen=True)
+class AccessTable:
+    """書き先の Access の表の列。`columns` が None なら**見られなかった**(VBA の形とみなす)。"""
+
+    columns: Optional[tuple[str, ...]] = None
+
+    @property
+    def page(self) -> PageColumn:
+        """ページの列。見られなかったときは VBA の `頁`。"""
+        if self.columns is None:
+            return PageColumn((PAGE,))
+        return PageColumn(page_names_of(self.columns) or (PAGE,))
+
+    def has(self, column: str) -> bool:
+        """その列に書くか。見られなかったときは VBA の表にある列だけ(④⑤は書かない)。"""
+        if self.columns is None:
+            return column not in STOP45_COLUMNS
+        return column in self.columns
+
+    @property
+    def stops45(self) -> bool:
+        """作業停止④⑤の列が全部あるか。"""
+        return all(self.has(c) for c in STOP45_COLUMNS)
+
+
+#: VBA `NippouDB_EnsureTables` の形(`頁`・④⑤なし)。表を見られなかったときもこれ
+VBA_TABLE = AccessTable()
+
+#: 書き先(.accdb)ごとの「表の名前 → 列」。**1回の共有へ保存で1回だけ読む**
+#: (`push_pending` の頭で忘れる)。読めなかったファイルは None
+_access_columns: dict[str, Optional[dict[str, tuple[str, ...]]]] = {}
+
+
+def _read_access_columns(accdb_path: Path) -> Optional[dict[str, tuple[str, ...]]]:
+    """.accdb の表ごとの列(内蔵の読み取り。ACE を使わない)。読めなければ None。"""
+    from ..accdb import reader
+
+    try:
+        with reader.AccdbReader(str(accdb_path)) as db:
+            return {name: tuple(c.name for c in db.columns(name))
+                    for name in db.table_names()}
+    except Exception as exc:                      # noqa: BLE001 - VBA の形とみなして続ける
+        _logger.warning("書き先の Access の表の列を読めませんでした(VBA の形とみなします)"
+                        " %s: %s", accdb_path, exc)
+        return None
+
+
+def access_table(accdb_path: Path, table: str) -> AccessTable:
+    """書き先の Access の表の形。ファイルを読めない・表が無いときは VBA の形。"""
+    key = str(accdb_path)
+    if key not in _access_columns:
+        _access_columns[key] = _read_access_columns(Path(accdb_path))
+    found = _access_columns[key]
+    if found is None or table not in found:
+        return VBA_TABLE
+    return AccessTable(found[table])
+
+
+def forget_access_tables() -> None:
+    _access_columns.clear()
+
+
+def _header_literals(header: HeaderRecord) -> dict[str, str]:
+    """見出しの1行を Access の SQL の値に(列の名前は中の呼び名 ── `HEADER_COLUMNS`)。"""
+    return {
+        "報告日": _lit(header.report_date), "ライン": _lit(header.line),
+        "直": _lit(header.shift), PAGE: str(header.page),
+        "担当者": _lit(header.worker), "昼勤": _lit(header.day_shift),
+        "枚数": _lit(header.count), "重量Kg": _lit(header.weight_kg),
+        "Lot数": _lit(header.lot_count), "係数Lot数": _lit(header.coefficient_lot_count),
+        "理由": _lit(header.reason), "保存日時": "Now()",
+    }
+
+
+def _detail_literals(header: HeaderRecord, d: DetailRecord) -> dict[str, str]:
+    from .sqlite_backend import _detail_values
+
+    out = {}
+    for column, value in zip(DETAIL_COLUMNS, _detail_values(header, d)):
+        out[column] = str(value) if column in (PAGE, "行番号") else _lit(value)
+    return out
+
+
+def _key_where(header: HeaderRecord, table: AccessTable) -> str:
+    """そのページを指す WHERE。ページは**主の列**で比べる(Access の SQL に COALESCE は無い)。"""
+    return (
         f"[報告日]={_lit(header.report_date)} AND [ライン]={_lit(header.line)} "
-        f"AND [直]={_lit(header.shift)} AND [ページ]={header.page}"
+        f"AND [直]={_lit(header.shift)} AND [{table.page.main}]={header.page}"
     )
-    delete_sql = f"DELETE FROM [{header_table_name(header.line)}] WHERE {key_where}"
-    insert_sql = (
-        f"INSERT INTO [{header_table_name(header.line)}] "
-        "([報告日],[ライン],[直],[ページ],[担当者],[昼勤],[枚数],[重量Kg],[Lot数],[係数Lot数],[理由],[保存日時]) "
-        "VALUES ("
-        f"{_lit(header.report_date)},{_lit(header.line)},{_lit(header.shift)},{header.page},"
-        f"{_lit(header.worker)},{_lit(header.day_shift)},{_lit(header.count)},{_lit(header.weight_kg)},"
-        f"{_lit(header.lot_count)},{_lit(header.coefficient_lot_count)},{_lit(header.reason)},Now())"
-    )
-    return [delete_sql, insert_sql]
 
 
-def build_detail_statements(header: HeaderRecord, details: list[DetailRecord]) -> list[str]:
-    key_where = (
-        f"[報告日]={_lit(header.report_date)} AND [ライン]={_lit(header.line)} "
-        f"AND [直]={_lit(header.shift)} AND [ページ]={header.page}"
-    )
-    statements = [f"DELETE FROM [{detail_table_name(header.line)}] WHERE {key_where}"]
+def _insert(table_name: str, logical: tuple[str, ...], literals: dict[str, str],
+            table: AccessTable) -> str:
+    """その表にある列だけで INSERT する。ページの列はその表の名前(両方あれば両方)。"""
+    page = table.page
+    columns: list[str] = []
+    values: list[str] = []
+    for column in logical:
+        if column == PAGE:
+            for name in page.write_names:
+                columns.append(name)
+                values.append(literals[PAGE])
+        elif table.has(column):
+            columns.append(column)
+            values.append(literals[column])
+    return (f"INSERT INTO [{table_name}] ({','.join(f'[{c}]' for c in columns)}) "
+            f"VALUES ({','.join(values)})")
 
-    columns = (
-        "[報告日],[ライン],[直],[ページ],[行番号],"
-        "[LOT],[ZAI],[SIZ],[KEN],[KZ],[KH],[SZ],[SH],[HIT],[AI],"
-        "[MAI],[TUT],[VC],[ET],[S],[TH],[SS],[THS],[STH],[THT],"
-        "[CON],[WEI],[TIM],[UNI],"
-        "[Others1],[Others2],[Others3],[Others4],[Others5],[Others6],[係数],"
-        "[S4],[TH4],[S5],[TH5]"
-    )
+
+def build_header_statements(header: HeaderRecord,
+                            table: AccessTable = VBA_TABLE) -> list[str]:
+    """1ページの見出しを入れ替える2文。`table` は書き先の表の形(既定は VBA の形)。"""
+    name = header_table_name(header.line)
+    delete_sql = f"DELETE FROM [{name}] WHERE {_key_where(header, table)}"
+    return [delete_sql, _insert(name, HEADER_COLUMNS, _header_literals(header), table)]
+
+
+def build_detail_statements(header: HeaderRecord, details: list[DetailRecord],
+                            table: AccessTable = VBA_TABLE) -> list[str]:
+    """1ページの明細を入れ替える文。**その表に無い列(VBA の表の④⑤)は書かない。**"""
+    name = detail_table_name(header.line)
+    statements = [f"DELETE FROM [{name}] WHERE {_key_where(header, table)}"]
     for d in details:
-        values = ",".join(
-            [
-                _lit(header.report_date), _lit(header.line), _lit(header.shift), str(header.page), str(d.row_no),
-                _lit(d.lot), _lit(d.zai), _lit(d.siz), _lit(d.ken), _lit(d.kz), _lit(d.kh), _lit(d.sz), _lit(d.sh),
-                _lit(d.hit), _lit(d.ai), _lit(d.mai), _lit(d.tut), _lit(d.vc), _lit(d.et), _lit(d.s), _lit(d.th),
-                _lit(d.ss), _lit(d.ths), _lit(d.sth), _lit(d.tht), _lit(d.con), _lit(d.wei), _lit(d.tim), _lit(d.uni),
-                _lit(d.others1), _lit(d.others2), _lit(d.others3), _lit(d.others4), _lit(d.others5), _lit(d.others6),
-                _lit(d.keisu),
-                _lit(d.s4), _lit(d.th4), _lit(d.s5), _lit(d.th5),
-            ]
-        )
-        statements.append(f"INSERT INTO [{detail_table_name(header.line)}] ({columns}) VALUES ({values})")
+        statements.append(_insert(name, DETAIL_COLUMNS, _detail_literals(header, d), table))
     return statements
+
+
+def has_stops45(details: list[DetailRecord]) -> bool:
+    """作業停止④⑤を打った行があるか。"""
+    return any((d.s4 or "").strip() or (d.th4 or "").strip()
+               or (d.s5 or "").strip() or (d.th5 or "").strip() for d in details)
+
+
+#: ④⑤を書けなかったときの知らせ(利用者に決めてもらった言い方のまま)
+NO_STOPS45_NOTICE = "Access の表に作業停止④⑤の列が無いので、④⑤は共有へ出ていません"
 
 
 @dataclass
@@ -153,6 +269,10 @@ class PushSummary:
     summaries: int = 0
     #: 「中止」で送らずに残したページの数(次に押せば続きから)
     stopped: int = 0
+    #: 送れたが、知らせておくこと(書き先が Access で④⑤を書けなかった、など。v4.36.0)
+    notices: list[str] = field(default_factory=list)
+    #: ④⑤を書けなかったページ(知らせの中身。`notices` はここから作る)
+    no_stops45: list[tuple[str, str, str, int]] = field(default_factory=list)
 
 
 def push_pending(
@@ -172,6 +292,8 @@ def push_pending(
     """
     summary = PushSummary()
     wanted = None if keys is None else {tuple(k) for k in keys}
+    # 書き先が Access のとき、表の列は**押すたびに読み直す**(VBA の側で表が変わるかもしれない)
+    forget_access_tables()
 
     # **`.laccdb` は Access のしくみ。** sqlite3 にそれは無く、同時に書こうと
     # しても待てば通る(`busy_timeout`)ので、ここで警告を出す意味がない ──
@@ -214,6 +336,13 @@ def push_pending(
 
     if not summary.stopped:
         summary.summaries = _push_summaries(repo, accdb_path, held=held)
+    if summary.no_stops45:
+        first = summary.no_stops45[0]
+        where = f"{first[0]} {first[1]} {first[2]} {first[3]}ページ"
+        more = len(summary.no_stops45) - 1
+        summary.notices.append(
+            f"{NO_STOPS45_NOTICE}(手元には残っています。{where}"
+            + (f" ほか{more}ページ" if more else "") + ")")
     return summary
 
 
@@ -365,41 +494,6 @@ def _push_summaries_one_by_one(repo: NippouRepository, accdb_path: Path,
     return sent
 
 
-#: あとから増えた明細の列(Access の表に無ければ足す)。作業停止④⑤(v4.24.0)
-ADDED_DETAIL_COLUMNS: tuple[str, ...] = ("S4", "TH4", "S5", "TH5")
-#: このプロセスで列を足し終えた(書き先, 表)。**1つの表には1回だけ**流す
-_columns_ensured: set[tuple[str, str]] = set()
-
-
-def add_columns_statements(table: str) -> list[str]:
-    return [f"ALTER TABLE [{table}] ADD COLUMN [{c}] TEXT(255)" for c in ADDED_DETAIL_COLUMNS]
-
-
-def _ensure_access_columns(accdb_path: Path, line: str,
-                           runner: Optional[ScriptRunner]) -> None:
-    """共有の Access の明細表に、作業停止④⑤の列を足す(もう有れば何もしない)。
-
-    足さないと、日報の INSERT が「列がありません」で断られ、共有へ保存
-    できなくなります。失敗しても日報の送信は続けます(断られた理由が
-    そちらで出るので)。
-    """
-    table = detail_table_name(line)
-    key = (str(accdb_path), table)
-    if key in _columns_ensured:
-        return
-    statements = add_columns_statements(table)
-    try:
-        if SETTINGS.access_backend == "odbc":
-            from .odbc_backend import add_columns_odbc
-            add_columns_odbc(accdb_path, statements)
-        else:
-            script = script_gen.build_add_columns_script(str(accdb_path), statements)
-            (runner or ScriptRunner()).run(script)
-        _columns_ensured.add(key)
-    except Exception:  # noqa: BLE001 - 日報の送信は続ける
-        _logger.exception("Access の表に作業停止④⑤の列を足せませんでした table=%s", table)
-
-
 def _push_one(
     repo: NippouRepository,
     accdb_path: Path,
@@ -425,20 +519,22 @@ def _push_one(
         result = push_records(
             Path(accdb_path), header, details,
             header_table_name(header.line), detail_table_name(header.line))
-    elif SETTINGS.access_backend == "odbc":
-        from .odbc_backend import push_statements_odbc
-        _ensure_access_columns(accdb_path, header.line, runner)
-        statements = (build_header_statements(header)
-                      + build_detail_statements(header, details))
-        result = push_statements_odbc(accdb_path, statements)
     else:
-        _ensure_access_columns(accdb_path, header.line, runner)
-        statements = (build_header_statements(header)
-                      + build_detail_statements(header, details))
-        result = run_with_retry(
-            lambda: script_gen.build_push_script(str(accdb_path), statements),
-            runner=runner,
-        )
+        # **VBA の表に合わせて書く**(列を足さない ── 冒頭)
+        head_table = access_table(accdb_path, header_table_name(header.line))
+        rows_table = access_table(accdb_path, detail_table_name(header.line))
+        statements = (build_header_statements(header, head_table)
+                      + build_detail_statements(header, details, rows_table))
+        if SETTINGS.access_backend == "odbc":
+            from .odbc_backend import push_statements_odbc
+            result = push_statements_odbc(accdb_path, statements)
+        else:
+            result = run_with_retry(
+                lambda: script_gen.build_push_script(str(accdb_path), statements),
+                runner=runner,
+            )
+        if result.success and not rows_table.stops45 and has_stops45(details):
+            summary.no_stops45.append(header.key())
 
     if result.success:
         repo.mark_synced(header.key())

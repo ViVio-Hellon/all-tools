@@ -10,6 +10,9 @@
 共有は**手元へ写して読みます**(`source_db`。共有のファイルを開かない)。
 Access のときや届かないときは読めないので None ── 判断の側が
 「確かめられませんでした」と添えて通します。
+
+共有の表のページの列は `頁`(VBA の形・v4.36.0 から作る表)か `ページ`(v4.35.3 まで)。
+**その表にあるほうで読みます**(`sqlite_backend.page_column`)。
 """
 from __future__ import annotations
 
@@ -37,12 +40,16 @@ def shared_pages(report_date: str, line: str, shift: str) -> Optional[list[int]]
             # フォルダはあるのにファイルが無い = まだ1度も送っていない。
             # フォルダごと見えない = 届かない(確かめられない)
             return [] if path.parent.is_dir() else None
+        from ..access_bridge import sqlite_backend
+
         table = pusher.header_table_name(line)
         if table not in source_db.list_tables(path):
             return []                            # そのラインはまだ1度も送っていない
+        page = sqlite_backend.PageColumn(
+            sqlite_backend.page_names_of(source_db.columns(path, table)))
         rows = source_db.read_query(
             path,
-            f'SELECT "ページ" AS p FROM {source_db.quote_identifier(table)}'
+            f'SELECT {page.sql()} AS p FROM {source_db.quote_identifier(table)}'
             ' WHERE "報告日"=? AND "ライン"=? AND "直"=?',
             [report_date, line, shift])
     except Exception as exc:                     # noqa: BLE001 - 読めないなら確かめられない

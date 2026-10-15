@@ -33,6 +33,10 @@ VBA は知らない表なので、触りません)。次に押したとき、「
 【Access のとき】
 日報データが `.accdb` のときは使えません(sqlite3 のときだけ)。読み取り(`backfill`)と
 同じ線引きです。
+
+【ページの列(v4.36.0)】
+前の表(VBA)は `頁`、正規の表は `頁`(v4.36.0 から作る表)か `ページ`(v4.35.3 までに
+作った表)。**表ごとに、その表にある列で読み書きします**(`sqlite_backend.page_column`)。
 """
 from __future__ import annotations
 
@@ -156,9 +160,11 @@ def _columns(conn, table: str) -> list[str]:
 
 
 def _rows(conn, table: str) -> list[dict[str, Any]]:
+    """表の行。ページは中の呼び名(`頁`)の鍵に揃える(表の列が「ページ」でも)。"""
+    page = backend.page_column(conn, table)
     cursor = conn.execute(f"SELECT * FROM {quote(table)}")
     names = [d[0] for d in cursor.description or []]
-    return [dict(zip(names, row)) for row in cursor.fetchall()]
+    return [page.normalized(dict(zip(names, row))) for row in cursor.fetchall()]
 
 
 def unknown_tables(tables: set[str]) -> list[str]:
@@ -189,7 +195,8 @@ def _read_old(conn, d: line_names.LineName, tables: set[str]) -> _Old:
     header_table, detail_table = HEADER_PREFIX + d.old, DETAIL_PREFIX + d.old
     extra: set[str] = set()
     if header_table in tables:
-        extra |= set(_columns(conn, header_table)) - set(backend.HEADER_COLUMNS)
+        extra |= (set(_columns(conn, header_table)) - set(backend.HEADER_COLUMNS)
+                  - set(backend.PAGE_NAMES))
         for row in _rows(conn, header_table):
             if line_names.same(row.get("ライン")) != d.old:
                 out.other_rows += 1
@@ -198,7 +205,8 @@ def _read_old(conn, d: line_names.LineName, tables: set[str]) -> _Old:
             out.headers[key] = row
             out.saved[key] = rule.text_of(row.get("保存日時"))
     if detail_table in tables:
-        extra |= set(_columns(conn, detail_table)) - set(backend.DETAIL_COLUMNS)
+        extra |= (set(_columns(conn, detail_table)) - set(backend.DETAIL_COLUMNS)
+                  - set(backend.PAGE_NAMES))
         for row in _rows(conn, detail_table):
             if line_names.same(row.get("ライン")) != d.old:
                 out.other_rows += 1
@@ -220,17 +228,19 @@ def _read_new(conn, d: line_names.LineName, tables: set[str]) -> dict[rule.PageK
     found: dict[rule.PageKey, str] = {}
     header_table, detail_table = HEADER_PREFIX + d.official, DETAIL_PREFIX + d.official
     if header_table in tables:
+        page = backend.page_column(conn, header_table).sql()
         for row in conn.execute(
-                f'SELECT "報告日", "直", "ページ", "保存日時" FROM {quote(header_table)}'
+                f'SELECT "報告日", "直", {page}, "保存日時" FROM {quote(header_table)}'
                 ' WHERE "ライン"=?', (d.official,)):
             values = tuple(row)
-            found[rule.page_key(dict(zip(("報告日", "直", "ページ"), values[:3])))] = \
+            found[rule.page_key(dict(zip(("報告日", "直", backend.PAGE), values[:3])))] = \
                 rule.text_of(values[3])
     if detail_table in tables:
+        page = backend.page_column(conn, detail_table).sql()
         for row in conn.execute(
-                f'SELECT DISTINCT "報告日", "直", "ページ" FROM {quote(detail_table)}'
+                f'SELECT DISTINCT "報告日", "直", {page} FROM {quote(detail_table)}'
                 ' WHERE "ライン"=?', (d.official,)):
-            found.setdefault(rule.page_key(dict(zip(("報告日", "直", "ページ"), row))), "")
+            found.setdefault(rule.page_key(dict(zip(("報告日", "直", backend.PAGE), row))), "")
     return found
 
 
@@ -280,20 +290,27 @@ def _key_values(official: str, key: rule.PageKey) -> tuple[Any, ...]:
     return (date, official, shift, page)
 
 
-def _delete_page(conn, d: line_names.LineName, key: rule.PageKey) -> None:
-    where = " AND ".join(f"{quote(c)}=?" for c in backend.HEADER_KEY)
+def _delete_page(conn, d: line_names.LineName, key: rule.PageKey,
+                 pages: tuple[backend.PageColumn, backend.PageColumn]) -> None:
+    head_page, detail_page = pages
     values = _key_values(d.official, key)
-    conn.execute(f"DELETE FROM {quote(DETAIL_PREFIX + d.official)} WHERE {where}", values)
-    conn.execute(f"DELETE FROM {quote(HEADER_PREFIX + d.official)} WHERE {where}", values)
+    conn.execute(f"DELETE FROM {quote(DETAIL_PREFIX + d.official)}"
+                 f" WHERE {backend.key_where(detail_page)}", values)
+    conn.execute(f"DELETE FROM {quote(HEADER_PREFIX + d.official)}"
+                 f" WHERE {backend.key_where(head_page)}", values)
 
 
 def _converted(row: dict[str, Any], columns: tuple[str, ...], official: str) -> tuple[Any, ...]:
-    """前の表の1行 → 正規の表の1行(ラインは正規、ページ・行番号は数に揃える)。"""
+    """前の表の1行 → 正規の表の1行(ラインは正規、ページ・行番号は数に揃える)。
+
+    `row` のページは中の呼び名(`頁`)の鍵(`_rows` が揃える)。並びは `columns` のまま
+    (書く列の名前へは `PageColumn.values` が広げる)。
+    """
     out = []
     for column in columns:
         if column == "ライン":
             out.append(official)
-        elif column in ("ページ", "行番号"):
+        elif column in (backend.PAGE, "行番号"):
             out.append(rule.number_of(row.get(column)))
         else:
             out.append(row.get(column))
@@ -302,22 +319,20 @@ def _converted(row: dict[str, Any], columns: tuple[str, ...], official: str) -> 
 
 def _write(conn, d: line_names.LineName, old: _Old, plan: rule.Plan, now: str) -> rule.Check:
     """1ラインぶんを書く(呼ぶ側がトランザクションを持つ)。書いたページを突き合わせる。"""
-    backend.ensure_tables(conn, HEADER_PREFIX + d.official, DETAIL_PREFIX + d.official)
+    pages = backend.ensure_tables(conn, HEADER_PREFIX + d.official, DETAIL_PREFIX + d.official)
+    head_page, detail_page = pages
     _ensure_track(conn)
     track_where = " AND ".join(f"{quote(c)}=?" for c in TRACK_KEY)
     for key in plan.keys(rule.RECOPY) + plan.keys(rule.GONE):
-        _delete_page(conn, d, key)
+        _delete_page(conn, d, key, pages)
     for key in plan.keys(rule.GONE):
         date, shift, page = key
         conn.execute(f"DELETE FROM {quote(TRACK_TABLE)} WHERE {track_where}",
                      (d.official, date, shift, page))
 
-    header_sql = (f"INSERT INTO {quote(HEADER_PREFIX + d.official)}"
-                  f" ({', '.join(quote(c) for c in backend.HEADER_COLUMNS)})"
-                  f" VALUES ({', '.join('?' for _ in backend.HEADER_COLUMNS)})")
-    detail_sql = (f"INSERT INTO {quote(DETAIL_PREFIX + d.official)}"
-                  f" ({', '.join(quote(c) for c in backend.DETAIL_COLUMNS)})"
-                  f" VALUES ({', '.join('?' for _ in backend.DETAIL_COLUMNS)})")
+    header_sql = backend.insert_sql(HEADER_PREFIX + d.official, backend.HEADER_COLUMNS, head_page)
+    detail_sql = backend.insert_sql(DETAIL_PREFIX + d.official, backend.DETAIL_COLUMNS,
+                                    detail_page)
     track_sql = (f"INSERT OR REPLACE INTO {quote(TRACK_TABLE)}"
                  f" ({', '.join(quote(c) for c in TRACK_COLUMNS)})"
                  f" VALUES ({', '.join('?' for _ in TRACK_COLUMNS)})")
@@ -327,9 +342,12 @@ def _write(conn, d: line_names.LineName, old: _Old, plan: rule.Plan, now: str) -
         header = old.headers.get(key)
         rows = old.details.get(key, {})
         if header is not None:
-            conn.execute(header_sql, _converted(header, backend.HEADER_COLUMNS, d.official))
-        conn.executemany(detail_sql, [_converted(row, backend.DETAIL_COLUMNS, d.official)
-                                      for row in rows.values()])
+            conn.execute(header_sql, head_page.values(
+                backend.HEADER_COLUMNS, _converted(header, backend.HEADER_COLUMNS, d.official)))
+        conn.executemany(detail_sql, [
+            detail_page.values(backend.DETAIL_COLUMNS,
+                               _converted(row, backend.DETAIL_COLUMNS, d.official))
+            for row in rows.values()])
         date, shift, page = key
         conn.execute(track_sql, (d.official, date, shift, page, d.old,
                                  old.saved.get(key, ""), now))
@@ -342,15 +360,19 @@ def _written_counts(conn, d: line_names.LineName,
     """正規の表にいまあるページ → (見出しがあるか, 明細の行数)。"""
     if not keys:
         return {}
-    headers = {rule.page_key(dict(zip(("報告日", "直", "ページ"), row))) for row in conn.execute(
-        f'SELECT "報告日", "直", "ページ" FROM {quote(HEADER_PREFIX + d.official)}'
+    head_page = backend.page_column(conn, HEADER_PREFIX + d.official).sql()
+    detail_page = backend.page_column(conn, DETAIL_PREFIX + d.official).sql()
+    names = ("報告日", "直", backend.PAGE)
+    headers = {rule.page_key(dict(zip(names, row))) for row in conn.execute(
+        f'SELECT "報告日", "直", {head_page} FROM {quote(HEADER_PREFIX + d.official)}'
         ' WHERE "ライン"=?', (d.official,))}
     rows: dict[rule.PageKey, int] = {}
     for row in conn.execute(
-            f'SELECT "報告日", "直", "ページ", COUNT(*) FROM {quote(DETAIL_PREFIX + d.official)}'
-            ' WHERE "ライン"=? GROUP BY "報告日", "直", "ページ"', (d.official,)):
+            f'SELECT "報告日", "直", {detail_page}, COUNT(*)'
+            f' FROM {quote(DETAIL_PREFIX + d.official)}'
+            f' WHERE "ライン"=? GROUP BY "報告日", "直", {detail_page}', (d.official,)):
         values = tuple(row)
-        key = rule.page_key(dict(zip(("報告日", "直", "ページ"), values[:3])))
+        key = rule.page_key(dict(zip(names, values[:3])))
         rows[key] = rows.get(key, 0) + values[3]
     return {key: (key in headers, rows.get(key, 0)) for key in keys}
 

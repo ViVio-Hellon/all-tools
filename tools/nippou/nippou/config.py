@@ -86,9 +86,12 @@ KEY_MONTHLY_DIR = "monthly_dir"          # 月替わりで書き出す先(自動
 #
 # **既定は sqlite3**(`access_db_filename` = "日報データ.sqlite3")。
 # 上流の変換が Access から sqlite3 へ移り終わっているためです。
-# `.accdb` しか置かれていないフォルダでは `_pick_source` がそちらを
-# 拾うので、まだ移していない現場もそのまま動きます ── 勝手に
-# 切り替えはしません。振り分けは `pusher.is_sqlite_target()` の1か所
+# **既定の名前のままなら `.accdb` は拾いません**(`_pick_source` が見るのは
+# `.sqlite3` / `.db` だけ)。`.accdb` しか置かれていないフォルダでも
+# `日報データ.sqlite3` を書き先にし、初めての「共有へ保存」で空から作ります。
+# VBA が書いている `日報データ.accdb` の中身は、設定の「日報データ.accdb から
+# 写す」で写します(v4.36.0)。Access を書き先にしたいときだけ、ファイル名を
+# `日報データ.accdb` にします。振り分けは `pusher.is_sqlite_target()` の1か所
 KEY_ACCESS_DB_FILE = "access_db_filename"
 KEY_ADMIN_PASSWORD = "admin_password"    # 撹拌済み(`admin_password.py`)
 # ライン毎の目標枚数(45度線)を書いたCSV。**メモ帳で直せるものを正にする**
@@ -293,8 +296,9 @@ class Settings:
     #
     # **既定は sqlite3。** 上流の変換が Access から sqlite3 へ移り終わって
     # いるので、既定が `.accdb` のままだと「まず設定を直さないと動かない」
-    # 状態から始まる。同じフォルダに `.accdb` しか無ければ `_pick_source`
-    # がそちらを拾うので、まだ Access の現場もそのまま動く
+    # 状態から始まる。同じフォルダに `.accdb` しか無くても**そちらは拾わない**
+    # (`_pick_source` の説明)── VBA が書き続けている .accdb へ、このツールが
+    # 黙って書き始めないように。中身は「日報データ.accdb から写す」で写す
     #
     # **名前は「日報データ」。** 現場に置かれている実ファイルがこの名前
     # (`T_日報ヘッダー_<ライン>` / `T_日報明細_<ライン>` が入っている)。
@@ -390,9 +394,9 @@ class Settings:
     # 置き場所は property(``gw_reference_dir``)。理由は ``access_dir`` と同じ
     gw_shared_table_name: str = "仕掛"
     # **既定は sqlite3**(`access_db_filename` と同じ理由)。同じ名前の
-    # `.accdb` しか無いフォルダでは `_pick_source` がそちらを拾う。
-    # 旧名(SIKALOTNOW / SIKAODRNOW / SIKAHIKINOW)しか置かれていない
-    # フォルダでも読める ── `OLDER_NAMES` を参照
+    # `.accdb` しか無いフォルダでも、そちらは拾わない(`_pick_source`)。
+    # 旧名(SIKALOTNOW / SIKAODRNOW / SIKAHIKINOW)の .sqlite3 しか置かれて
+    # いないフォルダでも読める ── `OLDER_NAMES` を参照
     gw_lot_master_filename: str = "SIKALOT.sqlite3"
     gw_order_master_filename: str = "SIKAODR.sqlite3"
     # 引当。**ロットと受注をつなぐ唯一の橋**(VBA `SQLiteLot検索` の
@@ -868,8 +872,25 @@ def _pick_source(directory: Path, filename: str) -> Path:
 
     上流の変換は AIM(Access)から sqlite3 へ、ファイル単位で移っていく。
     切り替えの日に設定を触らせないため、同じ名前の ``.sqlite3`` / ``.db``
-    が置かれていればそちらを採る。無ければ渡された名前のまま
-    (= これまでどおり Access)を返す。
+    が置かれていればそちらを採る(**渡された名前が .accdb でも**)。無ければ
+    渡された名前のまま返す。
+
+    **.accdb を探しには行きません**(v4.36.0 でこの説明を動きに合わせました。
+    以前は「.accdb しか無いフォルダではそちらを拾う」と書いていましたが、
+    そういう動きはありませんでした)。既定の名前は ``.sqlite3`` なので:
+
+        設定の名前    フォルダにあるもの            使うファイル
+        X.sqlite3     X.sqlite3                     X.sqlite3
+        X.sqlite3     X.accdb だけ                  X.sqlite3(無い。日報データなら
+                                                    初めての共有へ保存で作る)
+        X.accdb       X.accdb と X.sqlite3          X.sqlite3
+        X.accdb       X.accdb だけ                  X.accdb
+
+    **動きは変えていません。** 日報データ(書き先)で .accdb を拾うようにすると、
+    VBA が書き続けている ``日報データ.accdb`` へこのツールが黙って書き始めます
+    (VBA の表に合わせて書くとはいえ、並べて使っているあいだの書き先が知らないうちに
+    変わる)。VBA の中身は「日報データ.accdb から写す」(``services/accdb_copy``)で
+    ``日報データ.sqlite3`` へ写す、と決めてもらったので、こちらは今のままにします。
 
     名前そのものが変わる場合(参照DBの ``…NOW`` が取れた)も同じ考えで、
     新しい名前が無ければ ``OLDER_NAMES`` の旧名を探す。**上流が新しい

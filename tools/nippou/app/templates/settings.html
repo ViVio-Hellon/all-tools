@@ -441,8 +441,9 @@
           </table>
           <p class="lead" style="margin-top:var(--sp-2)">
             <strong>既定はどれも .sqlite3 です。</strong> 同じ名前の
-            <code>.accdb</code> しか置いていないフォルダでは、そちらを拾って
-            これまでどおり動きます ── 切り替えの日に設定を触る必要はありません。
+            <code>.sqlite3</code>(または <code>.db</code>)を置けば、設定を触らずにそちらを
+            読みます。<code>.accdb</code> しか置いていないフォルダでも、<code>.accdb</code> は
+            拾いません(日報データの中身は「取り込みと直し」の「日報データ.accdb から写す」で写します)。
           </p>
           <p class="lead">
             <strong>日報管理</strong>だけが書き込み先です。sqlite3 なら Windows も
@@ -1334,6 +1335,85 @@ LVC,119
       <div class="msg msg--info" id="line-rename-note" hidden
            style="margin-top:var(--sp-2)"></div>
     </div>
+
+    {# ---- 日報データ.accdb から写す(v4.36.0)── VBA が書いている Access の日報を共有へ ----
+
+       「日報データ.accdb から写す」ボタンを作ってよいか → お願いします
+       VBA の日報をまだしばらく使い続けるか → 使います
+
+       **2段です。** まず「下見する」で数を見て、よければ「写す」。何度押しても同じ結果
+       (写したページは「そのまま」になる)。写す元の Access には触りません
+       (`services/accdb_copy.py`)。
+       ------------------------------------------------------------ #}
+    <div class="card" id="accdb-copy">
+      <div class="card__head">
+        <h2>日報データ.accdb から写す</h2>
+        <span class="lead">VBA が書いている Access の日報を、共有の日報データへ写す</span>
+      </div>
+      <p class="lead">
+        VBA の日報(<code>日報データ.accdb</code>)のページを、このツールの共有の日報データへ写します。
+        写したページは「ロットを探す」「記録を見る」にそのまま出ます。
+        <b>Access のファイルには触りません</b>(VBA はそのまま使えます)。
+        <b>何回押しても大丈夫</b>です ── 押すたびに、まだ写していないページと、VBA で直したページ
+        (保存日時が新しくなったページ)だけを写します。<b>このツールで共有へ保存したページは、
+        古い Access の中身で上書きしません。</b> Access から消えたページも、こちらでは消しません。
+      </p>
+      <div class="row">
+        <div class="field field--wide">
+          <label for="accdb-copy-source">写す元(VBA の 日報データ.accdb)</label>
+          <input id="accdb-copy-source" type="text" value="{{ state.accdb_copy.source }}"
+                 data-default="{{ state.accdb_copy.source }}"
+                 {% if not editor %}disabled{% endif %}>
+        </div>
+        <button class="btn" type="button" id="accdb-copy-pick" hidden
+                {% if not editor %}disabled title="上の鍵を開けると使えます"{% endif %}>ファイルを選ぶ…</button>
+      </div>
+      <p class="lead" id="accdb-copy-dest">
+        写す先: <code>{{ state.accdb_copy.dest }}</code><br>
+        「共有へ保存」と同じ、共有の日報データです。置き場所は 参照設定 の
+        「{{ state.accdb_copy.path_label }}」で決まります。
+        {% if not state.accdb_copy.dest_sqlite %}
+        <b>共有の日報データが Access のファイルなので、写せません</b>(写せるのは sqlite3 のときだけです)。
+        {% endif %}
+      </p>
+      <details>
+        <summary class="lead">写し方・写し直しの決まり</summary>
+        <ul class="lead">
+          <li>ページ(報告日・ライン・直・ページ)ごとに決めます。<b>足す</b> … 共有に無いページ。
+            <b>新しくする</b> … 両方にあり、Access のほうが保存日時が新しい(VBA で直した)ページ。
+            <b>そのまま</b> … 前に写したまま。<b>共有を残す</b> … 共有のほうが新しい(このツールで
+            共有へ保存した)ページ。</li>
+          <li>値は打ったままの字で写します(数に直さない・丸めない・空白も消さない)。作業停止④⑤は
+            Access の表に無いので空です。保存日時は秒まで写します。</li>
+          <li>このツールに無いライン(予備PC など)は写さずに、名前とページ数を出します。</li>
+          <li>Access で同じページが2つあり中身が違うとき、保存日時の新しいほうを写します。
+            どちらが新しいか決められないページは写さずに出します。</li>
+          <li>読めた行数が Access の表の定義と違う表(読み落としの疑い)・古い形(.mdb)・暗号化された
+            ファイルは写しません。写す前に共有の日報データの控えを、隣の <code>backup</code>
+            フォルダに取ります。ほかの PC が書いている最中なら、少し待ってから断ります。</li>
+        </ul>
+      </details>
+      <div class="btn-row" style="margin-top:var(--sp-3)">
+        <button class="btn" type="button" id="accdb-copy-survey"
+                {% if not editor or not state.accdb_copy.dest_sqlite %}disabled{% endif %}
+                {% if not editor %}title="上の鍵を開けると使えます"{% endif %}>下見する(まだ写さない)</button>
+        <button class="btn btn--primary" type="button" id="accdb-copy-run" disabled
+                title="先に「下見する」で数を見てください">写す</button>
+        <span class="lead" id="accdb-copy-head">{% if editor %}まず「下見する」で数を見てください{% else %}管理者(または Administrator)だけが使えます{% endif %}</span>
+      </div>
+      <div class="scroll-x" id="accdb-copy-box" hidden style="margin-top:var(--sp-2)">
+        <table class="list rename__table">
+          <thead>
+            <tr><th>ライン</th><th>Access のページ</th>
+                {% for kind in state.accdb_copy.kinds %}<th>{{ kind }}</th>{% endfor %}
+                <th>確かめ</th></tr>
+          </thead>
+          <tbody id="accdb-copy-rows"></tbody>
+        </table>
+      </div>
+      <div class="msg msg--info" id="accdb-copy-note" hidden
+           style="margin-top:var(--sp-2);white-space:pre-line"></div>
+    </div>
   </section>
 
   {# ==============================================================
@@ -1373,8 +1453,8 @@ LVC,119
       <p class="lead">
         <strong>パスを決めるのはこの面だけ</strong>です。欄に直接打っても、
         「フォルダを選ぶ…」で辿ってもかまいません。空にすると既定に戻ります。
-        ファイル名は決めなくて構いません ── 既定の名前を使い、
-        <code>.accdb</code> しか置いていないフォルダでは自動でそちらを拾います。
+        ファイル名は決めなくて構いません ── 既定の名前(<code>.sqlite3</code>)を使います
+        (<code>.accdb</code> しか置いていないフォルダでも、<code>.accdb</code> は拾いません)。
       </p>
 
       {# 見出しの「n件」の中身(`presenters/settings.tab_problems`)。下の欄に出ていない

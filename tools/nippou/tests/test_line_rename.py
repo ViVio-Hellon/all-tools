@@ -133,7 +133,8 @@ class ConvertTests(WebTestCase):
         self.assertTrue(report.ok, report.as_dict())
         self.assertEqual(report.total(rule.COPY), 3)
         # 正規の名前の表に、正規のライン名で。ページは数に揃える
-        self.assertEqual(self.rows('SELECT "ライン", "ページ", typeof("ページ") '
+        # 正規の表は新しく作るので、ページの列は VBA と同じ「頁」(v4.36.0)
+        self.assertEqual(self.rows('SELECT "ライン", "頁", typeof("頁") '
                                    'FROM "T_日報ヘッダー_機側" ORDER BY 2'),
                          [("機側", 1, "integer"), ("機側", 2, "integer")])
         self.assertEqual(self.rows('SELECT COUNT(*), MIN("ライン") FROM "T_日報明細_トット"'),
@@ -167,15 +168,15 @@ class ConvertTests(WebTestCase):
         self.vba_page("MARU", page=2)
         self.svc.run()
         conn = sqlite3.connect(self.path)
-        conn.execute('UPDATE "T_日報ヘッダー_MARU" SET "担当者"=?, "保存日時"=? WHERE "ページ"=1',
+        conn.execute('UPDATE "T_日報ヘッダー_MARU" SET "担当者"=?, "保存日時"=? WHERE "頁"=1',
                      ("木村", "2026/09/01 12:00"))
-        conn.execute('DELETE FROM "T_日報ヘッダー_MARU" WHERE "ページ"=2')
-        conn.execute('DELETE FROM "T_日報明細_MARU" WHERE "ページ"=2')
+        conn.execute('DELETE FROM "T_日報ヘッダー_MARU" WHERE "頁"=2')
+        conn.execute('DELETE FROM "T_日報明細_MARU" WHERE "頁"=2')
         conn.commit()
         conn.close()
         report = self.svc.run()
         self.assertEqual((report.total(rule.RECOPY), report.total(rule.GONE)), (1, 1))
-        self.assertEqual(self.rows('SELECT "ページ", "担当者" FROM "T_日報ヘッダー_中板"'),
+        self.assertEqual(self.rows('SELECT "頁", "担当者" FROM "T_日報ヘッダー_中板"'),
                          [(1, "木村")])
         self.assertEqual(self.rows('SELECT COUNT(*) FROM "T_日報明細_中板"'), [(3,)])
 

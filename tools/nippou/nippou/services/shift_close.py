@@ -458,6 +458,9 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
         failed_note = f"共有へ送れなかったものが{len(summary_.failed)}件あります"
         result.push_note = (f"{result.push_note}。{failed_note}" if result.push_note
                             else failed_note)
+    for notice in getattr(summary_, "notices", []):
+        # 書き先が Access で④⑤を書けなかった(v4.36.0)。手で押したときと同じ知らせ
+        result.push_note = f"{result.push_note}。{notice}" if result.push_note else notice
     if summary_.succeeded or summary_.failed:
         # **送ったのだから履歴に載せる。** 数え方は手で押したときと同じ `record_push`
         # (送った直ごとに1行)。何も送らなかったときは「送るもの無し」を作らない

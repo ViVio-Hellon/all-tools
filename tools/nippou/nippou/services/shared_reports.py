@@ -42,6 +42,11 @@ VBA は前の名前の表(`T_日報ヘッダー_LS`)に書き続けます(`servi
 「ライン」を正規へ読み替えます。同じページが両方にあれば**正規の表**を採ります
 (このツールが書いたほう。コンバートの「このツールの分は残す」と同じ向き)。
 ページ・行番号は数に揃えます(VBA は字で入れていることがある)。
+
+【ページの列は「頁」でも「ページ」でも(v4.36.0)】
+VBA の表のページの列は `頁`、v4.35.3 までのこのツールが作った表は `ページ` です。
+**表ごとに、その表にある列で読みます**(`sqlite_backend.page_column`)。
+「日報データ.accdb から写す」で写した表は `頁` です。
 """
 from __future__ import annotations
 
@@ -53,6 +58,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
 
+from ..access_bridge.sqlite_backend import PageColumn, page_column
 from ..db.models import DetailRecord, HeaderRecord
 from ..logging_setup import get_logger
 from ..logic import line_names
@@ -152,12 +158,12 @@ def _tables(line: str) -> list[tuple[str, str]]:
     return out
 
 
-def _header(row: sqlite3.Row, names: set[str]) -> HeaderRecord:
+def _header(row: sqlite3.Row, names: set[str], page: "PageColumn") -> HeaderRecord:
     get = (lambda col: _text(row[col]) if col in names else "")
     saved_at = get("保存日時")
     return HeaderRecord(
         report_date=get("報告日"), line=line_names.upgrade(get("ライン")), shift=get("直"),
-        page=number_of(row["ページ"]) if "ページ" in names else 1,
+        page=number_of(page.value(row)) if page.names else 1,
         worker=get("担当者"), day_shift=get("昼勤"), count=get("枚数"),
         weight_kg=get("重量Kg"), lot_count=get("Lot数"),
         coefficient_lot_count=get("係数Lot数"), reason=get("理由"),
@@ -297,10 +303,11 @@ def lot_rows(lines: list[str], start: date, end: date, match: Callable[[str], bo
                 if header_table not in tables or detail_table not in tables:
                     continue
                 head_cols = _columns(conn, header_table)
+                head_page = page_column(conn, header_table)
                 headers: dict[PageKey, HeaderRecord] = {}
                 for r in conn.execute(f"SELECT * FROM {quote(header_table)}"
                                       ' WHERE in_span("報告日")'):
-                    header = _header(r, head_cols)
+                    header = _header(r, head_cols, head_page)
                     if header.line != line or not _usable(header.page):
                         continue
                     if header.key() not in taken:
@@ -308,12 +315,13 @@ def lot_rows(lines: list[str], start: date, end: date, match: Callable[[str], bo
                 if not headers:
                     continue
                 detail_cols = _columns(conn, detail_table)
+                detail_page = page_column(conn, detail_table)
                 left = cap + 1 - len(readout.rows)
                 for r in conn.execute(
                         f"SELECT * FROM {quote(detail_table)}"
                         ' WHERE in_span("報告日") AND lot_hit("LOT") LIMIT ?', (left,)):
                     key = (_text(r["報告日"]), line_names.upgrade(_text(r["ライン"])),
-                           _text(r["直"]), number_of(r["ページ"]))
+                           _text(r["直"]), number_of(detail_page.value(r)))
                     header = headers.get(key)
                     if header is None or not _usable(number_of(r["行番号"])):
                         continue
@@ -347,19 +355,21 @@ def shift_pages(report_date: str, line: str, shift: str, *,
             if header_table not in tables or detail_table not in tables:
                 continue
             head_cols = _columns(conn, header_table)
+            head_page = page_column(conn, header_table)
             headers: dict[int, HeaderRecord] = {}
             for r in conn.execute(f'SELECT * FROM {quote(header_table)}'
                                   ' WHERE "報告日"=? AND "直"=?', (report_date, shift)):
-                header = _header(r, head_cols)
+                header = _header(r, head_cols, head_page)
                 if header.line == line and _usable(header.page) and header.page not in found:
                     headers[header.page] = header
             if not headers:
                 continue
             detail_cols = _columns(conn, detail_table)
+            detail_page = page_column(conn, detail_table)
             rows: dict[int, list[DetailRecord]] = {page: [] for page in headers}
             for r in conn.execute(f'SELECT * FROM {quote(detail_table)}'
                                   ' WHERE "報告日"=? AND "直"=?', (report_date, shift)):
-                page = number_of(r["ページ"])
+                page = number_of(detail_page.value(r))
                 if (page in headers and line_names.upgrade(_text(r["ライン"])) == line
                         and _usable(number_of(r["行番号"]))):
                     rows[page].append(_detail(r, detail_cols, headers[page]))

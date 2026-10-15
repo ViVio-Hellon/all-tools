@@ -402,7 +402,8 @@ def search_coil_split(
     VBA はこのファイルだけ `SimpleArr`(=Access のまま)で読んでいました
     が、ほかの参照と同じく **sqlite3 として扱います** ── 上流の
     書き出しが .accdb から .sqlite3 へ移るのに合わせたもので、
-    `_pick_source` があるので `.accdb` しか無いフォルダでも読めます。
+    `_pick_source` は同じ名前の `.sqlite3` / `.db` を探します(`.accdb` は
+    拾いません ── v4.36.0 で説明を動きに合わせました)。
 
     **読めなくても例外にしません。** 縦横が空になるだけで、日報の入力
     そのものは続けられます(VBA も `GoTo skipCoilErr` で続けていました)。

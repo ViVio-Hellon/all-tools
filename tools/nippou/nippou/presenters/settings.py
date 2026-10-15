@@ -187,8 +187,9 @@ TABS: tuple[TabSpec, ...] = (
             "マスタの中身を直すとき"),
     TabSpec("sound", "音", "出来事ごとに何を鳴らすか(鳴らさない/音声ファイル)"),
     TabSpec("data", "取り込みと直し",
-            "過去の日報を取り込む・当直をDBから復旧・集計を作り直す・ライン名のコンバート",
-            "この面の操作(取り込み・復旧・コンバート)ぜんぶ"),
+            "過去の日報を取り込む・当直をDBから復旧・集計を作り直す・ライン名のコンバート・"
+            "日報データ.accdb から写す",
+            "この面の操作(取り込み・復旧・コンバート・写す)ぜんぶ"),
     TabSpec("paths", "参照設定",
             "読みに行くフォルダと、書き出すフォルダ。パスはここだけで決めます",
             "パスを変えるとき(どれでも)"),
@@ -246,8 +247,9 @@ PATH_TAB: dict[str, str] = {
 #: できるでいい」── そのとおりで、残り2つは**既定で足ります**:
 #:
 #:   日報データのファイル名   … 既定は `日報データ.sqlite3`。同じ名前の
-#:                              `.accdb` しか無いフォルダでは、そちらを
-#:                              自動で拾います(`config.py`)
+#:                              `.accdb` しか無いフォルダでも、そちらは
+#:                              拾いません(`config._pick_source`)。VBA の
+#:                              中身は「日報データ.accdb から写す」で写す
 #:   ライン毎目標のファイル   … 既定は `ライン毎目標.csv`。参照用マスタの
 #:                              フォルダの下を見ます
 #:
@@ -1076,6 +1078,21 @@ def line_rename_view() -> dict[str, Any]:
             "path_label": PROTECTED_LABELS[config.KEY_ACCESS_DIR]}
 
 
+def accdb_copy_view() -> dict[str, Any]:
+    """「日報データ.accdb から写す」のカード(v4.36.0)。**ファイルは読まない**(押したときだけ読む)。"""
+    from ..access_bridge import pusher
+    from ..logic import accdb_copy
+    from ..services import accdb_copy as service
+
+    dest = SETTINGS.access_db_path
+    return {"source": str(service.default_source()),
+            "dest": str(dest),
+            # 写せるのは共有の日報データが sqlite3 のときだけ
+            "dest_sqlite": pusher.is_sqlite_target(dest),
+            "kinds": list(accdb_copy.KINDS),
+            "path_label": PROTECTED_LABELS[config.KEY_ACCESS_DIR]}
+
+
 def to_dict() -> dict[str, Any]:
     """設定画面ぜんぶ。**毎回まるごと返す**(部分更新の食い違いを作らない)。"""
     paths = path_views()
@@ -1100,6 +1117,7 @@ def to_dict() -> dict[str, Any]:
         "storage": _storage_view(),
         "line": line_view(),
         "line_rename": line_rename_view(),
+        "accdb_copy": accdb_copy_view(),
         "problems": _problems(paths, files),
         "tabs": [vars(t) for t in TABS],
         "default_tab": DEFAULT_TAB,

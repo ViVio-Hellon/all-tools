@@ -110,11 +110,17 @@ class SharedDbTests(TmpCase):
         conn.close()
         self.assertEqual(got, ("2", "7"))
 
-    def test_Accessへも45を書き_列を足す文を出す(self) -> None:
-        statements = pusher.build_detail_statements(HeaderRecord(**KEY), [detail(s4="2", th4="7")])
-        self.assertIn("[S4],[TH4],[S5],[TH5]", statements[1])
-        self.assertEqual(pusher.add_columns_statements("日報明細_L-1")[0],
-                         "ALTER TABLE [日報明細_L-1] ADD COLUMN [S4] TEXT(255)")
+    def test_Accessは表にある列だけに書き_列は足さない(self) -> None:
+        """v4.36.0: VBA の表(④⑤が無い)には④⑤を書かない。ALTER TABLE は出さない。"""
+        rows = [detail(s4="2", th4="7")]
+        vba = pusher.build_detail_statements(HeaderRecord(**KEY), rows)
+        self.assertNotIn("[S4]", vba[1])
+        self.assertIn("[頁]", vba[1])
+        cols = tuple(sqlite_backend.DETAIL_COLUMNS)
+        wide = pusher.build_detail_statements(HeaderRecord(**KEY), rows, pusher.AccessTable(cols))
+        self.assertIn("[S4],[TH4],[S5],[TH5]", wide[1])
+        self.assertFalse(hasattr(pusher, "add_columns_statements"))
+        self.assertFalse(any("ALTER" in s for s in vba + wide))
 
 
 class CsvAndPaperTests(unittest.TestCase):

@@ -75,9 +75,21 @@ def text_of(value: object) -> str:
     return "" if value is None else str(value)
 
 
+#: ページの列の名前。VBA の表は「頁」、v4.35.3 までのこのツールの表は「ページ」(v4.36.0)
+PAGE_NAMES: tuple[str, ...] = ("頁", "ページ")
+
+
+def page_of(row: Mapping[str, object]) -> object:
+    """表の1行のページ。**「頁」でも「ページ」でも**(中身のあるほう)。"""
+    for name in PAGE_NAMES:
+        if row.get(name) is not None:
+            return row.get(name)
+    return None
+
+
 def page_key(row: Mapping[str, object]) -> PageKey:
     """表の1行 → そのページの名前。"""
-    return (text_of(row.get("報告日")), text_of(row.get("直")), number_of(row.get("ページ")))
+    return (text_of(row.get("報告日")), text_of(row.get("直")), number_of(page_of(row)))
 
 
 @dataclass

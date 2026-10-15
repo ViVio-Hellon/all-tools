@@ -79,23 +79,24 @@ class TableTests(unittest.TestCase):
         sqlite_backend.ensure_tables(conn, "T_日報ヘッダー_L-1", "T_日報明細_L-1")
 
     def test_ヘッダーの列はVBAのまま(self) -> None:
+        # ページの列は VBA と同じ「頁」(v4.36.0。v4.35.3 までは「ページ」で作っていた)
         self.assertEqual(sqlite_backend.HEADER_COLUMNS[:4],
-                         ("報告日", "ライン", "直", "ページ"))
+                         ("報告日", "ライン", "直", "頁"))
         self.assertIn("保存日時", sqlite_backend.HEADER_COLUMNS)
         self.assertEqual(len(sqlite_backend.HEADER_COLUMNS), 12)
 
     def test_明細の列はVBAのまま(self) -> None:
         cols = sqlite_backend.DETAIL_COLUMNS
-        self.assertEqual(cols[:5], ("報告日", "ライン", "直", "ページ", "行番号"))
+        self.assertEqual(cols[:5], ("報告日", "ライン", "直", "頁", "行番号"))
         # VBA の並び(LOT〜UNI の24項目 + Others1-6 + 係数 + キー5)はそのまま
         self.assertEqual(cols[35], "係数")
         # 作業停止④⑤(v4.24.0)は**後ろに足す**(前からある表へ足しても並びが同じ)
         self.assertEqual(cols[36:], ("S4", "TH4", "S5", "TH5"))
 
     def test_主キーはキー4つと行番号(self) -> None:
-        self.assertEqual(sqlite_backend.HEADER_KEY, ("報告日", "ライン", "直", "ページ"))
+        self.assertEqual(sqlite_backend.HEADER_KEY, ("報告日", "ライン", "直", "頁"))
         self.assertEqual(sqlite_backend.DETAIL_KEY,
-                         ("報告日", "ライン", "直", "ページ", "行番号"))
+                         ("報告日", "ライン", "直", "頁", "行番号"))
 
 
 class FailureKindTests(unittest.TestCase):

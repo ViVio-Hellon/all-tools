@@ -59,16 +59,16 @@ def send(path: Path, *, day: str = DAY, line: str = "HVC", shift: str = "1直", 
 
 def send_vba(path: Path, *, old: str = "LS", day: str = DAY, shift: str = "1直",
              page: object = "1", lots=("N7131T0",), worker: str = "VBA太郎") -> None:
-    """VBA が前の名前の表へ書いた、を作る(ページ・行番号は字で入っている)。"""
+    """VBA が前の名前の表へ書いた、を作る(ページ・行番号は字で入っている。ページの列は「頁」)。"""
     header_table, detail_table = f"T_日報ヘッダー_{old}", f"T_日報明細_{old}"
     conn = sqlite3.connect(str(path))
     try:
         with conn:
             sqlite_backend.ensure_tables(conn, header_table, detail_table)
-            conn.execute(f'INSERT INTO "{header_table}" ("報告日","ライン","直","ページ","担当者")'
+            conn.execute(f'INSERT INTO "{header_table}" ("報告日","ライン","直","頁","担当者")'
                          " VALUES (?,?,?,?,?)", (day, old, shift, page, worker))
             for n, lot in enumerate(lots, 1):
-                conn.execute(f'INSERT INTO "{detail_table}" ("報告日","ライン","直","ページ",'
+                conn.execute(f'INSERT INTO "{detail_table}" ("報告日","ライン","直","頁",'
                              '"行番号","LOT") VALUES (?,?,?,?,?,?)',
                              (day, old, shift, page, str(n), lot))
     finally:

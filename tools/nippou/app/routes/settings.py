@@ -874,6 +874,8 @@ def _push(ctx):
                      "(次に「共有へ保存」を押すと続きから送ります)")
     if summary.concurrency_warning:
         lines.append(summary.concurrency_warning)
+    # 書き先が Access で、④⑤の列が無い表へ送ったとき(v4.36.0 ── 列は足さない)
+    lines.extend(summary.notices)
     skipped = sum(len(r.skipped) for r in reports)
     if skipped:
         lines.append(f"※ {skipped}件を「{shift_check.SKIP_PHRASE}」で通しました")
@@ -1259,6 +1261,52 @@ def line_rename_run():
     with running.running("コンバート"):
         report = line_rename.run()
     log.info("コンバート: %s", report.message())
+    status = 200 if report.ok else (409 if report.error else 207)
+    return jsonify(report.as_dict()), status
+
+
+def _accdb_copy_refusal():
+    """「日報データ.accdb から写す」も**管理者だけ**(コンバートと同じ鍵 ── v4.36.0)。"""
+    if work_context.get_context().editor:
+        return None
+    return jsonify(error_body(
+        "not_admin",
+        "「日報データ.accdb から写す」は管理者モード(または Administrator)でのみ使えます")), 403
+
+
+@bp.get("/api/settings/accdb-copy")
+def accdb_copy_survey():
+    """**下見する**(v4.36.0)。写す元の Access を読み、写す先は写しを読んで数えるだけ。"""
+    from nippou.services import accdb_copy
+
+    refused = _accdb_copy_refusal()
+    if refused:
+        return refused
+    report = accdb_copy.survey(request.args.get("source", ""))
+    return jsonify(report.as_dict())
+
+
+@bp.post("/api/settings/accdb-copy")
+def accdb_copy_run():
+    """**写す**(v4.36.0)。VBA が書いている 日報データ.accdb を、共有の日報データへ写す。
+
+    写す元には触りません。何度押しても同じ結果になります(`services/accdb_copy`)。
+    """
+    from nippou.services import accdb_copy
+
+    refused = _accdb_copy_refusal()
+    if refused:
+        return refused
+    payload = request.get_json(silent=True) or {}
+    log_button_click("accdb_copy")
+    try:
+        with running.running("日報データ.accdb から写す"):
+            report = accdb_copy.run(payload.get("source", ""))
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log.exception("日報データ.accdb から写せませんでした")
+        return jsonify(error_body("accdb_copy_failed",
+                                  f"写せませんでした(何も写していません): {exc}")), 500
+    log.info("日報データ.accdb から写す: %s", report.message())
     status = 200 if report.ok else (409 if report.error else 207)
     return jsonify(report.as_dict()), status
 

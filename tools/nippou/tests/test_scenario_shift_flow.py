@@ -63,6 +63,11 @@ SKIP = "設備移動のため保存"
 # ======================================================================
 # 止めた時計
 # ======================================================================
+def _page(row: dict):
+    """共有の表の1行のページ。列は「頁」(v4.36.0 から作る表)か「ページ」(v4.35.3 まで)。"""
+    return row["頁"] if row.get("頁") is not None else row.get("ページ")
+
+
 class _Now:
     """いま。テストが `at()` で動かす。"""
 
@@ -316,13 +321,13 @@ class ScenarioCase(WebTestCase):
         return self.shared_rows(f"T_日報明細_{line}")
 
     def shared_keys(self, line: str = "L-1") -> set[tuple]:
-        return {(h["報告日"], h["直"], int(h["ページ"])) for h in self.shared_headers(line)}
+        return {(h["報告日"], h["直"], int(_page(h))) for h in self.shared_headers(line)}
 
     def shared_lots(self, line: str = "L-1") -> dict[tuple, list[str]]:
         """(報告日, 直, ページ) → 打ってある LOT の並び(行番号順)。"""
         found: dict[tuple, list[tuple[int, str]]] = {}
         for d in self.shared_details(line):
-            key = (d["報告日"], d["直"], int(d["ページ"]))
+            key = (d["報告日"], d["直"], int(_page(d)))
             found.setdefault(key, []).append((int(d["行番号"]), d["LOT"] or ""))
         return {k: [lot for _, lot in sorted(v) if lot] for k, v in found.items()}
 
@@ -1302,7 +1307,7 @@ class D_PushTogetherTests(ScenarioCase):
         details = self.shared_details()
         self.assertEqual(len(headers), 10)
         self.assertEqual(len(details), 10 * 12)
-        detail_keys = {(d["報告日"], d["直"], int(d["ページ"]), int(d["行番号"])) for d in details}
+        detail_keys = {(d["報告日"], d["直"], int(_page(d)), int(d["行番号"])) for d in details}
         self.assertEqual(len(detail_keys), 120, "同じ行が2つある")
         self.assertEqual({k[:3] for k in detail_keys}, self.shared_keys(), "ヘッダーと明細が対応しない")
         self.assertTrue(all(d["ライン"] == "L-1" for d in details))

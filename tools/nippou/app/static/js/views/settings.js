@@ -1749,6 +1749,117 @@ export function start() {
     }
   });
 
+  /* ---- 日報データ.accdb から写す(v4.36.0)----------------------------
+     **2段。** 「下見する」で数を見てから「写す」。数はサーバが数えます
+     (`services/accdb_copy`)。下見したあとで写す元を変えたら、もう一度下見させる。 */
+  let accdbSurveyed = "";
+
+  function accdbNote(text, kind = "info") {
+    const box = document.getElementById("accdb-copy-note");
+    if (!box) return;
+    box.hidden = !text;
+    box.textContent = text || "";
+    box.className = `msg msg--${kind}`;
+  }
+
+  function accdbSource() {
+    return (document.getElementById("accdb-copy-source")?.value || "").trim();
+  }
+
+  function paintAccdb(body) {
+    const rows = document.getElementById("accdb-copy-rows");
+    const box = document.getElementById("accdb-copy-box");
+    const head = document.getElementById("accdb-copy-head");
+    if (head) head.textContent = body.message || "";
+    if (!rows || !box) return;
+    rows.replaceChildren();
+    for (const line of body.lines || []) {
+      const tr = document.createElement("tr");
+      const cells = [line.label || lineLabel(line.line), line.source_pages,
+                     ...(body.kinds || []).map((kind) => line.counts?.[kind] ?? 0),
+                     line.error || line.checked || "—"];
+      for (const value of cells) {
+        const td = document.createElement("td");
+        td.textContent = String(value);
+        tr.append(td);
+      }
+      if (line.error) tr.className = "is-error";
+      rows.append(tr);
+    }
+    box.hidden = !(body.lines || []).length;
+    const notes = [];
+    for (const line of body.lines || []) {
+      for (const note of line.notes || []) notes.push(`${line.label || line.line}: ${note}`);
+      for (const page of line.skipped || []) notes.push(`  写していないページ ${page}`);
+    }
+    for (const u of body.unknown || []) {
+      notes.push(`このツールに無いライン(写していません): ${u.line} ${u.pages}ページ(${(u.tables || []).join("・")})`);
+    }
+    if ((body.other_tables || []).length) {
+      notes.push(`日報の表ではないので見ていません: ${body.other_tables.join("・")}`);
+    }
+    if (body.backup) notes.push(`写す前の控え: ${body.backup}`);
+    if (body.error) accdbNote(body.error, "error");
+    else accdbNote(notes.join("\n"), notes.length ? "warn" : "info");
+  }
+
+  function armAccdbRun(body) {
+    const run = document.getElementById("accdb-copy-run");
+    if (!run) return;
+    accdbSurveyed = body && !body.error ? accdbSource() : "";
+    run.disabled = !accdbSurveyed;
+    run.title = accdbSurveyed ? "" : "先に「下見する」で数を見てください";
+  }
+
+  document.getElementById("accdb-copy-source")?.addEventListener("input", () => {
+    // 写す元を変えたら、下見をやり直す(違うファイルの数で写さない)
+    if (accdbSource() !== accdbSurveyed) armAccdbRun(null);
+  });
+
+  const accdbPick = document.getElementById("accdb-copy-pick");
+  if (accdbPick && desktop.isDesktop) {
+    accdbPick.hidden = false;
+    accdbPick.addEventListener("click", async () => {
+      try {
+        const picked = await desktop.pickPath("file", {
+          start: accdbSource(), title: "VBA の 日報データ.accdb を選ぶ", extensions: ["accdb", "mdb"] });
+        if (picked) {
+          document.getElementById("accdb-copy-source").value = picked;
+          armAccdbRun(null);
+        }
+      } catch (err) {
+        accdbNote(`ファイルの選択窓を開けませんでした。欄に道を打ってください(${err})`, "warn");
+      }
+    });
+  }
+
+  document.getElementById("accdb-copy-survey")?.addEventListener("click", async () => {
+    try {
+      const body = await api.get(`/api/settings/accdb-copy?source=${encodeURIComponent(accdbSource())}`);
+      paintAccdb(body);
+      armAccdbRun(body);
+    } catch (err) {
+      armAccdbRun(null);
+      accdbNote(err.message, "error");
+    }
+  });
+
+  document.getElementById("accdb-copy-run")?.addEventListener("click", async () => {
+    const head = document.getElementById("accdb-copy-head")?.textContent || "";
+    if (!confirm(`共有の日報データへ写します(Access のファイルには触りません)。\n${head}\n` +
+                 "よろしいですか?")) return;
+    try {
+      const body = await api.post("/api/settings/accdb-copy", { source: accdbSource() });
+      paintAccdb(body);
+      toast(body.message, body.ok ? "ok" : "warn");
+    } catch (err) {
+      // 断られた(ロック中・読めない形 など)。結果の形で返ってきたら表にも出す
+      if (err.body && err.body.kinds) paintAccdb(err.body);
+      else accdbNote(err.message, "error");
+    }
+    armAccdbRun(null);       // 写したら、次はもう一度下見から
+  });
+
   document.getElementById("sync-shift")?.addEventListener("click", async () => {
     const box = document.getElementById("shift-note");
     const say = (text, kind) => {

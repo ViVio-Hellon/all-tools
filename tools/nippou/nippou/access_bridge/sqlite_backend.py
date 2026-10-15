@@ -25,12 +25,38 @@ VBA ``ExecuteSQLTransaction`` と同じで、(報告日,ライン,直,ページ)
 VBA ``NippouDB_EnsureTables`` と同じ役目。列の並び・名前・主キーは
 あちらに揃えてあります ── 同じファイルを Access 版と行き来させる可能性を
 残すためで、揃っていないと片方から読めなくなります。
+
+【ページの列は「頁」(v4.36.0)】
+
+    共有の表の列名「頁」と「ページ」のずれを直してよいか → 直してください
+    VBA の日報をまだしばらく使い続けるか → 使います
+
+VBA(日報データ.accdb)の列は **`頁`** です。このツールは v3.47.0 で CSV の見出しを
+「ページ」に言い換えたとき、共有に作る表の列まで `ページ` にしていました ── VBA の表と
+名前が食い違い、`頁` の表(VBA の形で写した 日報データ.sqlite3 など)へは「列が
+ありません」で保存できず、読むほうも `ページ` だけを見ていました。
+
+いまは**表ごとに、その表にある列の名前**を見て読み書きします(`page_column`):
+
+    読む   `頁` でも `ページ` でも読む(PRAGMA table_info で決める)
+    書く   その表に**すでにある列の名前**で書く(`頁` の表には `頁`、`ページ` の表には `ページ`)
+    作る   **VBA と同じ `頁`**(VBA を使い続けるので、形を VBA に揃える)
+
+**両方の列がある表**(`頁` の明細表に、v4.35.3 までの `add_missing_columns` が `ページ` を
+足してしまったもの)は、**表を作ったときの列(PRAGMA table_info で先に出るほう)を主**に
+します。読むときは主の列 → もう1つの順に、**中身のあるほう**を採ります(主が空の行は
+もう1つの列だけに入っている ── 足したあとにこのツールが書いた行)。書くときは
+**両方に同じ数**を書きます。片方に寄せて書くと、もう片方だけを読む側(VBA の形を読む道具と、
+v4.35.3 までのこのツール)の片方から、そのページが消えて見えるので。
+
+中の呼び名(`HEADER_COLUMNS` などに出てくる名前)は `PAGE`(= `頁`)です。
 """
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping, Sequence
 
 from ..db.models import (
     DetailRecord,
@@ -48,15 +74,21 @@ _logger = get_logger("access_bridge.sqlite_backend")
 # sqlite3 は待てば通ることが多い ── すぐ諦めない
 BUSY_TIMEOUT_MS = 10_000
 
+#: ページの列。**VBA(日報データ.accdb)の名前**。新しく作る表もこの名前(v4.36.0)
+PAGE = "頁"
+#: v3.47.0 〜 v4.35.3 のこのツールが、共有に作る表に付けていた名前(読むときは今も読む)
+PAGE_V347 = "ページ"
+PAGE_NAMES: tuple[str, ...] = (PAGE, PAGE_V347)
+
 # ヘッダーの列。**並びも名前も VBA `NippouDB_EnsureTables` のまま**
 HEADER_COLUMNS: tuple[str, ...] = (
-    "報告日", "ライン", "直", "ページ", "担当者", "昼勤", "枚数", "重量Kg",
+    "報告日", "ライン", "直", PAGE, "担当者", "昼勤", "枚数", "重量Kg",
     "Lot数", "係数Lot数", "理由", "保存日時",
 )
 
-# 明細の列。同上
+# 明細の列。同上(作業停止④⑤だけは VBA の表に無い ── 後ろに足してある)
 DETAIL_COLUMNS: tuple[str, ...] = (
-    "報告日", "ライン", "直", "ページ", "行番号",
+    "報告日", "ライン", "直", PAGE, "行番号",
     "LOT", "ZAI", "SIZ", "KEN", "KZ", "KH", "SZ", "SH", "HIT", "AI",
     "MAI", "TUT", "VC", "ET", "S", "TH", "SS", "THS", "STH", "THT",
     "CON", "WEI", "TIM", "UNI",
@@ -78,6 +110,9 @@ DETAIL_COLUMNS: tuple[str, ...] = (
 #
 # 記号ごとの合計は `GROUP BY 記号` で出せるので、**丸めた表は置きません**
 # ── 同じ数字を2か所に置くと、片方だけ古くなったときに困ります。
+#
+# この3つは **VBA に無い表**(このツールだけが書く)なので、ページの列は
+# 「ページ」のままです(v4.36.0 で `頁` に揃えたのは、VBA と同じ名前の日報の表だけ)。
 # ------------------------------------------------------------------
 SUMMARY_COLUMNS: tuple[str, ...] = (
     "報告日", "ライン", "直", "ページ数", "担当者", "昼勤", "理由",
@@ -103,9 +138,12 @@ STOP_DETAIL_COLUMNS: tuple[str, ...] = (
     "記号", "内訳", "分類", "時間分", "保存日時",
 )
 
+#: 作業停止④⑤の列(v4.24.0)。**VBA の表には無い**
+STOP45_COLUMNS: tuple[str, ...] = ("S4", "TH4", "S5", "TH5")
+
 # 主キー。Access側の CONSTRAINT と同じ組み合わせ
-HEADER_KEY: tuple[str, ...] = ("報告日", "ライン", "直", "ページ")
-DETAIL_KEY: tuple[str, ...] = ("報告日", "ライン", "直", "ページ", "行番号")
+HEADER_KEY: tuple[str, ...] = ("報告日", "ライン", "直", PAGE)
+DETAIL_KEY: tuple[str, ...] = ("報告日", "ライン", "直", PAGE, "行番号")
 SUMMARY_KEY: tuple[str, ...] = ("報告日", "ライン", "直")
 AGG_DETAIL_KEY: tuple[str, ...] = ("報告日", "ライン", "直", "ページ", "行番号")
 STOP_DETAIL_KEY: tuple[str, ...] = ("報告日", "ライン", "直", "ページ", "行番号",
@@ -131,12 +169,103 @@ def _create_sql(table: str, columns: tuple[str, ...],
     return f"CREATE TABLE IF NOT EXISTS {quote(table)} ({cols}, PRIMARY KEY ({pk}))"
 
 
+# ------------------------------------------------------------------
+# ページの列(「頁」か「ページ」か ── 表ごとに決める。v4.36.0)
+# ------------------------------------------------------------------
+@dataclass(frozen=True)
+class PageColumn:
+    """1つの表のページの列。`names` は**その表にあるページの列**(表の列の順)。
+
+    空なら、表が無い(これから作る ── `頁` で作る)か、ページの列が無い表です。
+    """
+
+    names: tuple[str, ...] = ()
+
+    @property
+    def main(self) -> str:
+        """主の列(表を作ったときの列)。無ければ `頁`(作る表の名前)。"""
+        return self.names[0] if self.names else PAGE
+
+    @property
+    def both(self) -> bool:
+        return len(self.names) > 1
+
+    @property
+    def write_names(self) -> tuple[str, ...]:
+        """書く列。**両方ある表には両方へ同じ数を**(冒頭の「両方の列がある表」)。"""
+        return self.names or (PAGE,)
+
+    def sql(self, alias: str = "") -> str:
+        """読む式(`WHERE` にも使う)。両方ある表は主 → もう1つの順に、中身のあるほう。"""
+        head = f"{alias}." if alias else ""
+        if self.both:
+            return "COALESCE(" + ", ".join(head + quote(n) for n in self.names) + ")"
+        return head + quote(self.main)
+
+    def value(self, row: Mapping[str, Any]) -> Any:
+        """表の1行(dict / sqlite3.Row)からページを読む。両方あれば中身のあるほう。"""
+        keys = row.keys()
+        for name in self.names or (PAGE,):
+            if name in keys and row[name] is not None:
+                return row[name]
+        return None
+
+    def columns(self, logical: Sequence[str]) -> tuple[str, ...]:
+        """中の列の並び(`PAGE` を含む)→ その表に書く列の並び(ページの列を表の名前に)。"""
+        out: list[str] = []
+        for column in logical:
+            out.extend(self.write_names if column == PAGE else (column,))
+        return tuple(out)
+
+    def values(self, logical: Sequence[str], values: Sequence[Any]) -> tuple[Any, ...]:
+        """`columns` と同じ並びの値(ページの数は書く列の数だけ繰り返す)。"""
+        out: list[Any] = []
+        for column, value in zip(logical, values):
+            out.extend([value] * len(self.write_names) if column == PAGE else [value])
+        return tuple(out)
+
+    def normalized(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """表の1行 → 中の呼び名の行(ページは `PAGE` の鍵に。もとの列は取り除く)。"""
+        out = {k: row[k] for k in row.keys() if k not in PAGE_NAMES}
+        out[PAGE] = self.value(row)
+        return out
+
+
+def page_names_of(columns: Iterable[str]) -> tuple[str, ...]:
+    """表の列の並び → その中のページの列(並びのまま)。"""
+    return tuple(c for c in columns if c in PAGE_NAMES)
+
+
+def page_column(conn: sqlite3.Connection, table: str) -> PageColumn:
+    """その表のページの列(`PRAGMA table_info`)。表が無ければ空(= `頁` で作る)。"""
+    return PageColumn(page_names_of(
+        row[1] for row in conn.execute(f"PRAGMA table_info({quote(table)})")))
+
+
+def key_where(page: PageColumn, alias: str = "") -> str:
+    """(報告日, ライン, 直, ページ) の1ページを指す `WHERE` の中身(値は `?` 4つ)。"""
+    head = f"{alias}." if alias else ""
+    return " AND ".join([f"{head}{quote(c)}=?" for c in ("報告日", "ライン", "直")]
+                        + [f"{page.sql(alias)}=?"])
+
+
+def insert_sql(table: str, logical: Sequence[str], page: PageColumn) -> str:
+    """その表へ1行入れる文(列の名前はその表のもの)。"""
+    columns = page.columns(logical)
+    return (f"INSERT INTO {quote(table)} ({', '.join(quote(c) for c in columns)})"
+            f" VALUES ({', '.join('?' for _ in columns)})")
+
+
 def ensure_tables(conn: sqlite3.Connection, header_table: str,
-                  detail_table: str) -> None:
-    """表が無ければ作る(VBA ``NippouDB_EnsureTables`` 相当)。"""
+                  detail_table: str) -> tuple[PageColumn, PageColumn]:
+    """表が無ければ作る(VBA ``NippouDB_EnsureTables`` 相当)。**ページの列は `頁`**(v4.36.0)。
+
+    返すのは、それぞれの表のページの列(作った表なら `頁`、前からある表ならその表の名前)。
+    """
     conn.execute(_create_sql(header_table, HEADER_COLUMNS, HEADER_KEY))
     conn.execute(_create_sql(detail_table, DETAIL_COLUMNS, DETAIL_KEY))
     add_missing_columns(conn, detail_table, DETAIL_COLUMNS)
+    return page_column(conn, header_table), page_column(conn, detail_table)
 
 
 def add_missing_columns(conn: sqlite3.Connection, table: str,
@@ -146,9 +275,17 @@ def add_missing_columns(conn: sqlite3.Connection, table: str,
     作業停止④⑤(v4.24.0)を足したとき、共有の表は③までの列で作られて
     いました。足さないと INSERT が「列がありません」で断られ、共有へ保存
     できなくなります。入っている行には触れません(足した列は空)。
+
+    **ページの列は足しません**(v4.36.0)。`頁` か `ページ` のどちらかがあれば、それが
+    その表のページの列です。v4.35.3 までは `頁` の明細表に `ページ` を足してしまい、
+    両方の列がある表ができていました(読み書きの決め方は冒頭)。
+
+    **共有の sqlite3 の表だけに使います。** 書き先が Access のときは列を足しません
+    (VBA の表なので ── `pusher`)。
     """
     have = {row[1] for row in conn.execute(f"PRAGMA table_info({quote(table)})")}
-    added = [c for c in columns if c not in have]
+    added = [c for c in columns if c not in have
+             and not (c in PAGE_NAMES and have & set(PAGE_NAMES))]
     for column in added:
         conn.execute(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)}")
     return added
@@ -193,22 +330,22 @@ def _marks(columns: tuple[str, ...]) -> str:
 
 def _write_records(conn: sqlite3.Connection, header: HeaderRecord,
                    details: list[DetailRecord], header_table: str,
-                   detail_table: str, saved_at: str) -> None:
-    """1キーぶんの DELETE と INSERT(確定は呼ぶ側の `with conn`)。"""
+                   detail_table: str, saved_at: str,
+                   pages: tuple[PageColumn, PageColumn]) -> None:
+    """1キーぶんの DELETE と INSERT(確定は呼ぶ側の `with conn`)。
+
+    `pages` は(見出しの表, 明細の表)のページの列。**表ごとに名前が違ってもよい**
+    (`頁` の表と `ページ` の表が混ざった共有もある)。
+    """
+    head_page, detail_page = pages
     key = (header.report_date, header.line, header.shift, header.page)
-    key_where = " AND ".join(f"{quote(c)}=?" for c in HEADER_KEY)
-    conn.execute(f"DELETE FROM {quote(detail_table)} WHERE {key_where}", key)
-    conn.execute(f"DELETE FROM {quote(header_table)} WHERE {key_where}", key)
-    conn.execute(
-        f"INSERT INTO {quote(header_table)}"
-        f" ({', '.join(quote(c) for c in HEADER_COLUMNS)})"
-        f" VALUES ({_marks(HEADER_COLUMNS)})",
-        _header_values(header, saved_at))
+    conn.execute(f"DELETE FROM {quote(detail_table)} WHERE {key_where(detail_page)}", key)
+    conn.execute(f"DELETE FROM {quote(header_table)} WHERE {key_where(head_page)}", key)
+    conn.execute(insert_sql(header_table, HEADER_COLUMNS, head_page),
+                 head_page.values(HEADER_COLUMNS, _header_values(header, saved_at)))
     conn.executemany(
-        f"INSERT INTO {quote(detail_table)}"
-        f" ({', '.join(quote(c) for c in DETAIL_COLUMNS)})"
-        f" VALUES ({_marks(DETAIL_COLUMNS)})",
-        [_detail_values(header, d) for d in details])
+        insert_sql(detail_table, DETAIL_COLUMNS, detail_page),
+        [detail_page.values(DETAIL_COLUMNS, _detail_values(header, d)) for d in details])
 
 
 def push_records(db_path: Path, header: HeaderRecord,
@@ -260,13 +397,13 @@ def push_records_batch(db_path: Path, items: list[RecordItem],
     rows = 0
     try:
         with conn:                                   # 例外ならロールバック
-            made: set[tuple[str, str]] = set()
+            made: dict[tuple[str, str], tuple[PageColumn, PageColumn]] = {}
             for header, details, header_table, detail_table in items:
                 if (header_table, detail_table) not in made:
-                    ensure_tables(conn, header_table, detail_table)
-                    made.add((header_table, detail_table))
+                    made[(header_table, detail_table)] = ensure_tables(
+                        conn, header_table, detail_table)
                 _write_records(conn, header, details, header_table, detail_table,
-                               saved_at)
+                               saved_at, made[(header_table, detail_table)])
                 rows += len(details) + 1
     except sqlite3.Error as exc:
         keys = [(h.report_date, h.line, h.shift, h.page) for h, *_ in items]
