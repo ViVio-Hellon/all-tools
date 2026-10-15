@@ -394,21 +394,19 @@ class WorkerSourceTest(unittest.TestCase):
     def test_Documents_Openの引数の位置(self):
         """Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, PasswordDocument,
         PasswordTemplate, Revert, WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible)。
+        VBA 版(PrintWordFile)と同じ: FileName・ReadOnly・AddToRecentFiles・Visible だけ(VER2.4.1)。
         Visible より後ろは Word の版で順番が違うので渡さない。"""
         calls = re.findall(r"gWd\.Documents\.Open\((.*)\)\r?$", self.text, re.M)
-        self.assertEqual(len(calls), 2)
-        for call in calls:
-            a = self.args(call)
-            self.assertEqual(len(a), 12, call)
-            self.assertEqual(a[0], "path")
-            self.assertEqual(a[1], "False", "ConfirmConversions: 変換の確認の窓を出さない")
-            self.assertEqual(a[2], "True", "ReadOnly: 「使用中」の窓を出さない・書き換えない")
-            self.assertEqual(a[3], "False", "AddToRecentFiles")
-            self.assertEqual(a[9], "wdOpenFormatAuto")
-            self.assertEqual(a[11], "False", "Visible")
-        self.assertIn("Const wdOpenFormatAuto = 0", self.text)
-        with_pwd = [self.args(c) for c in calls if self.args(c)[4]]
-        self.assertEqual([(a[4], a[5]) for a in with_pwd], [("pwd", "pwd")])
+        self.assertEqual(len(calls), 1)
+        a = self.args(calls[0])
+        self.assertEqual(len(a), 12, calls[0])
+        self.assertEqual(a[0], "path")
+        self.assertEqual(a[1], "False", "ConfirmConversions: 変換の確認の窓を出さない")
+        self.assertEqual(a[2], "True", "ReadOnly: 「使用中」の窓を出さない・書き換えない")
+        self.assertEqual(a[3], "False", "AddToRecentFiles")
+        self.assertEqual(a[11], "False", "Visible")
+        others = [a[i] for i in range(12) if i not in (0, 1, 2, 3, 11)]
+        self.assertEqual(others, [""] * 7, "VBA で渡していないもの(仮のパスワード・変換の確認など)は渡さない")
 
     def test_PrintOutの部数は8番目(self):
         """PrintOut(Background, Append, Range, OutputFileName, From, To, Item, Copies)"""
@@ -447,11 +445,13 @@ class WorkerSourceTest(unittest.TestCase):
         self.assertIn('"embedding"', find)
         self.assertIn("If count = 1 Then", find, "候補が1つに決まらなければ知らせない(止めることがあるため)")
 
-    def test_文書を開く前に確認の窓とマクロを止める(self):
+    def test_文書を開く前に確認の窓を止める_VBAと同じ設定だけ(self):
         start = self.body("Function StartWord(")
-        for needle in ("gWd.DisplayAlerts = wdAlertsNone", "gWd.AutomationSecurity = msoAutomationSecurityForceDisable",
-                       "gWd.FeatureInstall = msoFeatureInstallNone"):
-            self.assertIn(needle, start)
+        self.assertIn("gWd.DisplayAlerts = wdAlertsNone", start)
+        self.assertIn("gWd.Visible = False", start)
+        # VER2.4.1: VBA 版で印刷できていた設定だけ。これらは Word に入れない
+        for needle in ("gWd.AutomationSecurity", "gWd.WordBasic", "gWd.FeatureInstall"):
+            self.assertNotIn(needle, self.text, needle)
         # VER2.3.2: 1回の試しは PreviewWordOnce / TryPrintWord(Word が終わったら2回目がある)
         for header, use in (("Function PreviewWordOnce(", "OpenDoc(1, path)"),
                             ("Function TryPrintWord(", "PrintOneWord(index, path, copies)")):
@@ -745,7 +745,6 @@ class UserWordTest(_FakeWordCase):
         shared = finish[finish.index("If gWdShared Then"):finish.index("ElseIf openDocs = 0 Then")]
         self.assertIn('Emit "WORDBYE 0"', shared)
         self.assertIn("gWd.DisplayAlerts = gSavedAlerts", shared)
-        self.assertIn("gWd.AutomationSecurity = gSavedSecurity", shared)
         self.assertNotIn(".Quit", shared)
         self.assertIn("gWdShared", _vbs_body(text, "Sub ReportWordWindow("), "利用者の Word の窓は知らせない")
 
@@ -939,3 +938,30 @@ class WordWordingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VbaSameWordPrintTest(unittest.TestCase):
+    """VER2.4.1: Word の印刷は VBA 版(PrintWordFile)と同じ手順。隠れた文書に余計なことを頼まない。"""
+
+    def setUp(self):
+        self.text = _vbs_text()
+
+    def test_印刷の前にページ数も窓も聞かない(self):
+        body = _vbs_body(self.text, "Function PrintOneWord(")
+        self.assertNotIn("PageCount(", body)
+        self.assertNotIn("ComputeStatistics", body)
+        self.assertLess(body.index("OpenDoc(index, path)"), body.index("doc.PrintOut False"))
+        self.assertLess(body.index("doc.PrintOut False"), body.index("CloseDoc doc"))
+
+    def test_窓はPIDが分からないときだけ(self):
+        report = _vbs_body(self.text, "Sub ReportWordWindow(")
+        self.assertIn("If gWordPid > 0 Then Exit Sub", report)
+        self.assertLess(report.index("If gWordPid > 0 Then Exit Sub"), report.index(".Hwnd"))
+        start = _vbs_body(self.text, "Function StartWord(")
+        self.assertIn("gWordPid = pid", start)
+
+    def test_Wordは文書ごとに起動せず最後に1回終える(self):
+        start = _vbs_body(self.text, "Function StartWord(")
+        self.assertLess(start.index("If Not gWd Is Nothing Then"), start.index('CreateObject("Word.Application")'),
+                        "動いている Word は使い回す(VBA と同じ)")
+        self.assertIn("gWd.Quit wdDoNotSaveChanges", _vbs_body(self.text, "Sub FinishWord("))

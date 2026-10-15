@@ -277,3 +277,29 @@ class ScreenTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreviewOpenTest(unittest.TestCase):
+    """VER2.4.1: プレビューの画面に移っただけでは作らない(選んでから作る)。"""
+
+    def setUp(self):
+        with open(os.path.join(ROOT, "app", "static", "js", "preview.js"), encoding="utf-8") as fp:
+            self.js = fp.read()
+
+    def body(self, header):
+        start = self.js.index(header)
+        return self.js[start:self.js.index("\n}\n", start)]
+
+    def test_ボタンで開いたときは何も選ばない(self):
+        body = self.body("export function open(focusId)")
+        self.assertIn("focusId == null ? -1", body)
+        self.assertIn("if (start >= 0) select(start); else idle();", body)
+        self.assertNotIn("Math.max(0, view.items.findIndex", body, "見つからなければ1件目、をしない")
+
+    def test_何も選んでいない画面は作りかけを出さない(self):
+        body = self.body("function idle()")
+        self.assertIn("view.index = -1;", body)
+        self.assertIn("view.req += 1;", body)
+        self.assertIn("clearPdf();", body)
+        self.assertNotIn("show(", body)
+        self.assertNotIn("api(", body)

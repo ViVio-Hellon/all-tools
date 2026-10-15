@@ -50,8 +50,24 @@ export function open(focusId) {
   });
   const dlg = $("preview-dialog");
   if (!dlg.open) dlg.showModal();
-  const start = Math.max(0, view.items.findIndex((it) => it.id === focusId));
-  select(start);
+  // 「プレビュー」ボタンでは **何も作らない**。一覧から選んでから作る(VBA版と同じ。
+  // 開いた途端に1つ目を Excel・Word で作り始めない)。点検表の行の ◧ で開いたときだけ、
+  // その点検表を出す(選んで押したのと同じ)
+  const start = focusId == null ? -1 : view.items.findIndex((it) => it.id === focusId);
+  if (start >= 0) select(start); else idle();
+}
+
+/** まだ何も選んでいない(プレビュー画面に移ったところ) */
+function idle() {
+  view.index = -1;
+  view.req += 1;                           // 作りかけの前の要求は出さない
+  $("pv-image").hidden = true;
+  $("pv-image").removeAttribute("src");
+  clearPdf();
+  setFitShown(false);
+  $("pv-status").textContent = "点検表を選んでください";
+  message([el("b", null, "左の一覧から、プレビューする点検表を選んでください。"),
+           el("span", null, "選んだ点検表だけを Excel・Word で作ります。")]);
 }
 
 function select(index, force = false, settleMs = 0) {
@@ -196,8 +212,12 @@ export function init() {
     running.set(null);
   });
   $("preview-dialog").addEventListener("keydown", (ev) => {
+    // ↑↓で送る(まだ選んでいなければ、↓は1つ目・↑は最後から)
     if (ev.key === "ArrowDown") { ev.preventDefault(); select(Math.min(view.index + 1, view.items.length - 1), false, KEY_SETTLE_MS); }
-    if (ev.key === "ArrowUp") { ev.preventDefault(); select(Math.max(view.index - 1, 0), false, KEY_SETTLE_MS); }
+    if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      select(view.index < 0 ? view.items.length - 1 : Math.max(view.index - 1, 0), false, KEY_SETTLE_MS);
+    }
   });
   setFit(true);
 }

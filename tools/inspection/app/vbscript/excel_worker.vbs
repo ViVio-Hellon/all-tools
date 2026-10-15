@@ -17,6 +17,14 @@
 '     If the user's own document is open in it, Word is shown and left alone.
 '     If CreateObject hands back a Word that was already running (the user's),
 '     it is used as it is: not hidden, its settings given back, never quit.
+'   * Word is driven the way the VBA version (PrintWordFile) drove it, which
+'     printed on the line PCs: CreateObject, DisplayAlerts = none, Visible =
+'     False, Documents.Open(path, ReadOnly:=True, AddToRecentFiles:=False,
+'     Visible:=False), PrintOut Background:=False, Copies, Close without
+'     saving (VER2.4.1). Nothing more is set on Word or asked of the hidden
+'     document before printing: no AutomationSecurity / WordBasic macro
+'     switch / FeatureInstall, no dummy password, no page count, no window
+'     handle (the Word PID comes from WMI before any document is opened).
 '   * Word ended under us (VBScript error 462 / RPC errors: it crashed, the
 '     user closed it, or something ended it): Word is started again and the
 '     job (preview) or the document (print) is tried ONCE more. Not when
@@ -107,14 +115,12 @@ Const wdPrintView = 3
 Const wdGoToPage = 1
 Const wdGoToAbsolute = 1
 Const wdStatisticPages = 2
-Const wdOpenFormatAuto = 0
 Const wdExportFormatPDF = 17
 Const wdExportOptimizeForOnScreen = 1
 Const wdExportAllDocument = 0
 Const wdExportFromTo = 3
 Const wdExportDocumentContent = 0
 Const wdExportCreateNoBookmarks = 0
-Const msoFeatureInstallNone = 0
 
 Const RC_OK = 0
 Const RC_ARGS = 2
@@ -122,7 +128,7 @@ Const RC_EXCEL = 3
 Const RC_ITEM = 4
 
 Dim gFso, gJob, gXl, gWd, gWordReported, gMode, gLastErrNumber, gLastErrDesc, gJobError, gStage
-Dim gWdShared, gWordLostStage, gSavedAlerts, gSavedSecurity
+Dim gWdShared, gWordLostStage, gSavedAlerts, gWordPid
 
 Set gFso = CreateObject("Scripting.FileSystemObject")
 Set gXl = Nothing
@@ -130,6 +136,7 @@ Set gWd = Nothing
 gWordReported = False
 gWdShared = False
 gWordLostStage = ""
+gWordPid = 0
 gLastErrNumber = 0
 gLastErrDesc = ""
 gJobError = ""
@@ -1060,7 +1067,9 @@ Function PrintOneWord(index, path, copies)
     PrintOneWord = False
     Set doc = OpenDoc(index, path)
     If doc Is Nothing Then Exit Function
-    WriteResult "item." & index & ".sheet", "pages " & PageCount(doc)
+    ' Nothing is asked of the hidden document before printing (VBA: Open,
+    ' PrintOut, Close): not even the page count.
+    WriteResult "item." & index & ".sheet", "Word"
 
     number = 0
     description = ""
@@ -1132,6 +1141,7 @@ Function StartWord()
     ' blocks on a dialog before any document window exists.
     Stage "word.pid"
     pid = NewWordProcessId(before)
+    gWordPid = pid
     If pid > 0 Then Emit "WORDPID " & pid
 
     ' A Word that was already running (the user's) instead of a new one? Word
@@ -1152,11 +1162,13 @@ Function StartWord()
                     " document(s), visible " & vis & "): not hidden, not quit"
         Emit "WORDSHARED 1"
         gSavedAlerts = gWd.DisplayAlerts
-        gSavedSecurity = gWd.AutomationSecurity
         Err.Clear
     End If
 
-    ' Settings of this Word instance only (nothing that Word saves).
+    ' Settings of this Word instance only (nothing that Word saves), the same
+    ' two as the VBA version: DisplayAlerts and Visible. Nothing else is set
+    ' (AutomationSecurity, WordBasic.DisableAutoMacros and FeatureInstall were
+    ' set here up to VER2.4.0; Word did not print here while VBA could).
     ' A Word that has just started may reject calls for a moment: retry.
     Stage "word.setup"
     For attempt = 1 To 5
@@ -1174,14 +1186,6 @@ Function StartWord()
     If Not gWdShared Then
         gWd.Visible = False
         LogErr "Word Visible"
-    End If
-    gWd.FeatureInstall = msoFeatureInstallNone
-    LogErr "Word FeatureInstall"
-    If JobValue("disable_macros", "1") = "1" Then
-        gWd.AutomationSecurity = msoAutomationSecurityForceDisable
-        LogErr "Word AutomationSecurity"
-        gWd.WordBasic.DisableAutoMacros 1
-        LogErr "WordBasic.DisableAutoMacros"
     End If
     WriteResult "word.version", gWd.Version
     Err.Clear
@@ -1302,6 +1306,7 @@ Sub LoseWord()
     Set gWd = Nothing
     gWdShared = False
     gWordReported = False
+    gWordPid = 0
 End Sub
 
 
@@ -1342,8 +1347,6 @@ Sub FinishWord()
     If gWdShared Then
         ' The user's Word: give its settings back, keep it as it is
         gWd.DisplayAlerts = gSavedAlerts
-        gWd.AutomationSecurity = gSavedSecurity
-        If JobValue("disable_macros", "1") = "1" Then gWd.WordBasic.DisableAutoMacros 0
         Err.Clear
         WriteResult "log", "Word left running: it was running before this job (the user's Word)"
         Emit "WORDBYE 0"
@@ -1362,26 +1365,28 @@ Sub FinishWord()
     Set gWd = Nothing
     gWdShared = False
     gWordReported = False
+    gWordPid = 0
 End Sub
 
 
 ' Documents.Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles,
 '   PasswordDocument, PasswordTemplate, Revert, WritePasswordDocument,
 '   WritePasswordTemplate, Format, Encoding, Visible)
-' The dummy password makes a protected document fail (Word error 5408)
-' instead of asking; Word ignores it for a document without a password.
-' ConfirmConversions = False: no "Convert File" dialog. ReadOnly = True: no
-' "File in Use" dialog. Arguments after Visible are left out on purpose:
-' their order differs between Word versions.
+' The same arguments as the VBA version (VER2.4.1): FileName, ReadOnly =
+' True (no "File in Use" dialog, never written), AddToRecentFiles = False,
+' Visible = False, plus ConfirmConversions = False (no "Convert File"
+' dialog; nothing changes for a .doc / .docx). The others are left to Word,
+' as in VBA (up to VER2.4.0 a dummy password, Revert and Format too).
+' Arguments after Visible are left out on purpose: their order differs
+' between Word versions.
 Function OpenDoc(index, path)
-    Dim doc, pwd, attempt, number, description
+    Dim doc, attempt, number, description
 
     Set OpenDoc = Nothing
     If Not gFso.FileExists(path) Then
         SetItemError index, "FILE_NOT_FOUND", 0, path
         Exit Function
     End If
-    pwd = JobValue("open_password", "")
     number = 0
     description = ""
     Stage "word.open"
@@ -1389,11 +1394,7 @@ Function OpenDoc(index, path)
     For attempt = 1 To 3
         Err.Clear
         Set doc = Nothing
-        If Len(pwd) > 0 Then
-            Set doc = gWd.Documents.Open(path, False, True, False, pwd, pwd, False, , , wdOpenFormatAuto, , False)
-        Else
-            Set doc = gWd.Documents.Open(path, False, True, False, , , False, , , wdOpenFormatAuto, , False)
-        End If
+        Set doc = gWd.Documents.Open(path, False, True, False, , , , , , , , False)
         number = Err.Number
         description = Err.Description
         Err.Clear
@@ -1422,10 +1423,13 @@ Function OpenDoc(index, path)
 End Function
 
 
-' Word has no Application.Hwnd; the document window has one (Word 2013+)
+' Word has no Application.Hwnd; the document window has one (Word 2013+).
+' Only when WMI could not tell the Word PID (WORDPID): the hidden document's
+' window is not touched otherwise (VER2.4.1, the same as VBA).
 Sub ReportWordWindow(doc)
     Dim hwnd
     If gWordReported Or gWdShared Then Exit Sub     ' the user's Word is not ours to track
+    If gWordPid > 0 Then Exit Sub                   ' Python knows the PID already
     gWordReported = True
     On Error Resume Next
     hwnd = 0
