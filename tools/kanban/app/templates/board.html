@@ -50,6 +50,11 @@
 
     <span class="toolbar__spacer"></span>
     <span id="reports"></span>
+    {# 権限のあるほかのモードへ、その場で切り替える(デスクトップ版は開き直さずに) #}
+    {% for m in switch_modes %}
+    <button class="btn btn--sm" type="button" data-switch-mode="{{ m.key }}" data-label="{{ m.label }}"
+            title="{{ m.label }}に切り替えます(共有DBへの書き戻しを済ませてから)">⇄ {{ m.label }}へ</button>
+    {% endfor %}
   </div>
 
   {% if read_only %}

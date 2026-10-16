@@ -107,8 +107,29 @@ def page():
         shown_line=line,
         state=board_dict(view, stamp) if view else None,
         pending=store.pending_count(),
+        switch_modes=_switch_modes(mode),
         **shell_context("board"),
     )
+
+
+def _switch_modes(mode: str) -> list[dict[str, str]]:
+    """看板の画面から切り替えられるモード(この端末に権限のある、いま以外のもの)。
+
+    設定の奥まで行かずに、倉庫 ⇔ 現場を行き来できるようにする(Administrator が両方を
+    見るとき)。権限は起動したときに読んだもの。押したときにサーバがもう一度確かめる
+    (``POST /api/mode``)。
+    """
+    from flask import current_app
+
+    grant = current_app.config.get("ACCESS_GRANT")
+    if grant is None:
+        return []
+    # 現場と倉庫の**両方**を使える端末だけ(倉庫参照は誰でも開けるので、現場の盤に
+    # 「倉庫参照へ」を並べない。倉庫参照へは設定から)
+    both = [m for m in (config.MODE_SITE, config.MODE_WAREHOUSE) if grant.allows(m)]
+    if len(both) < 2:
+        return []
+    return [{"key": m, "label": config.mode_display_name(m)} for m in both if m != mode]
 
 
 @bp.get("/api/board")

@@ -26,7 +26,7 @@
   </nav></div></header>
 <main class="page">
   <div class="head">
-    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.2</span></div>
+    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.3</span></div>
     <p class="lead">資材の看板を画面で見て、ラインは「欲しい」を出し、倉庫は「発送した」を付けます。届いたらラインが確認して、看板を元に戻します。</p>
   </div>
 
@@ -72,6 +72,7 @@
     </table></div>
     <div class="tip"><b>こつ</b>現場モードで見るライン(<b>担当ライン</b>)と、使えるモードは、管理者が「アクセス権限」の表に登録して決めます(Windows のログインID と パソコンの名前で決まります)。
       登録の無いパソコンは現場モードだけです。倉庫モードが使えないときは、管理者に頼んでください(<a href="#settei">8. 設定</a>)。</div>
+    <div class="tip"><b>こつ</b>現場と倉庫の<b>両方</b>の権限があるパソコン(Administrator など)は、看板の画面の右上の<span class="btnname">⇄ 倉庫モードへ</span>/<span class="btnname">⇄ 現場モードへ</span>で、<b>閉じずに</b>切り替えられます(書き戻しを済ませてから開き直します。ブラウザ版は次に開いたときから)。</div>
   </section>
 
   <section id="mikata">
@@ -219,8 +220,8 @@
       <li><div><b>開いている端末</b> … いま看板を開いているラインのパソコン(例: L-1)。</div></li>
       <li><div><b>モードの札</b> … 倉庫モードは緑の札です。</div></li>
       <li><div><span class="btnname">表示中のラインを全て発送済みに</span> … 選んでいるラインの、まだ発送していない「欲しい」をまとめて発送済みにします。</div></li>
-      <li><div><span class="btnname">🖨 発送明細</span> … 発送した物(赤と緑が付いている物)の一覧を印刷します。</div></li>
-      <li><div><span class="btnname">🖨 非常設品リスト</span> … 「欲しい」が出ている非常設品の一覧を印刷します。</div></li>
+      <li><div><span class="btnname">🖨 発送明細</span> … 発送した物(赤と緑が付いている物)の一覧を印刷します。右の数は、押すたびにその場で変わります。</div></li>
+      <li><div><span class="btnname">🖨 非常設品リスト</span> … 「欲しい」が出ている非常設品の一覧を、<b>いまの状態</b>つきで印刷します。赤だけ=<b>受付</b>、緑=<b>発送</b>、黄=<b>注文中</b>。</div></li>
       <li><div><b>サイズ</b> … ラインが出した「欲しい」は赤で出ます(倉庫モードでは見るだけ)。</div></li>
       <li><div><span class="btnname">発送</span> … 発送したら押します。緑になります。</div></li>
       <li><div><span class="btnname">注文中</span> … 在庫が無く、仕入れ先へ注文したら押します。黄になります。赤が付いている看板だけ押せます。</div></li>
@@ -387,7 +388,7 @@
     <div class="warn"><b>気をつけること</b>電源を切る前に、必ず<span class="btnname">終了</span>で閉じてください。いきなり電源を切ると、押した操作が送られずに残ったり、ほかのパソコンの「開いている端末」に <b>?</b> 付きで残ったりします。</div>
   </section>
 
-  <p class="foot">資材発注看板システム VER3.5.2 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
+  <p class="foot">資材発注看板システム VER3.5.3 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
     写真の名前・ライン・資材・コメントは説明のための例です。</p>
 </main>
 </body>

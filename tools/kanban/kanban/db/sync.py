@@ -29,7 +29,7 @@ from dbkit.periodic import PeriodicTask
 
 from .. import applog, config
 from ..accdb.types import CATEGORY_NUMBER, CATEGORY_TEXT
-from .shared import SharedDb, TableSnapshot, build_update
+from .shared import SharedDb, TableSnapshot, _looks_like_lock, build_update
 from ..domain.models import MUTABLE_FIELDS
 from .store import DEFAULT_COLUMN_MAP, Store
 
@@ -389,6 +389,28 @@ def _key_value(value: Any, category: str) -> Any:
             return value
 
 
+def _stored_key(gateway: SharedDb, table: str, key_column: str, mgmt_no: str) -> tuple[bool, Any]:
+    """共有DBに**書いてあるとおりの**管理番号(型も含めて)。``(見つかった, 値)``。
+
+    共有DBの表は、作った道具によって管理番号の列の型の宣言が違う(宣言なし・LONG・TEXT …)。
+    宣言の無い列に数の ``1`` が入っていると、文字の ``'1'`` で問い合わせても SQLite は
+    一致としない(型の読み替えをしない)── 画面では同じ「1」なのに**0 行更新**になる。
+    同じ番号(:func:`kanban.keys.same`)の行が**ちょうど 1 つ**なら、その値そのもので書き直す。
+    2 つ以上(重なり)や 0 なら決めない。
+    """
+    from .. import keys
+
+    try:
+        found = [r["k"] for r in gateway.select(
+            f"SELECT {_quote(key_column)} AS k FROM {_quote(table)}")]
+    except Exception:  # noqa: BLE001 - 読めなければ決めない(失敗の記録は呼び出し側)
+        return False, None
+    near = [k for k in found if keys.same(k, mgmt_no)]
+    if len(near) == 1:
+        return True, near[0]
+    return False, None
+
+
 def _missing_row_reason(gateway: SharedDb, table: str, key_column: str, mgmt_no: str) -> str:
     """送り先の行が見つからない理由。**行が無い**のか、**番号の書き方が違う**のか。"""
     from .. import keys
@@ -404,6 +426,26 @@ def _missing_row_reason(gateway: SharedDb, table: str, key_column: str, mgmt_no:
                 f"(文字の種類・空白・型の違い)、この端末の「{mgmt_no}」と一致しません")
     return (f"対象行なし: 共有DBの {table} に{key_column} {mgmt_no} の行がありません"
             "(マスタで消された・Access から差し替えた・接続先が変わった など)")
+
+
+def _retry_with_stored_key(gateway: SharedDb, table: str, key_column: str,
+                           key: tuple[str, str, int], statement: tuple[str, list[Any]],
+                           first: Any) -> Any:
+    """0 行更新だった 1 文を、共有DBに書いてあるとおりの管理番号でもう 1 回だけ送る。"""
+    ok, stored = _stored_key(gateway, table, key_column, key[1])
+    if not ok:
+        return first
+    sql, params = statement
+    try:
+        again = gateway.execute([(sql, [*params[:-1], stored])])[0]
+    except Exception as exc:  # noqa: BLE001 - 送れなければ 1 回目の結果のまま(失敗として残る)
+        applog.warning("export_pending: %s/%s: 書いてある管理番号で送り直せませんでした (%s)",
+                       key[0], key[1], exc)
+        return first
+    if again.ok and again.affected > 0:
+        applog.info("export_pending: %s/%s: 共有DBの %s では管理番号が %r(%s)と書かれていたので、"
+                    "その値で書きました", key[0], key[1], table, stored, type(stored).__name__)
+    return again
 
 
 #: 論理名 → 共有DBでの列名。**利用者に見せるのは共有DB側の言葉**
@@ -519,7 +561,11 @@ def _export_items(
                 continue
 
             synced: list[tuple[str, str, int]] = []
-            for key, statement_result in zip(keys, statement_results):
+            for key, statement, statement_result in zip(keys, statements, statement_results):
+                if statement_result.ok and statement_result.affected == 0:
+                    # 番号の書き方(型)だけが違う行なら、共有DBに書いてある値で書き直す
+                    statement_result = _retry_with_stored_key(
+                        gateway, table_name, key_column, key, statement, statement_result)
                 if statement_result.ok and statement_result.affected > 0:
                     synced.append(key)
                 elif statement_result.ok:
@@ -860,8 +906,15 @@ class Exporter:
                 if not self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
                     self.store.set_meta(self.META_UNDELIVERED_SINCE,
                                         datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
-                why = ("共有DBが見えません" if not self.gateway.exists()
-                       else "共有DBへ書けませんでした(ほかの端末が使っている・ロック)")
+                # **本当の理由を出す。** 以前は見えていれば必ず「ロック」と言っていて、
+                # 行が見つからない(対象行なし)ときも「ほかの端末が使っている」と出ていた
+                error = self.store.dirty_sync_error()
+                if not self.gateway.exists():
+                    why = "共有DBが見えません"
+                elif error and not _looks_like_lock(error):
+                    why = f"共有DBへ書けませんでした: {error}"
+                else:
+                    why = "共有DBへ書けませんでした(ほかの端末が使っている・ロック)"
                 self.store.set_meta(self.META_UNDELIVERED_WHY, why)
             elif self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
                 self.store.set_meta(self.META_UNDELIVERED_SINCE, "")
@@ -959,7 +1012,17 @@ class Exporter:
     def last_result(self) -> ExportResult | None:
         return self._task.last_result
 
+    #: VER3.5.3 で送れるようになった失敗(管理番号の型だけが違う行)。前の版で諦めた行を
+    #: 起動したときに 1 回だけ送り直しに戻す(「⚠ 1 件がまだ共有に届いていません」が残らない)
+    REVIVE_ON_START = "と一致しません"
+
     def start(self) -> None:
+        try:
+            revived = self.store.revive_failed(self.REVIVE_ON_START)
+            if revived:
+                applog.info("export: 管理番号の書き方が違うだけで諦めていた %d 件を送り直します", revived)
+        except Exception:  # noqa: BLE001 - 戻せなくても書き戻しは始める
+            pass
         self._task.start()
         if self.interval_sec > 0 and self.RETRY_SEC > 0 and self._retry_thread is None:
             self._retry_stop.clear()

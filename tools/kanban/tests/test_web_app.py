@@ -2339,11 +2339,30 @@ class UnsendableOperationsTest(RouteTestBase):
             self.sync.export_pending(self.store, self.gateway)
 
     def test_the_reason_says_which(self):
+        import sqlite3
+
         self.ship_then_break("2", "deleted")
+        # 同じ番号が全角と半角で 2 行(どちらへ書くか決められない)
+        c = sqlite3.connect(str(self.shared))
+        c.execute("INSERT INTO [看板_LVC] VALUES ('４', '外装紙', 'D', '〇', '', '', '', '', '〇')")
+        c.commit()
+        c.close()
         self.ship_then_break("4", "fullwidth")
         errors = {f["mgmt_no"]: f["error"] for f in self.get("/api/settings").json["failures"]}
         self.assertIn("管理番号 2 の行がありません", errors["2"])
         self.assertIn("「４」と書かれていて", errors["4"])
+
+    def test_a_number_written_differently_is_still_written(self):
+        """全角の「６」と書かれた行にも、この端末の「6」の発送が届く(同じ看板が 1 行だけのとき)。"""
+        import sqlite3
+
+        self.ship_then_break("6", "fullwidth")
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.get("/api/settings").json["failures"], [])
+        c = sqlite3.connect(str(self.shared))
+        shipped = c.execute("SELECT 発送 FROM [看板_LVC] WHERE 管理番号 = '６'").fetchone()[0]
+        c.close()
+        self.assertEqual(shipped, config.MARK_ON)
 
     def test_discard_goes_back_to_the_shared_state(self):
         self.ship_then_break("2", "deleted")
@@ -2766,6 +2785,20 @@ class AccessRouteTest(RouteTestBase):
         self.assertIn("(権限なし)", html)
         self.assertIn('id="access-path-card"', html)
 
+    def test_board_offers_the_other_modes_this_terminal_may_use(self):
+        """Administrator は看板の画面から倉庫 ⇔ 現場へ切り替えられる(設定の奥まで行かない)。"""
+        admin = self.ac.Rule(no=1, login_id=self.me.login_id, pc_name=self.me.pc_name,
+                             permission="Administrator", enabled=True, note="")
+        self.app.config["ACCESS_GRANT"] = self.ac.resolve([admin], self.me)
+        html = self.get("/board").get_data(as_text=True)
+        self.assertIn('data-switch-mode="warehouse"', html)
+        self.assertNotIn('data-switch-mode="site"', html, "いまのモードは出さない")
+
+        self.app.config["ACCESS_GRANT"] = self.ac.resolve([], self.me)
+        html = self.get("/board").get_data(as_text=True)
+        self.assertNotIn('data-switch-mode="warehouse"', html, "権限の無いモードは出さない")
+        self.assertNotIn("data-switch-mode", html, "現場だけの端末には何も出さない(倉庫参照へも)")
+
     def test_startup_notice_is_shown_on_every_page(self):
         self.app.config["STARTUP_NOTICE"] = "倉庫モードの権限がないので、現場モードで開きました。"
         for path in ("/board", "/settings"):
@@ -2917,3 +2950,89 @@ class HistoryAndCsvRouteTest(RouteTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UntypedKeyColumnTest(RouteTestBase):
+    """共有DBの管理番号の列に型の宣言が無く、数の 1 が入っている(看板_AIM の件)。
+
+    発注 → 発注解除 だけで「対象行なし: … 「1」と書かれていて … 「1」と一致しません」が出た。
+    宣言の無い列は SQLite が型を読み替えないので、文字の '1' で問い合わせると 0 行更新になる。
+    """
+
+    MODE = config.MODE_SITE
+    LINE = "AIM"
+
+    def setUp(self) -> None:
+        super().setUp()
+        import sqlite3
+
+        from kanban.db import sync
+        from kanban.db.shared import SharedDb
+
+        self.sync = sync
+        self.shared = self.dir / "看板マスタ.sqlite3"
+        c = sqlite3.connect(str(self.shared))
+        c.execute("CREATE TABLE [看板_AIM] ([管理番号], [資材], [サイズ], [欲], [不], [更新日], [発送],"
+                  " [倉庫確認日時], [常設品])")
+        c.executemany("INSERT INTO [看板_AIM] VALUES (?, '中性紙', ?, '', '〇', '', '', '', '〇')",
+                      [(1, "1600 × 150M:4本"), (2, "1600 × 150M:2本")])
+        c.commit()
+        c.close()
+        self.gateway = SharedDb(str(self.shared), cache_dir=str(self.dir / "cache"))
+        self.sync.import_all(self.store, self.gateway, lines=["AIM"])
+
+    def shared_row(self, no):
+        import sqlite3
+
+        c = sqlite3.connect(str(self.shared))
+        try:
+            return c.execute("SELECT 欲, 不, typeof(管理番号) FROM [看板_AIM] WHERE 管理番号 = ?",
+                             (no,)).fetchone()
+        finally:
+            c.close()
+
+    def test_order_and_cancel_reach_the_shared_db(self):
+        from kanban.domain import models
+
+        self.store.apply_transition("AIM", "1", models.order_button_changes, operation="order")
+        result = self.sync.export_pending(self.store, self.gateway)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.shared_row(1)[:2], (config.MARK_ON, ""))
+        self.assertEqual(self.shared_row(1)[2], "integer", "管理番号の書き方(型)は変えない")
+
+        self.store.apply_transition("AIM", "1", models.order_button_changes, operation="order")
+        result = self.sync.export_pending(self.store, self.gateway)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.shared_row(1)[:2], ("", config.MARK_ON))
+
+    def test_rows_given_up_by_the_old_version_are_sent_again_on_start(self):
+        """前の版で諦めた(5 回失敗した)行も、起動したときに送り直しに戻る。"""
+        from kanban.db import store as store_mod
+        from kanban.domain import models
+
+        self.store.apply_transition("AIM", "1", models.order_button_changes, operation="order")
+        msg = "対象行なし: 共有DBの 看板_AIM では管理番号が「1」と書かれていて(文字の種類・空白・型の違い)、この端末の「1」と一致しません"
+        for _ in range(store_mod.MAX_SYNC_ATTEMPTS):
+            self.store.mark_items_failed([("AIM", "1")], msg)
+        self.assertEqual(self.store.pending_items(), [], "諦めた行は送る列に無い")
+        exporter = self.sync.Exporter(self.store, self.gateway, interval_sec=0)
+        exporter.start()
+        try:
+            exporter.run_once()
+        finally:
+            exporter.stop(final_export=False)
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.shared_row(1)[0], config.MARK_ON)
+
+    def test_the_band_says_the_real_reason(self):
+        from kanban.domain import models
+
+        self.store.apply_transition("AIM", "1", models.order_button_changes, operation="order")
+        self.store.mark_items_failed([("AIM", "1")], "対象行なし: 共有DBの 看板_AIM に管理番号 1 の行がありません")
+        exporter = self.sync.Exporter(self.store, self.gateway, interval_sec=0)
+        exporter._note_delivery()
+        why = self.store.get_meta(exporter.META_UNDELIVERED_WHY, "")
+        self.assertIn("行がありません", why)
+        self.assertNotIn("ロック", why)

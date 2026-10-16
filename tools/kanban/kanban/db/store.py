@@ -1175,6 +1175,28 @@ class Store:
 
         self.retry(_apply, "mark_items_failed")
 
+    def revive_failed(self, error_contains: str) -> int:
+        """諦めた行(要確認)のうち、エラーに ``error_contains`` を含むものを送り直しに戻す。
+
+        書き戻しの直し(版の更新)で送れるようになった種類の失敗だけに使う。数を返す。
+        """
+        def _apply() -> int:
+            with self.write_transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE kanban_item SET sync_attempts = 0"
+                    " WHERE dirty = 1 AND sync_attempts > 0 AND instr(sync_error, ?) > 0",
+                    (error_contains,))
+                return int(cur.rowcount or 0)
+
+        return int(self.retry(_apply, "revive_failed") or 0)
+
+    def dirty_sync_error(self) -> str:
+        """届いていない行の、いちばん新しい失敗の理由(無ければ空)。帯に出す。"""
+        row = self.connection.execute(
+            "SELECT sync_error FROM kanban_item WHERE dirty = 1 AND sync_error != ''"
+            " ORDER BY updated_at DESC LIMIT 1").fetchone()
+        return str(row[0]) if row else ""
+
     def pending_details(self, limit: int = 50) -> list[dict[str, Any]]:
         """未反映の**中身**。数だけでは何も分からない。
 

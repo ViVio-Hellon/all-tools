@@ -10,6 +10,7 @@
 // サーバがずれる。差分を持たないほうが、この規模では確実で速い。
 
 import { api, withLine } from '../api.js';
+import * as desktop from '../desktop.js';
 import { isQuietLeave } from '../leave.js';
 import { bad, ok, warn } from '../toast.js';
 
@@ -203,6 +204,9 @@ function applyPayload(payload, seq) {
       if (drawn) {
         shownStamp = stamp;
         if (seq !== undefined) shownSeq = seq;
+        // 盤が変わったら、印刷ボタンの数(発送明細・非常設品リスト)も読み直す。
+        // 以前は開いたとき・ラインを替えたとき・↻ だけで、押しても数が変わらなかった
+        scheduleReports();
       }
     }
   }
@@ -908,6 +912,7 @@ function drain() {
 }
 
 function wireToolbar() {
+  wireModeSwitch();
   on('refresh', async () => {
     const btn = document.getElementById('refresh');
     btn.disabled = true;
@@ -1035,6 +1040,36 @@ function wireTabs() {
   });
 }
 
+/**
+ * 「⇄ 現場モードへ」など。権限のあるほかのモードへ切り替える。
+ *
+ * **デスクトップ版は、その場で切り替わる**(外枠が Python だけを立て直す。書き戻しを
+ * 済ませてから)。設定の奥まで行かなくてよい。ブラウザ版はモードがポートに結びついて
+ * いるので、次に開いたときから。
+ */
+function wireModeSwitch() {
+  document.querySelectorAll('[data-switch-mode]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.switchMode;
+      const label = btn.dataset.label;
+      btn.disabled = true;
+      try {
+        const r = await api.post('/api/mode', { mode });
+        if (desktop.isDesktop) {
+          warn(`${label}に切り替えています…(書き戻しを済ませてから開き直します)`);
+          await desktop.restartApp();
+          return;
+        }
+        ok(r.message || `次にアプリを開いたときから${label}になります。`);
+      } catch (e) {
+        bad(e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
 async function switchTab(tab) {
   if (!tab || !tab.isConnected) return;
   line = tab.dataset.line;
@@ -1074,6 +1109,13 @@ async function reload() {
 // 印刷
 // ------------------------------------------------------------------
 let reportSeq = 0;
+let reportTimer = null;
+
+/** 印刷ボタンの数を少し後に読み直す(続けて押したときは最後の 1 回だけ) */
+function scheduleReports() {
+  if (reportTimer) clearTimeout(reportTimer);
+  reportTimer = setTimeout(() => { reportTimer = null; loadReports(); }, 250);
+}
 
 async function loadReports() {
   const host = document.getElementById('reports');

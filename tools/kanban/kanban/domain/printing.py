@@ -166,22 +166,25 @@ def build_warehouse_document(
 def build_non_permanent_document(
     line: str, items: Sequence[KanbanItem], now: datetime | None = None
 ) -> PrintDocument:
-    """倉庫モードの非常設品リスト(発注済みの非常設品)。
+    """倉庫モードの非常設品リスト(発注済みの非常設品と、**いまの状態**)。
 
-    保留中の行は載せない(``build_warehouse_document`` 参照)。
+    状態は盤の色と同じ言葉で出す(VER3.5.3。以前は載るだけで状態が分からなかった):
+
+    * 赤だけ(発注だけ) … ``受付``
+    * 緑(発送)          … ``発送``
+    * 黄(注文中)        … ``注文中``(以前は載せなかった。注文して待っている非常設品こそ
+      確かめたい)
     """
     name = config.display_name(line)
     rows = []
     for item in items:
-        if item.is_held:
-            continue
         if not item.is_ordered or not item.is_non_permanent:
             continue
         size, qty = _split_size(item.size)
-        rows.append((item.material, [item.material, size, qty]))
+        rows.append((item.material, [item.material, size, qty, non_permanent_state(item)]))
     return PrintDocument(
         title=f"{name} (非常設品)",
-        headers=["資材", "サイズ", "数"],
+        headers=["資材", "サイズ", "数", "状態"],
         rows=_with_separators(rows),
         kind=KIND_NON_PERMANENT,
         created_at=(now or datetime.now()).strftime("%Y/%m/%d %H:%M"),
@@ -189,6 +192,15 @@ def build_non_permanent_document(
         highlight_title=True,
         file_stem=f"非常設_{name}",
     )
+
+
+def non_permanent_state(item: KanbanItem) -> str:
+    """非常設品リストの「状態」。注文中(黄)> 発送(緑)> 受付(赤だけ)の順に見る。"""
+    if item.is_held:
+        return "注文中"
+    if item.is_shipped:
+        return "発送"
+    return "受付"
 
 
 #: 紙の端から、文字・罫線・色の帯(見出しの灰色など)を置かない幅(mm)。

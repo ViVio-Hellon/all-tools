@@ -68,7 +68,7 @@ class WarehouseDocumentTest(unittest.TestCase):
         ]
         doc = printing.build_non_permanent_document("大板小板", items)
         self.assertEqual(doc.data_row_count, 1)
-        self.assertEqual(doc.rows[0].cells, ["ハードボード", "660 × 1050", "100枚"])
+        self.assertEqual(doc.rows[0].cells, ["ハードボード", "660 × 1050", "100枚", "受付"])
         self.assertTrue(doc.highlight_title)
 
     def test_held_row_is_excluded_even_if_shipped(self):
@@ -89,17 +89,24 @@ class WarehouseDocumentTest(unittest.TestCase):
         self.assertEqual(doc.rows[0].cells[0], "外装紙")
         self.assertEqual(doc.rows[0].cells[1], "1900 × 50M")
 
-    def test_held_row_is_excluded_from_non_permanent_document(self):
+    def test_non_permanent_document_shows_the_state(self):
+        """非常設品リストは状態を出す: 赤だけ=受付・緑=発送・黄=注文中(注文中も載せる)。"""
         items = [
-            item(
-                "1", "ハードボード", "660 × 1050 : 100枚",
-                want="〇", permanent="×", hold="〇",
-            ),
+            item("1", "ハードボード", "660 × 1050 : 100枚", want="〇", permanent="×", hold="〇"),
             item("2", "ハードボード", "750 × 1130 : 100枚", want="〇", permanent="×"),
+            item("3", "ハードボード", "1030 × 1520 : 100枚", want="〇", permanent="×", shipped="〇"),
+            item("4", "ハードボード", "510 × 770 : 100枚", permanent="×", shipped="〇"),
         ]
         doc = printing.build_non_permanent_document("大板小板", items)
-        self.assertEqual(doc.data_row_count, 1)
-        self.assertEqual(doc.rows[0].cells[1], "750 × 1130")
+        self.assertEqual(doc.headers, ["資材", "サイズ", "数", "状態"])
+        self.assertEqual([(r.cells[1], r.cells[3]) for r in doc.rows if r.cells],
+                         [("660 × 1050", "注文中"), ("750 × 1130", "受付"), ("1030 × 1520", "発送")])
+
+    def test_cancelled_shipping_goes_back_to_reception(self):
+        """発送を付けて消した(緑→消灯)非常設品は、発注が残っているので「受付」で載る。"""
+        items = [item("1", "ハードボード", "1030 × 1520 : 100枚", want="〇", permanent="×")]
+        doc = printing.build_non_permanent_document("大板小板", items)
+        self.assertEqual(doc.rows[0].cells[3], "受付")
 
 
 class RenderTest(unittest.TestCase):
