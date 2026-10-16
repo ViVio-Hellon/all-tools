@@ -41,10 +41,15 @@ COLS = ("[管理番号] NUMERIC, [資材] TEXT, [サイズ] TEXT, [欲] TEXT, [�
         " [発送] TEXT, [倉庫確認日時] TEXT, [常設品] TEXT, [保留] TEXT, [注文中日時] TEXT")
 
 
-def make_shared(path: Path, lines=("LVC", "HVC"), count=4) -> None:
+#: 本番の共有DBの形。Access を変換したファイルは**型を書かずに**表を作る
+#: (python-web-tools の source_db.py「現物で踏んだ」)。管理番号には数の 1 が入る
+UNTYPED_COLS = ", ".join(c.split("]")[0] + "]" for c in COLS.split(","))
+
+
+def make_shared(path: Path, lines=("LVC", "HVC"), count=4, cols: str = COLS) -> None:
     db = sqlite3.connect(str(path))
     for line in lines:
-        db.execute(f"CREATE TABLE [看板_{line}] ({COLS})")
+        db.execute(f"CREATE TABLE [看板_{line}] ({cols})")
         for i in range(1, count + 1):
             db.execute(f"INSERT INTO [看板_{line}] VALUES (?,?,?,'','〇','','','','〇','','')",
                        (i, "外装紙", f"{line}-{i}"))
@@ -102,10 +107,12 @@ class GlobalRevTest(unittest.TestCase):
 # 取り込みが送り終えた行を戻さない
 # ---------------------------------------------------------------------------
 class ImportExportRaceTest(unittest.TestCase):
+    SHARED_COLS = COLS
+
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="kanban_race_"))
         self.shared = self.dir / "看板マスタ.sqlite3"
-        make_shared(self.shared, lines=("LVC",), count=3)
+        make_shared(self.shared, lines=("LVC",), count=3, cols=self.SHARED_COLS)
         self.gw = SharedDb(str(self.shared), cache_dir=str(self.dir / "cache"))
         self.store = Store(str(self.dir / "local.sqlite3"), host_name="LVC-PC")
         self.store.ensure_schema()
@@ -319,12 +326,13 @@ class MasterGuardRouteTest(RouteTestBase):
     """マスタで、届いていない発注のある看板を消さない・先に直した人の値を消さない。"""
 
     TABLE = "看板_LVC"
+    SHARED_COLS = COLS
 
     def setUp(self) -> None:
         super().setUp()
         self.shared = self.dir / "看板マスタ.sqlite3"
         conn = sqlite3.connect(str(self.shared))
-        conn.execute(f"CREATE TABLE [{self.TABLE}] ({COLS})")
+        conn.execute(f"CREATE TABLE [{self.TABLE}] ({self.SHARED_COLS})")
         conn.execute(f"INSERT INTO [{self.TABLE}] ([管理番号], [資材], [サイズ], [欲], [不]) VALUES (2, '外装紙', 'S', '', '〇')")
         conn.execute(f"INSERT INTO [{self.TABLE}] ([管理番号], [資材], [サイズ], [欲], [不]) VALUES (9, 'テープ', 'T', '', '〇')")
         conn.commit()
@@ -462,3 +470,18 @@ class TableRefreshPlanRouteTest(RouteTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# 同じ試験を、本番の形(型の無い共有DB)でも回す
+# ---------------------------------------------------------------------------
+class ImportExportRaceUntypedTest(ImportExportRaceTest):
+    """取り込みと書き戻しの重なり ── 型の無い共有DB(本番の形)で。"""
+
+    SHARED_COLS = UNTYPED_COLS
+
+
+class MasterGuardRouteUntypedTest(MasterGuardRouteTest):
+    """マスタの守り ── 型の無い共有DB(本番の形)で。"""
+
+    SHARED_COLS = UNTYPED_COLS
