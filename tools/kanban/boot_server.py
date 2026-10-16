@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Callable
+from typing import Optional, Any, Callable
 
 from kanban import app_config, boot_screen
 from kanban.applog import get_logger
@@ -51,6 +51,8 @@ class BootApp:
         self.mode = mode
         self.port = port
         self.token = token
+        #: 止め口(`/api/shutdown`)が呼ぶもの。`server.AppServer` が自分の stop を入れる
+        self.on_shutdown: Optional[Callable[[], None]] = None
         self.stage = "実行環境を確認中"
         self.stage_key = "env"
         self.startup_error = ""
@@ -101,6 +103,39 @@ class BootApp:
             "job": None,
         }
 
+    def shutdown(self, environ: dict, start_response: Callable) -> list:
+        """本体を組み立てる前の止め口。**本体の組み立てに失敗して理由を出しているあいだも**ここ。
+
+        以前は待機画面が `/api/health` と `/` にしか答えず、組み立てに失敗した Python は
+        stop.bat でも(--force でも)止まらなかった ── フォルダを消せず、タスクマネージャーで
+        Python を切るしかなかった(現場から届いた件)。本体と同じく起動トークンを確かめ、
+        `check` は訊くだけ(止めない)。まだ処理は何も始まっていないので、断る理由は無い。
+        """
+        from urllib.parse import parse_qs
+        import hmac
+
+        given = environ.get("HTTP_X_TOOL_TOKEN") or (
+            parse_qs(environ.get("QUERY_STRING", "")).get("t") or [""])[0]
+        if environ.get("REQUEST_METHOD", "GET").upper() != "POST" or not hmac.compare_digest(
+                str(given), str(self.token)):
+            return _json(start_response, {"stopped": False, "error": {
+                "code": "forbidden", "message": "起動トークンが違います"}}, status="403 Forbidden")
+        try:
+            size = int(environ.get("CONTENT_LENGTH") or 0)
+            body = json.loads(environ["wsgi.input"].read(size) or b"{}") if size > 0 else {}
+        except (ValueError, KeyError, OSError):
+            body = {}
+        if isinstance(body, dict) and body.get("check"):
+            return _json(start_response, {"stopped": False, "can_stop": True})
+        hook = self.on_shutdown
+        if hook is None:
+            return _json(start_response, {"stopped": False, "reason": "no_hook",
+                                          "message": "止め方が用意されていません"},
+                         status="503 Service Unavailable")
+        log.info("待機画面で停止要求を受け付けました(本体はまだ/組み立てに失敗)")
+        threading.Thread(target=hook, name="boot-shutdown", daemon=True).start()
+        return _json(start_response, {"stopped": True, "message": "終了します"})
+
     # -- WSGI ---------------------------------------------------------
     def __call__(self, environ: dict, start_response: Callable) -> list:
         path = environ.get("PATH_INFO", "/")
@@ -118,6 +153,8 @@ class BootApp:
                 ],
             )
             return [body]
+        if path == "/api/shutdown":
+            return self.shutdown(environ, start_response)
         # 業務の要求。まだ答えられないので、そう言う
         return _json(start_response, _NOT_READY, status="503 Service Unavailable")
 

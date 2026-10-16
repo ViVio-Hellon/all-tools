@@ -80,6 +80,42 @@ def is_alive(pid: int) -> bool:
     return True
 
 
+def terminate_tree(pid: int) -> bool:
+    """その PID(と、その子)を止める。止めたら(居なくなったら)True。
+
+    stop.bat --force の最後の手段。`/api/shutdown` に答えない・答えても終わらない
+    ツールの Python を、タスクマネージャーで切らずに済ませる。Windows は子ごと
+    (`taskkill /T`)── ツールが起こした cscript などを残さない。
+    """
+    if pid <= 0 or not is_alive(pid):
+        return True
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("PID %s を止められませんでした: %s", pid, exc)
+    for _ in range(50):
+        if not is_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not is_alive(pid)
+
+
+def wait_gone(runs: "list[Running]", timeout: float) -> "list[Running]":
+    """終わるのを待つ。`timeout` 秒たっても PID が生きているものを返す。"""
+    deadline = time.monotonic() + timeout
+    left = [r for r in runs if r.pid > 0]
+    while left and time.monotonic() < deadline:
+        left = [r for r in left if is_alive(r.pid)]
+        if left:
+            time.sleep(0.3)
+    return [r for r in left if is_alive(r.pid)]
+
+
 class Running:
     def __init__(self, tool: Tool, info: dict) -> None:
         self.tool = tool

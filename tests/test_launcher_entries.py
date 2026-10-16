@@ -117,3 +117,59 @@ class DesktopWindowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StuckToolTests(unittest.TestCase):
+    """組み立てに失敗したツールの Python が、止め口に答えても終わらない/答えないとき。
+
+    現場から: stop.bat を実行しても all-tools フォルダを消せず(実行中)、タスクマネージャーで
+    Python を切ったら消せた。以前は頼んだだけで「終わってもらいました」と言っていた。
+    """
+
+    def setUp(self) -> None:
+        import subprocess
+        import sys
+
+        from portal import browser_tools, catalog
+
+        # 止まらないツールの Python(この試験の子ではない孫にする。本物も stop.bat の子ではない)
+        out = subprocess.run([sys.executable, "-c",
+                              "import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', "
+                              "'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, "
+                              "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print(p.pid)"],
+                             capture_output=True, text=True, timeout=30)
+        self.pid = int(out.stdout.strip())
+        self.addCleanup(browser_tools.terminate_tree, self.pid)
+        tool = catalog.load().tools[0]
+        self.running = browser_tools.Running(tool, {"pid": self.pid, "port": 1, "token": "t"})
+        patches = [
+            mock.patch.object(instance_guard, "running", return_value=""),
+            mock.patch("start_app.read_lock", return_value=None),
+            mock.patch.object(browser_tools.BrowserTools, "running", return_value=[self.running]),
+            mock.patch.object(browser_tools.BrowserTools, "busy", return_value=[]),
+            mock.patch.object(browser_tools.BrowserTools, "stop_all"),
+            mock.patch.object(process_manager, "TOOL_EXIT_WAIT_SEC", 0.5),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_終わらなければ終わったと言わない(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = process_manager.stop()
+        self.assertEqual(code, 2)
+        self.assertIn("終わらなかったツールがあります", out.getvalue())
+        self.assertNotIn("終わってもらいました", out.getvalue())
+        self.assertIn("stop.bat --force", out.getvalue())
+        from portal.browser_tools import is_alive
+        self.assertTrue(is_alive(self.pid), "--force なしで止めた")
+
+    def test_forceなら止める(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = process_manager.stop(force=True)
+        self.assertEqual(code, 0, out.getvalue())
+        from portal.browser_tools import is_alive
+        self.assertFalse(is_alive(self.pid))
+        self.assertIn("終わらないので止めます", out.getvalue())

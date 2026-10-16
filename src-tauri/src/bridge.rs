@@ -614,7 +614,9 @@ impl Bridge {
                 }
                 thread::sleep(Duration::from_millis(50));
             }
-            let _ = child.kill();
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                kill_tree(child);
+            }
             let _ = child.wait();
         }
         child.take();
@@ -623,10 +625,31 @@ impl Bridge {
     fn kill_child(&self) {
         self.stdin.lock().unwrap().take();
         if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
+            kill_tree(&mut child);
             let _ = child.wait();
         }
     }
+}
+
+/// 子を**孫ごと**止める。Windows の `python.exe` は、ストア版の別名・`py.exe`・venv の
+/// 振り分け役のように、本物の Python を子として起こすだけのことがある。`kill()` は
+/// その振り分け役しか止めないので、本物の Python が残ってフォルダを掴み続けた
+/// (現場: stop.bat のあとも all-tools フォルダを消せず、タスクマネージャーで Python を切った)。
+/// Windows では `taskkill /T` で子ごと止め、念のため `kill()` も呼ぶ。
+fn kill_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    let _ = child.kill();
 }
 
 fn default_pythons() -> Vec<(String, Vec<String>)> {

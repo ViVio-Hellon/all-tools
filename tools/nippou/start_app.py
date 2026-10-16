@@ -55,6 +55,36 @@ class StartupError(RuntimeError):
 # ------------------------------------------------------------------
 # 1. 実行環境の確認
 # ------------------------------------------------------------------
+
+#: このフォルダの中にあるはずのパッケージ(無ければ、フォルダ一式がそろっていない)
+_OWN_PACKAGES = ("nippou", "app", "dbkit")
+
+
+def build_error_message(exc: BaseException, app_root: Path = APP_ROOT) -> str:
+    """本体を組み立てられなかったときに画面へ出す文。
+
+    **このフォルダの部品が見つからない**(``No module named 'nippou.services'`` など)ときは、
+    Python の言葉のままではなく、どのフォルダが無いのか・どこを読んだのかを言う。
+    コピーが途中で止まった・ウイルス対策ソフトがフォルダを隔離した・古いフォルダの上に一部だけ
+    写した、で起きる。直し方は「配布フォルダを丸ごと入れ直す」。
+    """
+    base = f"アプリを組み立てられませんでした: {exc}"
+    name = getattr(exc, "name", None) or ""
+    if not isinstance(exc, ModuleNotFoundError) or name.split(".")[0] not in _OWN_PACKAGES:
+        return base
+    parts = name.split(".")
+    expected = app_root.joinpath(*parts)
+    lines = [base, "", "日報のフォルダ一式がそろっていません。"]
+    if not expected.is_dir() and not expected.with_suffix(".py").is_file():
+        lines.append(f"無いもの: {expected}")
+    top = sys.modules.get(parts[0])
+    where = getattr(top, "__file__", None)
+    if where and Path(where).resolve().parent.parent != app_root.resolve():
+        lines.append(f"読んだ {parts[0]} の場所: {Path(where).resolve().parent}(このアプリのフォルダではありません)")
+    lines.append("配布フォルダを丸ごと入れ直してください(途中で止まったコピー・ウイルス対策ソフトの隔離・"
+                 "一部のフォルダだけを写した、などで起きます)。")
+    return "\n".join(lines)
+
 def check_python_version() -> None:
     if sys.version_info < MIN_PYTHON:
         raise StartupError(
@@ -323,7 +353,7 @@ def start(*, open_browser: bool = True) -> int:
             srv.build()
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
-            srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            srv.boot.mark_error(build_error_message(exc))
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -384,7 +414,7 @@ def start_bridge(*, token: str = "", server_factory) -> int:
         srv.build()
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log().exception("アプリを組み立てられませんでした")
-        srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+        srv.boot.mark_error(build_error_message(exc))
         _hold_until_stopped(srv, thread)
         return 1
     # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない

@@ -31,6 +31,9 @@ if str(APP_ROOT) not in sys.path:
 # 画面に打ちかけを置いてもらうのを待つ上限(秒)。ランチャーは stop.bat を 20 秒で見切る
 ASKING_WAIT_SEC = 15.0
 
+# 各ツールのブラウザ版に終わってもらってから、PID が居なくなるのを待つ上限(秒)
+TOOL_EXIT_WAIT_SEC = 15.0
+
 # 終了の入口: デスクトップ版の窓が閉じるのを待つ上限(秒)。ランチャーは入口を 20 秒で見切る
 DESKTOP_CLOSE_WAIT_SEC = 16.0
 
@@ -118,7 +121,26 @@ def stop(*, force: bool = False, hints: bool = True) -> int:
                     print("それでも止めるときは stop.bat --force")
                 return 2
         tools.stop_all(force=force)
-        print("各ツールのブラウザ版に終わってもらいました: " + "、".join(r.tool.title for r in left))
+        # **終わったことを確かめてから「終わった」と言う。** 以前は頼んだだけで言っていて、
+        # 本体の組み立てに失敗したツール(待機画面が止め口に答えなかった)の Python が残り、
+        # フォルダを消せなかった(タスクマネージャーで Python を切るしかなかった)
+        from portal.browser_tools import terminate_tree, wait_gone
+
+        stuck = wait_gone(left, TOOL_EXIT_WAIT_SEC)
+        if stuck and force:
+            for r in stuck:
+                print(f"{r.tool.title} が終わらないので止めます(pid={r.pid})")
+                terminate_tree(r.pid)
+            stuck = wait_gone(stuck, 5)
+        done = [r for r in left if r not in stuck]
+        if done:
+            print("各ツールのブラウザ版に終わってもらいました: " + "、".join(r.tool.title for r in done))
+        if stuck:
+            print("終わらなかったツールがあります: "
+                  + "、".join(f"{r.tool.title}(pid={r.pid})" for r in stuck))
+            if hints and not force:
+                print("止めるときは stop.bat --force")
+            return 2
     return code
 
 
