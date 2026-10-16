@@ -381,6 +381,9 @@ class OtherWritePathsTest(SharedShapesTest.__base__):
                                               config.COL_SIZE: "1000 × 100M:4本", config.COL_PERMANENT: ON})
         self.assertTrue(added.ok, added.message)
         self.assertEqual(len(self.rows()), 5)
+        five = next(r for r in self.rows() if _norm(r[config.COL_KEY]) == "5")
+        self.assertEqual(five["t"], "integer",
+                         "ほかの行が数なのに文字の '5' で足した(本物の看板_AIM の 5 番がそうなっていた)")
         self.round_trip("5")
 
     def test_master_edit_and_delete_hit_the_right_row(self):
@@ -560,6 +563,100 @@ class ThreeTerminalsOutageTest(unittest.TestCase):
         self.cycle()
         self.assert_all("1", ("", "", ""))
         self.assertEqual([e for t in self.t.values() for e in t.errors], [])
+
+
+class RealFileShapeTest(unittest.TestCase):
+    """本物の看板マスタ.sqlite3(2026/10/16 に受け取ったもの)と**同じ形**。中身は試験用。
+
+    * 表は型を書かない(``CREATE TABLE "看板_AIM" ("管理番号", "資材", ...)``)
+    * 管理番号は数。看板_AIM だけ 5 番が文字の '5'(マスタ管理で足した行)
+    * 日付は VBA の書き方 ``2026/8/12 10:59``(ゼロ埋めなし・秒なし)
+    * 常設品が NULL の行がある / 保留・注文中日時は NULL と空文字が混ざる
+    * Form状態管理 は 管理番号(文字)・ライン名・状態 の 3 列だけ(更新日時・ホスト名が無い)
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="kanban_realshape_"))
+        self.shared = self.root / "看板マスタ.sqlite3"
+        c = sqlite3.connect(str(self.shared))
+        c.execute(f'CREATE TABLE "{TABLE}" (' + ", ".join(f'"{x}"' for x in COLUMNS) + ")")
+        c.executemany(f'INSERT INTO "{TABLE}" VALUES ({", ".join("?" for _ in COLUMNS)})', [
+            (1, "中性紙", "1600 × 150M : 4本", "", "〇", "2026/8/12 10:59", "", "", "〇", None, None),
+            (2, "中性紙", "1600 × 150M : 2本", "", "〇", "", "", "", None, None, None),
+            (3, "中性紙", "1300 × 100M : 4本", "", "〇", "2026/8/12 10:59", "", "2026/8/12 11:19", "〇", "", ""),
+            (4, "中性紙", "1300 × 100M : 2本", "", "〇", "", "", "", "〇", None, None),
+            ("5", "HB", "11000 × 150M : 4本", "", "〇", "", "", "", "×", "", ""),
+        ])
+        c.execute('CREATE TABLE "Form状態管理" ("管理番号", "ライン名", "状態")')
+        c.executemany('INSERT INTO "Form状態管理" VALUES (?, ?, \'閉\')', [("1", "L1"), ("5", LINE), ("6", "倉庫")])
+        c.commit()
+        c.close()
+        self.site = Terminal(self.root, "現場PC", self.shared)
+        self.ware = Terminal(self.root, "倉庫PC", self.shared)
+        sync.ensure_comment_table(self.ware.gateway)
+        self.site.take()
+        self.ware.take()
+
+    def tearDown(self) -> None:
+        self.site.close()
+        self.ware.close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def shared_row(self, no: str) -> dict:
+        from kanban import keys
+        c = sqlite3.connect(str(self.shared))
+        c.row_factory = sqlite3.Row
+        try:
+            return next(dict(r) for r in c.execute(f'SELECT *, typeof("管理番号") AS t FROM "{TABLE}"')
+                        if keys.same(r["管理番号"], no))
+        finally:
+            c.close()
+
+    def test_every_kanban_goes_round(self):
+        for no in ("1", "2", "3", "4", "5"):
+            t = self.shared_row(no)["t"]
+            self.site.svc.toggle_order(LINE, no, expected_rev=self.site.item(no).rev)
+            self.site.send(); self.ware.take()
+            self.assertEqual(self.shared_row(no)["欲"], ON, (no, self.site.errors))
+            self.ware.svc.toggle_ship(LINE, no, expected_rev=self.ware.item(no).rev)
+            self.ware.send(); self.site.take()
+            self.assertEqual(self.shared_row(no)["発送"], ON, (no, self.ware.errors))
+            self.site.svc.toggle_order(LINE, no, expected_rev=self.site.item(no).rev, treat_as_delivered=True)
+            self.site.send(); self.ware.take()
+            row = self.shared_row(no)
+            self.assertEqual((row["欲"], row["発送"], row["t"]), ("", "", t), no)
+        self.assertEqual(self.site.errors + self.ware.errors, [])
+        self.assertEqual(self.site.store.pending_count() + self.ware.store.pending_count(), 0)
+
+    def test_vba_dates_and_null_marks_are_read(self):
+        self.assertEqual(self.site.item("3").confirmed_at and models.parse_datetime(self.site.item("3").confirmed_at),
+                         models.parse_datetime("2026/08/12 11:19:00"))
+        self.assertFalse(self.site.item("2").is_non_permanent, "常設品が NULL の看板を非常設にした")
+        self.assertTrue(self.site.item("5").is_non_permanent)
+
+    def test_presence_updates_the_three_column_table(self):
+        from kanban import presence
+
+        beat = presence.Heartbeat(self.site.gateway, self.site.store, LINE, host="現場PC")
+        self.assertTrue(beat.beat())
+        c = sqlite3.connect(str(self.shared))
+        try:
+            rows = c.execute('SELECT 管理番号, ライン名, 状態 FROM "Form状態管理" ORDER BY rowid').fetchall()
+        finally:
+            c.close()
+        self.assertEqual(len(rows), 3, "行を足した")
+        self.assertEqual(rows[1], ("5", LINE, config.STATE_OPEN))
+
+    def test_master_adds_a_number_like_the_other_rows(self):
+        from kanban.presenters import master
+
+        gw = SharedDb(str(self.shared), cache_dir=str(self.root / "cache_master"))
+        self.assertFalse(master.insert_row(gw, TABLE, {"管理番号": "5", "資材": "HB", "サイズ": "x",
+                                                       "常設品": ON}).ok, "文字の '5' と同じ番号を足せた")
+        res = master.insert_row(gw, TABLE, {"管理番号": "6", "資材": "中性紙", "サイズ": "1000 × 100M : 2本",
+                                            "常設品": ON})
+        self.assertTrue(res.ok, res.message)
+        self.assertEqual(self.shared_row("6")["t"], "integer")
 
 
 if __name__ == "__main__":

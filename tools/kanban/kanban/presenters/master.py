@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from .. import access_control, applog, config, keys
 from ..db.shared import (
@@ -571,6 +571,28 @@ def _coerce(value: Any, category: str) -> tuple[Any, str]:
     return text, ""
 
 
+def _key_like_others(value: Any, rows: Sequence[dict[str, Any]], key_column: str) -> Any:
+    """足す行の管理番号を、**その表のほかの行と同じ書き方**にする。
+
+    本番の共有DBは型を書かない表(Access を変換したもの)で、管理番号は数で入っている。
+    型の宣言が無いので画面から来た文字のまま入れると、その行だけ文字の '5' になる
+    (本物の看板_AIM の 5 番がそうなっていた)。ほかの行の**多く**が数(整数)なら、整数で書ける
+    番号は整数で入れる(すでに文字の行が混ざっていても)。文字が多ければ文字のまま。
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    others = [r.get(key_column) for r in rows if r.get(key_column) not in (None, "")]
+    numbers = sum(1 for v in others if isinstance(v, int) and not isinstance(v, bool))
+    if not others or numbers * 2 <= len(others):
+        return value
+    try:
+        number = int(text)
+    except ValueError:
+        return value
+    return number if str(number) == text else value
+
+
 @dataclass
 class EditResult:
     ok: bool
@@ -918,6 +940,7 @@ def insert_row(
             return EditResult(False, f"「{column}」は空にできません{why}。", "required")
         row[column] = clean
 
+    row[key_column] = _key_like_others(row[key_column], snapshot.rows, key_column)
     refused = _kanban_problem(table, snapshot, row, list(row), kind=kind)
     if refused is not None:
         return refused
