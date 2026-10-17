@@ -58,6 +58,8 @@ COLUMNS: tuple[tuple[str, str, bool], ...] = (
     ("packing_spec_no", "包装仕様NO", False),
     ("size", "サイズ(厚×幅×丈)", False),
     ("count", "件数", True),
+    # 標準を大きく超過した作業の数(v4.37.0。`logic.overrun_ratio`)。「抽出」で1件ずつ見られる
+    ("overruns", "大きく超過(件)", True),
     ("pkg_median", "標準(人分/梱包)", True),
     ("pkg_mean", "平均(人分/梱包)", True),
     ("pkg_low", "最小(人分/梱包)", True),
@@ -279,11 +281,12 @@ def build(db_path: Optional[Path], filters: Filters) -> StandardTimeView:
         estimate_label = f"{filters.packages:g}梱包を{filters.workers:g}人で(分)"
         columns.insert(columns.index("仮"), estimate_label)
         numeric.insert(len(numeric) - 1, True)
-    groups: dict[tuple[str, ...], list[logic.Sample]] = {}
+    # 条件ごとの実績(式の列と、大きく超過の数に使う)
+    groups: dict[tuple[str, ...], list[logic.Sample]] = (
+        _grouped_by_worker(samples) if filters.by_worker
+        else _grouped_by_operator(samples, operators.kinds) if filters.by_operator
+        else _grouped(service.usable_samples(db_path, filters.line)))
     if filters.formulas:
-        groups = (_grouped_by_worker(samples) if filters.by_worker
-                  else _grouped_by_operator(samples, operators.kinds) if filters.by_operator
-                  else _grouped(service.usable_samples(db_path, filters.line)))
         columns += list(STANDARD_FORMULA_COLUMNS)
         numeric += [False] * len(STANDARD_FORMULA_COLUMNS)
         if filters.estimating:
@@ -291,6 +294,7 @@ def build(db_path: Optional[Path], filters: Filters) -> StandardTimeView:
             numeric.append(False)
 
     rows = []
+    marks = []
     conditions = []
     for st in picked:
         # 「抽出」は条件で探す。作業者ごとの行からは班を問わずに(作業者の列で見分ける)。
@@ -303,12 +307,17 @@ def build(db_path: Optional[Path], filters: Filters) -> StandardTimeView:
             "line": line_names.label(st.line), "team": st.team, "purpose_code": st.purpose_code,
             "purpose_name": st.purpose_name, "packing_spec_no": st.packing_spec_no,
             "size": st.size, "count": str(st.count),
+            "overruns": "",
             "pkg_median": _num(st.per_package.median), "pkg_mean": _num(st.per_package.mean),
             "pkg_low": _num(st.per_package.low), "pkg_high": _num(st.per_package.high),
             "sheet_median": _num(st.per_sheet.median), "sheet_mean": _num(st.per_sheet.mean),
             "sheet_low": _num(st.per_sheet.low), "sheet_high": _num(st.per_sheet.high),
             "provisional": PROVISIONAL_MARK if st.provisional else "",
         }
+        over = sum(1 for s in groups.get(st.key, []) if logic.overrun_ratio(st, s) is not None)
+        if not st.provisional:
+            cells["overruns"] = str(over)
+        marks.append("over" if over else "")
         row = [cells[key] for key, _, _ in COLUMNS]
         if filters.by_worker:
             row.insert(TEAM_AT + 1, roster.get(st.team, logic.TEAM_UNKNOWN))
@@ -332,7 +341,7 @@ def build(db_path: Optional[Path], filters: Filters) -> StandardTimeView:
                else "標準作業時間(オペレーター構成ごと)" if filters.by_operator
                else "標準作業時間"),
         note=filters.note(),
-        columns=columns, numeric=numeric, rows=rows,
+        columns=columns, numeric=numeric, rows=rows, row_marks=marks,
         empty=("まだ標準がありません ── 「共有へ保存」で送った直の実績から作られます"
                if not readout.standards else "この絞り込みに合う条件はありません"))
     return StandardTimeView(
@@ -365,6 +374,8 @@ WORK_COLUMNS: tuple[tuple[str, str, bool], ...] = (
     ("stop_minutes", "停止時間(分)", True),
     ("standard_minutes", "標準作業時間(分)", True),
     ("diff", "標準との差(分・+は標準より長い)", True),
+    # 標準を大きく超過(v4.37.0。`logic.overrun_ratio` ── 1.5倍以上かつ10分以上長い)
+    ("overrun", "大きく超過", False),
     ("per_package", "梱包あたり人分", True),
     ("per_sheet", "枚あたり人分", True),
     ("excluded_reason", "標準に数えない理由", False),
@@ -403,6 +414,8 @@ class WorkFilters:
     end: Optional[date] = None
     include_excluded: bool = False
     formulas: bool = False
+    #: 大きく超過した作業だけ(v4.37.0)
+    only_overrun: bool = False
 
     @classmethod
     def of(cls, payload: dict, default_line: str) -> "WorkFilters":
@@ -426,7 +439,8 @@ class WorkFilters:
                                                            or line_names.upgrade(written)),
                    team=_text(payload.get("team")), start=start, end=end,
                    include_excluded=_flag(payload.get("include_excluded")),
-                   formulas=_flag(payload.get("formulas")))
+                   formulas=_flag(payload.get("formulas")),
+                   only_overrun=_flag(payload.get("only_overrun")))
 
     @property
     def any_team(self) -> bool:
@@ -483,11 +497,18 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
         numeric += [False] * len(WORK_FORMULA_COLUMNS)
 
     rows = []
+    marks = []
     diffs: list[float] = []
+    overruns = 0
     for s in found.samples:
         st = found.standard_for(s)
         standard_minutes = st.minutes_for_sample(s) if (st and s.usable) else None
         diff = (s.work_minutes - standard_minutes) if standard_minutes is not None else None
+        ratio = logic.overrun_ratio(st, s)
+        if ratio is not None:
+            overruns += 1
+        elif filters.only_overrun:
+            continue
         if diff is not None:
             diffs.append(diff)
         cells = {
@@ -501,6 +522,7 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
             "stop_minutes": f"{s.stop_minutes:g}",
             "standard_minutes": _num(standard_minutes),
             "diff": "" if diff is None else f"{diff:+.1f}",
+            "overrun": "" if ratio is None else f"大きく超過(標準の{ratio:.1f}倍)",
             "per_package": _num(s.per_package), "per_sheet": _num(s.per_sheet),
             "excluded_reason": s.excluded_reason,
         }
@@ -510,6 +532,7 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
                     logic.standard_minutes_formula(st, s),
                     logic.diff_formula(s, standard_minutes)]
         rows.append(row)
+        marks.append("over" if ratio is not None else "")
 
     minutes = [s.work_minutes for s in found.samples]
     usable = [s for s in found.samples if s.usable]
@@ -524,6 +547,8 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
         summary.append(["この抽出の中央値(人分/梱包)", _num(own.median)])
     if diffs:
         summary.append(["標準との差 平均", f"{sum(diffs) / len(diffs):+.1f}分"])
+    # 大きく超過(v4.37.0)。0件でも出す ── 「無い」ことも知りたい
+    summary.append(["大きく超過", f"{overruns}件"])
 
     keys = {(s.line, s.purpose_code, s.packing_spec_no, s.size) for s in found.samples}
     team = found.standard_team
@@ -541,8 +566,9 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
         standard += " ── 標準作業時間(分) = 標準(人分/梱包) × 梱包数 ÷ 作業人数"
 
     table = Table(
-        key="works", title="同条件の作業", note=filters.note(),
-        columns=columns, numeric=numeric, rows=rows,
+        key="works", title="同条件の作業",
+        note=filters.note() + ("・大きく超過だけ" if filters.only_overrun else ""),
+        columns=columns, numeric=numeric, rows=rows, row_marks=marks,
         empty="この条件の作業はありません(期間・班・AND / OR を見直してみてください)")
     c = filters.criteria
     return WorksView(

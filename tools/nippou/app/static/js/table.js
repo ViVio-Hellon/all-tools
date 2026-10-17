@@ -50,6 +50,9 @@ export function paintTable(table, { rowAction = null } = {}) {
   const tbody = document.createElement("tbody");
   table.rows.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
+    // 行の印(サーバが決める。"over" = 標準を大きく超過)
+    const mark = (table.row_marks || [])[rowIndex];
+    if (mark) tr.classList.add(`is-${mark}`);
     if (rowAction) {
       const td = document.createElement("td");
       const btn = document.createElement("button");

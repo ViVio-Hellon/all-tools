@@ -136,7 +136,7 @@ def _as_detail(row: LotRow) -> PackingDetail:
         stops=[PackingStop(
             stop_no=s.stop_no, stop_code=s.stop_code,
             stop_reason=s.stop_reason, stop_kind=s.stop_kind,
-            stop_minutes=s.stop_minutes) for s in row.stops])
+            stop_minutes=s.stop_minutes, break_range=s.break_range) for s in row.stops])
 
 
 def refresh_shift(repo: NippouRepository, work_date: str, line: str,
@@ -319,7 +319,8 @@ def _to_lot_row(report: PackingReport, detail: PackingDetail) -> LotRow:
         hiki_no=detail.hiki_no,
         stops=[StopRow(stop_no=s.stop_no, stop_code=s.stop_code,
                        stop_reason=s.stop_reason, stop_kind=s.stop_kind,
-                       stop_minutes=s.stop_minutes) for s in detail.stops])
+                       stop_minutes=s.stop_minutes, break_range=s.break_range)
+               for s in detail.stops])
 
 
 def shift_lot_rows(repo: NippouRepository, report: PackingReport

@@ -106,7 +106,10 @@ def page_fingerprint(header: Any, details: Sequence[Any]) -> str:
 
 #: 集計(`packing_report`)で数えない欄。**台帳と鍵**です
 _SUMMARY_SKIP = frozenset({"id", "report_id", "dirty", "synced_at",
-                           "created_at", "updated_at"})
+                           "created_at", "updated_at",
+                           # 休憩の時刻はこの端末の中と CSV だけ(共有へ出る中身ではない)。数えると
+                           # 足しただけで全部の直が「未送信」に戻る(v4.37.0)
+                           "break_range"})
 
 
 def _record_values(record: Any) -> list[str]:

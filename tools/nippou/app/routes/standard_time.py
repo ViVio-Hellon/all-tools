@@ -47,6 +47,7 @@ def index():
         "standard_time.html",
         line=ctx.line,
         tabs=view.tabs(), default_tab=view.DEFAULT_TAB,
+        overrun_rule=view.logic.overrun_rule(),
         db_path=str(SETTINGS.standard_time_db_path),
         month_start=today.replace(day=1).isoformat(), today=today.isoformat(),
         out_dir=settings_view.standard_time_output_view(),

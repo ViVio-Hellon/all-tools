@@ -148,8 +148,8 @@ class NippouRepository:
                                 s4, th4, s5, th5,
                                 con, wei, tim, uni,
                                 others1, others2, others3, others4, others5, others6, keisu,
-                                reason, hiki_no, box_course
-                            ) VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?, ?,?,?)
+                                reason, hiki_no, box_course, break_range
+                            ) VALUES (?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?)
                             """,
                             (
                                 header.report_date, header.line, header.shift, header.page, d.row_no,
@@ -158,7 +158,7 @@ class NippouRepository:
                                 d.s4, d.th4, d.s5, d.th5,
                                 d.con, d.wei, d.tim, d.uni,
                                 d.others1, d.others2, d.others3, d.others4, d.others5, d.others6, d.keisu,
-                                d.reason, d.hiki_no, d.box_course,
+                                d.reason, d.hiki_no, d.box_course, d.break_range,
                             ),
                         )
                     # 控え(LocalBackup)へも写す ── **同じ取引で**待ちに入れる
@@ -186,8 +186,8 @@ class NippouRepository:
         kwargs = {"report_date": r["report_date"], "line": r["line"], "shift": r["shift"],
                   "page": r["page"], "row_no": r["row_no"]}
         for fam in (*DETAIL_FAMILIES, "others1", "others2", "others3", "others4", "others5", "others6",
-                    "keisu", "reason", "hiki_no", "box_course"):
-            kwargs[fam] = r[fam] or ""
+                    "keisu", "reason", "hiki_no", "box_course", "break_range"):
+            kwargs[fam] = (r[fam] if fam in r.keys() else "") or ""
         return DetailRecord(**kwargs)
 
     def _details_for(self, report_date: str, line: str, shift: str, page: int) -> list[DetailRecord]:
@@ -574,10 +574,11 @@ class NippouRepository:
                     self.conn.execute(
                         "INSERT INTO packing_stop_detail"
                         " (detail_id, stop_no, stop_code, stop_reason,"
-                        "  stop_kind, stop_minutes, created_at, updated_at)"
-                        " VALUES (?,?,?,?,?,?,?,?)",
+                        "  stop_kind, stop_minutes, break_range, created_at, updated_at)"
+                        " VALUES (?,?,?,?,?,?,?,?,?)",
                         (detail.id, stop.stop_no, stop.stop_code,
                          stop.stop_reason, stop.stop_kind, stop.stop_minutes,
+                         getattr(stop, "break_range", "") or "",
                          stop.created_at, now))
         return report_id
 
@@ -686,6 +687,7 @@ class NippouRepository:
                 stop_reason=row["stop_reason"] or "",
                 stop_kind=row["stop_kind"] or "",
                 stop_minutes=float(row["stop_minutes"] or 0.0),
+                break_range=(row["break_range"] if "break_range" in row.keys() else "") or "",
                 created_at=row["created_at"] or "",
                 updated_at=row["updated_at"] or ""))
         return details

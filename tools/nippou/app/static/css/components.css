@@ -3113,3 +3113,7 @@ dl.kv dd{ margin:0; overflow-wrap:anywhere; }
 /* 記録を見る「ロットを探す」の「下見」(v4.33.0): 当たった行に印 ── 12行の中で見失わない */
 #preview tr.row-hit td{ background:var(--accent-soft); font-weight:700; }
 #preview tr.row-hit td:first-child{ box-shadow:inset 4px 0 0 var(--accent); }
+
+/* 標準を大きく超過した行(標準時間タブ。v4.37.0)── 表を写す側(table.js)が tr に付ける */
+table.list tr.is-over td{ background:var(--state-warn-bg); }
+table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-line); }

@@ -157,6 +157,8 @@ class PackingStop:
     stop_reason: str = ""
     stop_kind: str = ""
     stop_minutes: float = 0.0
+    # 休憩(記号 0)の時刻「11:30〜12:30」。休憩の停止にだけ(`logic/break_time`。v4.37.0)
+    break_range: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -218,6 +220,9 @@ class DetailRecord:
     # Gコースのロットだった印(`logic/g_course` ── `GSS` / `GSS/製造`)。**この端末の中だけ**。
     # 寸法が BOX最終実績から来たことを、開き直しても寸法の欄に出すための控え(v4.17.0)
     box_course: str = ""
+    # 休憩の時刻(作業停止に休憩 = 記号 0 を入れた行の「11:30〜12:30」)。**この端末の中と CSV だけ**
+    # (`logic/break_time`。v4.37.0)。紙にも Access にも欄が無い
+    break_range: str = ""
 
     def others(self) -> list[str]:
         return [self.others1, self.others2, self.others3, self.others4, self.others5, self.others6]

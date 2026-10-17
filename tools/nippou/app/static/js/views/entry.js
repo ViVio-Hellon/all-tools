@@ -592,6 +592,10 @@ function collect() {
   for (const el of document.querySelectorAll("[data-reason]")) {
     (rows[el.dataset.reason] ||= {}).reason = el.value;
   }
+  // 休憩の時刻も**行の値**(`rows[行].break_range`。v4.37.0)
+  for (const el of document.querySelectorAll("[data-break]")) {
+    (rows[el.dataset.break] ||= {}).break_range = el.value;
+  }
   return {
     rows, header, checks,
     // ツールが入れた開始時刻が、まだ人に触られずに残っている行
@@ -698,6 +702,7 @@ function paint(view, { forceRow = 0, since = null } = {}) {
   paintPrevShift(view.prev_shift);
   paintReadOnly(view);
   paintReason(view, since);
+  paintBreak(view, since);
   paintMarks(view.marks);
   paintGMarks(view.g_marks);
   paintLot(view.lot);
@@ -1245,6 +1250,111 @@ function paintReason(view, since = null) {
   const fresh = entries.find((e) => e.empty && !reasonAsked.has(String(e.row)));
   for (const row of present) reasonAsked.add(row);
   if (fresh) askReason(fresh);
+}
+
+/*
+  休憩の時刻(v4.37.0)。作業停止で休憩(記号 0)を選んだ行ごと。**どの行に欄が要るかと、合わない
+  ところはサーバが決める**(`presenters/entry.break_entries`)。聞き方は理由と同じ(選んだ瞬間に
+  1度だけポップアップ。休憩でなくなった行は忘れる)。止めない。
+*/
+const breakAsked = new Set();
+
+function paintBreak(view, since = null) {
+  const host = document.getElementById("break-rows");
+  const entries = view.break_entries;
+  if (!host || entries === undefined) return;
+  const typing = document.activeElement;
+  const keep = typing && typing.dataset && typing.dataset.break;
+  const newer = (input) => Boolean(input) && since !== null
+    && Number(input.dataset.editAt || 0) > since;
+  const have = new Map([...host.querySelectorAll("[data-break-row]")]
+    .map((el) => [el.dataset.breakRow, el]));
+  const wanted = new Set(entries.map((e) => String(e.row)));
+  for (const [row, el] of have) {
+    if (wanted.has(row)) continue;
+    const input = el.querySelector("input");
+    if (input && String(input.value || "").trim()
+        && (input === typing || newer(input) || since === null)) continue;
+    el.remove();
+  }
+  for (const entry of entries) {
+    const row = String(entry.row);
+    let box = have.get(row);
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "reason__row";
+      box.dataset.breakRow = row;
+      const label = document.createElement("label");
+      label.htmlFor = `break-${row}`;
+      label.textContent = entry.label;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.id = `break-${row}`;
+      input.dataset.break = row;
+      input.size = 16;
+      input.placeholder = "例: 11:30〜12:30";
+      input.addEventListener("blur", () => settle());
+      input.addEventListener("input", () => touched(input));
+      box.append(label, input);
+      const after = [...host.querySelectorAll("[data-break-row]")]
+        .find((el) => Number(el.dataset.breakRow) > entry.row);
+      host.insertBefore(box, after || null);
+    }
+    const input = box.querySelector("input");
+    if (input && input !== keep && input.value !== entry.text && !newer(input)) {
+      input.value = entry.text;
+      touched(input);
+    }
+    if (entry.empty) box.dataset.empty = "1"; else delete box.dataset.empty;
+    // 休憩の分と、合わないところ(作り直す。打っている欄には触らない)
+    for (const el of box.querySelectorAll(".lead, .break__problem")) el.remove();
+    if (entry.minutes) {
+      const lead = document.createElement("span");
+      lead.className = "lead";
+      lead.textContent = `休憩 ${entry.minutes} 分`;
+      box.append(lead);
+    }
+    for (const text of entry.problems || []) {
+      const warn = document.createElement("span");
+      warn.className = "msg msg--warn break__problem";
+      warn.textContent = text;
+      box.append(warn);
+    }
+  }
+  const none = document.getElementById("break-empty");
+  if (none) none.hidden = entries.length > 0;
+  const note = document.getElementById("break-note");
+  const empty = entries.filter((e) => e.empty).map((e) => e.label);
+  if (note) {
+    note.innerHTML = empty.length
+      ? `<b>${empty.join("、")}</b>の休憩の時刻がまだ空です。何時から何時まで休んだかを書いてください。`
+      : '作業停止で<b>休憩</b>を選ぶと、<b>その行ごと</b>に何時から何時までかを書けます。';
+  }
+  const present = new Set(entries.map((e) => String(e.row)));
+  for (const row of [...breakAsked]) {
+    if (!present.has(row)) breakAsked.delete(row);
+  }
+  const fresh = entries.find((e) => e.empty && !breakAsked.has(String(e.row)));
+  for (const row of present) breakAsked.add(row);
+  // 理由のポップアップが開いていれば重ねない(次の答えで聞く)
+  const reasonOpen = !document.getElementById("reason-modal")?.hidden;
+  if (fresh && reasonOpen) breakAsked.delete(String(fresh.row));
+  else if (fresh) askBreak(fresh);
+}
+
+function askBreak(entry) {
+  const text = document.getElementById("break-text");
+  const why = document.getElementById("break-why");
+  if (!text || !entry) return;
+  text.dataset.row = String(entry.row);
+  text.value = document.getElementById(`break-${entry.row}`)?.value || "";
+  if (why) {
+    why.textContent = `${entry.label}の作業停止で休憩${entry.minutes ? `(${entry.minutes} 分)` : ""}を選んでいます。`
+      + "何時から何時まで休みましたか。";
+  }
+  openModal("break-modal");
+  text.focus();
+  text.select();
 }
 
 function askReason(entry) {
@@ -2511,6 +2621,7 @@ export function start() {
   lastProblem = "";
   // 紙を開き直したら、聞いた行は忘れる(開いた紙の空の「その他」は1度だけ聞く)
   reasonAsked.clear();
+  breakAsked.clear();
 
   markRow = 0;
   pickedHiki = "";
@@ -2636,6 +2747,26 @@ export function start() {
 
   // 最初に描かれている欄にも配線する(以後は `paintReason` が付ける)
   for (const el of document.querySelectorAll("[data-reason]")) {
+    el.addEventListener("blur", () => settle());
+    el.addEventListener("input", () => touched(el));
+  }
+
+  // ---- 休憩の時刻 (休憩を選んだ行ごと。v4.37.0) ----
+  document.getElementById("break-apply")?.addEventListener("click", () => {
+    const text = document.getElementById("break-text");
+    const row = text?.dataset.row;
+    const field = row && document.getElementById(`break-${row}`);
+    if (field && text) {
+      field.value = text.value.trim();
+      touched(field);
+      settle();
+    }
+    closeModal("break-modal");
+  });
+  document.getElementById("break-text")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); document.getElementById("break-apply")?.click(); }
+  });
+  for (const el of document.querySelectorAll("[data-break]")) {
     el.addEventListener("blur", () => settle());
     el.addEventListener("input", () => touched(el));
   }

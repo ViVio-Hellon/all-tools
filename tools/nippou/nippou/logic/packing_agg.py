@@ -43,7 +43,7 @@ from .aggregation import (
     ShiftAggregate,
     classify_stop_code,
 )
-from . import empty_pages
+from . import break_time, empty_pages
 from .numeric import is_numeric, to_float
 from .shift import parse_business_date
 
@@ -97,6 +97,8 @@ class StopRow:
     #: 記号の文字種で振り分けており、記号の付け替えで過去の分類が
     #: 変わってしまうと、去年のグラフが今年書き換わります
     stop_kind: str = ""
+    #: 休憩(記号 0)の時刻「11:30〜12:30」。休憩の停止にだけ入れる(`logic/break_time`。v4.37.0)
+    break_range: str = ""
 
     @property
     def text(self) -> str:
@@ -197,7 +199,10 @@ def build_stops(d: DetailRecord,
             stop_no=index, stop_code=code,
             stop_reason=names.get(code, ""),
             stop_minutes=num(getattr(d, minutes_field, "")),
-            stop_kind=STOP_KINDS.get(classify_stop_code(code), "その他")))
+            stop_kind=STOP_KINDS.get(classify_stop_code(code), "その他"),
+            # 休憩の時刻は行に1つ(休憩を2つの欄に分けて打っても、時刻はその行の休憩ぜんぶ)
+            break_range=(break_time.normalize(getattr(d, "break_range", "") or "")
+                         if code == break_time.REST_STOP_CODE else "")))
     return out
 
 

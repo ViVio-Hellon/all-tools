@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from .. import constants, layout
 from ..db.models import DetailRecord, HeaderRecord
-from ..logic import (calculations, empty_pages, etc_marks, exclusions, g_course,
+from ..logic import (break_time, calculations, empty_pages, etc_marks, exclusions, g_course,
                      input_rules, navigation, reasons, work_time)
 
 # 列の並びと見出しは `nippou/layout.py` が1つだけ持つ。**画面と紙で
@@ -143,6 +143,9 @@ EXTRA_FAMILIES: tuple[str, ...] = (
     # Gコースのロットだった印(`logic/g_course.ROW_FAMILY`)。**この端末の中だけ**。
     # 寸法の欄に「G」を出す(v4.17.0)
     "box_course",
+    # 休憩の時刻(作業停止に休憩 = 記号 0 を入れた行。`logic/break_time`)。理由と同じく
+    # 表の列には出さず、表の下に「休憩を入れた行」だけ並べる(v4.37.0)
+    "break_range",
 )
 
 
@@ -674,6 +677,35 @@ def reason_entries(state: GridState,
     return out
 
 
+def break_entries(state: GridState) -> list[dict[str, Any]]:
+    """休憩の時刻を書く行の一覧。**行ごとに1つ**(`logic/break_time`)。
+
+    出すのは作業停止に休憩(記号 0)を入れた行と、**すでに時刻が書いてある行**です(理由と同じく、
+    休憩を消しても書いた時刻は黙って消さない)。合わないところ(分と時刻の長さ・その行の作業時間)は
+    ``problems`` で知らせるだけで、保存は止めません。
+    """
+    out: list[dict[str, Any]] = []
+    for row in range(1, constants.ROW_COUNT + 1):
+        values = state.rows.get(row, {})
+        text = (values.get(break_time.ROW_FAMILY) or "").strip()
+        wanted = break_time.has_break(values)
+        if not (wanted or text):
+            continue
+        minutes = break_time.break_minutes(values)
+        out.append({
+            "row": row,
+            "label": reasons.label(row),
+            # そろえた書き方で返す(1130-1230 → 11:30〜12:30)。読めなければ打ったまま
+            "text": break_time.normalize(text),
+            "needed": wanted,
+            "empty": wanted and not text,
+            # 作業停止に打った休憩の分(時刻を書く手がかり)
+            "minutes": f"{minutes:g}" if minutes else "",
+            "problems": break_time.problems(values) if wanted else [],
+        })
+    return out
+
+
 def reason_open(state: GridState, other_codes: set[str]) -> bool:
     """理由欄を開けてよいか。
 
@@ -790,8 +822,10 @@ def to_records(state: GridState, report_date: str, line: str, shift: str,
         details.append(DetailRecord(
             report_date=report_date, line=line, shift=shift, page=page, row_no=row,
             **{family.lower(): values.get(family, "") for family in ALL_FAMILIES},
-            # 表に出ない欄(印刷範囲外の6つ + 引当番号)も一緒に書く
-            **{family: values.get(family, "") for family in EXTRA_FAMILIES},
+            # 表に出ない欄(印刷範囲外の6つ + 引当番号)も一緒に書く。休憩の時刻はそろえた書き方で
+            **{family: (break_time.normalize(values.get(family, ""))
+                        if family == break_time.ROW_FAMILY else values.get(family, ""))
+               for family in EXTRA_FAMILIES},
         ))
     return header, details
 
@@ -914,6 +948,8 @@ def view_model(state: GridState, *, report_date: str, line: str, shift: str,
         "reason_combined": _combined_reason(state),
         # 行番号の分からない古い理由(行ごとに持つ前のデータ)
         "reason_legacy": (state.header.get("reason") or "").strip(),
+        # 休憩の時刻(作業停止に休憩を入れた行ごと。v4.37.0)
+        "break_entries": break_entries(state),
         # 作業の順序。**画面はこれを写すだけ**
         "steps": steps(state),
         # etc欄の印。**行ごとに etc の文字から読み直す**(VBA

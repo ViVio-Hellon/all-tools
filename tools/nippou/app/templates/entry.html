@@ -457,6 +457,37 @@
     印刷と共有へは <b>「3行目: ○○ / 7行目: ××」</b> の形で1つの欄にまとめます
     ── 印刷の理由欄が1つしかないためで、<b>持ち方は行ごと</b>です。
   </p>
+
+  {# ------------------------------------------------------------
+     休憩の時刻(v4.37.0)── 作業停止に休憩(記号 0)を入れた行だけ
+
+     分は作業停止に打つので、ここは**何時から何時まで**か。理由と同じく、休憩を選んだ
+     その場でポップアップで聞く。合わないところは知らせるだけで、保存は止めない
+     (`presenters/entry.break_entries` ・ `logic/break_time`)。
+     ------------------------------------------------------------ #}
+  <div class="reason" id="break-box">
+    <div class="reason__head">
+      <b>休憩の時刻</b>
+      <span class="lead" id="break-note">
+        作業停止で<b>休憩</b>を選ぶと、<b>その行ごと</b>に何時から何時までかを書けます。
+      </span>
+    </div>
+    <div class="reason__rows" id="break-rows">
+      {% for e in view.break_entries %}
+      <div class="reason__row" data-break-row="{{ e.row }}"
+           {% if e.empty %}data-empty="1"{% endif %}>
+        <label for="break-{{ e.row }}">{{ e.label }}</label>
+        <input id="break-{{ e.row }}" data-break="{{ e.row }}" type="text"
+               value="{{ e.text }}" size="16" placeholder="例: 11:30〜12:30">
+        {% if e.minutes %}<span class="lead">休憩 {{ e.minutes }} 分</span>{% endif %}
+        {% for p in e.problems %}<span class="msg msg--warn break__problem">{{ p }}</span>{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <p class="lead" id="break-empty" {% if view.break_entries %}hidden{% endif %}>
+      作業停止で休憩を選んだ行はまだありません。
+    </p>
+  </div>
   <p class="lead">※作業停止時間は5分以上で時間を記入</p>
 </div>
 
@@ -1253,6 +1284,32 @@
     <div class="modal__foot">
       <button class="btn" type="button" data-close="reason-modal">やめる</button>
       <button class="btn btn--primary" type="button" id="reason-apply">理由欄へ入れる</button>
+    </div>
+  </div>
+</div>
+
+{# ---- 休憩の時刻 (v4.37.0) ----
+
+   作業停止で休憩(記号 0)を選んだ瞬間に開きます(理由と同じ)。分は作業停止に打つので、
+   ここは何時から何時までか。閉じても入力は消えず、表の下の欄でいつでも直せます。 #}
+<div class="modal" id="break-modal" hidden role="dialog" aria-modal="true"
+     aria-labelledby="break-title">
+  <div class="modal__box modal__box--narrow">
+    <div class="modal__head">
+      <h2 id="break-title">休憩の時刻</h2>
+      <button class="btn btn--sm" type="button" data-close="break-modal">閉じる</button>
+    </div>
+    <div class="modal__body">
+      <p class="lead" id="break-why">作業停止で休憩を選んでいます。</p>
+      <div class="field">
+        <label for="break-text">何時から何時まで</label>
+        <input id="break-text" type="text" size="16" placeholder="例: 11:30〜12:30">
+      </div>
+      <p class="lead">11:30〜12:30・11:30-12:30・1130-1230 のどれでも書けます。</p>
+    </div>
+    <div class="modal__foot">
+      <button class="btn" type="button" data-close="break-modal">やめる</button>
+      <button class="btn btn--primary" type="button" id="break-apply">休憩の時刻へ入れる</button>
     </div>
   </div>
 </div>

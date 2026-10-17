@@ -193,6 +193,7 @@ export function start() {
     include_excluded: Boolean($("works-excluded")?.checked),
     join: joinOf("works-join"),
     formulas: Boolean($("works-formulas")?.checked),
+    only_overrun: Boolean($("works-overrun")?.checked),
   });
 
   /** 標準の行の「抽出」── 条件を入れて、面を移して、引く。 */
@@ -251,7 +252,7 @@ export function start() {
   $("works-run")?.addEventListener("click", loadWorks);
   // 条件が入っているときだけ、選び直したらそのまま引き直す
   const hasCriteria = () => value("works-purpose") || value("works-spec") || value("works-size");
-  for (const id of ["works-team", "works-excluded", "works-formulas"]) {
+  for (const id of ["works-team", "works-excluded", "works-formulas", "works-overrun"]) {
     $(id)?.addEventListener("change", () => { if (hasCriteria()) loadWorks(); });
   }
   for (const radio of document.querySelectorAll('input[name="works-join"]')) {

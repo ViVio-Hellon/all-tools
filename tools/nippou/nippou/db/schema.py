@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS daily_detail (
     -- Gコースのロットだった印(GSS / GSS/製造)。これも**この端末の中だけ**。
     -- 寸法が BOX最終実績から来たことを、開き直しても寸法の欄に出すため(v4.17.0)
     box_course TEXT,
+    -- 休憩の時刻(作業停止に休憩 = 記号 0 を入れた行の「11:30〜12:30」)。この端末の中と CSV だけ(v4.37.0)
+    break_range TEXT,
     PRIMARY KEY (report_date, line, shift, page, row_no),
     FOREIGN KEY (report_date, line, shift, page)
         REFERENCES daily_header (report_date, line, shift, page)
@@ -192,6 +194,7 @@ CREATE TABLE IF NOT EXISTS packing_stop_detail (
     -- 固定して残す** ── 記号の付け替えで去年のグラフが書き換わらない
     stop_kind     TEXT,
     stop_minutes  REAL,
+    break_range   TEXT,                 -- 休憩(記号 0)の時刻「11:30〜12:30」(v4.37.0)
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     FOREIGN KEY (detail_id) REFERENCES packing_report_detail (id)
@@ -376,6 +379,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("daily_detail", "hiki_no", "TEXT"),
     ("daily_detail", "box_course", "TEXT"),       # v4.17.0 Gコースの印
     ("daily_detail", "reason", "TEXT"),
+    ("daily_detail", "break_range", "TEXT"),      # v4.37.0 休憩の時刻
+    ("packing_stop_detail", "break_range", "TEXT"),
     # 作業停止④⑤(v4.24.0)
     ("daily_detail", "s4", "TEXT"),
     ("daily_detail", "th4", "TEXT"),

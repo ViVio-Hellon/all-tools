@@ -256,6 +256,32 @@ class Standard:
         return found
 
 
+#: 「大きく超過」(v4.37.0)。標準作業時間の **1.5 倍以上** で、しかも **10 分以上** 長い作業。
+#: 短い作業は少しの遅れでも倍率が大きくなるので、分の下限も置く。標準が「仮」(件数が
+#: `MIN_SAMPLES` 未満)のうちは、標準そのものが定まっていないので印を付けない
+OVERRUN_RATIO = 1.5
+OVERRUN_MIN_MINUTES = 10.0
+
+
+def overrun_ratio(st: Optional["Standard"], sample: "Sample") -> Optional[float]:
+    """その作業が標準を**大きく超過**していれば、標準の何倍か。していなければ None。"""
+    if st is None or st.provisional or not sample.usable:
+        return None
+    standard = st.minutes_for_sample(sample)
+    if not standard or standard <= 0:
+        return None
+    if (sample.work_minutes - standard >= OVERRUN_MIN_MINUTES
+            and sample.work_minutes >= standard * OVERRUN_RATIO):
+        return sample.work_minutes / standard
+    return None
+
+
+def overrun_rule() -> str:
+    """画面に出す決まりの1文。"""
+    return (f"標準作業時間の{OVERRUN_RATIO:g}倍以上、かつ{OVERRUN_MIN_MINUTES:g}分以上長い作業"
+            f"(標準が「仮」= {MIN_SAMPLES}件未満の条件は除く)")
+
+
 def estimate_minutes(per_package: Optional[float], packages: float,
                      workers: float) -> Optional[float]:
     """標準作業時間(分) = 人・分/梱包 × 梱包数 ÷ 作業人数。出せなければ None。"""

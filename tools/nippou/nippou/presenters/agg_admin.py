@@ -92,12 +92,14 @@ class Table:
     numeric: list[bool] = field(default_factory=list)
     rows: list[list[str]] = field(default_factory=list)
     empty: str = "この期間のデータはありません"
+    #: 行ごとの印(行と同じ並び。空なら印なし)。``"over"`` = 標準を大きく超過(v4.37.0)
+    row_marks: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"key": self.key, "title": self.title, "note": self.note,
                 "columns": self.columns, "numeric": self.numeric,
                 "rows": self.rows, "empty": self.empty,
-                "count": len(self.rows)}
+                "count": len(self.rows), "row_marks": self.row_marks}
 
 
 def lot_table(rows: list[LotRow], note: str) -> Table:

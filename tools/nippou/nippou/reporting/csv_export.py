@@ -290,6 +290,8 @@ STOP_FIELDNAMES = [
     "日付", "ライン", "直", "区分", "分類", "記号", "内訳",
     "ページ", "行", "LOTNO", "停止の位置",
     "回数", "停止時間(分)", "その直の停止に占める割合(%)",
+    # 休憩(記号 0)の1件ずつの行にだけ「11:30〜12:30」(v4.37.0。`logic/break_time`)
+    "休憩の時刻",
 ]
 
 
@@ -385,6 +387,7 @@ def _stop_occurrences(base: dict[str, str], lots: list[LotRow],
         "回数": "1",
         "停止時間(分)": format_fixed(stop.stop_minutes, 0),
         "その直の停止に占める割合(%)": "",
+        "休憩の時刻": getattr(stop, "break_range", "") or "",
     } for page, row_no, stop_no, lot, stop in found]
 
 

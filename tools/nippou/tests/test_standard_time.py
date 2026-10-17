@@ -326,7 +326,8 @@ class ViewTests(ServiceTestCase):
                          ["ライン", "班", "用途コード", "用途名", "包装仕様NO", "サイズ(厚×幅×丈)", "件数"])
         self.assertEqual([r[1] for r in got.table.rows], [logic.TEAM_ALL, "A", "B"])
         a = got.table.rows[1]
-        self.assertEqual(a[:8], ["L-1", "A", "H176", "ｼﾔ-ｼ", "1P0001", "8×1528×3053", "3", "35.0"])
+        # 件数の右は「大きく超過(件)」(v4.37.0)
+        self.assertEqual(a[:9], ["L-1", "A", "H176", "ｼﾔ-ｼ", "1P0001", "8×1528×3053", "3", "0", "35.0"])
         self.assertEqual(a[-1], "")                  # 3件なので仮ではない
         self.assertEqual(got.table.rows[2][-1], view.PROVISIONAL_MARK)
         self.assertEqual(got.teams, ["A", "B"])
@@ -653,7 +654,8 @@ class WebTests(WebTestCase):
         self.assertTrue(self.db().exists())
         got = self.post("/api/standard-time/standards", {"scope": "line"}).get_json()
         self.assertEqual([r[1] for r in got["table"]["rows"]], [logic.TEAM_ALL, "A"])
-        self.assertEqual(got["table"]["rows"][1][7], "30.0")
+        # 件数の右は「大きく超過(件)」。件数1件(仮)なので空(v4.37.0)
+        self.assertEqual(got["table"]["rows"][1][7:9], ["", "30.0"])
         self.assertEqual(got["teams"], ["A"])
 
     def test_共有が無くても保存は成功のまま(self) -> None:
@@ -774,3 +776,64 @@ class WebTests(WebTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ======================================================================
+# 大きく超過(v4.37.0)
+# ======================================================================
+class OverrunRuleTests(unittest.TestCase):
+    """標準の 1.5 倍以上、かつ 10 分以上長い作業。標準が「仮」のうちは付けない。"""
+
+    def standard(self, count=3, per_package=35.0) -> logic.Standard:
+        return logic.Standard("L-1", "A", "H176", "1P0001", "8×1528×3053", count=count,
+                              per_package=logic.Stat(count=count, median=per_package))
+
+    def test_倍率と分の両方を満たしたときだけ(self) -> None:
+        st = self.standard()                      # 4梱包・2人 → 標準 70分
+        self.assertAlmostEqual(logic.overrun_ratio(st, sample(work_minutes=105)), 1.5)
+        self.assertIsNone(logic.overrun_ratio(st, sample(work_minutes=104)), "1.5倍に届かない")
+        short = self.standard(per_package=5.0)    # 標準 10分 → 15分は1.5倍だが5分しか長くない
+        self.assertIsNone(logic.overrun_ratio(short, sample(work_minutes=15)))
+        self.assertIsNotNone(logic.overrun_ratio(short, sample(work_minutes=20)))
+
+    def test_仮の標準では付けない(self) -> None:
+        self.assertIsNone(logic.overrun_ratio(self.standard(count=2), sample(work_minutes=300)))
+
+    def test_標準が無ければ付けない(self) -> None:
+        self.assertIsNone(logic.overrun_ratio(None, sample(work_minutes=300)))
+
+
+class OverrunViewTests(ServiceTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.share.mkdir()
+        # A班: 60・70・80分(標準 35人分/梱包 → 4梱包2人で70分)と、180分の1件(大きく超過)
+        self.page("2026年9月1日", "1直", "山田", [(4, 2, 60, 40), (4, 2, 70, 40), (4, 2, 80, 40),
+                                                   (4, 2, 180, 40)])
+        self.pushed(("2026年9月1日", "L-1", "1直"))
+
+    def test_同条件の作業に印と件数(self) -> None:
+        got = view.build_works(self.db, view.WorkFilters.of({"purpose_code": "H176"}, "L-1"))
+        at = got.table.columns.index("大きく超過")
+        marked = [r[at] for r in got.table.rows]
+        self.assertEqual(sum(1 for m in marked if m), 1)
+        self.assertTrue(any("大きく超過(標準の" in m for m in marked))
+        self.assertEqual(got.table.row_marks.count("over"), 1)
+        self.assertIn(["大きく超過", "1件"], got.summary)
+
+    def test_大きく超過だけに絞る(self) -> None:
+        got = view.build_works(self.db, view.WorkFilters.of(
+            {"purpose_code": "H176", "only_overrun": True}, "L-1"))
+        self.assertEqual(len(got.table.rows), 1)
+        self.assertIn("大きく超過だけ", got.table.note)
+
+    def test_標準の表に件数(self) -> None:
+        got = view.build(self.db, view.Filters.of({}, "L-1"))
+        at = got.table.columns.index("大きく超過(件)")
+        by_team = {r[1]: r[at] for r in got.table.rows}
+        self.assertEqual(by_team["A"], "1")
+        self.assertEqual(got.table.row_marks[[r[1] for r in got.table.rows].index("A")], "over")
+
+    def test_画面に決まりを出す(self) -> None:
+        self.assertIn("1.5倍以上", logic.overrun_rule())
+        self.assertIn("10分以上", logic.overrun_rule())

@@ -83,6 +83,11 @@
         下の「欄のつなぎ方」で選べます。欄の中を「,」で区切ると、そのどれか。
         <a href="#guide-calc" data-goto-tab="guide">標準の出し方(考え方と計算)</a>
       </p>
+      <p class="lead">
+        <b>大きく超過(件)</b> … {{ overrun_rule }}の数。1件でもある条件は色が付きます。
+        「抽出」で開き、「大きく超過した作業だけ」に印を付けると、その作業(作業者・LOT・停止の分)を1件ずつ見られます。
+        休憩の分の打ち間違いで長く見えることもあるので、日報の<b>休憩の時刻</b>と合わせて確かめてください。
+      </p>
       <div class="row">
         <div class="field">
           <label for="standard-scope">ライン</label>
@@ -221,6 +226,8 @@
           標準に数えない作業も出す</label>
         <label class="check"><input type="checkbox" id="works-formulas">
           計算式を出す(表とCSVに式の列が付きます)</label>
+        <label class="check" title="{{ overrun_rule }}"><input type="checkbox" id="works-overrun">
+          大きく超過した作業だけ</label>
         <button class="btn btn--primary" type="button" id="works-run">抽出</button>
         <button class="btn" type="button" id="works-csv">CSVに出す</button>
       </div>
