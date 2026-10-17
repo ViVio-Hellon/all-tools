@@ -42,6 +42,8 @@ from ..db.connection import connect_readonly
 from ..db.models import PackingDetail, PackingReport
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
+from .. import constants
+from ..logic import break_time
 from ..logic import standard_time as logic
 from ..logic.shift import parse_business_date
 
@@ -58,6 +60,8 @@ SAMPLE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("packing_spec_no", "包装仕様NO"), ("size", "サイズ"), ("dimension", "寸法(日報のまま)"),
     ("packages", "梱包数"), ("sheets", "枚数"), ("workers", "作業人数"),
     ("work_minutes", "作業時間(分)"), ("stop_minutes", "停止時間(分)"),
+    # 休憩(v4.37.1。`logic/break_time`)。確かめに引っかかった行は「数えない理由」にも出る
+    ("break_minutes", "休憩(分)"), ("break_range", "休憩の時刻"), ("break_issue", "休憩の確かめ"),
     ("person_minutes", "人分"), ("per_package", "梱包あたり人分"),
     ("per_sheet", "枚あたり人分"), ("usable", "標準に数える"),
     ("excluded_reason", "数えない理由"), ("terminal", "端末"), ("recorded_at", "記録日時"),
@@ -179,6 +183,8 @@ def samples_of(repo: NippouRepository, report: PackingReport,
     worker = " ".join(repo.shift_workers(report.work_date, report.line_name,
                                           report.shift)) or report.worker_name
     team = logic.team_of(worker, teams)
+    details = list(details)
+    breaks = _break_checks(repo, report.shift, details)
     return [logic.sample_of(
         report_date=report.work_date, line=report.line_name, shift=report.shift,
         page=d.page, row_no=d.row_no, worker=worker, team=team, lot_no=d.lot_no,
@@ -186,7 +192,47 @@ def samples_of(repo: NippouRepository, report: PackingReport,
         packing_spec_no=d.packing_spec_no, dimension=d.dimension,
         packages=d.packing_package_count, sheets=d.actual_quantity,
         workers=d.worker_count, work_minutes=d.work_time,
-        stop_minutes=sum(s.stop_minutes for s in d.stops)) for d in details]
+        stop_minutes=sum(s.stop_minutes for s in d.stops),
+        **breaks.get((d.page, d.row_no), {})) for d in details]
+
+
+def _detail_values(d: PackingDetail) -> dict[str, str]:
+    """集計の明細1行を、`logic/break_time` が読む欄の名前へ(停止は①から順に詰める)。"""
+    def two(v) -> str:
+        return "" if v is None else str(v)
+
+    values = {"KZ": two(d.start_hour), "KH": two(d.start_minute),
+              "SZ": two(d.end_hour), "SH": two(d.end_minute)}
+    for (code, minutes), stop in zip(constants.STOP_SLOTS, d.stops):
+        values[code] = str(stop.stop_code or "")
+        values[minutes] = f"{float(stop.stop_minutes or 0):g}"
+    values[break_time.ROW_FAMILY] = next(
+        (s.break_range for s in d.stops if (s.break_range or "").strip()), "")
+    return values
+
+
+def _break_checks(repo: NippouRepository, shift: str,
+                  details: list[PackingDetail]) -> dict[tuple[int, int], dict]:
+    """直ぜんぶの行の休憩(分・時刻・確かめの1つ目)。保存の確かめと同じ物差し。"""
+    from ..logic.save_checks import latest_end
+    from ..logic.shift import bounds_text
+
+    try:
+        start, end = bounds_text(repo.get_shift_times(), shift)
+    except Exception:                                   # noqa: BLE001 - 直の時間が読めない
+        start, end = "", ""
+    window = break_time.shift_window(start, latest_end(shift, end))
+    many = len({d.page for d in details}) > 1
+    rows = [((d.page, d.row_no), f"{d.page}ページ {d.row_no}行目" if many else f"{d.row_no}行目",
+             _detail_values(d)) for d in details]
+    found = break_time.shift_issues(rows, window=window, shift=shift)
+    out: dict[tuple[int, int], dict] = {}
+    for key, _label, values in rows:
+        issues = found.get(key, [])
+        out[key] = {"break_minutes": break_time.break_minutes(values),
+                    "break_range": break_time.normalize(values[break_time.ROW_FAMILY]),
+                    "break_issue": issues[0].message if issues else ""}
+    return out
 
 
 def _sample_values(s: logic.Sample, terminal: str, now: str) -> tuple:
@@ -197,7 +243,9 @@ def _sample_values(s: logic.Sample, terminal: str, now: str) -> tuple:
         "purpose_name": s.purpose_name, "packing_spec_no": s.packing_spec_no,
         "size": s.size, "dimension": s.dimension, "packages": s.packages,
         "sheets": s.sheets, "workers": s.workers, "work_minutes": s.work_minutes,
-        "stop_minutes": s.stop_minutes, "person_minutes": s.person_minutes,
+        "stop_minutes": s.stop_minutes, "break_minutes": s.break_minutes,
+        "break_range": s.break_range, "break_issue": s.break_issue,
+        "person_minutes": s.person_minutes,
         "per_package": s.per_package, "per_sheet": s.per_sheet,
         "usable": 1 if s.usable else 0, "excluded_reason": s.excluded_reason,
         "terminal": terminal, "recorded_at": now,
@@ -215,7 +263,15 @@ def _sample_from_row(row: sqlite3.Row) -> logic.Sample:
         size=row["サイズ"] or "", dimension=row["寸法(日報のまま)"] or "",
         packages=float(row["梱包数"] or 0), sheets=float(row["枚数"] or 0),
         workers=float(row["作業人数"] or 0), work_minutes=float(row["作業時間(分)"] or 0),
-        stop_minutes=float(row["停止時間(分)"] or 0))
+        stop_minutes=float(row["停止時間(分)"] or 0),
+        # 休憩の列は v4.37.1 から(前の版が作った表には無いことがある)
+        break_minutes=float(_col(row, "休憩(分)") or 0),
+        break_range=str(_col(row, "休憩の時刻") or ""),
+        break_issue=str(_col(row, "休憩の確かめ") or ""))
+
+
+def _col(row: sqlite3.Row, name: str):
+    return row[name] if name in row.keys() else None
 
 
 # ======================================================================

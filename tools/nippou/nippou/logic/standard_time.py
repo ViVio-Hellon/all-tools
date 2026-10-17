@@ -139,6 +139,16 @@ class Sample:
     workers: float = 0.0           # 作業人数
     work_minutes: float = 0.0      # 作業時間(分・停止を引いたあと)
     stop_minutes: float = 0.0
+    # 休憩(v4.37.1)。分は作業停止の休憩(記号 0)、時刻は「11:30〜12:30」、確かめは
+    # `logic/break_time` の直すところ(1つ目)。確かめに引っかかった行は標準に数えない
+    break_minutes: float = 0.0
+    break_range: str = ""
+    break_issue: str = ""
+
+    @property
+    def break_unknown(self) -> bool:
+        """休憩を取っているのに、時刻が書いていない(作業時間の正しさを確かめられない)。"""
+        return self.break_minutes > 0 and not self.break_range
 
     @property
     def person_minutes(self) -> float:
@@ -169,6 +179,9 @@ class Sample:
             return "作業時間が0"
         if self.packages <= 0 and self.sheets <= 0:
             return "梱包数も枚数も0"
+        if self.break_issue:
+            # 休憩の分がでたらめだと作業時間もでたらめ(標準も大きく超過も狂う)
+            return f"休憩の時刻がありえない({self.break_issue})"
         return ""
 
     @property
@@ -184,7 +197,9 @@ def sample_of(*, report_date: str, line: str, shift: str, page: int, row_no: int
               worker: str, team: str, lot_no: str = "", purpose_code: str = "",
               purpose_name: str = "", packing_spec_no: str = "", dimension: str = "",
               packages: float = 0.0, sheets: float = 0.0, workers: float = 0.0,
-              work_minutes: float = 0.0, stop_minutes: float = 0.0) -> Sample:
+              work_minutes: float = 0.0, stop_minutes: float = 0.0,
+              break_minutes: float = 0.0, break_range: str = "",
+              break_issue: str = "") -> Sample:
     """集計の明細1行から実績を作る。サイズはここで揃える。"""
     return Sample(
         report_date=report_date, line=line, shift=shift, page=page, row_no=row_no,
@@ -195,7 +210,8 @@ def sample_of(*, report_date: str, line: str, shift: str, page: int, row_no: int
         size=normalize_size(dimension), dimension=(dimension or "").strip(),
         packages=float(packages or 0), sheets=float(sheets or 0),
         workers=float(workers or 0), work_minutes=float(work_minutes or 0),
-        stop_minutes=float(stop_minutes or 0))
+        stop_minutes=float(stop_minutes or 0), break_minutes=float(break_minutes or 0),
+        break_range=(break_range or "").strip(), break_issue=(break_issue or "").strip())
 
 
 # ======================================================================

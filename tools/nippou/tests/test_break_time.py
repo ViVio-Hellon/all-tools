@@ -150,5 +150,148 @@ class StoreAndCsvTests(unittest.TestCase):
                          page_fingerprint(header, [DetailRecord(**base, break_range="11:30〜12:30")]))
 
 
+# ======================================================================
+# v4.37.1 確かめ ── 休憩とほかの停止の重なり・ありえない時刻(大きく超過の土台)
+# ======================================================================
+class MultiRangeTests(unittest.TestCase):
+    def test_2つの休憩を並べて書ける(self) -> None:
+        for text in ("10:00〜10:10、12:00〜12:50", "1000-1010,1200-1250", "10:00~10:10 / 12:00~12:50"):
+            self.assertEqual(break_time.normalize(text), "10:00〜10:10、12:00〜12:50", text)
+            self.assertEqual(break_time.total_minutes(break_time.parse_all(text)), 60, text)
+
+    def test_1つでも読めなければ読めない(self) -> None:
+        self.assertIsNone(break_time.parse_all("10:00〜10:10、昼"))
+        self.assertEqual(break_time.normalize("10:00〜10:10、昼"), "10:00〜10:10、昼")
+
+
+class CheckTests(unittest.TestCase):
+    """`issues` の1つずつ。壊したところだけが出て、ほかは出ないこと。"""
+
+    ROW = {"S": "0", "TH": "60", "KZ": "11", "KH": "00", "SZ": "13", "SH": "00"}
+    DAY = break_time.shift_window("07:00", "15:00")
+
+    def codes(self, text: str, *, window=DAY, others=(), **extra) -> list[str]:
+        values = {**self.ROW, **extra, "break_range": text}
+        return [i.code for i in break_time.issues(values, window=window, shift="1直", others=others)]
+
+    def test_合っていれば何も出ない(self) -> None:
+        self.assertEqual(self.codes("11:30〜12:30"), [])
+        self.assertEqual(self.codes("11:00〜11:10、12:00〜12:50"), [])
+
+    def test_空は止めない(self) -> None:
+        self.assertEqual(self.codes(""), [])
+
+    def test_ありえない時刻(self) -> None:
+        for text in ("25:00〜26:00", "11:70〜12:00", "昼休み", "11:30", "11:30〜11:30"):
+            self.assertEqual(self.codes(text), [break_time.UNREADABLE], text)
+
+    def test_直の外(self) -> None:
+        got = break_time.issues({**self.ROW, "break_range": "3:00〜4:00"}, window=self.DAY, shift="1直")
+        self.assertEqual([i.code for i in got], [break_time.OUTSIDE_SHIFT])
+        self.assertIn("1直(7:00〜15:00)の時間ではありません", got[0].message)
+
+    def test_直を越える残業の行の中なら直の外とは言わない(self) -> None:
+        row = {"KZ": "14", "KH": "00", "SZ": "17", "SH": "00", "TH": "30"}
+        self.assertEqual(self.codes("15:30〜16:00", **row), [])
+
+    def test_3直は日をまたいで見る(self) -> None:
+        night = break_time.shift_window("22:50", "07:00")
+        row = {"KZ": "23", "KH": "00", "SZ": "3", "SH": "00"}
+        self.assertEqual(self.codes("0:30〜1:30", window=night, **row), [])
+        self.assertEqual(self.codes("12:00〜13:00", window=night, **row), [break_time.OUTSIDE_SHIFT])
+
+    def test_行の外(self) -> None:
+        self.assertEqual(self.codes("12:30〜13:30"), [break_time.OUTSIDE_ROW])
+
+    def test_分が合わない(self) -> None:
+        self.assertEqual(self.codes("11:30〜12:00"), [break_time.LENGTH])
+
+    def test_休憩の記号が無いのに時刻だけ(self) -> None:
+        self.assertEqual(self.codes("11:30〜12:30", S="1"), [break_time.NO_BREAK_CODE])
+
+    def test_同じ行の休憩どうしが重なる(self) -> None:
+        self.assertEqual(self.codes("11:30〜12:00、11:50〜12:20"), [break_time.OVERLAP_SELF])
+
+    def test_ほかの行の休憩と重なる(self) -> None:
+        other = [("2ページ 3行目", break_time.parse_all("12:00〜12:30"))]
+        got = break_time.issues({**self.ROW, "break_range": "11:30〜12:30"}, window=self.DAY, others=other)
+        self.assertEqual([i.code for i in got], [break_time.OVERLAP_ROW])
+        self.assertIn("2ページ 3行目の休憩(12:00〜12:30)と重なっています", got[0].message)
+        # 端が接するだけは重ならない
+        touching = [("3行目", break_time.parse_all("12:30〜12:40"))]
+        self.assertEqual(self.codes("11:30〜12:30", others=touching), [])
+
+    def test_ほかの停止と足すと行に入りきらない(self) -> None:
+        # 11:00〜13:00 の 120 分に、休憩 60 分 + 段取り 70 分
+        got = break_time.issues({**self.ROW, "SS": "1", "THS": "70", "break_range": "11:30〜12:30"})
+        self.assertEqual([i.code for i in got], [break_time.OTHER_STOPS])
+        self.assertIn("休憩 60 分とほかの停止 70 分を足すと 130 分", got[0].message)
+        self.assertEqual(self.codes("11:30〜12:30", SS="1", THS="60"), [])
+
+
+class SaveCheckTests(unittest.TestCase):
+    """保存の確かめ(7項目と一緒に走る)。直ぜんぶ・ページをまたいで見る。"""
+
+    def run_all(self, rows):
+        from nippou.logic import save_checks
+        return save_checks.run_all(rows, shift="1直", shift_start="07:00", shift_end="15:00",
+                                   limit_minutes=480, known_stop_codes={"0", "1"})
+
+    def row(self, page, n, kz, sz, br="", **kw):
+        return DetailRecord(report_date="2026年8月3日", line="L-1", shift="1直", page=page,
+                            row_no=n, lot=f"L{page}{n}", kz=kz[:2], kh=kz[2:], sz=sz[:2],
+                            sh=sz[2:], break_range=br, **kw)
+
+    def test_ほかのページの休憩と重なると止める(self) -> None:
+        from nippou.logic import save_checks
+        rows = [self.row(1, 1, "1100", "1300", "11:30〜12:30", s="0", th="60"),
+                self.row(2, 1, "1100", "1300", "12:00〜13:00", s="0", th="60")]
+        found = [f for f in self.run_all(rows) if f.code == save_checks.BREAK_TIME]
+        self.assertEqual([(f.page, f.row) for f in found], [(1, 1), (2, 1)])
+        self.assertIn("2ページ 1行目の休憩", found[0].message)
+        self.assertFalse(any(f.skippable for f in found), "設備移動のため保存でも通さない")
+        self.assertEqual(save_checks.during_input(found), found, "保存(確定)で止める")
+
+    def test_空なら何も言わない(self) -> None:
+        from nippou.logic import save_checks
+        rows = [self.row(1, 1, "1100", "1300", s="0", th="60")]
+        self.assertFalse([f for f in self.run_all(rows) if f.code == save_checks.BREAK_TIME])
+
+    def test_作業時間がマイナスの行は重ねて言わない(self) -> None:
+        from nippou.logic import save_checks
+        rows = [self.row(1, 1, "1100", "1300", "11:30〜12:30", s="0", th="60", ss="1", ths="70")]
+        found = self.run_all(rows)
+        self.assertEqual([f.code for f in found if f.code in (save_checks.BREAK_TIME,
+                                                                save_checks.NEGATIVE_TIME)],
+                         [save_checks.NEGATIVE_TIME])
+        self.assertIn("休憩とほかの停止が重なっていないかも",
+                      next(f for f in found if f.code == save_checks.NEGATIVE_TIME).how)
+
+    def test_直の外は止める(self) -> None:
+        from nippou.logic import save_checks
+        rows = [self.row(1, 1, "1100", "1300", "3:00〜4:00", s="0", th="60")]
+        found = [f for f in self.run_all(rows) if f.code == save_checks.BREAK_TIME]
+        self.assertEqual(len(found), 1)
+        self.assertIn("1直(7:00〜15:00)の時間ではありません", found[0].message)
+
+
+class EntryCheckTests(unittest.TestCase):
+    def test_画面の一覧にも同じ確かめが出る(self) -> None:
+        st = presenter.empty_state()
+        for row, values in {1: {"S": "0", "TH": "60", "KZ": "11", "KH": "00", "SZ": "13", "SH": "00",
+                                "break_range": "11:30〜12:30"},
+                            2: {"S": "0", "TH": "30", "KZ": "13", "KH": "00", "SZ": "15", "SH": "00",
+                                "break_range": "3:00〜3:30"}}.items():
+            for family, value in values.items():
+                st.set(row, family, value)
+        got = presenter.break_entries(
+            st, window=break_time.shift_window("07:00", "15:00"), shift="1直",
+            other_pages=[("2ページ 4行目", break_time.parse_all("12:00〜12:10"))])
+        by_row = {e["row"]: e["problems"] for e in got}
+        self.assertEqual(len(by_row[1]), 1)
+        self.assertIn("2ページ 4行目の休憩", by_row[1][0])
+        self.assertIn("1直(7:00〜15:00)の時間ではありません", by_row[2][0])
+
+
 if __name__ == "__main__":
     unittest.main()

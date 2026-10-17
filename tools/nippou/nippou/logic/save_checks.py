@@ -44,6 +44,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 from ..constants import STOP_FIELD_PAIRS
 from ..db.models import DetailRecord
+from . import break_time
 from .numeric import is_numeric, to_float
 from .work_time import elapsed_minutes, minutes_text, shift_minutes, stop_minutes
 from .shift import normalize_hhmm
@@ -57,6 +58,7 @@ OVER_SHIFT_TOTAL = "over_shift_total"   # Opetime_Calcul
 OVER_SHIFT_ROW = "over_shift_row"       # 時間計算_シート版
 SAME_TIME = "same_time"                 # 時間計算_シート版
 NEGATIVE_TIME = "negative_time"         # 時間計算(停止が作業時間を超える)
+BREAK_TIME = "break_time"               # 休憩の時刻(v4.37.1。VBA には無い)
 
 #: **直の終わりにならないと判断できないもの。**
 #:
@@ -399,12 +401,57 @@ def check_negative_time(details: Sequence[DetailRecord]) -> list[Finding]:
         if all(parts) and all(is_numeric(p) for p in parts):
             minutes = elapsed_minutes(*parts)
         if minutes - sum(stop_minutes(text) for text in stops) < 0:
+            rest = any(normalize(getattr(d, code) or "") == REST_STOP_CODE
+                       for code, _minutes in STOP_PAIRS)
             out.append(Finding(
                 NEGATIVE_TIME,
                 f"{d.row_no}行目：作業時間がマイナスです",
-                "停止時間が作業時間を超えていないか確かめてください",
+                "停止時間が作業時間を超えていないか確かめてください"
+                + ("(休憩とほかの停止が重なっていないかも)" if rest else ""),
                 page=d.page, row=d.row_no, field="TH",
                 sound="negative_time"))
+    return out
+
+
+# ======================================================================
+# 休憩の時刻(v4.37.1) ── 標準時間の「大きく超過」の土台
+# ======================================================================
+def check_break_times(details: Sequence[DetailRecord], *, shift: str = "",
+                      shift_start: str = "", shift_end: str = "") -> list[Finding]:
+    """休憩の時刻(作業停止で休憩を入れた行の「11:30〜12:30」)が、ありえる時刻か。
+
+    見るものは `logic/break_time` の通り ── 読めない・分が合わない・直の外・行の外・
+    休憩どうしの重なり(ほかのページも)・ほかの停止と足すと行に入りきらない。
+    **空は見ません**(書いていない前の版・取り込んだ過去の日報を止めないため)。
+
+    「ほかの停止と足すと入りきらない」は、打った分だけで作業時間がマイナスになる行では
+    言いません(:func:`check_negative_time` が同じことを言うので、2つ重ねない)。
+
+    打っている途中でも間違いと言い切れるので、保存(確定)で止めます。「設備移動のため保存」
+    では通せません ── 休憩の時刻は直を最後までやれたかの話ではないので。
+    """
+    rows = _sorted(details)
+    if not any((d.break_range or "").strip() for d in rows):
+        return []
+    many_pages = len({d.page for d in rows}) > 1
+    keyed = [((d.page, d.row_no),
+              f"{d.page}ページ {d.row_no}行目" if many_pages else f"{d.row_no}行目",
+              break_time.values_of(d)) for d in rows]
+    window = break_time.shift_window(shift_start, shift_end)
+    found = break_time.shift_issues(keyed, window=window, shift=shift)
+    negative = {(f.page, f.row) for f in check_negative_time(rows)}
+    out: list[Finding] = []
+    for d in rows:
+        key = (d.page, d.row_no)
+        for issue in found.get(key, []):
+            if issue.code == break_time.OTHER_STOPS and key in negative:
+                continue
+            out.append(Finding(
+                BREAK_TIME,
+                f"休憩の時刻: {issue.message}",
+                "表の下の「休憩の時刻」の欄で直してください(何時から何時まで休んだか。"
+                "分は作業停止の休憩の欄)",
+                page=d.page, row=d.row_no, field="break_range"))
     return out
 
 
@@ -565,6 +612,8 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
     findings += check_stop_codes(details, known_stop_codes)
     findings += check_row_times(details, limit_minutes)
     findings += check_negative_time(details)
+    findings += check_break_times(details, shift=shift, shift_start=shift_start,
+                                  shift_end=latest_end(shift, shift_end))
     findings += check_shift_end(details, shift, shift_end)
     findings += check_break(details, day_work=day_work, required=required_break)
     findings += check_total_work(details, shift, available)

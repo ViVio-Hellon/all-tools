@@ -1255,7 +1255,7 @@ function paintReason(view, since = null) {
 /*
   休憩の時刻(v4.37.0)。作業停止で休憩(記号 0)を選んだ行ごと。**どの行に欄が要るかと、合わない
   ところはサーバが決める**(`presenters/entry.break_entries`)。聞き方は理由と同じ(選んだ瞬間に
-  1度だけポップアップ。休憩でなくなった行は忘れる)。止めない。
+  1度だけポップアップ。休憩でなくなった行は忘れる)。ありえない時刻はサーバの保存(確定)が断る。
 */
 const breakAsked = new Set();
 
@@ -1316,7 +1316,7 @@ function paintBreak(view, since = null) {
     }
     for (const text of entry.problems || []) {
       const warn = document.createElement("span");
-      warn.className = "msg msg--warn break__problem";
+      warn.className = "msg msg--error break__problem";
       warn.textContent = text;
       box.append(warn);
     }

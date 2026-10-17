@@ -462,8 +462,9 @@
      休憩の時刻(v4.37.0)── 作業停止に休憩(記号 0)を入れた行だけ
 
      分は作業停止に打つので、ここは**何時から何時まで**か。理由と同じく、休憩を選んだ
-     その場でポップアップで聞く。合わないところは知らせるだけで、保存は止めない
-     (`presenters/entry.break_entries` ・ `logic/break_time`)。
+     その場でポップアップで聞く。ありえない時刻(読めない・分が合わない・直や行の外・ほかの
+     休憩やほかの停止と重なる)は赤で出し、保存(確定)も止める(v4.37.1。空は止めない)
+     (`presenters/entry.break_entries` ・ `logic/break_time` ・ `save_checks.check_break_times`)。
      ------------------------------------------------------------ #}
   <div class="reason" id="break-box">
     <div class="reason__head">
@@ -480,12 +481,17 @@
         <input id="break-{{ e.row }}" data-break="{{ e.row }}" type="text"
                value="{{ e.text }}" size="16" placeholder="例: 11:30〜12:30">
         {% if e.minutes %}<span class="lead">休憩 {{ e.minutes }} 分</span>{% endif %}
-        {% for p in e.problems %}<span class="msg msg--warn break__problem">{{ p }}</span>{% endfor %}
+        {% for p in e.problems %}<span class="msg msg--error break__problem">{{ p }}</span>{% endfor %}
       </div>
       {% endfor %}
     </div>
     <p class="lead" id="break-empty" {% if view.break_entries %}hidden{% endif %}>
       作業停止で休憩を選んだ行はまだありません。
+    </p>
+    <p class="lead">
+      時刻が<b>ありえないとき</b>(読めない・休憩の分と長さが違う・直や行の時間の外・ほかの休憩や
+      ほかの停止と重なる)は赤で出し、<b>保存(確定)できません</b>。1行に休憩が2つあるときは
+      「10:00〜10:10、12:00〜12:50」のように「、」で並べます。
     </p>
   </div>
   <p class="lead">※作業停止時間は5分以上で時間を記入</p>
@@ -1305,7 +1311,7 @@
         <label for="break-text">何時から何時まで</label>
         <input id="break-text" type="text" size="16" placeholder="例: 11:30〜12:30">
       </div>
-      <p class="lead">11:30〜12:30・11:30-12:30・1130-1230 のどれでも書けます。</p>
+      <p class="lead">11:30〜12:30・11:30-12:30・1130-1230 のどれでも書けます。休憩が2つなら「10:00〜10:10、12:00〜12:50」。</p>
     </div>
     <div class="modal__foot">
       <button class="btn" type="button" data-close="break-modal">やめる</button>

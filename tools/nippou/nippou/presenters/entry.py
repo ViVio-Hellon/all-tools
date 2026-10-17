@@ -16,7 +16,7 @@ tkinter版 `ui/entry_grid.py` + `ui/app.py` の入力まわりに対応する。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from .. import constants, layout
 from ..db.models import DetailRecord, HeaderRecord
@@ -677,20 +677,32 @@ def reason_entries(state: GridState,
     return out
 
 
-def break_entries(state: GridState) -> list[dict[str, Any]]:
+def break_entries(state: GridState, *, window: Optional[tuple[int, int]] = None,
+                  shift: str = "",
+                  other_pages: Sequence[tuple[str, Sequence["break_time.BreakRange"]]] = ()
+                  ) -> list[dict[str, Any]]:
     """休憩の時刻を書く行の一覧。**行ごとに1つ**(`logic/break_time`)。
 
     出すのは作業停止に休憩(記号 0)を入れた行と、**すでに時刻が書いてある行**です(理由と同じく、
-    休憩を消しても書いた時刻は黙って消さない)。合わないところ(分と時刻の長さ・その行の作業時間)は
-    ``problems`` で知らせるだけで、保存は止めません。
+    休憩を消しても書いた時刻は黙って消さない)。
+
+    ``problems`` は保存(確定)の確かめ(`save_checks.check_break_times`)と同じもの ── 読めない・
+    分が合わない・直の外(``window``)・行の外・休憩どうしの重なり(このページのほかの行と
+    ``other_pages``)・ほかの停止と足すと入りきらない。**画面で先に見せる**ので、押してから
+    断られて初めて知ることがない(v4.37.1)。
     """
-    out: list[dict[str, Any]] = []
+    rows = []
     for row in range(1, constants.ROW_COUNT + 1):
         values = state.rows.get(row, {})
         text = (values.get(break_time.ROW_FAMILY) or "").strip()
         wanted = break_time.has_break(values)
-        if not (wanted or text):
-            continue
+        if wanted or text:
+            rows.append((row, values, text, wanted))
+    mine = {row: (break_time.parse_all(text) or []) for row, _v, text, _w in rows}
+    out: list[dict[str, Any]] = []
+    for row, values, text, wanted in rows:
+        others = [(reasons.label(r), mine[r]) for r in mine if r != row and mine[r]]
+        others += list(other_pages)
         minutes = break_time.break_minutes(values)
         out.append({
             "row": row,
@@ -701,7 +713,7 @@ def break_entries(state: GridState) -> list[dict[str, Any]]:
             "empty": wanted and not text,
             # 作業停止に打った休憩の分(時刻を書く手がかり)
             "minutes": f"{minutes:g}" if minutes else "",
-            "problems": break_time.problems(values) if wanted else [],
+            "problems": break_time.problems(values, window=window, shift=shift, others=others),
         })
     return out
 

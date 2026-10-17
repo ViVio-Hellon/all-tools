@@ -372,6 +372,8 @@ WORK_COLUMNS: tuple[tuple[str, str, bool], ...] = (
     ("workers", "作業人数", True),
     ("work_minutes", "作業時間(分)", True),
     ("stop_minutes", "停止時間(分)", True),
+    # 休憩の時刻(v4.37.1)。大きく超過を見るとき、休憩が本当にその時間だったかの手がかり
+    ("break_range", "休憩の時刻", False),
     ("standard_minutes", "標準作業時間(分)", True),
     ("diff", "標準との差(分・+は標準より長い)", True),
     # 標準を大きく超過(v4.37.0。`logic.overrun_ratio` ── 1.5倍以上かつ10分以上長い)
@@ -522,7 +524,11 @@ def build_works(db_path: Optional[Path], filters: WorkFilters) -> WorksView:
             "stop_minutes": f"{s.stop_minutes:g}",
             "standard_minutes": _num(standard_minutes),
             "diff": "" if diff is None else f"{diff:+.1f}",
-            "overrun": "" if ratio is None else f"大きく超過(標準の{ratio:.1f}倍)",
+            "overrun": "" if ratio is None else (
+                f"大きく超過(標準の{ratio:.1f}倍)"
+                # 休憩の時刻が空なら、休憩の分が正しいかを確かめられない
+                + ("・休憩の時刻が空" if s.break_unknown else "")),
+            "break_range": s.break_range or ("(空)" if s.break_unknown else ""),
             "per_package": _num(s.per_package), "per_sheet": _num(s.per_sheet),
             "excluded_reason": s.excluded_reason,
         }

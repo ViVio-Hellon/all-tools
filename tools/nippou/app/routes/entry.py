@@ -234,6 +234,8 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
         message=message, focus=focus,
         other_codes=_other_codes() if other_codes is None else other_codes,
         bad_rows=len(bad))
+    # 休憩の時刻の確かめは、直の時間とほかのページの休憩も入れて見る(保存の確かめと同じ)
+    body["break_entries"] = _break_entries(state, report_date, line, shift, page)
     # 時間計算の断り。**入力は受け付けたうえで**画面に出す ── 打っている
     # 途中で保存できなくなるほうが困る(VBA は MsgBox で止めていた)
     body["time_problem"] = None if problem is None else {
@@ -953,6 +955,37 @@ def _recalculate(state, ctx, calc, *, shift: str = ""):
         state, package_calc=ctx.package_calc_enabled(),
         shift_times=get_repo().get_shift_times(),
         current_shift=shift, admin=ctx.editor)
+
+
+def _break_entries(state, report_date: str, line: str, shift: str, page: int) -> list[dict]:
+    """休憩の時刻の一覧(`presenter.break_entries`)に、直の時間とほかのページの休憩を渡す。
+
+    ほかのページの休憩と重なっていても、保存(確定)で断られる前に画面で分かるように。
+    読めなくても一覧は出す(そのページの中だけで見る)。
+    """
+    from nippou.logic import break_time
+    from nippou.services.shift_check import bounds_of
+
+    repo = get_repo()
+    try:
+        start, end = bounds_of(repo.get_shift_times(), shift)
+    except Exception:                                   # noqa: BLE001 - 直の時間が読めない日
+        start, end = "", ""
+    from nippou.logic.save_checks import latest_end
+    window = break_time.shift_window(start, latest_end(shift, end))
+    others: list[tuple[str, list]] = []
+    try:
+        for saved in repo.saved_pages(report_date, line, shift):
+            if saved == page:
+                continue
+            loaded = repo.load(report_date, line, shift, saved)
+            for d in (loaded[1] if loaded else []):
+                ranges = break_time.parse_all(d.break_range or "") or []
+                if ranges:
+                    others.append((f"{saved}ページ {d.row_no}行目", ranges))
+    except Exception:                                   # noqa: BLE001
+        log.exception("ほかのページの休憩を読めませんでした")
+    return presenter.break_entries(state, window=window, shift=shift, other_pages=others)
 
 
 def _bad_rows(state, ctx, calc, *, shift: str = "") -> list[dict]:

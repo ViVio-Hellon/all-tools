@@ -266,6 +266,45 @@ class SaveGateTests(WebTestCase):
         self.assertEqual(self._save({"1": good}).status_code, 200)
 
 
+class BreakTimeGateTests(WebTestCase):
+    """**休憩の時刻(v4.37.1)。** ありえない時刻は保存(確定)で止める。空は止めない。"""
+
+    ROW = {"LOT": "A1", "KEN": "100", "MAI": "10", "TUT": "1",
+           "KZ": "08", "KH": "00", "SZ": "10", "SH": "00", "S": "0", "TH": "30"}
+
+    def _save(self, rows):
+        return self.post("/api/entry/save", {"rows": rows, "header": {"worker": "杉山良宏"}})
+
+    def test_合っていれば通る_空も通る(self) -> None:
+        self.assertEqual(self._save({"1": dict(self.ROW, break_range="08:30〜09:00")}).status_code, 200)
+        self.assertEqual(self._save({"1": dict(self.ROW)}).status_code, 200)
+
+    def test_分が合わない_行の外_読めないは止める(self) -> None:
+        for text in ("08:30〜08:40", "11:00〜11:30", "25:00〜25:30"):
+            with self.subTest(text=text):
+                res = self._save({"1": dict(self.ROW, break_range=text)})
+                self.assertEqual(res.status_code, 422, res.get_json().get("message"))
+                self.assertEqual([f["code"] for f in res.get_json()["check_findings"]],
+                                 [save_checks.BREAK_TIME])
+                self.assertIn("休憩の時刻", res.get_json()["message"])
+
+    def test_ほかのページの休憩と重なれば画面で分かり_保存は止める(self) -> None:
+        page1 = {str(n): {"LOT": f"P{n:02d}", "KEN": "100", "MAI": "1", "TUT": "1",
+                          "KZ": "08", "KH": "00", "SZ": "08", "SH": "05"} for n in range(1, 12)}
+        page1["12"] = dict(self.ROW, LOT="A12", break_range="08:30〜09:00")
+        self.assertEqual(self._save(page1).status_code, 200)
+        made = self.post("/api/entry/newpage", {"rows": page1, "header": {"worker": "杉山良宏"}})
+        self.assertEqual(made.status_code, 200, made.get_json())
+        row = dict(self.ROW, LOT="B1", break_range="08:45〜09:15")
+        shown = self.post("/api/entry/state", {"rows": {"1": row}, "row": 1}).get_json()
+        problems = shown["break_entries"][0]["problems"]
+        self.assertTrue(any("1ページ 12行目の休憩(8:30〜9:00)と重なっています" in p for p in problems),
+                        problems)
+        res = self._save({"1": row})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn(save_checks.BREAK_TIME, [f["code"] for f in res.get_json()["check_findings"]])
+
+
 class VerifyDoesNotBlockTests(WebTestCase):
     """**「この直をチェック」は並べるだけ。** 止めるのは保存のほう。"""
 

@@ -774,6 +774,69 @@ class WebTests(WebTestCase):
             self.assertIn(path, js)
 
 
+class BreakSampleTests(ServiceTestCase):
+    """休憩の時刻(v4.37.1)── 確かめに引っかかった作業は標準に数えず、大きく超過にも出さない。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.share.mkdir()
+        key = dict(report_date="2026年9月1日", line="L-1", shift="1直", page=1)
+        base = dict(siz="8.000×1528.0×3053.0", tut="4", hit="2", con="40",
+                    others1="H176", others2="ｼﾔ-ｼ", others4="1P0001")
+        rows = [  # (開始, 終了, 作業時間, 休憩の分, 休憩の時刻)
+            ("0800", "0900", 60, "", ""), ("0900", "1010", 70, "", ""), ("1010", "1130", 80, "", ""),
+            # 休憩60分を引いて180分。時刻が書いていない(確かめられない)
+            ("1130", "1530", 180, "60", ""),
+            # 時刻は30分なのに休憩は60分 → 確かめに引っかかる(標準に数えない)
+            ("0700", "0900", 60, "60", "8:00〜8:30"),
+        ]
+        self.repo.save(HeaderRecord(**key, worker="山田"), [
+            DetailRecord(**key, row_no=i + 1, lot=f"N71{i}T0", kz=a[:2], kh=a[2:], sz=b[:2], sh=b[2:],
+                         tim=str(m), s="0" if br else "", th=br, break_range=text, **base)
+            for i, (a, b, m, br, text) in enumerate(rows)])
+        summary.refresh_shift(self.repo, "2026年9月1日", "L-1", "1直")
+        self.pushed(("2026年9月1日", "L-1", "1直"))
+
+    def test_実績に休憩の分と時刻と確かめが残る(self) -> None:
+        got = self.query('SELECT 行番号, "休憩(分)", 休憩の時刻, 休憩の確かめ, 標準に数える, 数えない理由'
+                         f' FROM "{svc.SAMPLE_TABLE}" WHERE 行番号 >= 4 ORDER BY 行番号')
+        self.assertEqual(got[0][:5], (4, 60.0, "", "", 1))
+        self.assertEqual(got[1][:3], (5, 60.0, "8:00〜8:30"))
+        self.assertIn("時刻は 30 分、作業停止の休憩は 60 分です", got[1][3])
+        self.assertEqual(got[1][4], 0)
+        self.assertIn("休憩の時刻がありえない", got[1][5])
+
+    def test_読み直しても同じ(self) -> None:
+        found = {s.row_no: s for s in svc.usable_samples(self.db, "L-1")}
+        self.assertNotIn(5, found, "確かめに引っかかった作業は標準に数えない")
+        self.assertTrue(found[4].break_unknown)
+
+    def test_同条件の作業に休憩の時刻と_空なら一言(self) -> None:
+        got = view.build_works(self.db, view.WorkFilters.of(
+            {"purpose_code": "H176", "include_excluded": True}, "L-1"))
+        cols = got.table.columns
+        rows = {r[cols.index("LOT")]: r for r in got.table.rows}
+        over = rows["N713T0"]
+        self.assertEqual(over[cols.index("休憩の時刻")], "(空)")
+        self.assertIn("大きく超過(標準の", over[cols.index("大きく超過")])
+        self.assertIn("休憩の時刻が空", over[cols.index("大きく超過")])
+        bad = rows["N714T0"]
+        self.assertEqual(bad[cols.index("大きく超過")], "", "数えない作業は大きく超過にしない")
+        self.assertIn("休憩の時刻がありえない", bad[cols.index("標準に数えない理由")])
+
+    def test_前の版が作った表にも列を足して読める(self) -> None:
+        conn = sqlite3.connect(self.db)
+        with conn:
+            conn.execute(f'ALTER TABLE "{svc.SAMPLE_TABLE}" DROP COLUMN "休憩の確かめ"')
+        conn.close()
+        self.assertTrue(svc.usable_samples(self.db, "L-1"))
+        conn = sqlite3.connect(self.db)
+        try:
+            self.assertIn(f"{svc.SAMPLE_TABLE}.休憩の確かめ", svc.ensure_tables(conn))
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()
 

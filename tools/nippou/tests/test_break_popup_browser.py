@@ -49,7 +49,7 @@ class BreakPopupBrowserTests(reason_popup.ReasonPopupBrowserTests):
         self.assertEqual(page.locator("#break-rows .break__problem").count(), 0)
         self.assertEqual(self.errors, [])
 
-    def test_合わないときは知らせるだけ(self) -> None:
+    def test_合わないときは赤で知らせる(self) -> None:
         page = self.open_entry()
         self.fill_row(page, 2, "1100", "1300")
         page.select_option("#S2", "0")
@@ -62,6 +62,24 @@ class BreakPopupBrowserTests(reason_popup.ReasonPopupBrowserTests):
         page.wait_for_selector("#break-rows .break__problem", timeout=5000)
         text = page.text_content("#break-rows")
         self.assertIn("時刻は 30 分、作業停止の休憩は 60 分です", text)
+        self.assertEqual(page.locator("#break-rows .break__problem.msg--error").count(), 1)
+
+    def test_ほかの行の休憩と重なれば出る(self) -> None:
+        page = self.open_entry()
+        for row, (start, end, text) in {1: ("1100", "1300", "11:30〜12:30"),
+                                        2: ("1100", "1300", "12:00〜13:00")}.items():
+            self.fill_row(page, row, start, end)
+            page.select_option(f"#S{row}", "0")
+            page.fill(f"#TH{row}", "60")
+            page.dispatch_event(f"#TH{row}", "change")
+            self.assertTrue(self.break_open(page))
+            page.fill("#break-text", text)
+            page.click("#break-apply")
+            page.wait_for_selector("#break-modal", state="hidden")
+        page.wait_for_function(
+            "document.querySelector('#break-rows')?.textContent.includes('重なっています')", timeout=5000)
+        self.assertIn("1行目の休憩(11:30〜12:30)と重なっています", page.text_content("#break-rows"))
+        self.assertEqual(self.errors, [])
 
     def test_休憩でない停止では聞かない(self) -> None:
         page = self.open_entry()
