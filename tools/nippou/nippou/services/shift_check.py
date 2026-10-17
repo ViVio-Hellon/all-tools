@@ -368,5 +368,5 @@ def combined_message(reports: Sequence[CheckReport]) -> str:
             where = f"{finding.where} " if finding.where else ""
             lines.append(f"  ・{where}{finding.message}")
     lines.append(f"※ 設備移動などで途中までのときは「{SKIP_PHRASE}」で"
-                 "最終時間と休憩のぶんだけ通せます")
+                 "最終時間と休憩(60分)の不足だけ通せます(休憩の時刻の誤りは通せません)")
     return "\n".join(lines)
