@@ -55,6 +55,7 @@ export function start(initial, initialLine) {
   wireBoard();
   wireComments();
   wireLeaving();
+  wireDropped();
 
   if (initial) applyPayload({ board: initial });
   else if (line) reload();
@@ -215,6 +216,7 @@ function applyPayload(payload, seq) {
     setUndelivered(payload.undelivered, payload.undelivered_since, payload.undelivered_why,
                    payload.undelivered_events);
   }
+  if ('dropped' in payload) setDropped(payload.dropped);
   if ('presence' in payload) setOpenTerminals(payload.presence);
   return drawn;
 }
@@ -1175,6 +1177,7 @@ function startPolling() {
       setPending(s.pending, s.failures);
       setUndelivered('undelivered' in s ? s.undelivered : s.pending, s.undelivered_since,
                      s.undelivered_why, s.undelivered_events);
+      if ('dropped' in s) setDropped(s.dropped);
       setOpenTerminals(s.presence);
       setFreshness(s.import_age_sec, s.import_stale, s.last_import_at);
       if (s.token !== lastToken) {
@@ -1228,6 +1231,35 @@ function setUndelivered(count, since, why, events) {
     return;
   }
   el.hidden = true;
+}
+
+// マスタ管理で消された看板に残っていて届かなかった操作(発注・発送など)。
+// 消せるのは共有DBで発注・発送・注文中でない看板だけだが、ほかの端末が押してまだ送って
+// いない操作は消す端末から見えない(行き違い)。送り先が無いので届かない ── 黙っていると、
+// 押した人は届いたと思ったままになる。「わかった」で閉じる(この端末に覚えている)
+function setDropped(list) {
+  const el = document.getElementById('dropped');
+  const text = document.getElementById('dropped-text');
+  if (!el || !text) return;
+  const notes = Array.isArray(list) ? list : [];
+  if (!notes.length) { el.hidden = true; return; }
+  const items = notes.map((n) => {
+    const what = [n.material, n.size].filter(Boolean).join(' ');
+    return `${n.line} ${n.mgmt_no}番${what ? `(${what})` : ''}の${n.what}`
+      + (n.at ? `(${String(n.at).slice(5, 16)})` : '');
+  });
+  text.textContent = `⚠ マスタ管理で消された看板への操作は届きませんでした: ${items.join('、')}。`
+    + '倉庫・現場には出ていません。必要なら看板を足し直してから押し直してください。';
+  el.hidden = false;
+}
+
+function wireDropped() {
+  document.getElementById('dropped-ok')?.addEventListener('click', async () => {
+    try {
+      const r = await api.post('/api/dropped/clear', {});
+      setDropped(r.dropped);
+    } catch (e) { /* 閉じられなくても次の確かめでまた出るだけ */ }
+  });
 }
 
 // 取り込みが止まっていないか(帯の「最終取り込み」)

@@ -672,6 +672,7 @@ class Store:
                     )
                 removable = [mgmt_no for mgmt_no in existing if mgmt_no not in seen]
                 dropped = [m for m in removable if existing[m]["dirty"]]
+                dropped_rows = [existing[m] for m in dropped]
                 for mgmt_no in removable:
                     conn.execute(
                         "DELETE FROM kanban_item WHERE line = ? AND mgmt_no = ?",
@@ -679,9 +680,49 @@ class Store:
                     )
             if dropped:
                 _log_dropped(line, dropped)
+                self._remember_dropped(line, dropped_rows)
             return inserted, updated, protected
 
         return self.retry(_apply, "import_line")
+
+    # -- 消された看板に残っていた操作(画面に知らせる) ------------------------
+    #: 覚えておく数(古いものから捨てる)
+    DROPPED_KEEP = 20
+    META_DROPPED = "dropped_notices"
+
+    def _remember_dropped(self, line: str, rows: list[dict[str, Any]]) -> None:
+        """共有DBから消された看板に残っていた未送信の操作を、**画面に出す知らせ**として覚える。
+
+        マスタ管理で看板を消せるのは、共有DBで発注・発送・注文中でない看板だけ。それでも、
+        ほかの端末が押してまだ送っていない操作は消す端末から見えない(行き違い)。送り先の
+        行がもう無いので送れず、取り込みで手元からも取り除く ── **黙って捨てると、押した人は
+        届いたと思ったまま**になる。看板の画面の帯に出し、「わかった」で消す。
+        """
+        import json
+
+        try:
+            notes = json.loads(self.get_meta(self.META_DROPPED, "") or "[]")
+        except ValueError:
+            notes = []
+        at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for row in rows:
+            notes.append({"at": at, "line": line, "mgmt_no": row.get("mgmt_no", ""),
+                          "material": row.get("material", "") or "", "size": row.get("size", "") or "",
+                          "what": _dropped_what(row)})
+        self.set_meta(self.META_DROPPED, json.dumps(notes[-self.DROPPED_KEEP:], ensure_ascii=False))
+
+    def dropped_notices(self) -> list[dict[str, Any]]:
+        """消された看板に残っていて届かなかった操作の知らせ(古い順)。"""
+        import json
+
+        try:
+            notes = json.loads(self.get_meta(self.META_DROPPED, "") or "[]")
+        except ValueError:
+            return []
+        return [n for n in notes if isinstance(n, dict)]
+
+    def clear_dropped_notices(self) -> None:
+        self.set_meta(self.META_DROPPED, "[]")
 
     def _refresh_clean_row(
         self,
@@ -1780,6 +1821,27 @@ class Store:
                 return cursor.rowcount
 
         return int(self.retry(_apply, "prune_operation_log"))
+
+
+def _dropped_what(row: dict[str, Any]) -> str:
+    """届かなかった操作の名前(「発注」「発送の取り消し」など)。未送信の列とその値から。
+
+    発注のボタンは発送・倉庫確認日時の列も一緒に書く(発注すると前の発送を消す)ので、
+    発注の列があるときは、発送・注文中は「付けた」ときだけ数える。
+    """
+    cols = {c for c in (row.get("dirty_columns") or "").split(",") if c}
+    on = lambda col: str(row.get(col, "") or "").strip() == config.MARK_ON  # noqa: E731
+    ordered = bool(cols & {"want", "unwant", "ordered_at"})
+    out = []
+    if ordered:
+        out.append("発注" if on("want") else "発注の取り消し・届いた確認")
+    if "shipped" in cols and (on("shipped") or not ordered):
+        out.append("発送" if on("shipped") else "発送の取り消し")
+    if "hold" in cols and (on("hold") or not ordered):
+        out.append("注文中" if on("hold") else "注文中の取り消し")
+    if not out and "confirmed_at" in cols:
+        out.append("確認")
+    return "・".join(out) or "操作"
 
 
 def _log_dropped(line: str, mgmt_nos: list[str]) -> None:

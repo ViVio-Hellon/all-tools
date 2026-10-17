@@ -188,6 +188,8 @@ def _undelivered(store) -> dict:
                                if store.get_meta("undelivered_events_since", "") else 0),
         "undelivered_since": store.get_meta("undelivered_since", "") if waiting else "",
         "undelivered_why": store.get_meta("undelivered_why", "") if waiting else "",
+        # マスタ管理で消された看板に残っていて届かなかった操作(帯で知らせる。「わかった」で消す)
+        "dropped": store.dropped_notices(),
     }
 
 
@@ -500,6 +502,16 @@ def _as_rev(value) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+@bp.post("/api/dropped/clear")
+def clear_dropped():
+    """帯「消された看板への操作は届きませんでした」の「わかった」。"""
+    store = get_store()
+    seen = len(store.dropped_notices())
+    store.clear_dropped_notices()
+    log.info("消された看板の知らせを閉じました(%d 件)", seen)
+    return jsonify({"ok": True, "dropped": []})
 
 
 @bp.post("/api/refresh")
