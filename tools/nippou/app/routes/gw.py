@@ -345,6 +345,11 @@ def _compute(payload: dict):
     unknown_vc = gw.unregistered_vc_problem(selection, weights.vc_film)
     if unknown_vc is not None:
         return None, _refuse([unknown_vc])
+    # **面ごとにも見る。** A面・B面の片方だけマスタに無いと、合計は0にならず
+    # その面のぶん軽いGWが出ていた
+    unknown_side = gw.unregistered_vc_side_problems(selection, vc_a, vc_b, vc_name_a, vc_name_b)
+    if unknown_side:
+        return None, _refuse(unknown_side)
 
     tare = gw.total_packing_weight(
         dims.pallet_weight_kg, weights.total,

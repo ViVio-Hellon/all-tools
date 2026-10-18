@@ -558,6 +558,30 @@ def unregistered_material_problems(
     return out
 
 
+def unregistered_vc_side_problems(
+        vc_selection: VcFilmSelection, vc_a_rate: MaterialRate, vc_b_rate: MaterialRate,
+        vc_name_a: str = "", vc_name_b: str = "") -> list[InputProblem]:
+    """**使うと言った面ごとに**、VC重量マスタに品名があるか。
+
+    :func:`unregistered_vc_problem` は VC の合計が 0 のときしか断りません。
+    A面・B面の両方を使い、**片方だけ**マスタに無い品名(オーダーの VC_表/VC_裏 から
+    自動で入った名前など)だと、合計は 0 にならないので素通りし、**その面のぶん
+    軽いGW**が出ていました(v4.37.3 で見つけた)。面ごとに単位質量が 0 なら断ります。
+    """
+    if not vc_selection.use_vc:
+        return []
+    out: list[InputProblem] = []
+    for used, rate, name, field, side in (
+            (vc_selection.use_side_a, vc_a_rate, vc_name_a, "vc_name_a", "A面"),
+            (vc_selection.use_side_b, vc_b_rate, vc_name_b, "vc_name_b", "B面")):
+        if used and rate.unit_mass == 0:
+            label = f"「{name}」" if str(name).strip() else ""
+            out.append(InputProblem(
+                field, f"VCフィルム({side}){label}: 登録されていないVCです。"
+                       "VC重量が計算できないので設定登録してください"))
+    return out
+
+
 def unregistered_vc_problem(vc_selection: VcFilmSelection,
                             vc_film_kg: float) -> Optional[InputProblem]:
     """port of 「登録されていないVCです」。
