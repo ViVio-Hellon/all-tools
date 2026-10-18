@@ -1,4 +1,4 @@
-"""GW計算の計算式の点検 (v4.37.3)
+"""GW計算の計算式の点検 (v4.37.3。v4.38.0 で縦バンドの高さと VC の係数を現場の指定どおりに)
 
     ＧＷ計算で計算処理（計算式）自体がおかしいものはありますか？チェックしてください
 
@@ -49,8 +49,8 @@ class HandCalculationTests(unittest.TestCase):
             "poly_sheet": ((1450 + 2700) * 2 * 700 + 1450 * 2700) / 1e6 * 0.141,       # 9.725 m²
             # 合紙は 枚数+1 枚
             "interleaf": 1250 * 2500 * 501 / 1e6 * 0.023,                   # 1565.625 m²
-            # 縦: (丈+山の高さ)×2×2本 / 横: (幅+梱包高さ)×2×4本 → m
-            "band": ((2500 + h) * 2 * 2 + (1250 + 700) * 2 * 4) / 1e3 * 0.077,  # 27.6 m
+            # 縦: (丈 + 山の高さ + ハードボード5×2 + 蓋・桟40)×2×2本 / 横: (幅+梱包高さ)×2×4本 → m
+            "band": ((2500 + h + 5 * 2 + 40) * 2 * 2 + (1250 + 700) * 2 * 4) / 1e3 * 0.077,  # 27.8 m
             # 縦バンド1本につき4個
             "angle": 2 * 4 * 0.05,
             # 上下2枚
@@ -68,7 +68,7 @@ class HandCalculationTests(unittest.TestCase):
             "outer_paper": ((w + 2500) * 2 * h + w * 2500 * 2) / 1e6 * 0.0842,
             "poly_sheet": (((w + 200) + 2700) * 2 * (h + 200) + (w + 200) * 2700) / 1e6 * 0.141,
             "interleaf": 1250 * 2500 * (501 + 1) / 1e6 * 0.023,              # 1枚あたりの面積は1列ぶん
-            "band": ((2500 + h) * 2 * 1 + (w + 600) * 2 * 4) / 1e3 * 0.077,
+            "band": ((2500 + h + 5 * 2 + 40) * 2 * 1 + (w + 600) * 2 * 4) / 1e3 * 0.077,
             "angle": 1 * 4 * 0.05,
             "hardboard": w * 2500 * 2 / 1e6 * 2.387,
         })
@@ -76,8 +76,9 @@ class HandCalculationTests(unittest.TestCase):
     def test_VCフィルムは枚数ぶん_面ごと(self) -> None:
         d = gw.PackingDimensions(1, 1250, 2500, 500, 2, 4, 700, 40, 1)
         both = gw.VcFilmSelection(True, True, True)
-        kg = gw.vc_film_weight(d, both, gw.MaterialRate(0.05, 1), gw.MaterialRate(0.04, 1))
-        self.assertAlmostEqual(kg, 1250 * 2500 * 500 / 1e6 * (0.05 + 0.04), places=6)
+        kg = gw.vc_film_weight(d, both, gw.MaterialRate(0.05, 1), gw.MaterialRate(0.04, 1.5))
+        # 面ごとに 単位質量 × 係数(v4.38.0 から係数も掛ける)
+        self.assertAlmostEqual(kg, 1250 * 2500 * 500 / 1e6 * (0.05 * 1 + 0.04 * 1.5), places=6)
 
     def test_風袋とGW(self) -> None:
         self.assertAlmostEqual(gw.total_packing_weight(40, 55.5, 10), 105.5)

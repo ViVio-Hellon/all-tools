@@ -138,9 +138,10 @@ class MaterialWeightFormulaTests(unittest.TestCase):
         self.assertAlmostEqual(interleaf_weight(DIMS, UNIT_RATE), 22.0)
 
     def test_band(self) -> None:
-        # BandL=(2000+1.0*10)*2*2=8040, BandW=((1000*1)+50)*2*2=4200
-        # (4200+8040)/1000 = 12.24
-        self.assertAlmostEqual(band_weight(DIMS, UNIT_RATE), 12.24)
+        # 縦: (2000 + 1.0*10 + ハードボード5*2 + 蓋・桟40) * 2 * 2 = 8240 (v4.38.0)
+        # 横: ((1000*1) + 50) * 2 * 2 = 4200
+        # (4200 + 8240) / 1000 = 12.44
+        self.assertAlmostEqual(band_weight(DIMS, UNIT_RATE), 12.44)
 
     def test_angle(self) -> None:
         """縦バンドアングルは**個数**。縦バンド1本につき4個(長さではない)。"""
@@ -164,20 +165,13 @@ class MaterialWeightFormulaTests(unittest.TestCase):
 
 
 class VcFilmWeightTests(unittest.TestCase):
-    """VCだけは**係数を掛けない**。
+    """VCも**係数を掛ける**(v4.38.0)。
 
-    VBA `NewGW` は VC を `検算VC_A.caption` の値でそのまま計算していて、
-    その caption は `ComboBox1_Change` が**単位質量だけ**を入れている。
-    `NewGW` の VC の列検索も「管理番号」と「品名」しか拾っておらず、
-    係数の列を見ていない。
-
-    係数の列自体は VC重量マスタに**ある**ので、掛けるのが本来の意図だった
-    可能性はある。ただ現場が使っている数値はVBAが出したものなので、
-    移植では VBA に合わせる(`gw_calculation.vc_film_weight` の説明)。
-    ここでは**係数を 1 以外にして**、掛かっていないことを確かめる。
+    VBA `NewGW` は VC だけ単位質量しか使っていなかった(マスタの係数が 1 なので省略して
+    いた ── 現場から)。式から意図が読み取れないので、ほかの資材と同じく掛ける。
+    ここでは**係数を 1 以外にして**、掛かっていることを確かめる。
     """
 
-    # 係数を掛けてしまうと 1.5*2.0=3.0 になる。掛けなければ 1.5 のまま
     VC_A_RATE = MaterialRate(unit_mass=1.5, coefficient=2.0)
     VC_B_RATE = MaterialRate(unit_mass=2.5, coefficient=4.0)
 
@@ -185,28 +179,28 @@ class VcFilmWeightTests(unittest.TestCase):
         dims = PackingDimensions(1, 1000, 2000, 10, 1, 1, 100, 0)
         sel = VcFilmSelection(use_vc=True, use_side_a=True, use_side_b=True)
         base = 1000 * 2000 * 10 / 10**6
-        expected = base * 1.5 + base * 2.5
+        expected = base * 1.5 * 2.0 + base * 2.5 * 4.0
         self.assertAlmostEqual(vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE), expected)
 
     def test_side_a_only(self) -> None:
         dims = PackingDimensions(1, 1000, 2000, 10, 1, 1, 100, 0)
         sel = VcFilmSelection(use_vc=True, use_side_a=True, use_side_b=False)
         base = 1000 * 2000 * 10 / 10**6
-        self.assertAlmostEqual(vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE), base * 1.5)
+        self.assertAlmostEqual(vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE), base * 1.5 * 2.0)
 
     def test_side_b_only(self) -> None:
         dims = PackingDimensions(1, 1000, 2000, 10, 1, 1, 100, 0)
         sel = VcFilmSelection(use_vc=True, use_side_a=False, use_side_b=True)
         base = 1000 * 2000 * 10 / 10**6
-        self.assertAlmostEqual(vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE), base * 2.5)
+        self.assertAlmostEqual(vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE), base * 2.5 * 4.0)
 
-    def test_係数は掛からない(self) -> None:
-        """**この試験が落ちたら、VBAと数値が合わなくなっている。**"""
+    def test_係数1なら前と同じ数(self) -> None:
+        """現場のマスタは係数 1。掛けても前(VBA)と同じ数になる。"""
         dims = PackingDimensions(1, 1000, 2000, 10, 1, 1, 100, 0)
         sel = VcFilmSelection(use_vc=True, use_side_a=True, use_side_b=False)
         base = 1000 * 2000 * 10 / 10**6
-        got = vc_film_weight(dims, sel, self.VC_A_RATE, self.VC_B_RATE)
-        self.assertNotAlmostEqual(got, base * 1.5 * 2.0)
+        got = vc_film_weight(dims, sel, MaterialRate(unit_mass=1.5, coefficient=1.0))
+        self.assertAlmostEqual(got, base * 1.5)
 
     def test_vc_not_used_is_zero(self) -> None:
         dims = PackingDimensions(1, 1000, 2000, 10, 1, 1, 100, 0)

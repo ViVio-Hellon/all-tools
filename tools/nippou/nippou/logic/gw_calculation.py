@@ -166,11 +166,33 @@ def interleaf_base(dims: PackingDimensions) -> float:
     return dims.width_mm * dims.length_mm * (dims.count + 1) / 10**6
 
 
+#: ハードボードの厚み(mm)。上と下に1枚ずつ(現場の指定。v4.38.0)
+HARDBOARD_THICKNESS_MM = 5.0
+#: 蓋 + 桟の厚み(mm)(現場の指定。v4.38.0)
+LID_CLEAT_THICKNESS_MM = 40.0
+
+
+def vertical_band_height_mm(dims: PackingDimensions) -> float:
+    """縦バンドが回る高さ(mm)。**製品の山 + ハードボード上下 + 蓋・桟。**
+
+    縦バンドは蓋の桟の上を通り、端面を降りて、下のハードボードの下で締まります
+    (梱包図のとおり。パレットは通らない)。VBA は製品の山の高さ(板厚 × 積み枚数)
+    だけで、ハードボードと蓋・桟の厚みが入っていませんでした(v4.38.0 で足す)::
+
+        板厚 × 積み枚数 + ハードボード 5mm × 2 + 蓋・桟 40mm
+    """
+    return (dims.thickness_mm * stack_count(dims)
+            + HARDBOARD_THICKNESS_MM * 2 + LID_CLEAT_THICKNESS_MM)
+
+
 def band_lengths(dims: PackingDimensions) -> tuple[float, float]:
-    """バンドの長さ(mm)。(縦ぶん, 横ぶん)。"""
+    """バンドの長さ(mm)。(縦ぶん, 横ぶん)。
+
+    縦: (板丈 + 縦バンドが回る高さ) × 2 × 縦本数(:func:`vertical_band_height_mm`)
+    横: (板幅 × 列 + 梱包高さ(パレット含)) × 2 × 横本数
+    """
     itaretu = dims.stack_pattern
-    tumisuu = stack_count(dims)
-    band_l = (dims.length_mm + dims.thickness_mm * tumisuu) * 2 * dims.vertical_bands
+    band_l = (dims.length_mm + vertical_band_height_mm(dims)) * 2 * dims.vertical_bands
     band_w = ((dims.width_mm * itaretu) + dims.pack_height_mm) * 2 * dims.horizontal_bands
     return band_l, band_w
 
@@ -261,23 +283,16 @@ def vc_film_weight(
 ) -> float:
     """VCフィルム重量(kg)。両面/A片面/B片面/未使用の4パターン。
 
-    **他の資材と違い、係数を掛けない。** VBA の ``NewGW`` は VC だけ
-    ``検算VC_A.caption`` の値をそのまま使っていて、その caption は
-    ``ComboBox1_Change`` が **単位質量だけ**を入れている
-    (``UFGW.検算VC_A.caption = VCTempHiki(i, V_単位質量)``)。``NewGW`` の
-    VC の列検索も ``管理番号`` と ``品名`` しか拾っておらず、係数の列は
-    見ていない。
-
-    ``VC重量`` マスタには係数の列が**ある**ので、掛けるのが本来の意図
-    だった可能性はあります。ただ現場が使っている数値はVBAが出したもので、
-    掛ければそちらと合わなくなります。**移植では VBA に合わせます。**
-    掛けるべきだと分かったら :func:`_weight` に戻すだけです。
+    **ほかの資材と同じく係数を掛けます**(v4.38.0)。VBA の ``NewGW`` は VC だけ
+    単位質量しか使っていませんでした(マスタの係数が 1 なので省略していた ──
+    現場から)。式から意図が読み取れないので、式には入れておきます。係数 1 なら
+    数は変わりません。
     """
     if not selection.use_vc:
         return 0.0
     base = vc_film_base(dims)
-    a_value = base * vc_a_rate.unit_mass
-    b_value = base * vc_b_rate.unit_mass
+    a_value = _weight(base, vc_a_rate)
+    b_value = _weight(base, vc_b_rate)
     if selection.use_side_a and selection.use_side_b:
         return a_value + b_value
     if selection.use_side_a:

@@ -65,7 +65,7 @@ class Line:
     unit_mass: float = 0.0
     unit_mass_unit: str = ""
     coefficient: float = 1.0
-    #: 係数を掛けるか(VCだけ掛けない)
+    #: 係数を掛けるか(面ごとの係数が違う VC の行だけ、④では出さずに注記へ)
     uses_coefficient: bool = True
     source: str = ""
     weight: float = 0.0
@@ -272,10 +272,14 @@ def build(dims: gw.PackingDimensions, flags: gw.MaterialFlags,
               note="板と板のあいだ + 上下で、枚数より1枚多い"),
         _line("band", f"バンド({band_kind})" if band_kind else "バンド",
               used=flags.band, skipped="使用しない(チェックOFF)",
-              formula=("(縦: (板丈 + 板厚 × 積み枚数) × 2 × 縦本数"
+              formula=("(縦: (板丈 + 板厚 × 積み枚数 + ハードボード "
+                       f"{num(gw.HARDBOARD_THICKNESS_MM, 0)} × 2 + 蓋・桟 "
+                       f"{num(gw.LID_CLEAT_THICKNESS_MM, 0)}) × 2 × 縦本数"
                        " + 横: (板幅 × 列 + 梱包高さ) × 2 × 横本数) ÷ 1,000"),
               substituted=(
-                  f"(({num(length)} + {num(t)} × {num(tumisuu)}) × 2 × "
+                  f"(({num(length)} + {num(t)} × {num(tumisuu)} + "
+                  f"{num(gw.HARDBOARD_THICKNESS_MM, 0)} × 2 + "
+                  f"{num(gw.LID_CLEAT_THICKNESS_MM, 0)}) × 2 × "
                   f"{num(dims.vertical_bands)} + "
                   f"({num(w)} × {itaretu} + {num(dims.pack_height_mm)}) × 2 × "
                   f"{num(dims.horizontal_bands)}) ÷ 1,000"),
@@ -341,9 +345,10 @@ def build(dims: gw.PackingDimensions, flags: gw.MaterialFlags,
         f"{material_master}から引いた値です。",
         "÷1,000,000 は mm² を m² に、÷1,000 は mm を m に直す換算です"
         "(だから単位質量が kg/m² か kg/m かで意味が変わります)。",
-        "VCフィルムだけ係数を掛けません ── VBA の `NewGW` が"
-        "単位質量だけで計算していたためで、意図して合わせています。",
-        "梱包高さはバンド(横)にだけ効きます。ほかの資材の式には出てきません。",
+        "VCフィルムにも係数を掛けます(VBA は係数 1 のため省略していました)。",
+        "梱包高さ(パレット含)はバンド(横)にだけ効きます。バンド(縦)は製品の山に"
+        f"ハードボード上下({num(gw.HARDBOARD_THICKNESS_MM, 0)}mm × 2)と蓋・桟"
+        f"({num(gw.LID_CLEAT_THICKNESS_MM, 0)}mm)を足した高さを回ります(パレットは通りません)。",
         "パレット+蓋の重量は資材計に入らず、風袋総重量で足します。",
     ]
     if any(line.used and line.unit_mass == 0 for line in lines):
@@ -375,18 +380,21 @@ def _vc_line(dims, selection, a_rate, b_rate, name_a, name_b,
                     uses_coefficient=False)
 
     detail = " + ".join(
-        f"{side}: {num(base, 4)} m² × {num(rate.unit_mass, 4)} kg/m²"
+        f"{side}: {num(base, 4)} m² × {num(rate.unit_mass, 4)} kg/m² × 係数 {num(rate.coefficient, 3)}"
         f"({name or '(未選択)'})" for side, name, rate in sides)
+    # 面ごとの係数がそろっていれば ④ の行にそのまま出す(違えば注記の面ごとの式で見る)
+    coefficients = {rate.coefficient for _s, _n, rate in sides}
+    same = len(coefficients) == 1
     return Line(
         key="vc_film", label="VCフィルム", used=True,
-        formula="板幅 × 板丈 × 梱包締枚数 ÷ 1,000,000 × 単位質量(面ごと)",
+        formula="板幅 × 板丈 × 梱包締枚数 ÷ 1,000,000 × 単位質量 × 係数(面ごと)",
         substituted=(f"{num(dims.width_mm)} × {num(dims.length_mm)} × "
                      f"{num(dims.count)} ÷ 1,000,000"),
         base=base, base_unit=AREA[0],
         unit_mass=sum(rate.unit_mass for _s, _n, rate in sides),
         unit_mass_unit=AREA[1],
-        coefficient=1.0, uses_coefficient=False,
+        coefficient=next(iter(coefficients)) if same else 1.0, uses_coefficient=same,
         source=f"{vc_master}(" + " / ".join(
             f"{side} {name or '(未選択)'}" for side, name, _r in sides) + ")",
         weight=weight,
-        note=detail + " ── 係数は掛けません(VBAに合わせています)")
+        note=detail)

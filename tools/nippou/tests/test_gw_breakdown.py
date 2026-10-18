@@ -179,16 +179,18 @@ class SkippedTests(unittest.TestCase):
 class VcTests(unittest.TestCase):
     """VCフィルムだけ**係数を掛けない**。"""
 
-    def test_係数を掛けないと書く(self) -> None:
+    def test_係数も掛けると書く(self) -> None:
+        """v4.38.0: VCにも係数を掛ける(式から意図が読み取れるように)。"""
         built, _w = build(
             vc=gw.VcFilmSelection(use_vc=True, use_side_a=True),
             vc_a=gw.MaterialRate(unit_mass=0.02, coefficient=9.9),
             vc_name_a="V325NW")
         line = line_of(built, "vc_film")
         self.assertTrue(line.used)
-        self.assertFalse(line.uses_coefficient)
-        self.assertIn("係数は掛けません", line.note)
-        self.assertNotIn("係数", line.last_step)
+        self.assertTrue(line.uses_coefficient)
+        self.assertIn("係数 9.9", line.note)
+        self.assertIn("係数", line.last_step)
+        self.assertIn("係数", line.formula)
 
     def test_文言に飾り記号を入れない(self) -> None:
         """そのまま画面に出る文字列。`**` は太字にならず、そう見える。"""
