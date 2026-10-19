@@ -119,6 +119,60 @@ def _aggregate_of(report_date: str, line: str, shift: str) -> dict:
 ALL_PAGES = "all"
 
 
+def save_paper(report_date: str, line: str, shift: str, pages=None, *,
+               generated_at: str = "") -> dict:
+    """その直の紙(印刷用HTML)を、出力先へ**ページごとに1ファイル**で残す(v4.39.0)。
+
+        共有へ保存実行時に一緒に残すようにしてください
+        「印刷」を押したときにも出力先へ HTML を保存するようにする
+
+    置き場所は「集計CSV・印刷用HTMLの出力パス」の
+    `<ライン>\\印刷\\<yyyy.mm>\\<dd>\\印刷_2026年8月3日_L-1_1直_1.html`
+    (`print_format.default_output_path`)。同じ直・同じページは**上書き**します(残るのは最新の紙)。
+    `pages` を省くと、その直の全ページを読み直します(`_all_pages`)。
+
+    **書けなくても止めない。** 返すのは `{"files": [...], "errors": [...], "dir": "..."}`。
+    呼んだ側が一言添えるだけで、印刷も共有への保存もそのまま進みます。
+    """
+    out: dict = {"files": [], "errors": [], "dir": ""}
+    try:
+        if pages is None:
+            pages, _why = _all_pages(report_date, line, shift)
+        if not pages:
+            return out
+        aggregate = _aggregate_of(report_date, line, shift)
+        stamps = _backfill_stamps(report_date, line, shift)
+        when = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for header, details in pages:
+            try:
+                path = print_format.default_output_path(SETTINGS.report_output_dir, header)
+                print_format.write_print_html(header, details, path, generated_at=when,
+                                              stamp=stamps.get(int(header.page), ""), **aggregate)
+                out["files"].append(str(path))
+                out["dir"] = str(path.parent)
+            except Exception as exc:              # noqa: BLE001 - 次のページへ
+                log.exception("印刷用HTMLを残せませんでした %s/%s/%s/%s",
+                              report_date, line, shift, header.page)
+                out["errors"].append(f"{header.page}ページ: {exc}")
+    except Exception as exc:                      # noqa: BLE001 - 印刷・保存は止めない
+        log.exception("印刷用HTMLを残せませんでした %s/%s/%s", report_date, line, shift)
+        out["errors"].append(str(exc))
+    return out
+
+
+def saved_note(result: dict) -> str:
+    """`save_paper` の結果を一言に。残さなかった(ページが無い)なら空。"""
+    files, errors = result.get("files") or [], result.get("errors") or []
+    if errors and not files:
+        return f"印刷用HTMLを出力先へ残せませんでした: {errors[0]}"
+    if not files:
+        return ""
+    text = f"印刷用HTMLを {len(files)}ページぶん残しました: {result.get('dir', '')}"
+    if errors:
+        text += f"(残せなかったページ: {'・'.join(errors)})"
+    return text
+
+
 def _page_rows(line: str) -> list[dict]:
     """一覧のもとになる**そのラインの**ページ1行ずつ。**未送信を先に、そのあと新しい順。**
 
@@ -461,6 +515,9 @@ def report():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     aggregate = _aggregate_of(report_date, line, shift)
     stamps = _backfill_stamps(report_date, line, shift)
+    # 日報入力の「印刷」から開いたときは、出力先へも残す(`save=1`。v4.39.0)。
+    # 記録を見るの「紙を見る」・紙の札は見るだけなので残さない
+    keep = str(args.get("save", "")).strip() == "1"
 
     if _wants_all(args):
         pages, why = _all_pages(report_date, line, shift)
@@ -468,9 +525,10 @@ def report():
             return _missing(report_date, line, shift, why)
         log_button_click("print_report", line=line,
                          extra=f"{report_date}/{shift}/全{len(pages)}ページ")
+        note = saved_note(save_paper(report_date, line, shift, pages, generated_at=now)) if keep else ""
         return Response(
             print_format.build_shift_html(pages, generated_at=now, stamps=stamps,
-                                          **aggregate),
+                                          note=note, **aggregate),
             mimetype="text/html")
 
     _, loaded, _, why = _load_any(report_date, line, shift, page)
@@ -479,9 +537,10 @@ def report():
 
     header, details = loaded
     log_button_click("print_report", line=line, extra=f"{report_date}/{shift}/{page}")
+    note = saved_note(save_paper(report_date, line, shift, [loaded], generated_at=now)) if keep else ""
     return Response(
         print_format.build_print_html(header, details, generated_at=now,
-                                      stamp=stamps.get(int(page), ""), **aggregate),
+                                      stamp=stamps.get(int(page), ""), note=note, **aggregate),
         mimetype="text/html")
 
 

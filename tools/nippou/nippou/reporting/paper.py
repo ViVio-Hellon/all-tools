@@ -87,8 +87,8 @@ TOOLBAR_CSS = """
 def toolbar_html(hint: str) -> str:
     """紙の上の帯。**押すとブラウザの印刷の画面が出る**(Ctrl+P と同じ)。
 
-    外の JS を読まない形にしてあります ── 紙は「当直をDBから復旧」で
-    ファイルにも書き出され、ブラウザで直に開かれる(`file://`)ことがあるので。
+    外の JS を読まない形にしてあります ── 紙は「共有へ保存」「印刷」「当直をDBから復旧」で
+    ファイルにも書き出され(v4.39.0)、ブラウザで直に開かれる(`file://`)ことがあるので。
     """
     return (f'<div class="toolbar">\n'
             f'  <button type="button" onclick="window.print()">{PRINT_LABEL}</button>\n'

@@ -292,7 +292,7 @@ def _print_hint(pages: int) -> str:
     return f"A4 横1枚で刷れます。{close}"
 
 
-def _document(title: str, body: str, *, pages: int = 0) -> str:
+def _document(title: str, body: str, *, pages: int = 0, note: str = "") -> str:
     """紙1枚ぶん / 直ぶんに共通の外側。
 
     `pages` があれば、上に「印刷する」の帯を付けます(v4.6.0)── 以前は
@@ -300,6 +300,9 @@ def _document(title: str, body: str, *, pages: int = 0) -> str:
     紙には付いていた)。帯は紙に出ません。刷るものが無い窓には付けません。
     """
     toolbar = paper.toolbar_html(_print_hint(pages)) + "\n" if pages else ""
+    # 帯の下の一言(どこへ残したか。v4.39.0)。帯と同じく紙には出ない
+    if note:
+        toolbar += f'<div class="toolbar"><span class="hint">{_esc(note)}</span></div>\n'
     return f"""<!doctype html>
 <html lang="ja">
 <head>
@@ -413,6 +416,7 @@ def build_print_html(
     summary: Optional[PackingReport] = None,
     stops: Optional[Sequence[tuple[StopRow, int]]] = None,
     stamp: str = "",
+    note: str = "",
 ) -> str:
     """port of ``配列_OutPut``: 1件(報告日+ライン+直+ページ)の印刷用HTMLを組み立てる。
 
@@ -426,7 +430,7 @@ def build_print_html(
         _sheet_title(header),
         _sheet_html(header, details, generated_at=generated_at,
                     summary=summary, stops=stops, stamp=stamp),
-        pages=1)
+        pages=1, note=note)
 
 
 def build_shift_html(
@@ -436,6 +440,7 @@ def build_shift_html(
     summary: Optional[PackingReport] = None,
     stops: Optional[Sequence[tuple[StopRow, int]]] = None,
     stamps: Optional[dict[int, str]] = None,
+    note: str = "",
 ) -> str:
     """**1直ぶんを1つの窓に。** ページのあいだで改ページします。
 
@@ -460,7 +465,7 @@ def build_shift_html(
     head = pages[0][0]
     title = (f"日報 {head.report_date} {line_names.label(head.line)} {head.shift} "
              f"全{len(pages)}ページ")
-    return _document(title, body, pages=len(pages))
+    return _document(title, body, pages=len(pages), note=note)
 
 
 _UNSAFE_FILENAME_CHARS = '\\/:*?"<>|'
@@ -474,10 +479,11 @@ def write_print_html(
     generated_at: str = "",
     summary: Optional[PackingReport] = None,
     stops: Optional[Sequence[tuple[StopRow, int]]] = None,
+    stamp: str = "",
 ) -> Path:
     """印刷用HTMLをファイルへ書き出し、書き出し先を返す。"""
     html_text = build_print_html(header, details, generated_at=generated_at,
-                                 summary=summary, stops=stops)
+                                 summary=summary, stops=stops, stamp=stamp)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html_text, encoding="utf-8")
     return out_path

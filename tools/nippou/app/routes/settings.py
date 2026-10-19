@@ -886,7 +886,7 @@ def _push(ctx):
     #
     # 2つ目は見る人とアクセス権の違う所なので、共有へ送った中身だけを
     # 出します(`services/second_output`)。届かなくても保存は成功のまま
-    job_progress.step(phase=progress_logic.PHASE_AFTER, total=3, done=0,
+    job_progress.step(phase=progress_logic.PHASE_AFTER, total=4, done=0,
                       label="集計CSV(2つ目の出力先)")
     sent = _second_output(lambda: second_output.after_push(
         get_repo(), summary.succeeded))
@@ -905,7 +905,16 @@ def _push(ctx):
         get_repo(), summary.succeeded, SETTINGS.standard_time_db_path))
     if standard.message:
         lines.append(standard.message)
-    job_progress.step(done=3)
+    # **送れた直の紙(印刷用HTML)を、出力先へ残す**(v4.39.0)。
+    #
+    #     共有へ保存実行時に一緒に残すようにしてください
+    #
+    # 送り切れた直ごとに全ページ。書けなくても保存は成功のまま(一言添えるだけ)
+    job_progress.step(done=3, label="印刷用HTML")
+    paper = _paper_after_push(summary)
+    if paper:
+        lines.append(paper)
+    job_progress.step(done=4)
 
     # **保存が済んでから月替わりを見る。** VBA も印刷保存の最後に
     # 置いていました ── 送っていないページがあるうちに片付け始めない
@@ -937,6 +946,36 @@ def _push(ctx):
         "standard_time": standard.as_dict(),
         "message": "\n".join(lines + roll_lines),
     })
+
+
+def _paper_after_push(summary) -> str:
+    """共有へ送り切れた直の紙を出力先へ残して、一言を返す(`printing.save_paper`)。"""
+    from nippou.logic import push_scope
+
+    from .printing import save_paper
+
+    failed = {tuple(o.key[:3]) for o in summary.failed}
+    shifts = [k for k in push_scope.oldest_first(tuple(k[:3]) for k in summary.succeeded)
+              if k not in failed]
+    if not shifts:
+        return ""
+    files: list[str] = []
+    errors: list[str] = []
+    folders: list[str] = []
+    for report_date, line, shift in dict.fromkeys(shifts):
+        got = save_paper(report_date, line, shift)
+        files += got["files"]
+        errors += [f"{report_date} {shift} {e}" for e in got["errors"]]
+        if got["dir"] and got["dir"] not in folders:
+            folders.append(got["dir"])
+    if errors and not files:
+        return f"印刷用HTMLを出力先へ残せませんでした: {errors[0]}"
+    if not files:
+        return ""
+    text = f"印刷用HTML: {len(files)}ページを残しました({'、'.join(folders)})"
+    if errors:
+        text += f"。残せなかったページ: {'・'.join(errors)}"
+    return text
 
 
 def _standard_time(write) -> "standard_time.Outcome":

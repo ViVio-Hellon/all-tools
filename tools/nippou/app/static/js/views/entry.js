@@ -3488,9 +3488,10 @@ export function start() {
   */
   document.getElementById("print-page")?.addEventListener("click", (event) => {
     const b = event.currentTarget.dataset;
+    // `save: 1` ── 出力先へも印刷用HTMLを残す(v4.39.0。紙の札・記録を見るは見るだけ)
     const q = new URLSearchParams({
       report_date: b.reportDate || "", line: b.line || "",
-      shift: b.shift || "", page: "all",
+      shift: b.shift || "", page: "all", save: "1",
     }).toString();
     openPage(tokenUrl(`/report/nippou?${q}`), "日報の紙");
   });
