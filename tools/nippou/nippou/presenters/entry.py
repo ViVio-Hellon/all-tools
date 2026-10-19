@@ -713,6 +713,9 @@ def break_entries(state: GridState, *, window: Optional[tuple[int, int]] = None,
             "empty": wanted and not text,
             # 作業停止に打った休憩の分(時刻を書く手がかり)
             "minutes": f"{minutes:g}" if minutes else "",
+            # 休憩(記号 0)の分の欄(①〜⑤のどれか)。1つなら窓で分を聞いてそこへ入れる(v4.38.1)
+            "minute_fields": [m for c, m in constants.STOP_SLOTS
+                              if str(values.get(c, "") or "").strip() == break_time.REST_STOP_CODE],
             "problems": break_time.problems(values, window=window, shift=shift, others=others),
         })
     return out

@@ -1307,15 +1307,23 @@
     </div>
     <div class="modal__body">
       <p class="lead" id="break-why">作業停止で休憩を選んでいます。</p>
+      {# **先に分、次に時刻**(v4.38.1)。時刻だけ入れて満足し、分を入れ忘れることがあるため。
+         分が先にあれば、時刻の長さと合っているかもその場で確かめられる #}
       <div class="field">
-        <label for="break-text">何時から何時まで</label>
+        <label for="break-minutes">① 休憩の分</label>
+        <input id="break-minutes" type="text" inputmode="numeric" size="6" placeholder="例: 60">
+        <span class="lead" id="break-minutes-note"></span>
+      </div>
+      <div class="field">
+        <label for="break-text">② 何時から何時まで</label>
         <input id="break-text" type="text" size="16" placeholder="例: 11:30〜12:30">
       </div>
+      <ul class="msg msg--error" id="break-problems" hidden></ul>
       <p class="lead">11:30〜12:30・11:30-12:30・1130-1230 のどれでも書けます。休憩が2つなら「10:00〜10:10、12:00〜12:50」。</p>
     </div>
     <div class="modal__foot">
       <button class="btn" type="button" data-close="break-modal">やめる</button>
-      <button class="btn btn--primary" type="button" id="break-apply">休憩の時刻へ入れる</button>
+      <button class="btn btn--primary" type="button" id="break-apply">休憩の分と時刻を入れる</button>
     </div>
   </div>
 </div>

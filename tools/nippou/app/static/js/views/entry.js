@@ -1258,6 +1258,14 @@ function paintReason(view, since = null) {
   1度だけポップアップ。休憩でなくなった行は忘れる)。ありえない時刻はサーバの保存(確定)が断る。
 */
 const breakAsked = new Set();
+/** 窓で入れた行(サーバの確かめが返ったら、合わなければもう一度聞く) */
+let breakCheckRow = null;
+/** 窓で入れたときの打った番号。これより前に頼んだ返事(古い返事)では窓を出さない */
+let breakEditSeq = 0;
+/** 行ごとに、いま出ている「合わないところ」(新しく合わなくなったかを見る) */
+const breakProblemSeen = new Map();
+/** 開いてから1回は塗った(読み込んだだけの合わないところでは窓を出さない) */
+let breakSeeded = false;
 
 function paintBreak(view, since = null) {
   const host = document.getElementById("break-rows");
@@ -1338,23 +1346,85 @@ function paintBreak(view, since = null) {
   for (const row of present) breakAsked.add(row);
   // 理由のポップアップが開いていれば重ねない(次の答えで聞く)
   const reasonOpen = !document.getElementById("reason-modal")?.hidden;
-  if (fresh && reasonOpen) breakAsked.delete(String(fresh.row));
-  else if (fresh) askBreak(fresh);
+  const breakOpen = !document.getElementById("break-modal")?.hidden;
+  if (fresh && (reasonOpen || breakOpen)) breakAsked.delete(String(fresh.row));
+  else if (fresh) { askBreak(fresh); return; }
+
+  // **合わないまま素通りさせない**(v4.38.1)。窓で入れた直後に合わなければ、もう一度
+  // 窓を出す。あとから表の分だけ打ち直して合わなくなったときも、新しく合わなくなった
+  // 行は窓で知らせる(下の一覧の赤だけでは見落とす)。開いた直後(読み込んだだけ)は出さない
+  // 窓で入れる前に頼んだ返事が遅れて着いたときは、古い値の「合わない」なので見送る
+  // (入れ直した直後に古い返事で窓が開き直り、閉じられなくなるのを防ぐ)
+  if (since !== null && since < breakEditSeq) return;
+  const checked = breakCheckRow;
+  breakCheckRow = null;
+  let ask = null;
+  for (const entry of entries) {
+    const row = String(entry.row);
+    const sig = (entry.problems || []).join("\n");
+    const before = breakProblemSeen.get(row);
+    breakProblemSeen.set(row, sig);
+    if (!sig || ask) continue;
+    if (row === checked || (breakSeeded && sig !== before)) ask = entry;
+  }
+  for (const row of [...breakProblemSeen.keys()]) {
+    if (!present.has(row)) breakProblemSeen.delete(row);
+  }
+  breakSeeded = true;
+  const typingBreak = document.activeElement?.dataset?.break;
+  if (ask && !reasonOpen && !breakOpen && !typingBreak) askBreak(ask, ask.problems);
 }
 
-function askBreak(entry) {
+function askBreak(entry, problems = []) {
   const text = document.getElementById("break-text");
+  const minutes = document.getElementById("break-minutes");
+  const note = document.getElementById("break-minutes-note");
   const why = document.getElementById("break-why");
+  const list = document.getElementById("break-problems");
   if (!text || !entry) return;
   text.dataset.row = String(entry.row);
   text.value = document.getElementById(`break-${entry.row}`)?.value || "";
+  // **先に分**。休憩(0)の欄が1つなら、窓でその欄の分を聞く。2つ以上に分けて打って
+  // あるときは合計を見せるだけ(どの欄へ入れるか決められないので、表で直す)
+  const fields = entry.minute_fields || [];
+  if (minutes) {
+    minutes.dataset.field = fields.length === 1 ? fields[0] : "";
+    minutes.value = entry.minutes || "";
+    minutes.readOnly = fields.length !== 1;
+  }
+  if (note) {
+    note.textContent = fields.length > 1
+      ? `(休憩を ${fields.length} つの欄に分けて打っています。分は表の欄で直してください)` : "分";
+  }
   if (why) {
-    why.textContent = `${entry.label}の作業停止で休憩${entry.minutes ? `(${entry.minutes} 分)` : ""}を選んでいます。`
-      + "何時から何時まで休みましたか。";
+    why.textContent = `${entry.label}の作業停止で休憩を選んでいます。`
+      + "先に①休憩の分、次に②何時から何時まで休んだかを入れてください。";
+  }
+  if (list) {
+    list.replaceChildren(...(problems || []).map((p) => {
+      const li = document.createElement("li");
+      li.textContent = p;
+      return li;
+    }));
+    list.hidden = !(problems && problems.length);
   }
   openModal("break-modal");
-  text.focus();
-  text.select();
+  const first = minutes && !minutes.readOnly && (!minutes.value || (problems && problems.length))
+    ? minutes : text;
+  first.focus();
+  first.select();
+}
+
+/** 窓の中で断る(閉じない)。 */
+function breakRefuse(message, focusId) {
+  const list = document.getElementById("break-problems");
+  if (list) {
+    const li = document.createElement("li");
+    li.textContent = message;
+    list.replaceChildren(li);
+    list.hidden = false;
+  }
+  document.getElementById(focusId)?.focus();
 }
 
 function askReason(entry) {
@@ -2622,6 +2692,10 @@ export function start() {
   // 紙を開き直したら、聞いた行は忘れる(開いた紙の空の「その他」は1度だけ聞く)
   reasonAsked.clear();
   breakAsked.clear();
+  breakProblemSeen.clear();
+  breakSeeded = false;
+  breakCheckRow = null;
+  breakEditSeq = 0;
 
   markRow = 0;
   pickedHiki = "";
@@ -2754,14 +2828,37 @@ export function start() {
   // ---- 休憩の時刻 (休憩を選んだ行ごと。v4.37.0) ----
   document.getElementById("break-apply")?.addEventListener("click", () => {
     const text = document.getElementById("break-text");
+    const minutes = document.getElementById("break-minutes");
     const row = text?.dataset.row;
     const field = row && document.getElementById(`break-${row}`);
-    if (field && text) {
-      field.value = text.value.trim();
-      touched(field);
-      settle();
+    if (!field || !text) { closeModal("break-modal"); return; }
+    // ① 分(休憩の欄が1つのときだけ、ここで入れる)。数字でなければ閉じずに聞き直す
+    const target = minutes && !minutes.readOnly && minutes.dataset.field
+      ? document.getElementById(`${minutes.dataset.field}${row}`) : null;
+    if (target) {
+      const typed = String(minutes.value || "").normalize("NFKC").trim();
+      if (!/^\d+(\.\d+)?$/.test(typed) || Number(typed) <= 0) {
+        breakRefuse("① 休憩の分を数字で入れてください(例: 60)", "break-minutes");
+        return;
+      }
+      target.value = typed;
+      touched(target);
     }
+    // ② 時刻。空のままでは入れない(やめるときは「やめる」)
+    if (!text.value.trim()) {
+      breakRefuse("② 何時から何時までを入れてください(例: 11:30〜12:30)", "break-text");
+      return;
+    }
+    field.value = text.value.trim();
+    touched(field);
+    // サーバの確かめが返ったら、この行が合わなければもう一度窓を出す(`paintBreak`)
+    breakCheckRow = String(row);
+    breakEditSeq = editSeq;
     closeModal("break-modal");
+    settle();
+  });
+  document.getElementById("break-minutes")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); document.getElementById("break-text")?.focus(); }
   });
   document.getElementById("break-text")?.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); document.getElementById("break-apply")?.click(); }

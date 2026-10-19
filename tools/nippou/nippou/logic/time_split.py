@@ -115,12 +115,38 @@ def is_filled(values: dict[str, str]) -> bool:
     return any(str(values.get(f, "") or "").strip() for f in FILLED_FAMILIES)
 
 
-def row_stop_minutes(values: dict[str, str]) -> Decimal:
-    """その行の停止の分の合計(①〜⑤)。"""
+def is_rest(values: dict[str, str], code_family: str) -> bool:
+    """その停止の記号が休憩「0」か(全角の「０」も同じ)。"""
+    from .save_checks import REST_STOP_CODE, normalize
+
+    return normalize(str(values.get(code_family, "") or "")) == REST_STOP_CODE
+
+
+def row_stop_minutes(values: dict[str, str], *, without_rest: bool = False) -> Decimal:
+    """その行の停止の分の合計(①〜⑤)。
+
+    `without_rest` なら休憩「0」の分は数えない(v4.38.1)。休憩の時間を飛ばす直では、休憩は
+    飛ばした時間そのもの ── 打ってある「0」まで数えると、休憩を2回数えてしまうので。
+    """
     from .work_time import stop_minutes
 
-    return sum((stop_minutes(str(values.get(f, "") or "")) for f in STOP_MINUTE_FAMILIES),
+    return sum((stop_minutes(str(values.get(minutes, "") or "")) for code, minutes in STOP_SLOTS
+                if not (without_rest and is_rest(values, code))),
                Decimal(0))
+
+
+def rest_slot(values: dict[str, str]) -> Optional[tuple[str, str]]:
+    """休憩を入れる欄(停止の記号, 分)。もう「0」があればその欄、無ければ空いている欄。
+
+    停止①〜⑤が埋まっていれば None(手で入れてもらう)。
+    """
+    for code, minutes in STOP_SLOTS:
+        if is_rest(values, code):
+            return code, minutes
+    for code, minutes in STOP_SLOTS:
+        if not str(values.get(code, "") or "").strip() and not str(values.get(minutes, "") or "").strip():
+            return code, minutes
+    return None
 
 
 def row_packs(values: dict[str, str]) -> Decimal:
