@@ -106,6 +106,9 @@ def create_app(*, token: Optional[str] = None,
     # **ロックを取ったあとにもう1度。** 待っているあいだに打てるタブが替わって
     # いたら、ここで断る(`_tab_refusal`)
     _register_tab_recheck(app)
+    # ほかのPCがマスタの時間用を直していたら読み直す(v4.39.1)。**直の変わり目を
+    # 確かめる前に**(新しい時刻で確かめる)。DBの接続を使うので `_register_db` の後
+    _register_shift_master_refresh(app)
     # **DBの次に置く。** 直を引くのに時間マスタを読むので、接続を用意する
     # フックより後でなければならない
     _register_rollover(app)
@@ -286,6 +289,30 @@ def _register_boot_gate(app: Flask) -> None:
 # 見に行かない道。**心拍と静的ファイルは素通しする** ── 20秒ごとに
 # 走る道でDBを開くと、何もしていない夜のあいだも開け閉てを続ける
 ROLLOVER_SKIP = ("/static/", "/api/alive", "/api/health", "/sound/")
+
+
+def _register_shift_master_refresh(app: Flask) -> None:
+    """**ほかのPCがマスタで直した直の時刻を、1分以内にこの端末へ**(v4.39.1)。
+
+    画面は1分ごとに見張り(`/api/shift/key`・自動確定・音)を叩くので、そのついでに
+    `services/shift_times.refresh_if_changed` を通します(30秒に1回まで・ファイルの
+    更新時刻を見るだけ)。手元のDBへ写すときだけ書き込みのロックを取る(取れなければ次の要求で)。
+    **ここで何があっても要求は通します**(前の時刻のまま動くだけ)。
+    """
+
+    @app.before_request
+    def _refresh_shift_master():                # noqa: ANN202 - Flaskのフック
+        if not app.config["READY"]:
+            return None
+        if request.path.startswith(ROLLOVER_SKIP):
+            return None
+        try:
+            from nippou.services import shift_times
+
+            shift_times.refresh_if_changed(get_repo(), guard=_WRITE_LOCK)
+        except Exception:                       # noqa: BLE001 - 要求は通す
+            log.exception("マスタの直の時間を読み直せませんでした")
+        return None
 
 
 def _register_rollover(app: Flask) -> None:
