@@ -122,27 +122,69 @@ def is_rest(values: dict[str, str], code_family: str) -> bool:
     return normalize(str(values.get(code_family, "") or "")) == REST_STOP_CODE
 
 
-def row_stop_minutes(values: dict[str, str], *, without_rest: bool = False) -> Decimal:
+def row_stop_minutes(values: dict[str, str], *, minus: Decimal = Decimal(0)) -> Decimal:
     """その行の停止の分の合計(①〜⑤)。
 
-    `without_rest` なら休憩「0」の分は数えない(v4.38.1)。休憩の時間を飛ばす直では、休憩は
-    飛ばした時間そのもの ── 打ってある「0」まで数えると、休憩を2回数えてしまうので。
+    `minus` はそこから引く分(v4.38.1)。休憩の時間を飛ばす直では、決まった休憩を打った分
+    (`RestParts.lunch_minutes`)を引く ── 休憩は飛ばした時間そのものなので、打ってある「0」まで
+    数えると休憩を2回数えてしまう。
     """
     from .work_time import stop_minutes
 
-    return sum((stop_minutes(str(values.get(minutes, "") or "")) for code, minutes in STOP_SLOTS
-                if not (without_rest and is_rest(values, code))),
-               Decimal(0))
+    total = sum((stop_minutes(str(values.get(f, "") or "")) for f in STOP_MINUTE_FAMILIES), Decimal(0))
+    return max(total - minus, Decimal(0))
 
 
-def rest_slot(values: dict[str, str]) -> Optional[tuple[str, str]]:
-    """休憩を入れる欄(停止の記号, 分)。もう「0」があればその欄、無ければ空いている欄。
+@dataclass
+class RestParts:
+    """その行の休憩「0」の中身(v4.38.2)。"""
 
-    停止①〜⑤が埋まっていれば None(手で入れてもらう)。
+    #: 休憩「0」の分の合計(①〜⑤)
+    total: Decimal
+    #: 決まった休憩とは**別の休憩**の時刻(直の中で、決まった休憩と重ならないもの。9:00〜9:10 など)
+    separate: list = field(default_factory=list)
+    #: 書いてある時刻が全部、別の休憩か(この行の「0」は決まった休憩を含まない)
+    only_separate: bool = False
+
+    @property
+    def separate_minutes(self) -> int:
+        return sum(r.minutes for r in self.separate)
+
+    @property
+    def lunch_minutes(self) -> Decimal:
+        """決まった休憩を打ったものとみなす分(割り振りでは数えず、またぐ行へまとめる)。"""
+        if self.only_separate:
+            return Decimal(0)
+        return max(self.total - self.separate_minutes, Decimal(0))
+
+
+def rest_parts(values: dict[str, str], shift: str,
+               shift_window: Optional[tuple[int, int]] = None) -> RestParts:
+    """その行の休憩「0」を、決まった休憩(`BREAKS`)と別の休憩に分ける(v4.38.2)。
+
+    時刻が無い・読めない・決まった休憩と重なる・直の外(ありえない時刻)のものは、決まった
+    休憩を打ったものとみなします。直の中で決まった休憩と重ならない時刻だけが、別の休憩です。
+    ``shift_window`` は直の時間(0 時からの分。`break_time.shift_window`)。
     """
-    for code, minutes in STOP_SLOTS:
-        if is_rest(values, code):
-            return code, minutes
+    from . import break_time
+    from .work_time import stop_minutes
+
+    total = sum((stop_minutes(str(values.get(minutes, "") or "")) for code, minutes in STOP_SLOTS
+                 if is_rest(values, code)), Decimal(0))
+    found = BREAKS.get(shift)
+    if total <= 0 or not found:
+        return RestParts(total)
+    ranges = break_time.parse_all(str(values.get(break_time.ROW_FAMILY, "") or ""))
+    window = break_time.parse(f"{found[0]}〜{found[1]}")
+    if not ranges or window is None:
+        return RestParts(total)
+    separate = [r for r in ranges if not break_time.overlaps(r, window)
+                and (shift_window is None or break_time.inside(r, shift_window))]
+    return RestParts(total, separate, only_separate=len(separate) == len(ranges))
+
+
+def free_slot(values: dict[str, str]) -> Optional[tuple[str, str]]:
+    """停止①〜⑤のうち、記号も分も空いている欄。無ければ None。"""
     for code, minutes in STOP_SLOTS:
         if not str(values.get(code, "") or "").strip() and not str(values.get(minutes, "") or "").strip():
             return code, minutes

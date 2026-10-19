@@ -221,6 +221,16 @@ def _inside(r: BreakRange, window: tuple[int, int]) -> bool:
                for b in (r.start, r.start + DAY, r.start - DAY))
 
 
+def overlaps(a: BreakRange, b: BreakRange) -> bool:
+    """2つの休憩が重なるか(:func:`_overlap` の外向きの名前)。"""
+    return _overlap(a, b)
+
+
+def inside(r: BreakRange, window: tuple[int, int]) -> bool:
+    """休憩が窓(行・直)の中に収まるか(:func:`_inside` の外向きの名前)。"""
+    return _inside(r, window)
+
+
 def _overlap(a: BreakRange, b: BreakRange) -> bool:
     """2つの休憩が重なるか(時計の上で。端が接するだけは重ならない)。"""
     a0, a1 = a.start, a.start + a.minutes
