@@ -156,6 +156,13 @@ def _base_holiday(d: _dt.date) -> str:
 
     # -- 7月 --
     if m == 7:
+        if y == 2021:
+            # 五輪特措法(2021年に延期)により「海の日」7/22 /「スポーツの日」7/23 へ移動(VBA 版の後の改正)
+            if day == 22:
+                return "海の日"
+            if day == 23:
+                return "スポーツの日"
+            return ""
         if y >= 2021:
             return "海の日" if _nth_weekday(d) == "32" else ""
         if y == 2020:
@@ -173,6 +180,8 @@ def _base_holiday(d: _dt.date) -> str:
 
     # -- 8月 --
     if m == 8:
+        if y == 2021:
+            return "山の日" if day == 8 else ""  # 五輪特措法(延期)により移動。8/9 は振替休日
         if y >= 2021:
             return "山の日" if day == 11 else ""
         if y == 2020:
@@ -198,6 +207,8 @@ def _base_holiday(d: _dt.date) -> str:
 
     # -- 10月 --
     if m == 10:
+        if y == 2021:
+            return ""  # 五輪特措法(延期)により 7/23 へ移動
         if y >= 2021:
             return "スポーツの日" if _nth_weekday(d) == "22" else ""
         if y == 2020:

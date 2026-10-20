@@ -52,6 +52,19 @@ class HolidayTest(unittest.TestCase):
         self.assert_holiday(2020, 10, 12, "")  # 移動したので祝日ではない
         self.assert_holiday(2020, 7, 20, "")  # 本来の海の日も祝日ではない
 
+    def test_2021_olympic_moves(self) -> None:
+        """五輪特措法(1年延期)による 2021 年の祝日移動(VER4.2.2。前は通常の日のままだった)。"""
+        self.assert_holiday(2021, 7, 22, "海の日")
+        self.assert_holiday(2021, 7, 23, "スポーツの日")
+        self.assert_holiday(2021, 8, 8, "山の日")
+        self.assert_holiday(2021, 8, 9, "振替休日")   # 8/8(日)の振替
+        self.assert_holiday(2021, 7, 19, "")          # 本来の海の日(第3月曜)
+        self.assert_holiday(2021, 8, 11, "")          # 本来の山の日
+        self.assert_holiday(2021, 10, 11, "")         # 本来のスポーツの日(第2月曜)
+        self.assert_holiday(2022, 7, 18, "海の日")     # 翌年からは元に戻る
+        self.assert_holiday(2022, 8, 11, "山の日")
+        self.assert_holiday(2022, 10, 10, "スポーツの日")
+
     def test_2019_imperial_transition(self) -> None:
         """2019 年の即位関連の休日。"""
         self.assert_holiday(2019, 4, 30, "国民の休日")

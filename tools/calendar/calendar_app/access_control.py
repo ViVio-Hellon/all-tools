@@ -110,12 +110,20 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+#: ``有効`` 列で「無効」と読む書き方(大文字小文字は見ない)。**看板・python-web-tools と同じ**
+#: (`kanban.access_control.parse_enabled`・python-web-tools `to_flag`)。VER4.2.2(統合 1.5.36)で揃えました ──
+#: 前はカレンダーだけ「FALSE」「off」「×」「no」を有効と読み、同じ共有の表で答えが割れていた
+DISABLED_WORDS: tuple[str, ...] = ("0", "false", "no", "n", "×", "x", "無効", "off")
+
+
+def parse_enabled(value: Any) -> bool:
+    """``有効``。空・NULL は有効(列の既定が 1 のため)。はっきり無効と書いたものだけ無効。"""
+    return _text(value).casefold() not in DISABLED_WORDS
+
+
 def _enabled(value: Any) -> bool:
-    """``有効``。空・NULL は有効(列の既定が 1 のため)。"""
-    text = _text(value)
-    if text == "":
-        return True
-    return text not in ("0", "False", "false", "無効")
+    """`parse_enabled` の前からの名前(読み方は1か所)。"""
+    return parse_enabled(value)
 
 
 def load_rules(conn: sqlite3.Connection) -> list[Rule]:

@@ -422,7 +422,11 @@ def to_uri(path: Path) -> str:
     """``file:`` の URI にする。UNC(``\\\\サーバ\\共有``)にも対応する。"""
     text = str(path).replace("\\", "/")
     if text.startswith("//"):                     # UNC
-        return "file:" + quote(text, safe="/:")
+        # ``file:////サーバ/共有/…``(VER4.2.2)。前の ``file://サーバ/…`` は、sqlite がサーバ名を
+        # URI のホストとして読んで断っていた(invalid uri authority)。ふだんの開き方は素のパスへ
+        # 逃げて通っていたが、控えを取る道(`_backup_consistent`)には逃げ道が無く、整合の取れない
+        # ファイルの写しになっていた。入口(`portal/shared_db.py`)・日報と同じ形
+        return "file://" + quote(text, safe="/:")
     if len(text) > 1 and text[1] == ":":          # C:/... のドライブ
         return "file:/" + quote(text, safe="/:")
     return "file:" + quote(text, safe="/:")
