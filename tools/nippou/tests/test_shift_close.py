@@ -7,7 +7,8 @@ VBA は1分タイマー(`Application.OnTime` → `CheckPrintReminder`)で
 
 をやっていました。こちらは**紙を作業者が欲しいときだけ**出すものに
 したので、残り5分でやるのは「締める」ことです ── チェック → 集計の
-作り直し → 締めた印、まで。**紙は1枚も出しません。**
+作り直し → 締めた印、まで。**紙は刷りません**(共有へ送れたときだけ、手で押したときと
+同じく印刷用HTMLを出力先へ残す。v4.39.2 ── `test_push_flow`)。
 
 ここで確かめるのは:
 
@@ -72,6 +73,16 @@ class ShiftCloseTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
+        # 送ったあとの後始末(紙・月替わり・標準作業時間。v4.39.2 から自動確定でも走る)が
+        # **本物のフォルダへ書かない**ように、置き場所をこの一時フォルダへ向ける
+        import os
+        from unittest.mock import patch as _patch
+        env = _patch.dict(os.environ, {
+            "NIPPOU_APP_DIR": str(self.tmp / "app"), "NIPPOU_LOCAL_DIR": str(self.tmp / "local"),
+            "NIPPOU_ACCESS_DIR": str(self.tmp / "access"), "NIPPOU_MONTHLY_DIR": str(self.tmp / "monthly"),
+            "NIPPOU_GW_REF_DIR": str(self.tmp / "ref")})
+        env.start()
+        self.addCleanup(env.stop)
 
         from nippou.db.connection import connect
         from nippou.db.repository import NippouRepository
@@ -200,14 +211,15 @@ class RunTests(ShiftCloseTestCase):
         result = self.run_auto()
         self.assertEqual(result.pages, 2)
 
-    def test_紙は1枚も作らない(self) -> None:
-        """**ここがいちばん大事。** 紙は「印刷」ボタンからだけ。"""
+    def test_締めるだけでは紙を作らない(self) -> None:
+        """紙は「印刷」ボタンと、共有へ送れたときだけ(v4.39.2)。送っていない締めでは作らない。"""
         from nippou.reporting import print_format
 
         self.save()
         with patch.object(print_format, "write_print_html") as writer:
             result = self.run_auto()
         self.assertTrue(result.ran)
+        self.assertEqual(result.pushed, 0, "この試験では共有へ送っていない")
         writer.assert_not_called()
 
     def test_締めた印が立つ(self) -> None:

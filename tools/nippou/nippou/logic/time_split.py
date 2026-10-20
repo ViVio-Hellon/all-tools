@@ -67,6 +67,9 @@ from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Optional, Sequence
 
+from .. import constants
+from . import break_time
+
 #: 区切りの刻み(分)。1 行に渡る分がこれより短いときは 1 分刻み
 STEP = 5
 
@@ -77,14 +80,13 @@ FILLED_FAMILIES: tuple[str, ...] = (
 )
 
 #: 停止の分の欄(①〜⑤)
-STOP_MINUTE_FAMILIES: tuple[str, ...] = ("TH", "THS", "THT", "TH4", "TH5")
+STOP_MINUTE_FAMILIES: tuple[str, ...] = constants.STOP_TIME_FAMILIES
 
-#: 停止の(記号, 分)の欄の組(①〜⑤)。休憩を入れる空きを探す
-STOP_SLOTS: tuple[tuple[str, str], ...] = (
-    ("S", "TH"), ("SS", "THS"), ("STH", "THT"), ("S4", "TH4"), ("S5", "TH5"))
+#: 停止の(記号, 分)の欄の組(①〜⑤)。休憩を入れる空きを探す。**組は `constants.STOP_SLOTS` の1か所**
+STOP_SLOTS: tuple[tuple[str, str], ...] = constants.STOP_SLOTS
 
-#: 休憩を入れる停止の記号(`作業停止時間内訳_1` の「休憩食事」。`save_checks.REST_STOP_CODE` と同じ)
-REST_CODE = "0"
+#: 休憩を入れる停止の記号(`作業停止時間内訳_1` の「休憩食事」。`break_time.REST_STOP_CODE` の1か所)
+REST_CODE = break_time.REST_STOP_CODE
 
 #: 直ごとの休憩(始まり, 終わり)。割り振りではこの時間を飛ばす
 BREAKS: dict[str, tuple[str, str]] = {
@@ -116,10 +118,8 @@ def is_filled(values: dict[str, str]) -> bool:
 
 
 def is_rest(values: dict[str, str], code_family: str) -> bool:
-    """その停止の記号が休憩「0」か(全角の「０」も同じ)。"""
-    from .save_checks import REST_STOP_CODE, normalize
-
-    return normalize(str(values.get(code_family, "") or "")) == REST_STOP_CODE
+    """その停止の記号が休憩「0」か(全角の「０」も同じ。決めるのは `break_time.is_rest_code`)。"""
+    return break_time.is_rest_code(values.get(code_family, ""))
 
 
 def row_stop_minutes(values: dict[str, str], *, minus: Decimal = Decimal(0)) -> Decimal:

@@ -42,8 +42,21 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from .. import constants
 
-#: 休憩の記号。停止理由マスタの「休憩食事」(`logic/save_checks.REST_STOP_CODE` と同じ)
+#: 休憩の記号。停止理由マスタの「休憩食事」。**休憩かどうかは `is_rest_code` の1か所で決める**
+#: (`save_checks`・`time_split`・`presenters/entry`・`packing_agg` もここを使う。v4.39.2)
 REST_STOP_CODE = "0"
+
+
+def is_rest_code(code: object) -> bool:
+    """停止の記号が休憩「0」か。**全角の「０」・前後や間の空白も休憩**(v4.39.2)。
+
+    前は、時間の割り振りと保存の確かめは全角の「０」を休憩とみなし、休憩の時刻の確かめと
+    休憩の時刻の欄は休憩でないとみなしていました(同じ行で答えが割れる)。そろえ方は
+    保存の確かめが停止の記号を比べるときと同じ(`save_checks.normalize`。VBA `NormalizeValue`)。
+    """
+    from .save_checks import normalize
+
+    return normalize(str(code or "")) == REST_STOP_CODE
 
 #: 行の値に持つ欄の名前(`presenters/entry.EXTRA_FAMILIES`・`daily_detail.break_range`)
 ROW_FAMILY = "break_range"
@@ -169,20 +182,20 @@ def break_minutes(values: Mapping[str, str]) -> float:
     """その行で休憩(記号 0)に打った分の合計(作業停止①〜⑤)。"""
     return sum(_number(values.get(minute_family, ""))
                for code_family, minute_family in constants.STOP_SLOTS
-               if str(values.get(code_family, "") or "").strip() == REST_STOP_CODE)
+               if is_rest_code(values.get(code_family, "")))
 
 
 def other_stop_minutes(values: Mapping[str, str]) -> float:
     """その行の、休憩でない停止の分の合計。"""
     return sum(_number(values.get(minute_family, ""))
                for code_family, minute_family in constants.STOP_SLOTS
-               if str(values.get(code_family, "") or "").strip() not in ("", REST_STOP_CODE))
+               if str(values.get(code_family, "") or "").strip()
+               and not is_rest_code(values.get(code_family, "")))
 
 
 def has_break(values: Mapping[str, str]) -> bool:
     """その行の作業停止に休憩(記号 0)があるか。"""
-    return any(str(values.get(code, "") or "").strip() == REST_STOP_CODE
-               for code, _minutes in constants.STOP_SLOTS)
+    return any(is_rest_code(values.get(code, "")) for code, _minutes in constants.STOP_SLOTS)
 
 
 def row_span(values: Mapping[str, str]) -> Optional[tuple[int, int]]:

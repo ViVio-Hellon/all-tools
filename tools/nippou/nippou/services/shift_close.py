@@ -10,7 +10,9 @@
 レジストリの `yyyymmdd_<直名>` に入れた印刷時刻でした ── ここでは
 `print_status` の表が同じ役目をします。
 
-【紙は出しません ── 追いかける相手を「印刷」から「確定」に変えました】
+【紙は刷りません ── 追いかける相手を「印刷」から「確定」に変えました】
+(プリンタへは流しません。綺麗で共有へ送れたときは、手で押した「共有へ保存」と同じく、送った直の
+紙を**印刷用HTMLとして出力先へ残します**。v4.39.2、`services/push_flow`)
 VBA は実際にプリンタへ流していました。こちらは**紙を作業者が欲しいとき
 だけ出すもの**にしたので(「印刷」ボタンは別にあります)、直の終わりまでに
 済ませたいのは紙ではなく
@@ -119,6 +121,8 @@ class ShiftCloseResult:
     push_note: str = ""
     #: 締めた印(`print_status`)を残せたか。**残せなければ確定ではありません**
     marked: bool = True
+    #: 送ったあとの後始末の一言(紙を残した・月替わりを書き出した。v4.39.2)
+    after_note: str = ""
 
     @property
     def message(self) -> str:
@@ -143,6 +147,8 @@ class ShiftCloseResult:
         if self.push_note:
             # 送れた直と止めた直が両方あるとき(次の直の画面の拾い)は**両方書く**
             head += f"。{self.push_note}"
+        if self.after_note:
+            head += f"。{self.after_note}"
         return head + "。紙が要るときは「印刷」から出してください"
 
     def as_dict(self) -> dict:
@@ -151,6 +157,7 @@ class ShiftCloseResult:
                 "shift": self.shift, "minutes_left": self.minutes_left,
                 "pages": self.pages, "findings": self.findings,
                 "pushed": self.pushed, "push_note": self.push_note,
+                "after_note": self.after_note,
                 "marked": self.marked, "message": self.message}
 
 
@@ -400,7 +407,12 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
                                      ほかの直は送ります
 
     関門も同じ `shift_check.run_pending`(範囲の直だけ)。片方だけ緩いと、
-    機械は送れたのに人が押すと断られる(またはその逆)が起きます。
+    機械は送れたのに人が押すと断られる(またはその逆)が起きます。ただし**管理者の緩め**
+    (作業時間の上限をいちばん長い直で見る)は使いません ── 誰も見ていないところで、
+    手で押せば断られる直を送らないため(人が確かめて押せば送れます)。
+
+    **送る・後始末は手で押したときと同じ1本**(`services/push_flow`。v4.39.2)── 送っている
+    あいだ終わらせない守り、紙(印刷用HTML)、月替わりの書き出しも同じです。
     前は「未送信ぜんぶが綺麗なら」でした ── 前の直が1つ止まっていると、
     綺麗に終わった直まで自動では出ませんでした。
 
@@ -412,10 +424,8 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
     関門で止めたときは `record_blocked`。送るものが無かった・確かめられなかった
     (送ろうとしていない)ときは残しません。
     """
-    from ..access_bridge import pusher
-    from ..config import SETTINGS
     from ..logic import push_scope
-    from . import shift_check
+    from . import push_flow, shift_check
 
     try:
         pending = [(h.report_date, h.line, h.shift) for h in repo.pending_sync_headers()]
@@ -432,8 +442,8 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
     if blocked:
         names = "、".join(r.key_text for r in blocked)
         # 手で押して関門で止めたときと同じに残す(止められた直ごとに1行)
-        _keep_history(repo, lambda pressed: _history().record_blocked(
-            repo, pressed, blocked), sent_by)
+        push_flow.keep_history(repo, lambda: _history().record_blocked(
+            repo, _pressed(sent_by), blocked))
         if not (push_scope.holds_one_by_one(scope) and sendable):
             result.push_note = (f"直すところがあるので共有へは送っていません"
                                 f"({names})")
@@ -447,7 +457,7 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
         return
 
     try:
-        summary_ = pusher.push_pending(repo, SETTINGS.access_db_path, keys=sendable)
+        summary_ = push_flow.send(repo, sendable)
     except Exception as exc:                      # noqa: BLE001 - 締めは済んでいる
         log.exception("自動送信に失敗しました")
         result.push_note = f"共有へ送れませんでした({exc})"
@@ -462,51 +472,14 @@ def _push_if_clean(repo: NippouRepository, result: ShiftCloseResult,
         # 書き先が Access で④⑤を書けなかった(v4.36.0)。手で押したときと同じ知らせ
         result.push_note = f"{result.push_note}。{notice}" if result.push_note else notice
     if summary_.succeeded or summary_.failed:
-        # **送ったのだから履歴に載せる。** 数え方は手で押したときと同じ `record_push`
-        # (送った直ごとに1行)。何も送らなかったときは「送るもの無し」を作らない
-        _keep_history(repo, lambda pressed: _history().record_push(
-            repo, pressed, summary_, sent_by.current), sent_by)
-    if summary_.succeeded:
-        _after_push(repo, list(summary_.succeeded))
+        # **送ったのだから後始末も手で押したときと同じ**(`push_flow.after_push`)。履歴の数え方も
+        # 同じ `record_push`(送った直ごとに1行)。何も送らなかったときは「送るもの無し」を作らない
+        done = push_flow.after_push(repo, summary_, history=lambda: _history().record_push(
+            repo, _pressed(sent_by), summary_, sent_by.current))
+        roll_lines, _monthly = done.roll_lines()
+        result.after_note = "。".join(x for x in [done.paper, *roll_lines] if x)
 
 
-def _keep_history(repo: NippouRepository, record, sent_by: _Sender) -> None:
-    """共有保存の履歴を残し、共有の T_共有保存履歴 へ写す(`routes/settings._keep_history` と同じ)。
-
-    **何が起きても締め・送信の結果は変えません。** 写せなかった行は手元に
-    `shared=0` で残り、次に誰かが送ったとき(手でも自動でも)に写ります。
-    """
-    history = _history()
-    try:
-        record(history.Pressed.auto(sent_by.current, via=sent_by.via, at=sent_by.at))
-    except Exception:                             # noqa: BLE001 - 記録で締めを止めない
-        log.exception("自動送信: 共有保存の履歴を残せませんでした")
-        return
-    try:
-        history.share(repo, SETTINGS.access_db_path)
-    except Exception:                             # noqa: BLE001 - 次の保存で写す
-        log.exception("自動送信: 共有保存の履歴を共有へ写せませんでした")
-
-
-def _after_push(repo: NippouRepository, pushed_keys: list) -> None:
-    """**手で押した「共有へ保存」と同じ後始末**(標準作業時間・集計CSVの2つ目)。
-
-    自動で送った直は、ここを通っていませんでした。標準作業時間は「送れた直」
-    だけを写す作りなので、5分前の自動確定や翌朝の拾いで送られた直は
-    **いつまでも標準作業時間に入りません**でした(2つ目の出力先も同じ)。
-
-    共有保存の履歴(`push_history`)は `_push_if_clean` が残します(v4.34.2 から。
-    それまでは「押した記録だから」と残していませんでした)。
-    月替わりの書き出しはしません(VBA も自動印刷では飛ばしていた)。
-    **どちらが失敗しても、送れたことは変わりません。**
-    """
-    from . import second_output, standard_time
-
-    try:
-        standard_time.after_push(repo, pushed_keys, SETTINGS.standard_time_db_path)
-    except Exception:                             # noqa: BLE001 - 次の保存で写す
-        log.exception("自動送信のあと、標準作業時間へ写せませんでした")
-    try:
-        second_output.after_push(repo, pushed_keys)
-    except Exception:                             # noqa: BLE001 - 送れてはいる
-        log.exception("自動送信のあと、集計CSVの2つ目の出力先へ出せませんでした")
+def _pressed(sent_by: _Sender):
+    """自動の道の「押したとき」(共有保存の履歴に書く)。"""
+    return _history().Pressed.auto(sent_by.current, via=sent_by.via, at=sent_by.at)

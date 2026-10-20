@@ -37,7 +37,9 @@ log = get_logger("services.shift_times")
 _seen: dict[str, tuple[int, int]] = {}
 #: 変わったかを見るのは、これより間を空けて(秒)。画面の1分の見張りで足りる
 CHECK_EVERY = 30.0
-_checked_at: dict[str, float] = {}
+#: 最後に見に行ったとき(`time.monotonic`)。**間を空けるかの判断は設定もファイルも読まずに**
+#: (v4.39.2。前は毎回の要求で設定ファイルを読み、マスタの場所を確かめてから間を見ていた)
+_last_check: Optional[float] = None
 _lock = threading.Lock()
 
 
@@ -51,12 +53,13 @@ def _stamp(path: Path) -> Optional[tuple[int, int]]:
 
 def reset() -> None:
     """覚えている更新時刻を忘れる(試験用)。"""
+    global _last_check
     with _lock:
         _seen.clear()
-        _checked_at.clear()
+        _last_check = None
 
 
-def refresh_if_changed(repo: NippouRepository, *, now: Optional[float] = None,
+def refresh_if_changed(repo, *, now: Optional[float] = None,
                        guard=None) -> Optional[dict[str, tuple[str, str]]]:
     """**ほかのPCがマスタの時間用を直したら、この端末にも効かせる**(v4.39.1)。
 
@@ -75,24 +78,26 @@ def refresh_if_changed(repo: NippouRepository, *, now: Optional[float] = None,
     `guard` は手元のDBへ写すあいだ持つロック(書き込みのロック)。**少しだけ待って取れ
     なければ今回は見送り**、次の要求でまた見ます(共有へ保存のような長い書き込みの
     あいだ、画面の要求を待たせない)。
+
+    `repo` は手元のDB、または**それを返す関数**(読み直すときだけ開く。v4.39.2)。
     """
-    path = SETTINGS.transmission_master_path
-    key = str(path)
+    global _last_check
     t = time.monotonic() if now is None else now
     with _lock:
-        last = _checked_at.get(key)
-        if last is not None and t - last < CHECK_EVERY:
+        if _last_check is not None and t - _last_check < CHECK_EVERY:
             return None
-        _checked_at[key] = t
+        _last_check = t
+    path = SETTINGS.transmission_master_path
+    key = str(path)
     stamp = _stamp(path)
     if stamp is None or _seen.get(key) == stamp:
         return None
     if guard is not None and not guard.acquire(timeout=0.5):
         with _lock:
-            _checked_at.pop(key, None)            # 次の要求でもう一度
+            _last_check = None                    # 次の要求でもう一度
         return None
     try:
-        times = reload(repo)
+        times = reload(repo() if callable(repo) else repo)
     finally:
         if guard is not None:
             guard.release()

@@ -640,7 +640,7 @@ class WebTests(WebTestCase):
             return pusher.PushSummary(succeeded=list(keys))
         with patch("nippou.services.shift_check.run_pending", return_value=[]), \
                 patch("nippou.access_bridge.pusher.push_pending", side_effect=fake_push), \
-                patch("app.routes.settings._rollover_after_push", return_value=[]):
+                patch("nippou.services.push_flow.rollover_after_push", return_value=[]):
             return self.post("/api/settings/push", {})
 
     def db(self) -> Path:

@@ -216,6 +216,30 @@ class ShiftMasterReflectTests(flow.ScenarioCase):
         self.assertEqual(self.repo().get_shift_times()["1"], ("07:00", "15:30"), "次の要求で読み直す")
 
 
+    # -- 心拍では読み直さない(v4.39.2) -----------------------------------------
+    def test_心拍と進み具合では読み直さない(self) -> None:
+        """タブの心拍(5秒ごと)は書き込みのロックの外に置いた道。そこへ読み直しを持ち込まない。"""
+        self.start_shift("2026-10-05 07:05", "山田")
+        self.other_pc_edits("1", {"終了": "15:30"})
+        with patch("nippou.services.shift_times.reload") as reload:
+            for path in ("/api/tab/ping", "/api/progress", "/api/jobs"):
+                self.client.post(path, json={}) if path == "/api/tab/ping" else self.client.get(path)
+            reload.assert_not_called()
+        self.assertEqual(self.repo().get_shift_times()["1"], ("07:00", "15:00"))
+        self.look("2026-10-05 10:00", ROWS_1500)           # ふつうの要求では読み直す
+        self.assertEqual(self.repo().get_shift_times()["1"], ("07:00", "15:30"))
+
+    def test_間を空けているあいだは設定もDBも開かない(self) -> None:
+        from nippou.services import shift_times
+        self.start_shift("2026-10-05 07:05", "山田")
+        with patch.object(shift_times, "CHECK_EVERY", 3600.0):
+            self.look("2026-10-05 10:00", ROWS_1500)        # ここで見た
+            with patch.object(shift_times, "_stamp") as stamp, \
+                    patch("app.get_repo") as repo:
+                self.look("2026-10-05 10:01", ROWS_1500)
+            stamp.assert_not_called()                       # マスタのファイルを見に行かない
+            repo.assert_not_called()
+
 for _name in [n for n in dir(flow.ScenarioCase) if n.startswith("test_")]:
     setattr(ShiftMasterReflectTests, _name, None)
 

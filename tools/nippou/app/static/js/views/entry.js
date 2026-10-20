@@ -3101,8 +3101,13 @@ export function start() {
       はいと言われたら `confirm` を添えて同じ道へ投げ直す。**止めるのでは
       なく、確かめるだけ**なので、断り方は用意しない。
     */
-    const issue = (extra = {}) =>
-      api.post("/api/entry/newpage", { ...collect(), ...extra });
+    // **送る前の打った番号を覚える**(v4.39.2)。断られて画面を塗り直すとき、送ったあとに
+    // 打った欄は戻さない(ほかの道と同じ。前は断りを受けた時点の番号で、打った欄が戻り得た)
+    let sentAt = editSeq;
+    const issue = (extra = {}) => {
+      sentAt = editSeq;
+      return api.post("/api/entry/newpage", { ...collect(), ...extra });
+    };
     try {
       let body;
       try {
@@ -3123,7 +3128,7 @@ export function start() {
       refresh();
     } catch (err) {
       if (!live(mine)) return;
-      if (err.body) paint({ ...err.body, message: "" }, { since: editSeq });
+      if (err.body) paint({ ...err.body, message: "" }, { since: sentAt });
       // 発行も**確定の入口**なので、断りは「この直をチェック」と
       // 同じ場所へ。トーストだけだと、消えたあとに理由が残りません
       if (err.body?.check_findings?.length) {

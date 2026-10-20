@@ -48,8 +48,7 @@ from nippou.logic import progress as progress_logic
 from nippou.logic.shift import default_times_text
 from nippou.presenters import fs_browse
 from nippou.presenters import settings as settings_presenter
-from nippou.reporting import print_format
-from nippou.services import push_history, second_output, standard_time
+from nippou.services import push_flow, push_history, second_output, standard_time
 
 from .. import error_body, get_repo, shell
 
@@ -635,25 +634,14 @@ def restore_shift():
         return jsonify(error_body(
             "not_found", "DBにその当直のデータがありません")), 404
 
-    # 紙の頭に載せる集計。**1直ぶんなのでページごとに読み直さない**
-    from .printing import _aggregate_of
-    aggregate = _aggregate_of(report_date, line, shift)
+    # 紙(印刷用HTML)を出力先へ。**書く道は `printing.save_paper` の1か所**(v4.39.2)。
+    # 前はここに別の書き出しがあり、「後日作成」の印が載っていませんでした。
+    # 生成日時も載せます ── 現場に貼る紙なので、古いものが残っていても見分けが付くように
+    from .printing import save_paper
 
-    written: list[str] = []
-    for header, details in pages:
-        try:
-            out = print_format.default_output_path(
-                SETTINGS.report_output_dir, header)
-            # **生成日時を渡す。** 渡さないと紙の脚が「生成日時: 」で
-            # 終わり、いつ出した紙なのかが分からなくなります ── 現場に
-            # 貼る紙なので、古いものが残っていても見分けが付きません
-            written.append(str(print_format.write_print_html(
-                header, details, out,
-                generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                **aggregate)))
-        except Exception as exc:                  # noqa: BLE001 - 続けられるだけ続ける
-            log.exception("ページ%s の印刷用出力に失敗しました", header.page)
-            written.append(f"(ページ{header.page} は出力できませんでした: {exc})")
+    saved = save_paper(report_date, line, shift, pages)
+    written: list[str] = list(saved["files"])
+    written += [f"(出力できませんでした: {e})" for e in saved["errors"]]
 
     log_button_click("restore_shift", line=line,
                      extra=f"{report_date}/{shift}/{len(pages)}ページ")
@@ -670,7 +658,7 @@ def restore_shift():
 # ── つまり保存です。「反映」はソースの中の言い方(③反映)で、押す人の
 # 言葉ではありませんでした。日報入力の「保存(確定)」と紛れないよう、
 # 行き先まで名前に入れます。
-PUSH_ACTION = "共有への保存"
+PUSH_ACTION = push_flow.PUSH_ACTION      # 送る流れは `services/push_flow` の1本(v4.39.2)
 
 
 @bp.post("/api/settings/push")
@@ -688,7 +676,7 @@ def push():
 
     【出す前に確かめる ── VBA の印刷保存と同じ関門】
     VBA は直に1回の印刷保存のところで5つの手続き(いまの数えかたで
-    **7項目**)を通し、1つでも
+    **7項目**。いまは休憩の時刻を足して8項目)を通し、1つでも
     引っかかれば**保存そのものを止めて**いました。ここが同じ場所です:
     共有へ出てしまえば、他のラインも上の集計もそれを読みます。
 
@@ -764,7 +752,7 @@ def _push(ctx):
     if blocked and not held:
         log.info("共有への保存を断りました(%s): %d直に直すところがあります",
                  push_scope.label(scope) or "まとめて", len(blocked))
-        _keep_history(lambda: push_history.record_blocked(get_repo(), pressed, blocked))
+        push_flow.keep_history(get_repo(), lambda: push_history.record_blocked(get_repo(), pressed, blocked))
         message = shift_check.combined_message(reports)
         if scope == push_scope.SCOPE_PREVIOUS:
             # 過去分が**全部**エラーだった ── 送った直 0件 と先に言う
@@ -822,7 +810,7 @@ def _push(ctx):
         # 関門で止めたときと同じ `record_blocked`)
         log.info("前の直のうち%d直は直すところがあるので止め、%d直を送ります",
                  len(held), len(sendable))
-        _keep_history(lambda: push_history.record_blocked(get_repo(), pressed, held))
+        push_flow.keep_history(get_repo(), lambda: push_history.record_blocked(get_repo(), pressed, held))
         keys = sendable
     # **押す前に、送るものがあったかを数えておく。**
     #
@@ -838,12 +826,8 @@ def _push(ctx):
         except Exception:                         # noqa: BLE001 - 押せるように
             nothing_to_send = False
     try:
-        # **このあいだは終わらせない。** 途中で落ちると、ヘッダだけ送れて
-        # 明細が送れていない状態が**共有側に**残る。手元のSQLiteと
-        # 違って、そこは他のラインも読む場所(`nippou/running.py`)
-        with running.running(PUSH_ACTION):
-            summary = pusher.push_pending(get_repo(), SETTINGS.access_db_path,
-                                          keys=keys)
+        # **このあいだは終わらせない**(`push_flow.send`。自動確定も同じ道)
+        summary = push_flow.send(get_repo(), keys)
     except Exception as exc:                      # noqa: BLE001 - 自ラインを落とさない
         log.exception("共有への保存で予期しないエラーが発生しました")
         return jsonify(error_body(
@@ -880,47 +864,13 @@ def _push(ctx):
     if skipped:
         lines.append(f"※ {skipped}件を「{shift_check.SKIP_PHRASE}」で通しました")
 
-    # **送れた日を、集計CSVの2つ目の出力先へ。**
-    #
-    #     ２つ目に追加した出力先に出すタイミングは共有保存を押したタイミングに
-    #
-    # 2つ目は見る人とアクセス権の違う所なので、共有へ送った中身だけを
-    # 出します(`services/second_output`)。届かなくても保存は成功のまま
-    job_progress.step(phase=progress_logic.PHASE_AFTER, total=4, done=0,
-                      label="集計CSV(2つ目の出力先)")
-    sent = _second_output(lambda: second_output.after_push(
-        get_repo(), summary.succeeded))
-    if sent.text("送った日の集計CSV"):
-        lines.append(sent.text("送った日の集計CSV"))
-
-    # 押した記録を残して、共有の T_共有保存履歴 へも写す
-    job_progress.step(done=1, label="共有保存の履歴")
-    _keep_history(lambda: push_history.record_push(
+    # **後始末は自動確定と同じ1本**(`push_flow.after_push`。v4.39.2)── 2つ目の出力先・
+    # 共有保存の履歴・標準作業時間・紙(印刷用HTML)・月替わり。どれが失敗しても保存は成功のまま
+    done = push_flow.after_push(get_repo(), summary, history=lambda: push_history.record_push(
         get_repo(), pressed, summary, current))
-
-    # **送れた直の実績を、共有の 標準作業時間.sqlite3 へ。** 届かなければ
-    # 待ちに残して次の保存で写す(`services/standard_time`)
-    job_progress.step(done=2, label="標準作業時間")
-    standard = _standard_time(lambda: standard_time.after_push(
-        get_repo(), summary.succeeded, SETTINGS.standard_time_db_path))
-    if standard.message:
-        lines.append(standard.message)
-    # **送れた直の紙(印刷用HTML)を、出力先へ残す**(v4.39.0)。
-    #
-    #     共有へ保存実行時に一緒に残すようにしてください
-    #
-    # 送り切れた直ごとに全ページ。書けなくても保存は成功のまま(一言添えるだけ)
-    job_progress.step(done=3, label="印刷用HTML")
-    paper = _paper_after_push(summary)
-    if paper:
-        lines.append(paper)
-    job_progress.step(done=4)
-
-    # **保存が済んでから月替わりを見る。** VBA も印刷保存の最後に
-    # 置いていました ── 送っていないページがあるうちに片付け始めない
-    job_progress.step(phase=progress_logic.PHASE_MONTH)
-    rolls = _rollover_after_push(summary)
-    roll_lines, monthly = _roll_lines(rolls)
+    lines.extend(done.lines())
+    sent, standard, rolls = done.second, done.standard, done.rolls
+    roll_lines, monthly = done.roll_lines()
 
     from nippou.logic import sound
 
@@ -946,45 +896,6 @@ def _push(ctx):
         "standard_time": standard.as_dict(),
         "message": "\n".join(lines + roll_lines),
     })
-
-
-def _paper_after_push(summary) -> str:
-    """共有へ送り切れた直の紙を出力先へ残して、一言を返す(`printing.save_paper`)。"""
-    from nippou.logic import push_scope
-
-    from .printing import save_paper
-
-    failed = {tuple(o.key[:3]) for o in summary.failed}
-    shifts = [k for k in push_scope.oldest_first(tuple(k[:3]) for k in summary.succeeded)
-              if k not in failed]
-    if not shifts:
-        return ""
-    files: list[str] = []
-    errors: list[str] = []
-    folders: list[str] = []
-    for report_date, line, shift in dict.fromkeys(shifts):
-        got = save_paper(report_date, line, shift)
-        files += got["files"]
-        errors += [f"{report_date} {shift} {e}" for e in got["errors"]]
-        if got["dir"] and got["dir"] not in folders:
-            folders.append(got["dir"])
-    if errors and not files:
-        return f"印刷用HTMLを出力先へ残せませんでした: {errors[0]}"
-    if not files:
-        return ""
-    text = f"印刷用HTML: {len(files)}ページを残しました({'、'.join(folders)})"
-    if errors:
-        text += f"。残せなかったページ: {'・'.join(errors)}"
-    return text
-
-
-def _standard_time(write) -> "standard_time.Outcome":
-    """標準作業時間へ写す。**何が起きても保存の結果は返す。**"""
-    try:
-        return write()
-    except Exception as exc:                      # noqa: BLE001 - 次の保存で写す
-        log.exception("標準作業時間へ写せませんでした")
-        return standard_time.Outcome(error=str(exc))
 
 
 def _sent_shifts(summary) -> list[str]:
@@ -1089,77 +1000,6 @@ def _pressed(ctx, reports, worker=None, *, scope: str = ""):
                                     via=via), ("", ctx.line, "")
 
 
-def _keep_history(record) -> None:
-    """共有保存の履歴を残し、共有へ写す。**何が起きても保存の結果は返す。**"""
-    try:
-        record()
-    except Exception:                             # noqa: BLE001 - 記録で保存を止めない
-        log.exception("共有保存の履歴を残せませんでした")
-        return
-    try:
-        push_history.share(get_repo(), SETTINGS.access_db_path)
-    except Exception:                             # noqa: BLE001 - 次の保存で写す
-        log.exception("共有保存の履歴を共有へ写せませんでした")
-
-
-def _roll_lines(rolls) -> tuple[list[str], "second_output.Outcome"]:
-    """月替わりの結果を知らせの行に。2つ目の結果は1つにまとめる。"""
-    lines: list[str] = []
-    monthly = second_output.Outcome()
-    for result, extra in rolls:
-        lines.append(result.message)
-        if extra is not None:
-            if extra.text("月別の書き出し"):
-                lines.append(extra.text("月別の書き出し"))
-            monthly = monthly.merge(extra)
-    return lines, monthly
-
-
-def _second_output(write):
-    """2つ目の出力先へ出す。**何が起きても共有への保存の結果は返す。**"""
-    try:
-        return write()
-    except Exception:                             # noqa: BLE001 - 保存は成功している
-        log.exception("集計CSVの2つ目の出力先へ出せませんでした")
-        return second_output.Outcome()
-
-
-def _rollover_after_push(summary) -> list:
-    """送り終えたところで、**まだ書き出していない月**を片付ける。
-
-    書き出した月は覚えておき、二度は書き出しません(直した・取り込んだ
-    月は書き出し直す)。覚えていなかった頃は、9月の保存のたびに8月を
-    書き出し直し、10月になっても9月が書き出されませんでした
-    (`services/month_rollover.catch_up`)。
-
-    **失敗しても保存の結果は返す。** 月に1度の後始末で、押した人が
-    いま知りたいのは「共有へ出たかどうか」のほうです。
-    """
-    if summary.failed:
-        # 送れていないページがあるうちは、まだ月を片付けない
-        return []
-    # **その月に未送信の直が残っていれば書き出さない**(v4.35.0)。いまの直だけ
-    # 送れて、前の月の直がまだ止まっている、が起きるようになったので
-    return _catch_up_months(hold_pending=True)
-
-
-def _catch_up_months(*, hold_pending: bool = False) -> list:
-    """済んでいない月を1つ目・2つ目へ。(1つ目の結果, 2つ目の結果) の並び。"""
-    from nippou.services import month_rollover
-
-    try:
-        if not month_rollover.check(get_repo()).due:
-            return []
-        with running.running("月替わりの書き出し"):
-            return month_rollover.catch_up(
-                get_repo(), SETTINGS.monthly_dir, hold_pending=hold_pending,
-                second=lambda result: _second_output(
-                    lambda: second_output.after_rollover(get_repo(), result)))
-    except Exception:                             # noqa: BLE001 - 保存は成功している
-        log.exception("月替わりの後始末に失敗しました")
-        return []
-
-
 @bp.get("/api/settings/rollover")
 def rollover_state():
     """月が替わっているか(`月替わりチェック実行` 相当)。**何もしない。**"""
@@ -1200,14 +1040,14 @@ def rollover_run():
                 result = month_rollover.run(get_repo(), SETTINGS.monthly_dir,
                                             month=month)
                 # 押して走らせたときも、2つ目の出力先の「自動集計」へ同じ月を
-                monthly = _second_output(lambda: second_output.after_rollover(
+                monthly = push_flow.guarded_second(lambda: second_output.after_rollover(
                     get_repo(), result))
                 month_rollover.settle(get_repo(), result, monthly.ok)
                 rolls = [(result, monthly)]
             else:
                 rolls = month_rollover.catch_up(
                     get_repo(), SETTINGS.monthly_dir,
-                    second=lambda r: _second_output(
+                    second=lambda r: push_flow.guarded_second(
                         lambda: second_output.after_rollover(get_repo(), r)))
     except Exception as exc:                      # noqa: BLE001 - 自ラインを落とさない
         log.exception("月替わりの書き出しに失敗しました")
@@ -1219,7 +1059,7 @@ def rollover_run():
         body["second_output"] = second_output.Outcome().as_dict()
         body["months"] = []
         return jsonify(body)
-    lines, monthly = _roll_lines(rolls)
+    lines, monthly = push_flow.roll_lines(rolls)
     body = rolls[-1][0].as_dict()
     body["months"] = [result.as_dict() for result, _ in rolls]
     body["second_output"] = monthly.as_dict()

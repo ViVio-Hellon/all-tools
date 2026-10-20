@@ -93,7 +93,7 @@ REST_STOP_CODE = "0"
 #: 日勤に固定した画面は、このうちいちばん遅い時刻(19:00)まで打てます。
 #: 確かめの側だけが残業を認めて画面が 17:00 で閉じていたので、残業の行は
 #: どうやっても保存できませんでした。
-DAY_SHIFT_OVERTIME_ENDS: tuple[str, ...] = ("18:00", "19:00")
+from ..constants import DAY_SHIFT_OVERTIME_ENDS  # noqa: E402 ── 決めるのは constants の1か所
 
 
 def is_day_shift(shift: str) -> bool:
@@ -401,8 +401,7 @@ def check_negative_time(details: Sequence[DetailRecord]) -> list[Finding]:
         if all(parts) and all(is_numeric(p) for p in parts):
             minutes = elapsed_minutes(*parts)
         if minutes - sum(stop_minutes(text) for text in stops) < 0:
-            rest = any(normalize(getattr(d, code) or "") == REST_STOP_CODE
-                       for code, _minutes in STOP_PAIRS)
+            rest = any(break_time.is_rest_code(getattr(d, code)) for code, _minutes in STOP_PAIRS)
             out.append(Finding(
                 NEGATIVE_TIME,
                 f"{d.row_no}行目：作業時間がマイナスです",
@@ -466,7 +465,7 @@ def break_minutes(details: Sequence[DetailRecord]) -> int | float:
     total = sum(stop_minutes(getattr(d, minutes_field))
                 for d in details
                 for code_field, minutes_field in STOP_PAIRS
-                if normalize(getattr(d, code_field) or "") == REST_STOP_CODE)
+                if break_time.is_rest_code(getattr(d, code_field)))
     return _plain(total)
 
 
@@ -590,10 +589,10 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
             known_stop_codes: Iterable[str] = (),
             day_work: bool = False,
             required_break: int = REQUIRED_BREAK_MINUTES) -> list[Finding]:
-    """7項目ぜんぶ。**順番は VBA と同じ**(見つけた順に上から出る)。
+    """8項目ぜんぶ(VBA の7項目 + 休憩の時刻。v4.37.1)。**順番は VBA と同じ**(見つけた順に上から出る)。
 
-    VBA の手続きは5つで、その中身がこの7つに分かれます
-    (時間計算_シート版 が3つ、Last_Confi が2つ)。
+    VBA の手続きは5つで、その中身が7つに分かれます
+    (時間計算_シート版 が3つ、Last_Confi が2つ)。休憩の時刻はこのツールで足した確かめです。
 
     VBA は1本目で止めていましたが、ここは**全部返します**。止める/
     止めないを決めるのは呼び手(`services/shift_check.py`)です。
@@ -649,7 +648,7 @@ def during_input(findings: Sequence[Finding]) -> list[Finding]:
     できません。**
 
     外した2つが素通りになるわけではありません。「共有へ保存」と
-    「直の確定」は :func:`blocking` のほう(7項目ぜんぶ)を通ります。
+    「直の確定」は :func:`blocking` のほう(8項目ぜんぶ)を通ります。
     """
     return [f for f in findings if not f.at_shift_end]
 

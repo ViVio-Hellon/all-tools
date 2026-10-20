@@ -165,3 +165,9 @@ DAY_SHIFT_ALWAYS_LINES: frozenset[str] = frozenset({"トット", "バランサ�
 # 実際に使う名前は設定画面から変えられる(`user_settings`)。現場で音を
 # 差し替えたいときに、コードを配り直さずに済ませるため。
 # ---------------------------------------------------------------------------
+
+#: 日勤の残業の終わり(`HH:MM`)。VBA `Last_Confi` が定時の代わりに認めていた2つ。
+#: **ここだけで決める**(v4.39.2)── 保存の確かめ(`save_checks`)・画面の固定
+#: (`ShiftCalculator.input_close_at`)・次の行へ終了を写さない時刻(`navigation.ends_shift`)が読む。
+#: 前は `navigation` だけが 18:00 を直に持っていて、19:00 で終わった行の終了が次の行の開始へ写っていた
+DAY_SHIFT_OVERTIME_ENDS: tuple[str, ...] = ("18:00", "19:00")

@@ -1,7 +1,7 @@
 """Flask アプリの組み立て
 
 社内「汎用Webアプリ作成 基盤仕様書」に沿った構成。起動・停止・監視の
-詳細は docs/設計.md を参照。
+詳細は README.md と、リポジトリの docs/日報管理ツール.md を参照。
 
 【tkinter版との対応】
 tkinter版の `ui/app.py`(メイン画面)+ 各 Toplevel ウィンドウが、ここでは
@@ -304,12 +304,15 @@ def _register_shift_master_refresh(app: Flask) -> None:
     def _refresh_shift_master():                # noqa: ANN202 - Flaskのフック
         if not app.config["READY"]:
             return None
-        if request.path.startswith(ROLLOVER_SKIP):
+        # **心拍・進み具合では見ない**(v4.39.2)。ロックの外に置いた道(`_NO_LOCK_PREFIXES`)に
+        # 読み直し(Access なら時間がかかる)を持ち込むと、心拍が遅れてタブが入れ替わる
+        if request.path.startswith(_REFRESH_SKIP):
             return None
         try:
             from nippou.services import shift_times
 
-            shift_times.refresh_if_changed(get_repo(), guard=_WRITE_LOCK)
+            # DB は読み直すときだけ開く(ふだんは間の判断だけで返る)
+            shift_times.refresh_if_changed(get_repo, guard=_WRITE_LOCK)
         except Exception:                       # noqa: BLE001 - 要求は通す
             log.exception("マスタの直の時間を読み直せませんでした")
         return None
@@ -382,6 +385,10 @@ _WRITE_LOCK = threading.RLock()
 # (先に心拍が通ったほうが引き継ぐ)。打っていた人の画面が、押してもいない
 # のに「見るだけ」になります。
 _NO_LOCK_PREFIXES = ("/api/jobs", "/api/alive", "/api/tab")
+
+# マスタの直の時刻を読み直さない道(`_register_shift_master_refresh`)。静的なもの・生存確認と、
+# 待たせてはいけない道(心拍・進み具合)
+_REFRESH_SKIP = ROLLOVER_SKIP + _NO_LOCK_PREFIXES + ("/api/progress",)
 
 
 def _is_write(req) -> bool:

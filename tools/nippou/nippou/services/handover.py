@@ -4,7 +4,7 @@
 DBを読んで、あちらが要る事実だけを渡します:
 
     ・共有へ未送信の直は何か(`pending_sync_headers`)
-    ・その直に直すところがあるか(`shift_check.run` = 7項目ぜんぶ)
+    ・その直に直すところがあるか(`shift_check.run` = 8項目ぜんぶ)
     ・もう引き継がれているか(`shift_handover`)
     ・**いまの直**にもう保存があるか(打ち始めていれば止めない)
 
@@ -37,7 +37,7 @@ def left_behind(repo: NippouRepository, *, current_key: tuple[str, str, str],
                 admin: bool = False) -> list[Left]:
     """**いまの直ではない**、共有へ未送信の直。新しい順ではなく直順。
 
-    直すところがあるかは `shift_check.run`(7項目ぜんぶ)で見ます ──
+    直すところがあるかは `shift_check.run`(8項目ぜんぶ)で見ます ──
     共有へ出すときに通る関門と**同じもの**でなければ、「押せば済む」と
     言っておいて押したら断られる、が起きます。
     """

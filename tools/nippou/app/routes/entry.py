@@ -1975,7 +1975,7 @@ def save():
 
 
 def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
-    """その日の集計CSVを**確定保存のたびに書き直す**(4本)。
+    """その日の集計CSVを**確定保存のたびに書き直す**(3本。`csv_export.write_daily_set`)。
 
     【なぜ保存のたびなのか】
     押して出すボタンは残してありますが、押し忘れると共有のフォルダは
@@ -2234,8 +2234,9 @@ def close_shift():
     1分ごとに叩くだけで、早すぎる・もう締めた・呼出中、といった見分けは
     しません(**判断を2か所に置かない**)。
 
-    **紙は出しません。** チェック → 集計の作り直し → 締めた印、までです。
-    紙は「印刷」から、欲しいときだけ出します。
+    **紙は刷りません。** チェック → 集計の作り直し → 締めた印、までです。
+    紙は「印刷」から、欲しいときだけ出します(綺麗で共有へ送れたときは、手で押したときと同じく
+    印刷用HTMLを出力先へ残し、月替わりも書き出します。v4.39.2)。
 
     走らなかったときも 200 で返します ── ふつうはいつも「まだ早い」で、
     それは失敗ではありません。何が起きたかは `ran` と `reason` に。
@@ -2283,6 +2284,9 @@ def close_shift():
             note += f"。共有へも送りました({sent}件)"
         elif swept[-1].push_note:
             note += f"。{swept[-1].push_note}"
+        if swept[-1].after_note:
+            # 拾って送った直の紙・月替わり(v4.39.2。手で押したときと同じ後始末)
+            note += f"。{swept[-1].after_note}"
         body["message"] = (f"{body['message']}\n{note}" if result.ran else note)
     return jsonify(body)
 

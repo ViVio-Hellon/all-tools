@@ -202,7 +202,7 @@ def build_stops(d: DetailRecord,
             stop_kind=STOP_KINDS.get(classify_stop_code(code), "その他"),
             # 休憩の時刻は行に1つ(休憩を2つの欄に分けて打っても、時刻はその行の休憩ぜんぶ)
             break_range=(break_time.normalize(getattr(d, "break_range", "") or "")
-                         if code == break_time.REST_STOP_CODE else "")))
+                         if break_time.is_rest_code(code) else "")))
     return out
 
 

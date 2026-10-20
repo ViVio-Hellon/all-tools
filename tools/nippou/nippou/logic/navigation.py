@@ -124,7 +124,8 @@ def ends_shift(sz_text: str, sh_text: str, *, day_temp: str,
     """
     if (sz_text, sh_text) in set(shift_end_times.values()):
         return True
-    return day_temp == "日勤" and sz_text == "18" and sh_text == "00"
+    # 日勤の残業の終わり(18:00・19:00)も直の終わり。**時刻は `constants` の1か所**(v4.39.2)
+    return day_temp == "日勤" and f"{sz_text}:{sh_text}" in constants.DAY_SHIFT_OVERTIME_ENDS
 
 
 # ------------------------------------------------------------------
