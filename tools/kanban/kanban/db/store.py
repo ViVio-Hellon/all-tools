@@ -35,7 +35,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from dbkit import sqlite_toolkit
 
-from .. import applog, config
+from .. import applog, config, keys
 from ..domain.models import MUTABLE_FIELDS, KanbanItem
 
 SCHEMA_VERSION = 6
@@ -591,13 +591,28 @@ class Store:
                     )
                 }
                 seen: set[str] = set()
+                # **届いた管理番号を手元の管理番号に結ぶ**(VER3.5.7。`keys.pair`)。共有DBの書き方が
+                # 変わっても(1 → 1.0 → '１')同じ看板として扱う。前は文字のまま比べていたので、
+                # 書き方が変わると別の看板とみなして手元の行を消し、未送信の操作も一緒に消えていた
+                pairs, ambiguous = keys.pair(
+                    [k for k in (str(r.get("mgmt_no", "")).strip() for r in rows) if k], existing)
+                if ambiguous:
+                    applog.warning("管理番号の書き方が違う看板が複数あり、手元の看板と結べませんでした"
+                                   "(未送信の操作は残します): %s / %s", line, "、".join(sorted(ambiguous)))
                 # その回(出した日時)が倉庫の端末に初めて出た。**このラインを前に取り込んで
                 # いたときだけ**書く ── 初めて取り込んだときは、いつから出ていたか分からない
                 newly_seen: list[dict[str, Any]] = []
 
                 for order, row in enumerate(rows):
-                    mgmt_no = str(row.get("mgmt_no", "")).strip()
-                    if not mgmt_no:
+                    raw_no = str(row.get("mgmt_no", "")).strip()
+                    if not raw_no:
+                        continue
+                    mgmt_no = pairs.get(raw_no, raw_no)
+                    if mgmt_no in seen:
+                        # 同じ看板が1回の読み込みに2行(1 と '1' など)。前は初めての取り込みで2回
+                        # 足そうとして取り込みごと止まっていた。先の行を使い、残りは見送る
+                        applog.warning("同じ管理番号の看板が共有DBに2行あります(後の行は見送ります): %s / %s",
+                                       line, raw_no)
                         continue
                     seen.add(mgmt_no)
                     current = existing.get(mgmt_no)
@@ -606,7 +621,7 @@ class Store:
                             and (current is None
                                  or str(current.get("want") or "").strip() != config.MARK_ON
                                  or str(current.get("ordered_at") or "") != str(row.get("ordered_at", "")))):
-                        newly_seen.append({"mgmt_no": mgmt_no, **row})
+                        newly_seen.append({**row, "mgmt_no": mgmt_no})
                     if current is None:
                         conn.execute(
                             "INSERT INTO kanban_item(line, mgmt_no, material, size, want,"
@@ -670,7 +685,10 @@ class Store:
                          r.get("material", ""), r.get("size", ""), r.get("ordered_at", "") or "",
                          self.host_name),
                     )
-                removable = [mgmt_no for mgmt_no in existing if mgmt_no not in seen]
+                # 結べなかった番号(書き方の違う看板が複数届いた)の未送信の行は消さない(推し量らない)
+                removable = [mgmt_no for mgmt_no in existing if mgmt_no not in seen
+                             and not (existing[mgmt_no]["dirty"]
+                                      and keys.normalize(mgmt_no) in ambiguous)]
                 dropped = [m for m in removable if existing[m]["dirty"]]
                 dropped_rows = [existing[m] for m in dropped]
                 for mgmt_no in removable:
