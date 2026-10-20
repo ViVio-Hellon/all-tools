@@ -408,9 +408,39 @@ class BrowserTests(WebTestCase):
         self.assertFalse(self.viewer(a))            # グラフはそのまま
         self.assertFalse(a.is_visible("#tab-lock"))
         a.click('nav.rail a[href="/"]')
-        a.wait_for_selector("#tab-lock", state="visible", timeout=8000)
+        try:
+            a.wait_for_selector("#tab-lock", state="visible", timeout=8000)
+        except Exception as exc:                    # noqa: BLE001 - 何が起きていたかを残す
+            # Windows の CI で一度だけ札が出なかった(手元では 0.2 秒で出る)。
+            # 次に起きたとき原因が分かるよう、画面とサーバの見ていたものを残す
+            self.fail(f"日報入力へ戻っても札が出ません: {exc}\n{self._tab_state(a, b)}")
         self.assertTrue(self.viewer(a))             # 日報入力へ戻れば見るだけ
         self.assertEqual(self.errors, [])
+
+    def _tab_state(self, a, b) -> str:
+        """札が出なかったときに残すもの(画面2枚とサーバの名札の帳面)。"""
+        from nippou import awake_clock
+        from nippou.logic import tab_lock
+
+        lines = []
+        for name, page in (("A", a), ("B", b)):
+            try:
+                lines.append(f"{name}: " + str(page.evaluate(
+                    "({path: location.pathname, tab: sessionStorage.getItem('nippou.tab'),"
+                    " viewer: document.body.classList.contains('is-viewer'),"
+                    " banner: document.getElementById('tab-lock') ? "
+                    "!document.getElementById('tab-lock').hidden : null,"
+                    " entry: !!document.getElementById('grid-body'),"
+                    " visibility: document.visibilityState})")))
+            except Exception as err:                # noqa: BLE001
+                lines.append(f"{name}: 読めません({err})")
+        desk = tab_lock.get_desk()
+        now = awake_clock.now()
+        lines.append(f"打てる側: {desk.editor or '(なし)'}")
+        for token, tab in desk.tabs.items():
+            lines.append(f"  {token}: {now - tab.seen_at:.1f}秒前 hidden={tab.hidden}")
+        lines.append(f"画面の誤り: {self.errors}")
+        return "\n".join(lines)
 
 
 if __name__ == "__main__":
