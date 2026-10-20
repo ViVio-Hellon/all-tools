@@ -50,6 +50,19 @@ class FrameTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge_proto.read_frame(io.BytesIO(b'{"id": 1, "len": -1}\n'))
 
+    def test_上限を超えた1件は読み捨てて続きを読める(self) -> None:
+        """v1.5.36: 前は上限を超えると読むのをやめて終わっていた(4ツールも同じ直し)。"""
+        from unittest.mock import patch
+        stream = io.BytesIO(b'{"id": 7, "len": 40}\n' + b"x" * 40 + b'{"id": 8, "len": 2}\nok')
+        with patch.object(bridge_proto, "MAX_BODY", 16):
+            with self.assertRaises(bridge_proto.FrameTooLarge) as caught:
+                bridge_proto.read_frame(stream)
+            head, body = bridge_proto.read_frame(stream)
+        self.assertEqual((head["id"], body), (8, b"ok"))
+        status, _headers, data = bridge_proto.too_large_reply(caught.exception)
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(data)["error"]["code"], "too_large")
+
 
 class BridgeProcessTests(unittest.TestCase):
     """本物のプロセスを起こして、外枠の代わりに要求を渡す。"""

@@ -113,6 +113,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         while True:
             try:
                 frame = bridge_proto.read_frame(reader)
+            except bridge_proto.FrameTooLarge as exc:
+                # その1件だけ断って続ける(入口ごと終わらない。v1.5.36)
+                log.warning("要求が大きすぎるので断りました: %s %s", exc.head.get("path"), exc)
+                status, headers, data = bridge_proto.too_large_reply(exc)
+                try:
+                    writer.write({"id": exc.head.get("id"), "status": status, "headers": headers}, data)
+                except (BrokenPipeError, OSError):
+                    break
+                continue
             except (ValueError, EOFError) as exc:
                 log.error("要求を読めませんでした: %s", exc)
                 break

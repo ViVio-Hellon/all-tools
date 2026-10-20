@@ -63,6 +63,39 @@ DEFAULT_HOST = "app.localhost"
 # ==================================================================
 # やりとりの形
 # ==================================================================
+class FrameTooLarge(ValueError):
+    """本文が上限(`MAX_BODY`)を超えた1件。**本文は読み捨ててあるので、続けて次を読める。**
+
+    前は上限を超えると読むのをやめてツールごと終わっていました(デスクトップ版で大きな
+    ファイルを送ると、そのツールが落ちる)。その1件だけ 413 で断り、続けます(v1.5.36)。
+    """
+
+    def __init__(self, head: dict, size: int) -> None:
+        super().__init__(f"本文が大きすぎます: {size} バイト(上限 {MAX_BODY} バイト)")
+        self.head = head
+        self.size = size
+
+
+def too_large_reply(error: "FrameTooLarge") -> tuple[int, list, bytes]:
+    """上限を超えた要求への答え(413)。画面が読めるよう、ほかの断りと同じ形の JSON。"""
+    limit_mb = MAX_BODY // (1024 * 1024)
+    body = json.dumps({"error": {"code": "too_large",
+                                 "message": f"送ったものが大きすぎます(上限 {limit_mb}MB)。"
+                                            "小さくしてから送ってください"}},
+                      ensure_ascii=False).encode("utf-8")
+    return 413, [["Content-Type", "application/json; charset=utf-8"]], body
+
+
+def _discard(stream: BinaryIO, size: int) -> None:
+    """本文を読み捨てる(やりとりの区切りを崩さないため)。途中で終われば EOFError。"""
+    left = size
+    while left > 0:
+        chunk = stream.read(min(left, 1024 * 1024))
+        if not chunk:
+            raise EOFError("本文の途中で終わりました")
+        left -= len(chunk)
+
+
 def read_frame(stream: BinaryIO) -> Optional[tuple[dict, bytes]]:
     """1件読む。終わり(相手が閉じた)なら `None`。"""
     line = stream.readline()
@@ -70,8 +103,11 @@ def read_frame(stream: BinaryIO) -> Optional[tuple[dict, bytes]]:
         return None
     head = json.loads(line.decode("utf-8"))
     size = int(head.get("len", 0) or 0)
-    if size < 0 or size > MAX_BODY:
+    if size < 0:
         raise ValueError(f"本文の長さが不正です: {size}")
+    if size > MAX_BODY:
+        _discard(stream, size)
+        raise FrameTooLarge(head, size)
     body = b""
     while len(body) < size:
         chunk = stream.read(size - len(body))
@@ -213,6 +249,16 @@ def make_server_class():
                 while not self._stop_requested:
                     try:
                         frame = read_frame(self.reader)
+                    except FrameTooLarge as exc:
+                        # その1件だけ断って続ける(ツールごと終わらない)
+                        log.warning("要求が大きすぎるので断りました: %s %s", exc.head.get("path"), exc)
+                        status, headers, data = too_large_reply(exc)
+                        try:
+                            self.writer.write({"id": exc.head.get("id"), "status": status,
+                                               "headers": headers}, data)
+                        except (BrokenPipeError, OSError):
+                            break
+                        continue
                     except (ValueError, EOFError) as exc:
                         log.error("要求を読めませんでした: %s", exc)
                         break

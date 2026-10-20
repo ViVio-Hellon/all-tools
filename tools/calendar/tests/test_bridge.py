@@ -70,6 +70,23 @@ class FrameTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.read_frame(io.BytesIO(b'{"id": 1, "len": -1}\n'))
 
+    def test_上限を超えた1件は読み捨てて続きを読める(self) -> None:
+        """v1.5.36: 前は上限を超えると読むのをやめてツールごと終わっていた。"""
+        from unittest.mock import patch
+        big = b"x" * 40
+        stream = io.BytesIO(b'{"id": 7, "path": "/api/big", "len": 40}\n' + big
+                            + b'{"id": 8, "len": 2}\nok')
+        with patch.object(bridge, "MAX_BODY", 16):
+            with self.assertRaises(bridge.FrameTooLarge) as caught:
+                bridge.read_frame(stream)
+            self.assertEqual(caught.exception.head["id"], 7)
+            self.assertIsInstance(caught.exception, ValueError)
+            head, body = bridge.read_frame(stream)
+        self.assertEqual((head["id"], body), (8, b"ok"), "区切りが崩れていない")
+        status, headers, data = bridge.too_large_reply(caught.exception)
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(data)["error"]["code"], "too_large")
+
 
 @unittest.skipUnless(HAS_WEB, "flask が無い")
 class CallWsgiTests(unittest.TestCase):
@@ -272,6 +289,18 @@ class BridgeProcessTests(unittest.TestCase):
         # 画面からの操作がログに残る(外枠 → Python → 外枠が1周した証拠)
         self.assertIn("操作 POST /api/screen/claim → 200", self.log_text())
         self.assertIn("ポートは使いません", self.log_text())
+
+    def test_大きすぎる要求はその1件だけ断り_ツールは動き続ける(self) -> None:
+        """v1.5.36: 前は上限(64MB)を超えた要求を読むのをやめて、ツールごと終わっていた。"""
+        b = BridgeProcess(self, self.env)
+        b.wait_ready()
+        head, body = b.request("POST", "/api/upload-test", body=b"x" * (bridge.MAX_BODY + 1),
+                               timeout=120)
+        self.assertEqual(head["status"], 413, body[:200])
+        self.assertEqual(json.loads(body)["error"]["code"], "too_large")
+        head, _ = b.request("GET", "/api/health")
+        self.assertEqual(head["status"], 200, "まだ動いている")
+        self.assertIsNone(b.proc.poll())
 
     def test_外枠が先に閉じたら終わる(self) -> None:
         b = BridgeProcess(self, self.env)
