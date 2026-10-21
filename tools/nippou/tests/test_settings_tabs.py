@@ -114,10 +114,9 @@ class TabScreenTests(WebTestCase):
         self.assertNotIn("2つ目", box)
 
     def test_表の行を直す窓は欄を広くとる(self) -> None:
+        """実際に欄が広いか(90px で見切れない)は本物のブラウザで測ります
+        (`test_master_browser` の ShiftTimesTests。CSS の広げ方を外すと落ちる)。"""
         self.assertIn('class="stack-fields stack-fields--wide" id="row-fields"', self.html())
-        css = (Path(__file__).resolve().parent.parent / "app" / "static" / "css" / "components.css"
-               ).read_text(encoding="utf-8")
-        self.assertIn(".stack-fields--wide .stack-field{", css)
 
     def test_既定の面に印が付く(self) -> None:
         self.assertIn('data-default="1"', self.html())

@@ -281,9 +281,8 @@ class BackfillWebTests(WebTestCase):
         html = self.get("/records").get_data(as_text=True)
         button = html[html.index('id="backfill-here"'):][:200]
         self.assertNotIn("disabled", button)
-        root = Path(__file__).resolve().parent.parent
-        js = (root / "app/static/js/views/records.js").read_text(encoding="utf-8")
-        self.assertIn('"/api/settings/backfill", { ...target, dry_run: true }', js)
+        # 押すとまず確かめるだけ(`dry_run`)を送り、訊いてから作って開くことは、字を探すのではなく
+        # **本物のブラウザで押して確かめます**(`test_records_browser` の BackfillTests)
 
 
 if __name__ == "__main__":

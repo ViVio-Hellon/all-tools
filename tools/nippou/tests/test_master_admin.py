@@ -136,15 +136,12 @@ class MasterEditTests(WebTestCase):
         self.assertIn("並び替えた上から 200件", body["page"]["note"])
 
     def test_画面は押せることを言う(self) -> None:
-        """見出しが押せると気づかれないと、無いのと同じ。"""
-        root = Path(__file__).resolve().parent.parent
-        js = (root / "app" / "static" / "js" / "views" / "master.js").read_text(encoding="utf-8")
-        self.assertIn('th.dataset.sortable = "1"', js)
-        self.assertIn('load({ sort: "", sort_dir: "asc" })', js)    # 3回目で元の並び
-        self.assertIn('"Enter"', js)                                 # キーでも押せる
-        self.assertIn("見出しを押すと、その列で並び替え", js)
-        css = (root / "app" / "static" / "css" / "components.css").read_text(encoding="utf-8")
-        self.assertIn("th[data-sortable]:not([data-sort])::after", css)
+        """見出しが押せると気づかれないと、無いのと同じ。
+
+        見出しを押すと ▲ → ▼ → 元の並び・キー(Enter)でも押せる・押せる印(⇅)と添え書きは、
+        字を探すのではなく**本物のブラウザで押して確かめます**(`test_master_browser` の
+        SortTests。守りを外すと落ちる)。ここは添え書きの置き場所があることだけ。
+        """
         page = self.get("/settings").get_data(as_text=True)
         self.assertIn('id="tbl-sort"', page)
 

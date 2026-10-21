@@ -275,12 +275,9 @@ class SavedLineTests(SavedLineCase):
         row = self.row_of(self.table(self.html()), "L-1")
         self.assertIn('data-recall-path="/api/settings/recall"', row)
 
-    def test_画面は行き先と欄をサーバに聞く(self) -> None:
-        js = (Path(__file__).resolve().parent.parent
-              / "app/static/js/views/records.js").read_text(encoding="utf-8")
-        self.assertIn("btn.dataset.recallPath", js)
-        self.assertIn('getElementById("saved-line")', js)
-        self.assertIn("/records?line=", js)
+    # 画面が行き先(`data-recall-path`)と欄(`#saved-line` → `/records?line=`)をサーバに聞くことは、
+    # 字を探すのではなく**本物のブラウザで選び直して呼び出して確かめます**(下の
+    # SavedLineBrowserTests と `test_records_browser` の RecallPathTests。守りを外すと落ちる)
 
 
 class SavedLineBrowserTests(SavedLineCase):

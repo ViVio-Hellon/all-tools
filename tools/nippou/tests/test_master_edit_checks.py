@@ -225,9 +225,8 @@ class ShiftTakesEffectTests(_Transmission):
         from nippou.logic.shift import default_times_text
         self.assertIn(default_times_text(), html)
         self.assertNotIn("1直 08:00-17:00", html)
-        script = (Path(__file__).resolve().parent.parent
-                  / "app/static/js/views/master.js").read_text(encoding="utf-8")
-        self.assertIn("paintShiftTimes(body.shift_times)", script)
+        # 直したら同じ画面の表をその場で描き直すことは、字を探すのではなく**本物のブラウザで
+        # 直して確かめます**(`test_master_browser` の ShiftTimesTests。描き直しを外すと落ちる)
 
     def test_ほかの表では直の時刻を返さない(self) -> None:
         body = self.add("作業停止時間内訳_1", {"内訳": "段取り"}).get_json()

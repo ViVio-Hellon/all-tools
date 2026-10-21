@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nippou.logic import standard_time as logic  # noqa: E402
 from nippou.presenters import standard_time as view  # noqa: E402
 from tests._web import WebTestCase  # noqa: E402
-from tests.test_standard_time import ROOT, TEAMS, WorksFixture, sample  # noqa: E402
+from tests.test_standard_time import TEAMS, WorksFixture, sample  # noqa: E402
 
 
 class WorkerStandardsLogicTests(unittest.TestCase):
@@ -129,10 +129,8 @@ class WorkerModeWebTests(WebTestCase):
         self.assertRegex(page, r'<div class="field">\s*<label for="standard-group">')
         self.assertIn('<option value="worker" data-worker-only hidden disabled>作業者ごと</option>',
                       page)
-        js = (ROOT / "app" / "static" / "js" / "views" / "standard_time.js").read_text(
-            encoding="utf-8")
-        for needle in ('"worker-mode"', "[data-worker-only]", '!workerMode()'):
-            self.assertIn(needle, js)
+        # 入れたときだけ選べ、切ったら班ごとへ戻すことは、字を探すのではなく**本物のブラウザで
+        # 押して確かめます**(`test_records_browser` の WorkerModeTests。守りを外すと落ちる)
 
     def test_作業者ごとのAPIとCSV(self) -> None:
         body = self.post("/api/standard-time/standards", {"group": "worker"}).get_json()

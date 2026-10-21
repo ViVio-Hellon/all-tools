@@ -533,18 +533,16 @@ class SettingsWordingTests(WebTestCase):
         # 打った12行は触らない
         self.assertIn("1文字も触りません", card)
 
-    def test_取り込みの重複がどうなるか書いてある(self) -> None:
-        """「重複だった場合どうなるんですか？」── まるごと入れ替えです。"""
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "settings.js").read_text(encoding="utf-8")
-        self.assertIn("中身をまるごと入れ替えます", js)
-        self.assertIn("いまある行は消えて", js)
-        # 「入る先」の2文字では、何の一覧なのかが分からない
-        self.assertNotIn("<th>入る先</th>", js)
-        self.assertIn("入れる日報(日付・ライン・直・ページ)", js)
+    # 取り込みの下見が「重複だった場合どうなるんですか？」(まるごと入れ替え)と何の一覧か
+    # (入れる日報 = 日付・ライン・直・ページ)を言うことは、字を探すのではなく**本物のブラウザで
+    # 下見を出して確かめます**(`test_settings_browser`。文言を外すと落ちる)
 
     def test_別の面へ連れて行ける(self) -> None:
-        """日報入力の「見るだけです」から、管理者モードまで運びます。"""
+        """日報入力の「見るだけです」から、管理者モードまで運びます。
+
+        **字の試験のまま残す**: 名指しの面を開くのは共有の部品(`tabs.js` の `requested`)と
+        ここの二重の守りで、片方を外しても画面では区別できない(ブラウザで確かめた)。
+        """
         js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
               / "views" / "settings.js").read_text(encoding="utf-8")
         self.assertIn('URLSearchParams(location.search).get("tab")', js)

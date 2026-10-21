@@ -230,13 +230,14 @@ class ScreenTests(WebTestCase):
         self.assertIn("前の直(過去分)</b>は、上の赤い帯の<b>「過去分を共有へ送る」</b>", html)
 
     def test_画面のボタンは範囲を添えて送る(self) -> None:
-        """押した先のサーバが範囲を知るのは、画面が `scope` を添えるからです。"""
+        """押した先のサーバが範囲を知るのは、画面が `scope` を添えるからです。
+
+        日報入力の「共有へ保存」「過去分を共有へ送る」と設定の2つのボタンは、字を探すのではなく
+        **本物のブラウザで押して、添えた範囲を見ます**(`test_push_browser` の ScopeTests。
+        範囲を取り違えると落ちる)。直の実績の確認(締めくくり)の「共有へ保存して終わる」は、
+        押せる場面(終わった前の直が片付いて、締めくくりに出る)を作るのが重いので字で残す。
+        """
         root = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-        entry = (root / "views" / "entry.js").read_text(encoding="utf-8")
-        self.assertIn('pushShared("", "current")', entry)
-        self.assertIn('pushShared("", "previous")', entry)
-        settings = (root / "views" / "settings.js").read_text(encoding="utf-8")
-        self.assertIn('pushToShared("", "previous")', settings)
         review = (root / "views" / "review.js").read_text(encoding="utf-8")
         self.assertIn("closing.push_scope", review)
 

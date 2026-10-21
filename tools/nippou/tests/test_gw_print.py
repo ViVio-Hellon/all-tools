@@ -319,11 +319,9 @@ class ScreenTests(GwWebTestCase):
         body = self.get("/gw").get_data(as_text=True)
         self.assertIn('id="print-why"', body)
         self.assertIn("先に「計算」を押すと印刷できます", body)
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "gw.js").read_text(encoding="utf-8")
-        self.assertIn('byId("print-why")', js)
-        # 押したら、紙の窓がそのまま印刷の画面を出す
-        self.assertIn('params.append("print", "1")', js)
+        # 計算すると理由が消えて押せる・押したら紙の窓がそのまま印刷の画面を出す(`print=1`)は、
+        # 字を探すのではなく**本物のブラウザで押して確かめます**(`test_gw_browser` の
+        # FigureAndPrintTests。守りを外すと落ちる)
 
     def test_内訳はコピーと言う(self) -> None:
         """「内訳を写すってどうなるんですか？」── 写す=クリップボードへのコピー。"""

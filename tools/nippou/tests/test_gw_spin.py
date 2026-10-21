@@ -11,7 +11,6 @@
 """
 from __future__ import annotations
 
-import re
 import sys
 import unittest
 from pathlib import Path
@@ -20,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
 SPIN_NAMES = ("count", "vertical_bands", "horizontal_bands")
 
 
@@ -56,11 +54,8 @@ class GwSpinTests(WebTestCase):
         self.assertIn('data-spin-min="0"', horizontal)
         self.assertNotIn("data-spin-max", horizontal)
 
-    def test_画面のJSが配線する(self) -> None:
-        js = (ROOT / "app" / "static" / "js" / "views" / "gw.js").read_text(encoding="utf-8")
-        self.assertIn("function stepSpin(", js)
-        self.assertRegex(js, r"wireSpins\(\);")
-        self.assertIn('"ArrowUp"', js)
+    # ▲▼ を押して数が変わる・矢印キーでも変わる(画面の JS の配線)は、字を探すのではなく
+    # **本物のブラウザで押して確かめます**(下の HoldSpinBrowserTests。配線を外すと落ちる)
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
@@ -122,6 +117,16 @@ class HoldSpinBrowserTests(WebTestCase):
         self.assertEqual(page.input_value("#dim-count"), "1")
         self.assertEqual(self.errors, [])
 
+    def test_上下の矢印キーでも変わり_上限で止まる(self) -> None:
+        page = self.open()
+        page.click("#dim-vertical_bands")
+        for _ in range(3):
+            page.keyboard.press("ArrowUp")
+        self.assertEqual(page.input_value("#dim-vertical_bands"), "2", "縦バンドは 2 本まで")
+        page.keyboard.press("ArrowDown")
+        self.assertEqual(page.input_value("#dim-vertical_bands"), "1")
+        self.assertEqual(self.errors, [])
+
     def test_ボタンの外へ出たら止まる(self) -> None:
         page = self.open()
         page.hover(self.button(page, "horizontal_bands", 1))
@@ -143,14 +148,9 @@ class StaffModalLayoutTests(WebTestCase):
         self.assertIn('class="modal__box modal__box--wide"', modal)
         self.assertIn('class="staff-teams"', modal)
 
-    def test_広い窓の幅はモーダルの決まりより後に書く(self) -> None:
-        css = (ROOT / "app" / "static" / "css" / "components.css").read_text(encoding="utf-8")
-        base = re.search(r"^\.modal__box\{", css, re.M)
-        wide = re.search(r"^\.modal__box--wide\{", css, re.M)
-        self.assertIsNotNone(base)
-        self.assertIsNotNone(wide)
-        self.assertGreater(wide.start(), base.start())      # 同じ強さなら後勝ち
-        self.assertRegex(css, r"\.staff-teams\{[^}]*grid-template-columns:repeat\(auto-fit")
+    # 広い窓の幅がモーダルの決まりに負けない(CSS の後勝ち)・班を横に並べる は、字を探すのではなく
+    # **本物のブラウザで窓を開いて幅を測ります**(`test_gw_browser` の StaffModalTests。
+    # 広い窓の幅や班の並べ方を外すと落ちる)
 
 
 if __name__ == "__main__":

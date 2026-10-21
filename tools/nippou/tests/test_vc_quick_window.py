@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import re
 import sys
 import unittest
 from pathlib import Path
@@ -17,8 +16,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
@@ -44,10 +41,9 @@ class QuickWindowTests(WebTestCase):
         self.assertNotIn('data-bare="1"', page)
         self.assertNotRegex(page, r'class="tabs__bar"[^>]*hidden')
 
-    def test_開くボタンは別窓の道へ(self) -> None:
-        js = (ROOT / "app" / "static" / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn('window.open("/vc?window=quick&tab=quick"', js)
-        self.assertIsNone(re.search(r'window\.open\("/vc\?tab=quick"', js))
+    # 「早見表を別の窓で開く」が早見表だけの窓(`/vc?window=quick&tab=quick`)を開くことは、
+    # 字を探すのではなく**本物のブラウザで押して確かめます**(`test_vc_browser` の QuickTests。
+    # 道を `/vc?tab=quick` に戻すと落ちる)
 
 
 if __name__ == "__main__":

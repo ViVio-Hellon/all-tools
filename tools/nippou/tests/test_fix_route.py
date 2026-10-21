@@ -153,13 +153,9 @@ class RefusalRouteTests(WebTestCase):
         body = self.push().get_json()
         self.assertIn("2026年9月15日 L-1 1直", body["skip_blockers"][0]["where"])
 
-    def test_画面は同じ形で描く(self) -> None:
-        """並べるだけの `<li>` に戻さない(開くボタンが消えます)。"""
-        found = re.search(r"const list = document\.getElementById"
-                          r"\(\"entry-skip-blockers\"\);(.*?)\n  }",
-                          ENTRY_JS, re.S)
-        self.assertIsNotNone(found)
-        self.assertIn("findingItem", found.group(1))
+    # 「先に次を直してください」を並べるだけの `<li>` に戻さない(そこを開くボタンを並べ、押せば
+    # 開く)ことは、字を探すのではなく**本物のブラウザで断られて押して確かめます**
+    # (`test_push_browser` の FixRouteTests。開くボタンを外すと落ちる)
 
     def test_空の紙では開くのをやめない(self) -> None:
         """**いちばん深いところ。**
@@ -169,6 +165,10 @@ class RefusalRouteTests(WebTestCase):
         断られて**開くのをやめていました** ── 直しに行こうとするのは
         たいてい画面を開いた直後(空のまま)なので、いちばん必要なときに
         だけ動かない、という形でした。
+
+        **字の試験のまま残す**: いまはサーバも打ちかけの空の紙を断らずに見送る(`skipped`)ので、
+        画面のここを外しても画面では区別できない(二重の守り)。両方を外すと開けなくなることは
+        本物のブラウザで確かめます(`test_push_browser` の FixRouteTests)。
         """
         # 中身は `placeDraft`(v4.24.0 ── 置けたか・直の変わり目・ページ違いを分けて返す)
         found = re.search(r"async function placeDraft\([^)]*\) \{(.*?)\n\}",

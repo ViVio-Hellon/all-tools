@@ -507,10 +507,8 @@ class FlowTests(WebTestCase):
         self.assertEqual(self.push(worker="高橋").status_code, 200)
         row, = self.repo().push_history()
         self.assertEqual((row["worker"], row["pressed_by"]), ("山田", "高橋"))
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "entry.js").read_text(encoding="utf-8")
-        body = js[js.index("async function pushShared"):]
-        self.assertIn('[data-header="worker"]', body[:body.index("catch (err)")])
+        # 画面が欄の作業者を添えてくることは、字を探すのではなく**本物のブラウザで押して
+        # 確かめます**(`test_push_browser` の ScopeTests。添えるのをやめると落ちる)
 
     def test_関門で止めても残る(self) -> None:
         from tests.test_auto_export import payload
@@ -585,10 +583,8 @@ class FlowTests(WebTestCase):
         html = self.get("/agg").get_data(as_text=True)
         self.assertIn('id="push-log"', html)
         self.assertIn('href="#push-log"', html)
-        root = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-        self.assertIn("paintTimingChart", (root / "views" / "agg.js").read_text(encoding="utf-8"))
-        self.assertIn("export function paintTimingChart",
-                      (root / "chart.js").read_text(encoding="utf-8"))
+        # 表示を押すとグラフが描かれることは、本物のブラウザで確かめます
+        # (`test_push_browser` の PushLogCardTests。描く呼び出しを外すと落ちる)
 
 
 if __name__ == "__main__":

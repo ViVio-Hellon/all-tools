@@ -235,10 +235,8 @@ class AddColumnTests(WebTestCase):
         for needle in ('id="col-name" maxlength="40"', '<option value="int">整数</option>',
                        '<option value="real">小数</option>', "いまある行すべてに入ります。空なら空のまま"):
             self.assertIn(needle, page)
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "views"
-              / "master.js").read_text(encoding="utf-8")
-        self.assertIn('"/api/master/column/add"', js)
-        self.assertIn("足した列は消せません。よろしいですか?", js)   # 確認は1回
+        # 押すと確かめが1回だけ出て、足した列がすぐ一覧に出ることは、字を探すのではなく
+        # **本物のブラウザで押して確かめます**(`test_master_browser` の AddColumnTests)
 
 
 if __name__ == "__main__":

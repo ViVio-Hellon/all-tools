@@ -17,8 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nippou.db.models import DetailRecord, HeaderRecord
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
 class RecordsProblemTests(WebTestCase):
@@ -63,9 +61,8 @@ class RecordsProblemTests(WebTestCase):
             self.assertIn(kind, html)
         # 報告日は 2026-09-15 の形で並べる(「2026年9月15日」の字の順では 10月が9月より前に来る)
         self.assertIn('data-value="2026-09-15"', html)
-        js = (ROOT / "app/static/js/views/records.js").read_text(encoding="utf-8")
-        self.assertIn('wireSort(document.getElementById("records-table"))', js)
-        self.assertIn("aria-sort", js)
+        # 見出しを押すと並び、もう一度押すと逆順・並べる値は `data-value`(日の順)は、字を探すのでは
+        # なく**本物のブラウザで押して確かめます**(`test_records_browser` の SortTests。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

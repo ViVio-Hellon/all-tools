@@ -252,12 +252,6 @@ class LeftOverMaterialTests(WebTestCase):
     def source(self) -> str:
         return self.JS.read_text(encoding="utf-8")
 
-    def clear_auto(self) -> str:
-        """`clearAuto` の中身だけを取り出す。"""
-        text = self.source()
-        start = text.index("function clearAuto()")
-        return text[start:text.index("\n}", start)]
-
     def test_受注が決まらなければ白紙に戻す(self) -> None:
         """**ここが本体。** `if (!auto) return;` では残ります。"""
         text = self.source()
@@ -266,48 +260,12 @@ class LeftOverMaterialTests(WebTestCase):
         self.assertIn("clearAuto()", head,
                       "受注が無いときに前の選択が残ります")
 
-    def test_引けなかったときにも消す(self) -> None:
-        """ロットが当たらなかったとき ── ここが一番よく通る道です。"""
-        text = self.source()
-        block = text[text.index("if (!body.found)"):][:400]
-        self.assertIn("clearAuto()", block)
-
-    def test_引当が複数で選ぶ前にも消す(self) -> None:
-        """受注が返ってこない＝まだ決まっていない。前のままにしない。"""
-        self.assertIn("if (!body.order) clearAuto();", self.source())
-
-    def test_ＶＣは外す(self) -> None:
-        body = self.clear_auto()
-        for name in ("use-vc", "vc-a", "vc-b", "vc-name-a", "vc-name-b"):
-            with self.subTest(name=name):
-                self.assertIn(name, body)
-
-    def test_標準の資材まで外さない(self) -> None:
-        """**5つぶんの重量が抜けた計算になります。**
-
-        `[data-flag]` をまとめて外すと、ダンプレートも外装紙もバンドも
-        ポリシートもハードボードも消えます ── どれも受注とは関係なく
-        毎回使うものです。
-        """
-        body = self.clear_auto()
-        self.assertNotIn("querySelectorAll", body,
-                         "使う資材をまとめて外しています")
-        for name in ("dunplate", "outer_paper", "band",
-                     "poly_sheet", "hardboard"):
-            with self.subTest(name=name):
-                self.assertNotIn(name, body)
-
-    def test_合紙と縦バンドアングルは既定へ戻す(self) -> None:
-        """この2つだけが受注で決まるもの。合紙は**配られたときの姿**、
-        縦バンドアングルは**縦バンドの本数どおり**(`syncAngle`)。"""
-        body = self.clear_auto()
-        self.assertIn("interleaf", body)
-        self.assertIn("= true", body)
-        self.assertIn("syncAngle()", body)
-
-    def test_自動の印も消す(self) -> None:
-        """印が残ると、人が選んだものまで自動で決まったように見えます。"""
-        self.assertIn("markDecided([])", self.clear_auto())
+    # 受注が決まらないロット(当たらない・引当が無い・引当が複数で選ぶ前・受注が無い)を打ったとき、
+    # ＶＣは外し・合紙は既定(付いた)・縦バンドアングルは本数どおり・自動の印も消し、**標準の資材は
+    # 外さない** ── は、字を探すのではなく**本物のブラウザで打って確かめます**
+    # (`test_gw_browser` の LeftOverMaterialTests。`clearAuto` の各行や呼ぶところを外すと落ちる)。
+    # 上の `applyAuto` の守りは、受注があれば決まりも必ず返る(`routes/gw._order_body`)ため
+    # 画面からは通れない備えなので、字で残す。
 
     def test_画面は7つとも付いた状態で配られる(self) -> None:
         """「チェックが入っている」の出どころ ── **受注ではなく既定**。
@@ -393,9 +351,6 @@ class FigureButtonTests(WebTestCase):
     でした。VBA には押すボタンがあったので、同じものを計算の隣に置きます。
     """
 
-    JS = (Path(__file__).resolve().parent.parent
-          / "app" / "static" / "js" / "views" / "gw.js")
-
     def test_計算の隣にボタンがある(self) -> None:
         html = self.client.get("/gw", headers=HEADERS).get_data(as_text=True)
         self.assertIn('id="show-figure"', html)
@@ -404,27 +359,6 @@ class FigureButtonTests(WebTestCase):
         between = html[html.index('id="calc"'):html.index('id="show-figure"')]
         self.assertNotIn("<section", between)
 
-    def test_押せば配線されている(self) -> None:
-        source = self.JS.read_text(encoding="utf-8")
-        self.assertIn('byId("show-figure")?.addEventListener("click", showFigure)',
-                      source)
-
-    def test_まだ計算していなければ先に計算する(self) -> None:
-        """**押したのに何も起きない、を作らない。**"""
-        source = self.JS.read_text(encoding="utf-8")
-        body = source[source.index("async function showFigure()"):]
-        body = body[:body.index("\n}\n")]
-        self.assertIn("await calculate()", body)
-        self.assertIn("scrollIntoView", body)
-
-    def test_計算が通らなくても黙って終わらない(self) -> None:
-        """寸法が空のまま押すと、図の枠すら出ません。
-
-        そこで何も言わずに終わると、ボタンが壊れているように見えます
-        ── 断りの中身は「直すところ」に出ているので、そこへ送ります。
-        """
-        source = self.JS.read_text(encoding="utf-8")
-        body = source[source.index("async function showFigure()"):]
-        body = body[:body.index("\n}\n")]
-        self.assertIn("calc-state", body)
-        self.assertIn("calc-problems", body)
+    # 押せば配線されている・まだ計算していなければ先に計算して図へ送る・計算が通らなくても黙って
+    # 終わらず「直すところ」へ送る は、字を探すのではなく**本物のブラウザで押して確かめます**
+    # (`test_gw_browser` の FigureAndPrintTests。守りを外すと落ちる)

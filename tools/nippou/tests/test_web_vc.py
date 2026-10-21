@@ -228,9 +228,8 @@ class FixedBlockLengthTests(VcCase):
         page = self.get("/vc").get_data(as_text=True)
         for id_ in ("vc-grid-length", "vc-grid-vcatu", "vc-grid-fill", "vc-grid-overwrite"):
             self.assertIn(f'id="{id_}"', page)
-        js = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn('fill_empty: $("vc-grid-fill").checked', js)
-        self.assertIn("(空ならこのまま)", js)
+        # 「空のマスにも入れる」を外せば外して送る・欄の例(空ならこのまま)は、字を探すのではなく
+        # **本物のブラウザで押して確かめます**(`test_vc_browser` の SettingsPanelTests。守りを外すと落ちる)
 
 
 class MasterAdminTests(VcCase):
@@ -375,22 +374,19 @@ class CoilTests(VcCase):
     def test_fit_on_screen_wiring(self) -> None:
         """1920×1080 で「少しスクロールがいる」を縮めて収める (v4.3.0)。
 
-        段は そのまま → 詰める → 0.75倍まで縮める → ページごと動かす。
-        実際に収まるかはブラウザで測っています(README の v4.3.0)。
+        段は そのまま → 詰める → 0.75倍まで縮める → ページごと動かす。**段の決め方・縮めても
+        窓の下まで使う・枠は作業面の残りちょうど(`vc.js` の fitFrame)は本物のブラウザで
+        窓の高さを変えて確かめます**(`test_vc_browser` の CoilTests。守りを外すと落ちる)。
+        ここに残すのは、ブラウザの通しでは起こしにくい揺れの歯止めと、後から変わる高さの見張り。
         """
         coil = STATIC / "vc" / "coil"
         html = (coil / "index.html").read_text(encoding="utf-8")
-        self.assertIn('href="coil-fit.css"', html)
         # 形状の切替が済んでから、いまの中身をはかる(最後に読む)
         self.assertLess(html.index('src="shape-switch.js"'), html.index('src="coil-fit.js"'))
         js = (coil / "coil-fit.js").read_text(encoding="utf-8")
-        self.assertIn("const MIN_ZOOM = 0.75;", js)
-        for cls in ("fit-compact", "fit-zoom", "fit-scroll", "fit-measure"):
-            self.assertIn(cls, js)
         # 後から高さが変わるもの(アイコンの字・グラフ・エラーの文)を見張る
         self.assertIn("new ResizeObserver(later)", js)
         css = (coil / "coil-fit.css").read_text(encoding="utf-8")
-        self.assertIn("calc(100vh / var(--fit-zoom, 1))", css)
         # 3D の枠は固定の 500px をやめて残りいっぱい / グラフは高さを決める
         self.assertRegex(css, r"\.model-container \{\s*flex: 1 1 auto;")
         self.assertRegex(css, r"\.chart-container \{\s*position: relative;\s*height: 150px;")
@@ -404,30 +400,22 @@ class CoilTests(VcCase):
         self.assertIn("const FLIP_LIMIT = 4;", js)
         self.assertIn("if (now < heldUntil) return;", js)
         self.assertIn("heldUntil = 0; flips = []; later();", js)
-        # 外のページも動かさない: 枠の高さは作業面の残りちょうど
-        vc = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn("function fitFrame()", vc)
-        self.assertIn('window.addEventListener("resize", fitFrame, { signal });', vc)
 
     def test_theme_light_and_dark(self) -> None:
-        """背景をダーク、ライト選べるように (v4.3.0)。"""
+        """背景をダーク、ライト選べるように (v4.3.0)。
+
+        **既定はライト・選べば覚える・印刷は白い紙(ダークは画面だけ)は本物のブラウザで
+        押して確かめます**(`test_vc_browser` の CoilTests。守りを外すと落ちる)。
+        ここに残すのは、描く前に決める読み込みの位置(ちらつき)・グラフの塗り直し・色の書き方。
+        """
         coil = STATIC / "vc" / "coil"
         html = (coil / "index.html").read_text(encoding="utf-8")
         head = html[:html.index("</head>")]
         # 本文を描く前に決める(白く光ってから暗くならないように)
         self.assertIn('<script src="coil-theme.js"></script>', head)
         self.assertIn('href="coil-theme.css"', head)
-        for choice in ("light", "dark"):
-            self.assertIn(f'data-theme-choice="{choice}"', html)
         js = (coil / "coil-theme.js").read_text(encoding="utf-8")
-        self.assertIn("localStorage.setItem(KEY, theme)", js)
-        # 選んでいなければライト(日報・日報複合ツールの4ツールとそろえる。OS には付いていかない)
-        self.assertIn("root.dataset.theme = saved() || DEFAULT", js)
-        self.assertIn("const DEFAULT = 'light'", js)
         self.assertIn("Chart.register(", js)
-        css = (coil / "coil-theme.css").read_text(encoding="utf-8")
-        # **印刷はいつも白い紙**: ダークは画面だけ
-        self.assertLess(css.index("@media screen"), css.index(':root[data-theme="dark"]'))
         # 色は変数に寄せた(白・黒の書き込みが残っていない)
         for name in ("aluminum-coil-calculator.css", "plate-calculator.css"):
             text = (coil / name).read_text(encoding="utf-8")
@@ -455,9 +443,8 @@ class WiringTests(unittest.TestCase):
         css = (STATIC / "css" / "components.css").read_text(encoding="utf-8")
         self.assertIn("@page vcquick{", css)
         self.assertNotRegex(css, r"@page\s*\{\s*size:\s*A4 landscape")
-        js = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn('document.body.classList.add("vc-printing")', js)
-        self.assertIn("onLeave(endPrint)", js)
+        # 刷るあいだだけ紙を組み、刷り終えたら・画面を移ったら片付けるのは、本物のブラウザで
+        # 確かめます(`test_vc_browser` の QuickTests。守りを外すと落ちる)
 
     def test_colors_come_from_tokens(self) -> None:
         tokens = (STATIC / "css" / "tokens.css").read_text(encoding="utf-8")
@@ -576,17 +563,11 @@ class SettingsTabTests(VcCase):
         box = page[at:page.index(">", at)]
         self.assertIn('class="vc-place__dir"', box)
         self.assertNotIn('size="48"', box)                 # 短かった幅の指定は外した
-        css = (STATIC / "css" / "components.css").read_text(encoding="utf-8")
-        rule = re.search(r"\.vc-place__dir\{([^}]*)\}", css)
-        self.assertIsNotNone(rule)
-        for part in ("flex:1 1 40em", "width:100%", "min-width:0", "max-width:100%"):
-            self.assertIn(part, rule.group(1), part)
+        # 実際に行の残りいっぱいまで伸び、狭い窓ではみ出さないかは本物のブラウザで測ります
+        # (`test_vc_browser` の SettingsPanelTests。CSS の伸ばし方を外すと落ちる)
 
-    def test_tab_select_is_not_shadowed(self) -> None:
-        """vc.js には品種を選ぶ `select` がある。面を替える `select` と取り違えない。"""
-        js = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn("select as selectTab", js)
-        self.assertIn("selectTab(root, link.dataset.vcTab)", js)
+    # 早見表の「設定」の案内で面を替える(品種を選ぶ `select` と取り違えない)は、字を探すのではなく
+    # **本物のブラウザで押して確かめます**(`test_vc_browser` の QuickTests。守りを外すと落ちる)
 
 
 class QuickBlockApiTests(VcCase):
@@ -697,11 +678,6 @@ class QuickBlockApiTests(VcCase):
             self.assertIn(f'id="{id_}"', settings, id_)
         self.assertIn('<option value="teal">青緑</option>', settings)
         self.assertIn("早見表の品種(枠とマス)", settings)
-        js = (STATIC / "js" / "views" / "vc.js").read_text(encoding="utf-8")
-        for url in ("/api/vc/quick-block", "/api/vc/quick-block/delete",
-                    "/api/vc/quick-block/source", "/api/vc/quick-cells/delete",
-                    "/api/vc/product/delete"):
-            self.assertIn(f'"{url}"', js)
-        # 消す前に、何が消えるかを数で言う
-        self.assertIn("の枠とマス ${b.cells} を消します", js)
-        self.assertIn("固定値(打った長さ)", js)
+        # 足す・消す・切り替えるがそれぞれの口へ届くこと・消す前に何が消えるかを数で訊くこと・
+        # 固定値の枠に「固定値(打った長さ)」と出ることは、本物のブラウザで押して確かめます
+        # (`test_vc_browser`。守りを外すと落ちる)
