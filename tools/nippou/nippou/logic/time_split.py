@@ -81,6 +81,10 @@
     ・直の**最初の行**は、前の直の最後のロット(手元に保存があれば)と比べる。同じロットなら
       変わり目ではない。前の直の保存が無ければ変わり目として数える(段取りから始まる)。
       VC は比べる相手が無ければ足さない
+    ・**段取り変更の停止がある行は長くしない**(v4.42.1。「段取り変更の停止がある行は長くしないでください」)。
+      段取りの時間はその停止の分として先に渡してあるので、1梱包目を長くすると2回数える。VC交換のぶんも
+      足さない(段取り変更の停止に含まれる)。EX の倍率はそのまま。段取りの停止かどうかは、停止理由の
+      内訳(マスタ・停止内訳.csv)の名前に「段取」があるか(`setup_stop_codes`)
 
 ここは計算だけ。どの行を数えるか・ページをまたいで書くのは `app/routes/entry.distribute_times`。
 """
@@ -362,20 +366,50 @@ def pack_count(values: dict[str, str]) -> int:
     return max(count, 1)
 
 
+#: 段取りの停止と見る、停止理由の内訳の名前に含まれる字(「段取り変更」「段取替え」など)
+SETUP_STOP_WORD = "段取"
+
+
+def setup_stop_codes(by_category: dict) -> frozenset[str]:
+    """停止理由の一覧(`stop_master.load_all_categories`)から、段取りの停止の記号。"""
+    import unicodedata
+
+    codes = set()
+    for reasons in (by_category or {}).values():
+        for reason in reasons:
+            label = unicodedata.normalize("NFKC", str(getattr(reason, "label", "") or ""))
+            code = str(getattr(reason, "code", "") or "").strip()
+            if code and SETUP_STOP_WORD in label:
+                codes.add(_norm(code))
+    return frozenset(codes)
+
+
+def has_setup_stop(values: dict[str, str], codes: frozenset[str]) -> bool:
+    """その行の停止①〜⑤に、段取りの停止の記号があるか。"""
+    return bool(codes) and any(_norm(values.get(code, "")) in codes for code, _ in STOP_SLOTS)
+
+
 def adjust_weights(weights: Sequence[Decimal], rows: Sequence[dict[str, str]],
-                   kinds: Sequence[RowKind], factors: Factors) -> tuple[list[Decimal], list[str]]:
-    """梱包数の重みに、EX・段取り・VC交換の倍率を掛ける。返すのは(重み, 確かめの窓に出す一言)。"""
+                   kinds: Sequence[RowKind], factors: Factors,
+                   setup_codes: frozenset[str] = frozenset()) -> tuple[list[Decimal], list[str]]:
+    """梱包数の重みに、EX・段取り・VC交換の倍率を掛ける。返すのは(重み, 確かめの窓に出す一言)。
+
+    ``setup_codes`` は段取りの停止の記号(`setup_stop_codes`)。その停止がある行は長くしない。
+    """
     out: list[Decimal] = []
-    ex_rows = changes = vc_changes = 0
+    ex_rows = changes = vc_changes = skipped = 0
     for weight, values, kind in zip(weights, rows, kinds):
         w = weight * (factors.ex if kind.ex else Decimal(1))
         extra = Decimal(0)
-        if kind.change:
+        if (kind.change or kind.vc_change) and has_setup_stop(values, setup_codes):
+            # 段取りは停止として先に渡してある(2回数えない)
+            skipped += 1
+        elif kind.change:
             extra += factors.setup - 1
             changes += 1
-        if kind.vc_change:
-            extra += factors.vc - 1
-            vc_changes += 1
+            if kind.vc_change:
+                extra += factors.vc - 1
+                vc_changes += 1
         if extra > 0:
             w += w / pack_count(values) * extra
         ex_rows += 1 if kind.ex and factors.ex != 1 else 0
@@ -388,6 +422,8 @@ def adjust_weights(weights: Sequence[Decimal], rows: Sequence[dict[str, str]],
     if vc_changes and factors.vc != 1:
         notes.append(f"そのうち VC が前のロットと違う {vc_changes} か所は、VC交換のぶんさらに長め"
                      f"(+{_times(factors.vc - 1)}倍)")
+    if skipped:
+        notes.append(f"段取り変更の停止がある {skipped} か所は長くしません(段取りは停止の分として渡します)")
     return out, notes
 
 

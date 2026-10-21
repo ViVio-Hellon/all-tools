@@ -14,6 +14,7 @@
     ・前のロットと VC が違えば、1梱包目に VC交換のぶんを足す
     ・直の最初の行は前の直の最後のロットと比べる(同じなら変わり目ではない)
     ・倍率は設定・管理者で変えられる(1〜5。管理者モードだけ)
+    ・段取り変更の停止がある行は長くしない(v4.42.1。段取りは停止の分として先に渡してある)
 """
 from __future__ import annotations
 
@@ -24,16 +25,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from nippou.access_bridge.stop_master import StopReason  # noqa: E402
 from nippou.logic import time_split as ts  # noqa: E402
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 
 D = Decimal
 
 
-def weights_of(rows, before=None, factors=None):
+def weights_of(rows, before=None, factors=None, setup_codes=frozenset()):
     base, _ = ts.pack_weights([ts.row_packs(r) for r in rows])
     kinds = ts.lot_runs(rows, before)
-    return ts.adjust_weights(base, rows, kinds, factors or ts.Factors())
+    return ts.adjust_weights(base, rows, kinds, factors or ts.Factors(), setup_codes)
 
 
 class LotRunsTests(unittest.TestCase):
@@ -128,6 +130,44 @@ class AdjustWeightsTests(unittest.TestCase):
         self.assertLessEqual(abs(spans[0] - spans[1]), 5, "前の直の続きのロットは段取りを足さない")
         self.assertEqual(w[0], w[1])
         self.assertEqual(sum(spans), 420)
+
+
+class SetupStopTests(unittest.TestCase):
+    """段取り変更の停止がある行は長くしないでください (v4.42.1)"""
+
+    CODES = ts.setup_stop_codes({
+        "設備停止": [StopReason("休憩食事", "0")],
+        "不稼働": [StopReason("突発停止(機械)", "ｲ")],
+        "ハンドリング": [StopReason("段取り変更", "A"), StopReason("内径カット", "B")],
+    })
+
+    def test_段取りの停止の記号は内訳の名前で見分ける(self) -> None:
+        self.assertEqual(self.CODES, frozenset({"A"}))
+        self.assertEqual(ts.setup_stop_codes({"x": [StopReason("段取替え", "Ｃ")]}), frozenset({"C"}))
+
+    def test_段取り変更の停止がある変わり目は長くしない(self) -> None:
+        rows = [{"LOT": "A", "VC": "両面", "MAI": "5", "TUT": "1", "S": "A", "TH": "15"},
+                {"LOT": "B", "VC": "片面", "MAI": "5", "TUT": "1"}]
+        w, notes = weights_of(rows, before=("Z", "両面"), setup_codes=self.CODES)
+        self.assertEqual(w[0], D(5), "段取り変更の停止がある行は長くしない(VC交換も足さない)")
+        self.assertEqual(w[1], D(10), "停止の無い変わり目は今までどおり(段取り + VC交換)")
+        self.assertIn("段取り変更の停止がある 1 か所は長くしません(段取りは停止の分として渡します)", notes)
+        self.assertIn("ロットの変わり目 1 か所の1梱包目は段取りのぶん長め(1.5倍)", notes)
+
+    def test_停止の2つめ以降に打ってあっても同じ(self) -> None:
+        rows = [{"LOT": "A", "MAI": "5", "S": "ｲ", "TH": "5", "STH": "A", "THT": "10"}]
+        w, _ = weights_of(rows, setup_codes=self.CODES)
+        self.assertEqual(w, [D(5)])
+
+    def test_EXの倍率はそのまま(self) -> None:
+        rows = [{"LOT": "A", "ET": "EX", "MAI": "5", "S": "A", "TH": "10"}]
+        w, _ = weights_of(rows, setup_codes=self.CODES)
+        self.assertEqual(w, [D(6)])
+
+    def test_ほかの停止では長くする(self) -> None:
+        rows = [{"LOT": "A", "MAI": "5", "TUT": "1", "S": "B", "TH": "10"}]
+        w, _ = weights_of(rows, setup_codes=self.CODES)
+        self.assertEqual(w, [D("7.5")])
 
 
 class FactorsTests(unittest.TestCase):
@@ -229,6 +269,31 @@ class DistributeLotWebTests(WebTestCase):
         plan = self.plan({"1": {"MAI": "5", "TUT": "1"}})
         self.assertEqual(plan["pages"], [1, 2], plan)
         self.assertIn("EX のロットの 2 行は 1.2倍で数えます", plan["adjust_notes"])
+
+    def test_段取り変更の停止がある行は長くしない(self) -> None:
+        """停止の分を引いた残り(作業の分)が、変わり目でない行と同じ。"""
+        from unittest import mock
+
+        reasons = {"ハンドリング": [StopReason("段取り変更", "A")]}
+        self.save_previous_shift("A", "両面")
+        rows = {"1": {"LOT": "A", "VC": "両面", "MAI": "5", "TUT": "1"},
+                "2": {"LOT": "B", "VC": "片面", "MAI": "5", "TUT": "1", "S": "A", "TH": "20"},
+                "3": {"LOT": "C", "VC": "片面", "MAI": "5", "TUT": "1"}}
+        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", return_value=reasons):
+            plan = self.plan(rows)
+        spans = self.spans(plan)
+        work = [spans[0], spans[1] - 20, spans[2]]
+        self.assertLessEqual(abs(work[1] - work[0]), 5, work)   # 段取りは停止の20分だけ
+        self.assertGreater(work[2], work[0] + 5, work)           # 停止の無い変わり目は長め
+        self.assertIn("段取り変更の停止がある 1 か所は長くしません(段取りは停止の分として渡します)",
+                      plan["adjust_notes"])
+
+    def test_停止理由を読めなくても割り振る(self) -> None:
+        from unittest import mock
+
+        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", side_effect=OSError("届かない")):
+            plan = self.plan({"1": {"LOT": "A", "MAI": "5", "S": "A", "TH": "10"}})
+        self.assertEqual(plan["count"], 1)
 
     def test_倍率は管理者だけが変えられる(self) -> None:
         res = self.post("/api/settings/time-split-factors", {"ex": "2", "setup": "1.5", "vc": "1.5"})
