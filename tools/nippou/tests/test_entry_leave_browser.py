@@ -49,6 +49,32 @@ class LeaveTests(EntryBrowserCase):
         self.assertEqual(self.value(page, "ZAI1"), "52S- R")
         self.assertEqual(self.errors, [])
 
+    def test_欄を離れた答えを待つうちに移っても_空の自動保存で打った行を消さない(self) -> None:
+        """v4.40.2 で直した不具合(段階1の試験で見つかった)。
+
+        欄を離れた答え(`/api/entry/state`)を待つうちに「記録を見る」へ移ると、その要求は取り消され、
+        取り消しを受けた後始末が**記録の画面の上で**自動保存を走らせていました(画面の回 `gen` が
+        日報入力に入ったときにしか進まなかった)。集めた中身は空で、置いたばかりの打ちかけを空で上書きした。
+        """
+        page = self.open_entry()
+        self.hold = ("/api/entry/state",)
+        self.type_in(page, "MAI1", "10")
+        page.locator("#MAI1").press("Tab")              # 離れる → 答えを止める
+        self.wait_held(page, 1)
+        page.click('nav.rail a[href="/records"]')
+        page.wait_for_function("location.pathname === '/records'", timeout=8000)
+        mark = len(self.sent)
+        self.hold = ()
+        page.wait_for_timeout(1500)                     # 取り消しの後始末が走りきるのを待つ
+        empty = [b for p, b in self.sent[mark:]
+                 if p.startswith("/api/entry/save") and not b.get("rows")]
+        self.assertEqual(empty, [], "日報入力を出たあとに空の中身で保存しています")
+        page.click('nav.rail a[href="/"]')
+        page.wait_for_selector("#grid-body")
+        page.wait_for_timeout(800)
+        self.assertEqual(self.value(page, "MAI1"), "10", "打った行が消えました")
+        self.assertEqual(self.errors, [])
+
     def test_打ちかけを置けなければ黙って捨てずに訊く(self) -> None:
         page = self.open_entry()
         self.type_in(page, "HIT1", "3")

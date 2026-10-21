@@ -2762,10 +2762,11 @@ body.is-viewer #main > *:not(#tab-lock){ display:none; }
 .job__acts .job__stop[hidden]{ display:none; }
 /* **浮かせる枠**(共有へ保存・マスタを直す)。画面ごとに置き場所を作らず、
    どの画面でも上の真ん中に出す(`static/js/progress.js`)。マスタの窓
-   (z-index 80)の上、全画面の確認(200)の下 */
+   (z-index 80)の上、**全画面の確認(200)の上**(v4.40.2)── 直の実績の画面にも
+   「共有へ保存」があり、前は枠が覆いの下に隠れて、進み具合も中止も見えなかった */
 .job--float{
   position:fixed; top:64px; left:50%; transform:translateX(-50%);
-  width:min(560px, calc(100vw - 2 * var(--sp-4))); margin:0; z-index:90;
+  width:min(560px, calc(100vw - 2 * var(--sp-4))); margin:0; z-index:210;
   box-shadow:0 8px 24px rgba(0,0,0,.18);
 }
 .job__title{ font-size:var(--fs-xs); color:var(--muted); font-weight:700; }

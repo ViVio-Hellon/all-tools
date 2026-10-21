@@ -130,13 +130,10 @@ class ProgressTests(PushCase):
                 self.assertEqual(page.evaluate("document.querySelector('#job-float progress').value"), 75)
                 # 中止は「止めて」と頼むだけ(送った束は共有に入る)
                 mark = len(self.sent)
-                if name == "直の実績":
-                    # **直の実績では、枠が画面いっぱいの覆いの下に隠れて押せません**(段階1で
-                    # 見つけた不具合。覆いの z-index 200 > 枠の 90)。ここでは押した先の道だけを見る
-                    page.dispatch_event("#job-float .job__stop", "click")
-                else:
-                    self.assertTrue(self.on_top(page), "進み具合の枠がほかの物の下に隠れています")
-                    page.click("#job-float .job__stop")
+                # 直の実績では、前は枠が画面いっぱいの覆い(z-index 200)の下に隠れて押せなかった
+                # (段階1で見つけた不具合。v4.40.2 で枠を覆いの上へ)
+                self.assertTrue(self.on_top(page), "進み具合の枠がほかの物の下に隠れています")
+                page.click("#job-float .job__stop")
                 self.wait_sent(page, mark, "/api/progress/stop")
                 # 終われば必ず消す
                 self.hold = ()

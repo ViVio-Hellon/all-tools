@@ -127,6 +127,13 @@ function noteSaved(sentSnap, typed) {
 let gen = 0;
 const live = (mine) => mine === gen;
 
+/*
+  **日報入力の表がいま画面にあるか**(v4.40.2)。画面を出たあとに走った後始末が、ほかの画面の上で
+  中身を集めると**空の12行**になります。それを保存として送ると、置いたばかりの打ちかけを空で
+  上書きしていました(欄を離れた答えを待つうちに「記録を見る」へ移ったとき)。表の無い所からは送らない。
+*/
+const onScreen = () => Boolean(document.getElementById("grid-body"));
+
 /** 画面の中身を送る要求。**画面を出たら取り消す**(`api.post` の `signal`)。 */
 function send(path, data, options = {}) {
   return api.post(path, data, { ...options, signal: pageSignal() });
@@ -2145,6 +2152,7 @@ async function maybeAutosave() {
   // ありませんが、断られるだけの要求を毎回飛ばすとログが埋まり、
   // 本当に断られた回が読めなくなります
   if (!tabLock.mayEdit()) return;
+  if (!onScreen()) return;              // 日報入力を出たあと(空の中身を送らない)
   const note = document.getElementById("save-note");
   const mine = gen;
   try {
@@ -2155,7 +2163,7 @@ async function maybeAutosave() {
     const body = await inOrder(() => {
       // 順番が来たときに画面が引き直されていたら送らない(新しい画面の中身を
       // 前の画面の自動保存として送らない)
-      if (!live(mine)) return { saved: false, skipped: "" };
+      if (!live(mine) || !onScreen()) return { saved: false, skipped: "" };
       since = editSeq;
       sent = snap();
       return api.post("/api/entry/save", { ...collect(), silent: true }, { mute: true });
@@ -3586,4 +3594,8 @@ export function start() {
 
   // 画面を出るときにタイマーを止める(`nav.js` が合図をくれる)
   pageSignal().addEventListener("abort", stopTimers, { once: true });
+  // **画面を出たら、この画面の回は終わり**(v4.40.2)。前は次に日報入力へ入る(`start()`)まで回が
+  // 進まず、出たあとに取り消された要求の後始末(`settle` の catch の自動保存など)が、まだこの画面に
+  // いるつもりで走っていました
+  pageSignal().addEventListener("abort", () => { gen += 1; }, { once: true });
 }
