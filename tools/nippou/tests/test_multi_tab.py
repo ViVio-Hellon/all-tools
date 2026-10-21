@@ -22,8 +22,8 @@
    開いています」の1枚に差し替わっていました(取り合うのは打つ画面だけ)。
 
 ここでは、判断(`logic/tab_lock.py`)・書き込みの口(`app/__init__.py`)・
-画面の配線を見たうえで、**本物のブラウザ**でも1と2と4を確かめます
-(Playwright が無い環境では飛ばします)。
+画面の配線を見たうえで、**本物のブラウザ**でも1と2と4を確かめます。2枚目の差し替え・名札・断られたら読み直すも
+本物のブラウザで確かめます(Playwright が無い環境では飛ばします。CI では落とします)。
 """
 from __future__ import annotations
 
@@ -237,39 +237,14 @@ class GuardTests(WebTestCase):
 # 画面の配線
 # ----------------------------------------------------------------------
 class WiringTests(unittest.TestCase):
-    def test_複製したタブは名札を作り直す(self) -> None:
-        js = _read("app", "static", "js", "api.js")
-        self.assertIn('new BroadcastChannel("nippou-tab")', js)
-        self.assertIn("export const tabReady", js)
-        # 名札は作り直すことがあるので、**使うたびに読む**
-        self.assertIn("export let tabId", js)
-        self.assertIn('"X-Tab": TAB', js)
-
+    # 複製したタブの名札・引き継いで古ければ読み直す・断られたら読み直す・差し替えは日報入力の上だけ
+    # は、字を探すのをやめて下の `BrowserTests` で本当に動かして確かめます(段階1)
     def test_名札が決まってから名乗る(self) -> None:
         js = _read("app", "static", "js", "tab_lock.js")
         beat = js[js.index("async function beat(path)"):]
         beat = beat[:beat.index("\n}")]
         self.assertLess(beat.index("await tabReady"), beat.index("background.post"))
         self.assertIn("body.loaded = loadedAt()", beat)
-
-    def test_打てる側になって表が古ければ読み直す(self) -> None:
-        js = _read("app", "static", "js", "tab_lock.js")
-        apply = js[js.index("function apply(body)"):]
-        apply = apply[:apply.index("\n}")]
-        self.assertIn('next === "editor" && body && body.stale && onEntry', apply)
-        self.assertIn("reloadStale(", apply)
-
-    def test_断られたら読み直す(self) -> None:
-        js = _read("app", "static", "js", "api.js")
-        self.assertIn('if (error.code === "stale_tab") reloadStale(error.message)', js)
-
-    def test_差し替えるのは日報入力の上だけ(self) -> None:
-        js = _read("app", "static", "js", "tab_lock.js")
-        paint = js[js.index("function paint()"):]
-        paint = paint[:paint.index("\n}")]
-        self.assertIn("if (!onEntry) return;", paint)
-        leave = js[js.index("onLeave(() => {"):]
-        self.assertIn("onEntry = false;", leave[:leave.index("});")])
 
 
 # ----------------------------------------------------------------------
@@ -308,21 +283,35 @@ class BrowserTests(WebTestCase):
         self.addCleanup(self.ctx.close)
         self.ctx.route("http://app.test/**", self._forward)
         self.errors: list[str] = []
+        #: 通した要求(方法, 道, 名札)。名札の付け忘れ・心拍が続いているかを見る
+        self.seen: list[tuple[str, str, str]] = []
+        #: 返した答え(道, HTTP の番号)
+        self.replies: list[tuple[str, int]] = []
 
     def _forward(self, route) -> None:
         req = route.request
         path = req.url.split("http://app.test", 1)[1]
+        self.seen.append((req.method, path, req.headers.get("x-tab") or ""))
         headers = dict(HEADERS)
         if req.headers.get("x-tab"):
             headers["X-Tab"] = req.headers["x-tab"]
         res = self.client.open(path, method=req.method, headers=headers,
                                data=req.post_data_buffer,
                                content_type=req.headers.get("content-type"))
+        self.replies.append((path, res.status_code))
         try:
             route.fulfill(status=res.status_code, body=res.get_data(),
                           headers={"content-type": res.headers.get("Content-Type", "text/plain")})
         finally:
             res.close()
+
+    def wait_until(self, page, ok, what: str, timeout: float = 8.0) -> None:
+        """Python 側の状態(`seen`)を待つ。待つあいだも要求は捌かれる。"""
+        deadline = time.monotonic() + timeout
+        while not ok():
+            if time.monotonic() > deadline:
+                self.fail(f"{what} が来ません")
+            page.wait_for_timeout(50)
 
     def open_tab(self):
         page = self.ctx.new_page()
@@ -367,6 +356,105 @@ class BrowserTests(WebTestCase):
         self.repo().save(HeaderRecord(**at, worker="山田"),
                          [DetailRecord(**at, row_no=n, lot=lot) for n, lot in enumerate(lots, 1)])
         tab_lock.get_desk().note_write(self.tab_of(page), now=awake_clock.now())
+
+    def test_2枚目は札1枚に差し替わり_打つものは押せない(self) -> None:
+        """帯では紛らわしかった(表も保存の並びも薄くなっただけでそこにある)。**1枚に差し替える。**
+
+        隠すのは見た目の話で焦点はキーボードで入り込めるので、`#main` の中は押せなくする。
+        帯の「終了」(`#main` の外)まで灰色にすると、このタブが壊れたように見える。
+        """
+        a = self.open_tab()
+        b = self.open_tab()
+        self.assertTrue(self.becomes_viewer(b))
+        self.assertTrue(b.is_visible("#tab-lock"))
+        self.assertIn("この日報は、別のタブで開いています", b.text_content("#tab-lock"))
+        self.assertTrue(b.is_enabled("#tab-lock-take"))
+        self.assertFalse(b.is_visible("#grid-body"), "表が見えたままです")
+        for field in ("#hd-worker", "#HIT1", "#save"):
+            with self.subTest(field=field):
+                self.assertTrue(b.is_disabled(field), f"{field} が押せます")
+        self.assertTrue(b.is_enabled("#quit"), "#main の外まで押せなくしています")
+        # 1枚目はそのまま打てる
+        self.assertFalse(self.viewer(a))
+        self.assertFalse(a.is_visible("#tab-lock"))
+        self.assertTrue(a.is_enabled("#hd-worker"))
+        self.assertEqual(self.errors, [])
+
+    def test_見るだけのタブもほかの画面はふつうに見られる_心拍は続ける(self) -> None:
+        """取り合うのは打つ画面だけ。**画面を出たら差し替えを戻す。心拍は止めない**
+        (止めるとグラフを見て戻っただけで権利を落とす)。"""
+        self.open_tab()
+        b = self.open_tab()
+        self.assertTrue(self.becomes_viewer(b))
+        tab_b = self.tab_of(b)
+        b.click('nav.rail a[href="/graph"]')
+        b.wait_for_function("location.pathname === '/graph'", timeout=8000)
+        b.wait_for_timeout(500)
+        self.assertFalse(self.viewer(b), "グラフまで差し替えています")
+        self.assertEqual(b.locator("#tab-lock").count(), 0)
+        mark = len(self.seen)
+        self.wait_until(b, lambda: any(p.startswith("/api/tab/ping") and t == tab_b
+                                       for _, p, t in self.seen[mark:]),
+                        "グラフにいるあいだの心拍", timeout=8.0)
+        b.click('nav.rail a[href="/"]')
+        b.wait_for_selector("#grid-body", state="attached")
+        self.assertTrue(self.becomes_viewer(b), "日報入力へ戻ったら見るだけに戻ります")
+        self.assertEqual(self.errors, [])
+
+    def test_名札は全部の要求に付く(self) -> None:
+        """書き込みの口が名札で見るので、**付け忘れる場所を作らない。**名札は読み直しでも変わらない。"""
+        a = self.open_tab()
+        tab = self.tab_of(a)
+        self.assertTrue(tab)
+        a.fill("#hd-worker", "山田")
+        a.dispatch_event("#hd-worker", "change")
+        a.wait_for_timeout(500)
+        a.locator("#HIT1").click()
+        a.locator("#HIT1").press_sequentially("3", delay=20)
+        a.locator("#HIT1").press("Tab")
+        a.wait_for_timeout(500)
+        a.click("#save")
+        a.wait_for_timeout(800)
+        a.click('nav.rail a[href="/records"]')
+        a.wait_for_function("location.pathname === '/records'", timeout=8000)
+        a.wait_for_timeout(500)
+        # 起きているかの見張り(`health.js`)は名札を見ない口なので除く
+        probes = ("/api/health", "/api/alive")
+        calls = [(m, p, t) for m, p, t in self.seen
+                 if p.startswith("/api/") and not p.startswith(probes)]
+        self.assertTrue(any(p.startswith("/api/entry/save") for _, p, _ in calls), calls)
+        missing = [(m, p) for m, p, t in calls if t != tab]
+        self.assertEqual(missing, [], "名札の無い(違う)要求があります")
+        a.reload(wait_until="load")
+        a.wait_for_timeout(500)
+        self.assertEqual(self.tab_of(a), tab, "読み直しで名札が変わりました")
+
+    def test_古い表からの保存は断られて_読み直して理由を言う(self) -> None:
+        """ほかのタブが書いたあとの表から保存すると、サーバは `stale_tab` で断る。
+        画面はそれを受けて**読み直し、読み直した画面で理由を出す**(`api.js`)。"""
+        from nippou.logic import tab_lock
+        a = self.open_tab()
+        tab = self.tab_of(a)
+        a.fill("#hd-worker", "山田")
+        a.dispatch_event("#hd-worker", "change")
+        a.wait_for_timeout(800)
+        desk = tab_lock.get_desk()
+        self.assertIsNotNone(desk.loaded.get(tab))
+        a.evaluate("window.__before = true")                      # 読み直すと消える印
+        desk.note_write("other", now=desk.loaded[tab] + 0.001)   # ほかのタブがあとから書いた
+        # 打って欄を離れる(自動保存が古い表を送る)。次の心拍(5秒)より先に
+        a.locator("#HIT1").click()
+        a.locator("#HIT1").press_sequentially("3", delay=20)
+        a.locator("#HIT1").press("Tab")
+        # 断りの文言は失敗の知らせとしても出るので、**読み直したこと**を印で見る
+        a.wait_for_function("window.__before === undefined", timeout=4000)
+        a.wait_for_selector("#grid-body")
+        # 読み直した画面で、サーバの断り文を出す(心拍が読み直したときの文言とは別)
+        a.wait_for_function(
+            "[...document.querySelectorAll('.toast--warn .toast__text')]"
+            ".some(t => t.textContent.includes('読み直します'))", timeout=4000)
+        self.assertIn(("/api/entry/save", 409), [(p.split("?")[0], c) for p, c in self.replies])
+        self.assertEqual(self.errors, [])
 
     def test_引き継いだタブは表を読み直す(self) -> None:
         a = self.open_tab()

@@ -280,7 +280,11 @@ class WriteGuardTests(WebTestCase):
 
 
 class ScreenTests(WebTestCase):
-    """画面の側。"""
+    """画面の側。
+
+    2枚目は1枚に差し替わる・隠れていても押せない・他の画面は差し替えない・名札は全部の要求に付く
+    は、字を探すのをやめて `test_multi_tab.BrowserTests` で本当に開いて確かめます(段階1)。
+    """
 
     def test_日報入力だけが取り合う(self) -> None:
         """打つ画面はここだけ。**グラフまで取り合わない。**"""
@@ -294,64 +298,6 @@ class ScreenTests(WebTestCase):
                 text = (root / "app" / "static" / "js" / "views"
                         / f"{name}.js").read_text(encoding="utf-8")
                 self.assertNotIn("tab_lock.js", text)
-
-    def test_2枚目は1枚に差し替わる(self) -> None:
-        """**帯では足りませんでした。**
-
-        薄くして触れなくしても、12行の表も保存の並びもそこにあるので、
-        画面としては日報入力のままです ── どちらのタブで打っているのかは、
-        結局その帯を読まないと分かりません。
-        「2枚目を開いた時点で『別のタブで開いています』の1枚に差し替える」。
-        """
-        root = Path(__file__).resolve().parent.parent
-        js = (root / "app" / "static" / "js"
-              / "tab_lock.js").read_text(encoding="utf-8")
-        self.assertIn("別のタブで開いています", js)
-        self.assertIn("このタブで入力する", js)
-        # 本体を隠すのは CSS。JS で `display` を1つずつ触らない
-        # (戻すときに元の値が分からなくなる)
-        self.assertNotIn(".style.display", js)
-        css = (root / "app" / "static" / "css"
-               / "components.css").read_text(encoding="utf-8")
-        self.assertIn("body.is-viewer #main > *:not(#tab-lock){ display:none; }",
-                      css)
-
-    def test_隠れていても押せなくしておく(self) -> None:
-        """隠すのは見た目の話。焦点はキーボードで入り込めます。"""
-        root = Path(__file__).resolve().parent.parent
-        js = (root / "app" / "static" / "js"
-              / "tab_lock.js").read_text(encoding="utf-8")
-        self.assertIn("el.disabled = true", js)
-        # **触るのは `#main` の中だけ。** 帯の「終了」や左の並びまで
-        # 灰色にすると、このタブが壊れたように見えます
-        self.assertIn('document.getElementById("main")', js)
-
-    def test_他の画面までは差し替えない(self) -> None:
-        """記録・グラフ・集計は2枚目でも見られます。
-
-        差し替えたまま画面を移ると、そちらが真っ白になります ──
-        取り合っているのは「打つ画面」だけです。
-        """
-        root = Path(__file__).resolve().parent.parent
-        js = (root / "app" / "static" / "js"
-              / "tab_lock.js").read_text(encoding="utf-8")
-        leave = js[js.index("onLeave(() => {"):]
-        self.assertIn("unpaint();", leave[:leave.index("});")])
-        body = js[js.index("function unpaint()"):]
-        body = body[:body.index("\n}")]
-        self.assertIn('classList.remove("is-viewer")', body)
-        # **心拍は止めない。** 止めると、グラフを見に行って戻ってきた
-        # だけで打つ権利を落とします
-        self.assertNotIn("clearInterval", body)
-
-    def test_名札は全部の要求に付く(self) -> None:
-        """書き込みの口が見るので、**付け忘れる場所を作らない。**"""
-        root = Path(__file__).resolve().parent.parent
-        text = (root / "app" / "static" / "js"
-                / "api.js").read_text(encoding="utf-8")
-        self.assertIn('"X-Tab"', text)
-        # タブごとに別で、読み直しでは消えない寿命
-        self.assertIn("sessionStorage", text)
 
 
 if __name__ == "__main__":
