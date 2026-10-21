@@ -210,7 +210,7 @@ class VersionDisplayTests(WebTestCase):
         self.assertEqual(body["version"], self.app.config["VERSION"])
 
     # 「画面が自分の印を拾う」は、字を探すのをやめて本物のブラウザで開いて確かめます
-    # (`test_shell_browser.StampTests`)。字探しは通っていたのに、実際は印を拾えていなかった(v4.40.2 で直した)
+    # (`test_shell_browser.StampTests`)。字探しは通っていたのに、実際は印を拾えていなかった(v4.40.3 で直した)
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ class SkinTests(ScreenBrowserCase):
 
 
 class StampTests(ScreenBrowserCase):
-    """**画面(JS)の版の印を、自分の URL の道(`/sv/<印>/js/app.js`)から拾う**(v4.40.2 で直した)。
+    """**画面(JS)の版の印を、自分の URL の道(`/sv/<印>/js/app.js`)から拾う**(v4.40.3 で直した)。
 
     前は `?v=` から拾っていて、印が道へ移ったあと**いつも空**でした ── 設定の「この端末」は
     「(取れません)/ 確かめられません」、古い控えを掴んでいても帯に印が付かなかった。

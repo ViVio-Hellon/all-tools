@@ -131,7 +131,7 @@ class ProgressTests(PushCase):
                 # 中止は「止めて」と頼むだけ(送った束は共有に入る)
                 mark = len(self.sent)
                 # 直の実績では、前は枠が画面いっぱいの覆い(z-index 200)の下に隠れて押せなかった
-                # (段階1で見つけた不具合。v4.40.2 で枠を覆いの上へ)
+                # (段階1で見つけた不具合。v4.40.3 で枠を覆いの上へ)
                 self.assertTrue(self.on_top(page), "進み具合の枠がほかの物の下に隠れています")
                 page.click("#job-float .job__stop")
                 self.wait_sent(page, mark, "/api/progress/stop")
