@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import PropertyMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -45,6 +46,16 @@ class RepoTestCase(unittest.TestCase):
         self.repo = NippouRepository(self.conn)
         self.addCleanup(self._tmp.cleanup)
         self.addCleanup(self.conn.close)
+        # **集計CSVの出力先を、この1件の一時フォルダへ。** 取り込みは出力先を渡さないと
+        # 設定の出力先(と決めてあれば2つ目)へ出す。寄せないと、試験を流すだけで本物の
+        # 出力先(共有フォルダのこともある)へ偽の日の集計CSVが出ていた
+        from nippou.config import Settings
+        self.out_default = self.tmp / "出力先"
+        for name, value in (("report_output_dir", self.out_default),
+                            ("report_output_dir_2", None)):
+            mocked = patch.object(Settings, name, new_callable=PropertyMock, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
 
     def save(self, *details: DetailRecord, **head) -> None:
         base = dict(report_date=DAY, line="L-1", shift="1直", page=1,
@@ -334,6 +345,15 @@ class ApplyTests(RepoTestCase):
         loaded = self.repo.load(DAY, "L-1", "1直", 1)
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded[1][0].lot, "A")
+
+    def test_出力先を渡さなくても試験の一時フォルダにだけ出る(self) -> None:
+        """寄せ先(`RepoTestCase`)が効いているか。**本物の出力先へ書かない。**"""
+        path = self.csv(f"日付,ライン,直,ロット№,実績合計 枚数\n"
+                        f"{DAY},L-1,1直,A,100\n")
+        import_service.apply(self.repo, path)
+        written = [p for p in self.out_default.rglob("*.csv")]
+        self.assertTrue(written)
+        self.assertTrue(all(self.tmp in p.parents for p in written))
 
     def test_共有へは既定で送らない(self) -> None:
         """古いぶんは VBA の時代に既に入っている。**一斉に飛ばさない。**"""

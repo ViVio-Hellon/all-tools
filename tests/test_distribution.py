@@ -91,7 +91,7 @@ class DistributionTests(unittest.TestCase):
         self.assertIsNone(user_settings.get("知らない鍵"), "知らない鍵は捨てる")
 
     def test_名前を変える前に書き出した配布設定も読む(self) -> None:
-        """1.3.x までは「統合ツール.json」。配った先の 配布設定\ を作り直さなくても効く。"""
+        """1.3.x までは「統合ツール.json」。配った先の 配布設定\\ を作り直さなくても効く。"""
         DIST.mkdir(parents=True)
         (DIST / "統合ツール.json").write_text(json.dumps({
             "format": distribution.FORMAT, "settings": {"shared_db_name": "古い名前.sqlite3"}}),

@@ -296,6 +296,14 @@ class BrowserTests(WebTestCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # **サーバの時計を直の中ほどに止める。** 本物の時計のままだと、直の残り5分
+        # (06:55・14:55・22:45 から)に流したとき自動確定が走って確認画面へ移り、
+        # 2枚目のタブが日報入力にいないので「見るだけ」にならず落ちていた(アプリは仕様どおり)
+        from datetime import date, datetime, time as clock_time
+        from tests.test_scenario_shift_flow import _Now, install_clock
+
+        _Now.value = datetime.combine(date.today(), clock_time(10, 0))
+        install_clock(self)
         self.ctx = self.browser.new_context(viewport={"width": 1400, "height": 900})
         self.addCleanup(self.ctx.close)
         self.ctx.route("http://app.test/**", self._forward)

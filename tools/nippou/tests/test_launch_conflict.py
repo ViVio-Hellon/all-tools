@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -53,6 +55,13 @@ class StaleTests(unittest.TestCase):
     """古い版が終わらないとき。**断るだけで終わらせない。**"""
 
     def setUp(self) -> None:
+        # 案内(`多重起動.html`)はローカル領域の work へ書かれる。**本物の領域へ書かない**
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        env = patch.dict(os.environ, {"NIPPOU_LOCAL_DIR": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        self.local = Path(tmp.name)
         self.guard = launch_guard.GuardResult(
             False, url="http://127.0.0.1:8733/", existing=_lock(),
             stale_version="2.9.0", reason="古い版が終了しませんでした")
@@ -78,6 +87,10 @@ class StaleTests(unittest.TestCase):
         for expected in ("PID 4321", "ポート 8733", "2.9.0",
                          r"\\srv\共有\日報ツール", "stop.bat"):
             self.assertIn(expected, text)
+
+    def test_案内は試験の一時フォルダに書く(self) -> None:
+        page = start_app._write_conflict_page(self.guard)
+        self.assertIn(self.local, page.parents)
 
     def test_案内に何が動いているかが書いてある(self) -> None:
         page = start_app._write_conflict_page(self.guard)
