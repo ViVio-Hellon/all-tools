@@ -31,6 +31,7 @@ from calendar_app import (
 )
 from calendar_app.dbkit import outbox_sync, source_db
 from calendar_app.repository import Repository
+from calendar_app.sync import business_rules
 from calendar_app.sync import deletes as sync_deletes
 from calendar_app.sync import specs as sync_specs
 from calendar_app.sync import total_pending_count
@@ -220,6 +221,8 @@ class DeleteWhileSendingTests(_FileBase):
         source = source_db.connect(self.data_db, read_only=False)
         self.addCleanup(source.close)
         outbox_sync.ensure_op_id_column(source, sync_specs.DATA_SPEC)
+        # 送る前に、後から足した列(記入班・登録日時)を共有の表へ足す(本物の送信と同じ)
+        business_rules.missing_added_columns(source, config.TABLE_DATA)
         # 背景の送信が予約して INSERT まで済ませ、「済」を書く前
         rows, op_ids = outbox_sync.claim_rows(self.other(), sync_specs.DATA_SPEC)
         values = {k: rows[0][k] for k in rows[0].keys() if k != "ID"}

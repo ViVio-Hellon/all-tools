@@ -16,6 +16,12 @@
 同じ考え方)。確認と実際の INSERT の間にはごく短い競合の余地が残るが
 (同時に 2 ラインが送信した場合など)、元の設計からの既知の限界であり、
 実運用では確認〜挿入までの時間が短いため実害は小さい。
+
+後から足した列 (VER4.2.4)
+-------------------------
+休み管理には「記入班」(連絡を残した班)と「登録日時」(保存した時刻)を
+足した。共有の表がまだ前の形なら、送る前に**後ろへ**足す
+(``missing_added_columns``)。前からの列は変えない。
 """
 
 from __future__ import annotations
@@ -27,7 +33,8 @@ from .. import config
 from ..dbkit import outbox_sync, source_db
 from ..logging_utils import debug_log
 
-__all__ = ["GuardedSendResult", "send_data_with_duplicate_guard", "duplicate_guard"]
+__all__ = ["GuardedSendResult", "send_data_with_duplicate_guard", "duplicate_guard",
+           "missing_added_columns"]
 
 
 @dataclass
@@ -100,6 +107,65 @@ def _waiting_for_delete(conn: sqlite3.Connection, source_table: str,
         "識別コード": values.get("識別コード")})
 
 
+#: 後から足した列を**足せなかった**取り込み元 (パス, 表) → 足せなかった列。
+#: 権限が無い・読み取り専用など、待っても直らない相手に毎回 ALTER を投げて
+#: 失敗のログを積まないため(``outbox_sync._op_id_failed`` と同じ考え方)。
+#: 「ある」ほうは覚えない ── 取り込み元のファイルは差し替えられるので、毎回見る
+_added_failed: dict[tuple[str, str], frozenset[str]] = {}
+
+
+def missing_added_columns(source: "source_db.SourceConnection",
+                           table: str) -> frozenset[str]:
+    """後から足した列のうち、**今回は省いて送る**ものを返す (VER4.2.4)。
+
+    共有の表に列が無ければ、**前からの列は変えず、後ろに**足す
+    (``ALTER TABLE ... ADD COLUMN``。python-web-tools など外からも読まれる
+    ので、列の順も意味も動かさない)。見るのは ``PRAGMA`` 1回で、
+    足すのは最初に送る1度だけ。
+
+    * 足せた・もうある   … 省かない(届く)
+    * 待っても足せない   … 省いて送る(連絡そのものは届く。時刻と班は手元にだけ残る)
+    * ロック競合で今は不明 … 省かない。列が無ければその行は送れずに
+      送信待ちに残り、次の周期で足し直してから届く(省いて送ると、
+      時刻と班が共有から永久に欠ける)
+    """
+    present = set(source.columns(table))
+    if not present:
+        return frozenset()                  # 表が無い。送ろうとして失敗する(前と同じ)
+    missing = [name for name in config.DATA_ADDED_COLUMNS if name not in present]
+    if not missing:
+        _added_failed.pop((str(source.path), table), None)
+        return frozenset()
+    known = _added_failed.get((str(source.path), table))
+    if known is not None:
+        return known & frozenset(missing)
+
+    failed: set[str] = set()
+    for name in missing:
+        try:
+            source.execute(
+                f"ALTER TABLE {source_db.quote_identifier(table)} "
+                f"ADD COLUMN {source_db.quote_identifier(name)} TEXT NOT NULL DEFAULT ''")
+            debug_log(f"business_rules: {table} に「{name}」列を足しました")
+        except source_db.SourceError as exc:
+            text = str(exc).lower()
+            if "duplicate column" in text:
+                continue                    # ほかの端末が先に足した
+            if source_db.is_lock_error(exc):
+                debug_log(f"business_rules: {table} の「{name}」列を今は足せません(使用中) {exc}")
+                continue
+            debug_log(f"business_rules: {table} に「{name}」列を足せません。省いて送ります {exc}")
+            failed.add(name)
+    if failed:
+        _added_failed[(str(source.path), table)] = frozenset(failed)
+    return frozenset(failed)
+
+
+def reset_added_column_cache() -> None:
+    """試験用。取り込み元を作り直したときに呼ぶ。"""
+    _added_failed.clear()
+
+
 def send_data_with_duplicate_guard(
     conn: sqlite3.Connection,
     source: "source_db.SourceConnection",
@@ -117,11 +183,15 @@ def send_data_with_duplicate_guard(
         return result
 
     op_id_ready = spec.use_op_id_guard and outbox_sync.ensure_op_id_column(source, spec)
+    # 後から足した列(記入班・登録日時)。共有の表に無ければ後ろに足す。
+    # 足せない相手には、その列を省いて送る(行そのものは止めない)
+    unsendable = missing_added_columns(source, spec.source_table)
     failed: list[int] = []
     try:
         for row in rows:
             row_id = int(row[spec.key_column])
-            values = {k: row[k] for k in row.keys() if k != spec.key_column}
+            values = {k: row[k] for k in row.keys()
+                      if k != spec.key_column and k not in unsendable}
 
             guard = duplicate_guard(spec.source_table, values)
             if guard and _waiting_for_delete(conn, spec.source_table, values):

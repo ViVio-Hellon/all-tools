@@ -17,6 +17,18 @@ from .dbkit import source_db
 # ---------------------------------------------------------------------------
 #: 休み・連絡の保存先 (VBA: TABLE_DATA)
 TABLE_DATA = "休み管理"
+
+#: 休み管理に後から足した列 (VER4.2.4)。**前からの列は変えず、表の後ろに足す** ──
+#: 共有の表は python-web-tools など外からも読まれるので、列の順や意味を動かさない。
+#: 足す前の表・古い行は空のまま読める(``db.py`` / ``sync/business_rules.py`` / ``importer.py``)
+#:
+#: * 記入班   … 連絡を**残した**班(書いた人の班)。VER4.2.3 までは班の列に
+#:              **宛先として選んだ班**しか無かったので、古い行は空(「(班なし)」と出す)
+#: * 登録日時 … 保存した時刻 ``yyyy/mm/dd hh:mm:ss``(取り込み元へ送った時刻ではない)
+COL_WRITER_GROUP = "記入班"
+COL_REGISTERED_AT = "登録日時"
+DATA_ADDED_COLUMNS = (COL_WRITER_GROUP, COL_REGISTERED_AT)
+
 #: 削除履歴 (VBA: TABLE_DEL_HISTORY)
 TABLE_DEL_HISTORY = "削除履歴"
 #: 作業者名簿 (VBA: TABLE_MEMBER。マスタ DB 側にある読み取り専用テーブル)

@@ -9,7 +9,7 @@
 
     日付 → [休み / コメント・連絡 / 内容閲覧 / 削除]
              休み           → 作業者 → (3交替なら) 直 → 残業繋ぎ → 早出繋ぎ
-             コメント・連絡 → ライン → 班 → 本文
+             コメント・連絡 → (作業長だけ ライン) → 残す班 → 本文
              内容閲覧       → その日の登録内容(読むだけ)
              削除           → チェック → 最終確認
 */
@@ -81,7 +81,7 @@ export function start() {
   // **保存していない連絡を言えるようにしておく**(読み込み直し・窓の × の前に訊く)
   leave.register(() => {
     if (liveDraft && String(liveDraft.text || "").trim()) {
-      return `${liveDraft.label} ${liveDraft.line} ${liveDraft.group}班 への連絡(まだ登録していません)`;
+      return `${liveDraft.label} ${liveDraft.line} ${liveDraft.group}班からの連絡(まだ登録していません)`;
     }
     return liveRest;
   });
@@ -197,7 +197,7 @@ async function onDayClicked(cell) {
   const label = `${Number(cell.date.slice(5, 7))}月${Number(cell.date.slice(8, 10))}日`;
   const action = await pick(`${label} の操作を選んでください`, [
     { label: "休み", value: "rest", note: "作業者の休みを登録" },
-    { label: "コメント・連絡", value: "comment", note: "ライン・班あての連絡" },
+    { label: "コメント・連絡", value: "comment", note: "班からの連絡を残す" },
     { label: "内容閲覧", value: "view", note: `登録 ${cell.count} 件` },
     { label: "削除", value: "delete", note: "履歴に残して削除" },
   ]);
@@ -395,36 +395,58 @@ function pickWorker(title, options, opts = {}) {
   });
 }
 
-/* -- コメント・連絡 ------------------------------------------------- */
+/* -- コメント・連絡 -------------------------------------------------
+   【班は「宛先」ではなく「残した班」】(VER4.2.4)
+   前は「連絡の宛先」としてライン・班を選ばせ、「xx班 への連絡」と出していた。
+   現場が知りたいのは**どの班が書いたか**なので、「xx班からの連絡」にした。
+   **ラインは作業長の端末だけが選べる。** 連絡はそのラインの端末にしか
+   出ないので、ほかのラインへ書いても書いた本人には見えず、意味が無い。
+   作業長かどうかはサーバが決める(`can_choose_line`)。押せなくするのは
+   画面の都合で、別のラインを送ってきてもサーバが断る
+   --------------------------------------------------------------------- */
 async function registerComment(date, label) {
   const targets = await api.get("/api/comment-targets");
   if (!targets.lines.length) {
-    await inform("宛先がありません",
-                 "ライン・班の一覧を取得できませんでした。\n"
-                 + "設定画面で班員名簿の取り込みを確認してください。");
+    await inform("班がありません",
+                 targets.can_choose_line || !targets.my_line
+                   ? "ライン・班の一覧を取得できませんでした。\n"
+                     + "設定画面で班員名簿の取り込みとこの端末のラインを確認してください。"
+                   : `この端末のライン(${targets.my_line})の班が班員名簿にありません。\n`
+                     + "設定画面で班員名簿の取り込みを確認してください。");
     return;
   }
 
   const chosen = await modal({
-    title: `${label} 連絡の宛先`,
+    title: `${label} 連絡を残す班`,
     step: "1 / 2",
     render(body, close) {
       const row = document.createElement("div");
       row.className = "row";
 
       const lineField = field("ライン", "cm-line");
-      const groupField = field("班", "cm-group");
+      const groupField = field("班(連絡を残す班)", "cm-group");
       const lineSelect = lineField.querySelector("select");
       const groupSelect = groupField.querySelector("select");
 
       fill(lineSelect, targets.lines);
+      // 既定は**この端末のライン**
       if (targets.my_line && targets.lines.includes(targets.my_line)) {
         lineSelect.value = targets.my_line;
       }
+      // 作業長以外は押せない(選べるのは班だけ)
+      lineSelect.disabled = !targets.can_choose_line;
       // 1つ目を選ぶと2つ目が**実在する組み合わせだけ**に絞られる
       const refresh = () => fill(groupSelect, targets.groups[lineSelect.value] || []);
       lineSelect.addEventListener("change", refresh);
       refresh();
+
+      if (!targets.can_choose_line) {
+        const why = document.createElement("span");
+        why.className = "hint";
+        why.id = "cm-line-note";
+        why.textContent = "この端末のラインです(選べるのは作業長の端末だけ)";
+        lineField.appendChild(why);
+      }
 
       row.append(lineField, groupField);
       body.appendChild(row);
@@ -511,7 +533,7 @@ async function writeComment(draft, firstNote = "") {
   for (;;) {
     saveDraft(draft);
     const text = await modal({
-      title: `${draft.label} ${draft.line} ${draft.group}班 への連絡`,
+      title: `${draft.label} ${draft.line} ${draft.group}班からの連絡`,
       step: "2 / 2",
       // 本文があれば、閉じる前に訊く
       dirty: () => {
@@ -660,8 +682,8 @@ async function deleteDay(date, label) {
         text.textContent = item.caption;
         const meta = document.createElement("small");
         meta.className = "pick__meta";
-        meta.textContent = [item.line, item.group && `${item.group}班`]
-          .filter(Boolean).join(" ");
+        // 添える文はサーバが組む(連絡は「どの班から・いつ」)
+        meta.textContent = item.meta || "";
         text.appendChild(meta);
 
         row.append(check, text);

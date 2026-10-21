@@ -210,8 +210,10 @@ class CommentTests(unittest.TestCase):
         self.assertEqual(res.get_json()["error"]["code"], "empty_text")
 
     def test_実在しない組み合わせは断る(self) -> None:
+        # この端末のライン(L-1)に無い班。ほかのラインへは作業長しか送れない
+        # (test_comment_origin.LineLockTests)ので、ここでは自分のラインで見る
         res = self.client.post("/api/comment",
-                               json={"date": D, "line": "コイル", "group": "Z",
+                               json={"date": D, "line": "L-1", "group": "Z",
                                      "text": "test"},
                                headers=_web.auth())
         self.assertEqual(res.status_code, 422)

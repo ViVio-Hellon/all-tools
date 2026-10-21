@@ -31,6 +31,8 @@ from ..repository import (
     build_day_detail,
     build_day_text,
     build_day_tooltip,
+    comment_origin,
+    comment_when,
     shift_neighbours,
 )
 
@@ -63,7 +65,7 @@ class Cell:
     today: bool = False
     holiday: str = ""          # 祝日名(無ければ空)
     body: str = ""             # ライン設定で絞ったあとの本文
-    tip: str = ""              # 残業繋ぎ・早出繋ぎ(tkinter 版の ControlTipText)
+    tip: str = ""              # 残業繋ぎ・早出繋ぎと、連絡のどの班から・いつ(ControlTipText)
     count: int = 0             # その日の登録件数(絞り込み前)
 
 
@@ -146,7 +148,7 @@ def month_view(conn: sqlite3.Connection, year: int, month: int,
             # **前後月は中身を出さない**(VBA と同じ)。押せもしないので、
             # 出すと「押せそうなのに反応しない」ことになる
             body=build_day_text(day_records, my_line) if in_month else "",
-            tip=build_day_tooltip(day_records) if in_month else "",
+            tip=build_day_tooltip(day_records, my_line) if in_month else "",
             count=len(day_records) if in_month else 0,
         ))
 
@@ -233,8 +235,12 @@ def _delete_item(record: DayRecord) -> dict[str, Any]:
         caption = f"[休み] {record.naiyou}"
         if record.shift:
             caption += f" ({record.shift}直)"
+        meta = " ".join(part for part in
+                        (record.line, f"{record.group}班" if record.group else "") if part)
     else:
         caption = f"[連絡] {record.naiyou}"
+        # 連絡は**どの班から・いつ**(VER4.2.4)。前の版の行の班は宛先なので出さない
+        meta = f"{comment_origin(record)}　{comment_when(record)}"
     return {
         "id": record.id,
         # 画面はこれを**そのまま返すだけ**。中身の意味は見ない
@@ -243,6 +249,8 @@ def _delete_item(record: DayRecord) -> dict[str, Any]:
         "kind": "rest" if record.is_rest else "comment",
         "line": record.line,
         "group": record.group,
+        # 見出しの下に添える小さな文。**画面は組み立てずにそのまま出す**
+        "meta": meta,
     }
 
 
@@ -311,22 +319,54 @@ def _worker_dict(worker: Worker) -> dict[str, Any]:
     }
 
 
+def can_choose_comment_line(my_line: str) -> bool:
+    """連絡のラインを選べる端末か。**作業長だけ** (VER4.2.4)。
+
+    連絡はそのラインの端末にしか出ない(``repository.build_day_text``)ので、
+    ほかのラインの端末が別のラインへ書いても、書いた本人には見えない。
+    作業長は全ラインを見るので、どのラインへも書ける。作業長かどうかは
+    この端末のライン設定(アクセス権限・管理者パスワードで決まる)で見る。
+    """
+    return my_line == config.LINE_SUPERVISOR
+
+
+def comment_line_refusal(my_line: str, line: str) -> str:
+    """そのラインへ連絡を書けなければ断る理由、書ければ空。**サーバでも確かめる**ため。"""
+    if can_choose_comment_line(my_line) or line == my_line:
+        return ""
+    if not my_line:
+        return ("この端末のラインが決まっていないため、連絡を登録できません。\n"
+                "設定画面でこの端末のラインを選んでください。")
+    return (f"この端末({my_line})からは、ほかのライン({line})へ連絡を登録できません。\n"
+            "ラインを選べるのは作業長の端末だけです。")
+
+
 def comment_targets(conn: sqlite3.Connection) -> dict[str, Any]:
-    """コメント・連絡の宛先 (tkinter 版 ComboPickerDialog)。
+    """コメント・連絡を残す班 (tkinter 版 ComboPickerDialog)。
 
     ライン → 班 の2段。1つ目を選ぶと2つ目の候補が
     **実在する組み合わせだけ**に絞られるよう、対応表をそのまま渡す。
+    班は**連絡を残す班**(書いた人の班。VER4.2.4 から。前は宛先の班)。
+
+    ラインは**作業長の端末だけ**が選べる(``can_choose_comment_line``)。
+    ほかの端末には、この端末のラインだけを渡す ── 画面は欄を押せなくするが、
+    渡さなければ選びようが無い(送られてきても受け口が断る)。
     """
+    my_line = settings.get_my_line()
+    can_choose = can_choose_comment_line(my_line)
     pairs = Repository(conn).get_line_group_pairs()
     lines: list[str] = []
     groups: dict[str, list[str]] = {}
     for line, group in pairs:
+        if not can_choose and line != my_line:
+            continue
         if line not in groups:
             groups[line] = []
             lines.append(line)
         if group not in groups[line]:
             groups[line].append(group)
-    return {"lines": lines, "groups": groups, "my_line": settings.get_my_line()}
+    return {"lines": lines, "groups": groups, "my_line": my_line,
+            "can_choose_line": can_choose}
 
 
 # ---------------------------------------------------------------------------

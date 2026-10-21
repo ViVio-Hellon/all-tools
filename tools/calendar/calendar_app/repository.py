@@ -37,6 +37,9 @@ __all__ = [
     "build_day_text",
     "build_day_tooltip",
     "build_day_detail",
+    "comment_origin",
+    "comment_when",
+    "shown_time",
     "shift_neighbours",
 ]
 
@@ -76,6 +79,10 @@ class DayRecord:
     line: str
     date: _dt.date | None = None
     access_id: int | None = None
+    #: 連絡を残した班 (VER4.2.4)。前の版の行は空 ── ``group`` は宛先として選んだ班
+    writer_group: str = ""
+    #: 保存した時刻 ``yyyy/mm/dd hh:mm:ss`` (VER4.2.4)。前の版の行は空
+    registered_at: str = ""
 
     @property
     def is_rest(self) -> bool:
@@ -103,7 +110,17 @@ class DayRecord:
             line=(row["ライン"] or "").strip(),
             date=parsed,
             access_id=row["access_id"] if "access_id" in keys else None,
+            # 後から足した列。**無い表・空の行でも読める**(空のまま)
+            writer_group=_text(row, keys, config.COL_WRITER_GROUP),
+            registered_at=_text(row, keys, config.COL_REGISTERED_AT),
         )
+
+
+def _text(row: sqlite3.Row, keys: Sequence[str], name: str) -> str:
+    """列があれば前後の空白を落とした文字、無ければ空。"""
+    if name not in keys:
+        return ""
+    return str(row[name] or "").strip()
 
 
 @dataclass
@@ -203,8 +220,17 @@ class Repository:
         early: str = "",
         group: str = "",
         line: str = "",
+        writer_group: str = "",
+        registered_at: str | None = None,
     ) -> int:
-        """1 件保存する (VBA: SaveRecord)。戻り値は採番された ID。"""
+        """1 件保存する (VBA: SaveRecord)。戻り値は採番された ID。
+
+        ``writer_group`` は連絡を**残した**班、``registered_at`` は保存した時刻
+        (省略すると今。VER4.2.4)。時刻は送った時刻ではなく、**打った人が
+        登録を押した時刻**を残す ── 共有が落ちていて送るのが遅れても変わらない。
+        """
+        if registered_at is None:
+            registered_at = db.now_string()
         values = {
             "日付": _date_key(d),
             "区分": db.sanitize(kubun),
@@ -215,6 +241,8 @@ class Repository:
             "早出者": db.sanitize(early),
             "班": db.sanitize(group),
             "ライン": db.sanitize(line),
+            config.COL_WRITER_GROUP: db.sanitize(writer_group),
+            config.COL_REGISTERED_AT: db.sanitize(registered_at),
         }
 
         # ここで Access への送信予約を明示する必要はない。
@@ -371,7 +399,8 @@ def build_day_text(records: Iterable[DayRecord], my_line: str) -> str:
     """カレンダーセルに出す端的な表示テキスト (VBA: BuildDayText)。
 
     休み     -> 「L-1:B班:杉山良宏 休」 (1 件 1 行)
-    コメント -> 「L-1:B班 コメント有」  (同じライン+班のコメントは 1 行にまとめる)
+    コメント -> 「L-1:B班 コメント有」  (同じライン+班のコメントは 1 行にまとめる。
+                班は**残した班**。前の版の行は「L-1:(班なし) コメント有」)
 
     PC のライン設定に応じて表示を絞り込む::
 
@@ -398,20 +427,64 @@ def build_day_text(records: Iterable[DayRecord], my_line: str) -> str:
             lines.append(f"{head}{rec.naiyou} 休")
 
         elif rec.kubun == config.KUBUN_OTHER:
-            show = True if my_line == config.LINE_SUPERVISOR else (rec.line == my_line)
-            if not show:
+            if not _comment_shown(rec, my_line):
                 continue
+            # 班は**残した班**(VER4.2.4)。前の版の行は宛先の班しか無いので、
+            # 「からの連絡」と読ませないよう (班なし) にする
             head = f"{rec.line}:" if rec.line else ""
-            if rec.group:
-                head += f"{rec.group}班"
-            if not head:
-                head = "(所属不明)"
+            head += f"{rec.writer_group}班" if rec.writer_group else NO_GROUP
             if head not in comment_heads:
                 comment_heads.append(head)
 
     # コメントはライン+班ごとに「コメント有」だけを出す (詳細は内容閲覧で確認する)
     lines.extend(f"{head} コメント有" for head in comment_heads)
     return "\n".join(lines)
+
+
+#: 連絡を残した班が分からない(前の版の)行に出す札
+NO_GROUP = "(班なし)"
+#: 保存した時刻が無い(前の版の)行に出す文
+NO_TIME = "時刻の記録なし"
+
+
+def _comment_shown(rec: DayRecord, my_line: str) -> bool:
+    """その連絡をこの端末のマス目に出すか。作業長は全ライン、ほかは自分のライン宛だけ。"""
+    return my_line == config.LINE_SUPERVISOR or rec.line == my_line
+
+
+def comment_origin(rec: DayRecord) -> str:
+    """連絡の見出し「L-1 B班からの連絡」(VER4.2.4)。
+
+    **班は宛先ではなく、残した班。** 前の版の行は ``班`` に宛先として選んだ班
+    しか無いので、それを「からの連絡」と出すと逆の意味に読める。書いた班が
+    残っていない行は「L-1 連絡(班なし)」にする。
+    """
+    line = rec.line or "(所属不明)"
+    if rec.writer_group:
+        return f"{line} {rec.writer_group}班からの連絡"
+    return f"{line} 連絡{NO_GROUP}"
+
+
+def shown_time(stamp: str) -> str:
+    """保存した時刻を画面に出す形「2026/10/21 14:05」に。秒は落とす。無ければ空。
+
+    ``yyyy/mm/dd hh:mm:ss`` でないもの(別の手段で入った行)は、読める範囲だけ出す。
+    """
+    text = (stamp or "").strip()
+    if not text:
+        return ""
+    for form in (config.DATETIME_FORMAT, "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                 "%Y/%m/%d %H:%M"):
+        try:
+            return _dt.datetime.strptime(text, form).strftime("%Y/%m/%d %H:%M")
+        except ValueError:
+            continue
+    return text
+
+
+def comment_when(rec: DayRecord) -> str:
+    """連絡を残した時刻。前の版の行は「時刻の記録なし」。"""
+    return shown_time(rec.registered_at) or NO_TIME
 
 
 def shift_neighbours(shift: str) -> tuple[int, int] | None:
@@ -431,13 +504,17 @@ def shift_neighbours(shift: str) -> tuple[int, int] | None:
     return prev, nxt
 
 
-def build_day_tooltip(records: Sequence[DayRecord]) -> str:
-    """残業/早出繋ぎのツールチップ文字列 (VBA: BuildDayTooltip)。
+def build_day_tooltip(records: Sequence[DayRecord], my_line: str | None = None) -> str:
+    """マスにマウスを乗せたときの文字列 (VBA: BuildDayTooltip)。
 
-    複数人の休みがある場合は区切り線と番号を入れて見分けやすくする。
+    * 休み … 残業/早出繋ぎ。複数人の休みがある場合は区切り線と番号を入れて見分けやすくする
+    * 連絡 … どの班からといつ「L-1 B班からの連絡　2026/10/21 14:05」(VER4.2.4)。
+      **マスに出す連絡と同じものだけ**(``my_line`` で絞る。``None`` なら絞らない)
     """
     targets = [r for r in records if r.is_rest and r.shift]
-    if not targets:
+    comments = [r for r in records if r.kubun == config.KUBUN_OTHER
+                and (my_line is None or _comment_shown(r, my_line))]
+    if not targets and not comments:
         return ""
 
     blocks: list[str] = []
@@ -458,6 +535,10 @@ def build_day_tooltip(records: Sequence[DayRecord]) -> str:
             head = f"[{i}] {head}"
 
         blocks.append(f"{head}\n  {prev}直残業　{overtime}\n  {nxt}直早出　{early}")
+
+    if comments:
+        blocks.append("\n".join(f"{comment_origin(rec)}　{comment_when(rec)}"
+                                for rec in comments))
 
     return ("\n" + "-" * 20 + "\n").join(blocks)
 
@@ -487,7 +568,8 @@ def build_day_detail(records: Sequence[DayRecord]) -> str:
                 head += f"\n  {prev}直残業: {overtime}\n  {nxt}直早出: {early}"
             blocks.append(head)
         else:
-            head = f"{rec.group}班" if rec.group else "コメント"
-            blocks.append(f"{head}\n  {rec.naiyou}")
+            # どの班からといつ (VER4.2.4)。前の版の行は宛先の班を出さない
+            blocks.append(f"[連絡] {comment_origin(rec)}　{comment_when(rec)}"
+                          f"\n  {rec.naiyou}")
 
     return ("\n" + "-" * 30 + "\n").join(blocks)

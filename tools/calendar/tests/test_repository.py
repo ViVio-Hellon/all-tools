@@ -226,8 +226,10 @@ class BuildDayTextTest(unittest.TestCase):
 
     def test_comments_only_for_own_line(self) -> None:
         records = [
-            make_record(id=1, kubun=config.KUBUN_OTHER, naiyou="連絡", line="L-1", group="B"),
-            make_record(id=2, kubun=config.KUBUN_OTHER, naiyou="別件", line="HVC", group="A"),
+            make_record(id=1, kubun=config.KUBUN_OTHER, naiyou="連絡", line="L-1", group="B",
+                        writer_group="B"),
+            make_record(id=2, kubun=config.KUBUN_OTHER, naiyou="別件", line="HVC", group="A",
+                        writer_group="A"),
         ]
         text = build_day_text(records, "L-1")
         self.assertEqual(text, "L-1:B班 コメント有")
@@ -235,10 +237,16 @@ class BuildDayTextTest(unittest.TestCase):
     def test_comments_are_collapsed_per_line_and_group(self) -> None:
         """同じライン+班のコメントは 1 行にまとめる。"""
         records = [
-            make_record(id=i, kubun=config.KUBUN_OTHER, naiyou=f"連絡{i}", line="L-1", group="B")
+            make_record(id=i, kubun=config.KUBUN_OTHER, naiyou=f"連絡{i}", line="L-1", group="B",
+                        writer_group="B")
             for i in range(3)
         ]
         self.assertEqual(build_day_text(records, "L-1"), "L-1:B班 コメント有")
+
+    def test_old_comment_does_not_show_target_group(self) -> None:
+        """書いた班が残っていない前の版の行は、宛先の班を出さない (VER4.2.4)。"""
+        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="前の版", line="L-1", group="B")]
+        self.assertEqual(build_day_text(records, "L-1"), "L-1:(班なし) コメント有")
 
     def test_empty(self) -> None:
         self.assertEqual(build_day_text([], "L-1"), "")
@@ -284,9 +292,20 @@ class BuildTooltipTest(unittest.TestCase):
         """日勤 (直なし) はツールチップを出さない。"""
         self.assertEqual(build_day_tooltip([make_record(shift="")]), "")
 
-    def test_comments_are_excluded(self) -> None:
-        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="連絡", shift="1")]
-        self.assertEqual(build_day_tooltip(records), "")
+    def test_comments_are_not_shift_blocks(self) -> None:
+        """連絡は繋ぎの欄にはならない。どの班から・いつ、だけを出す (VER4.2.4)。"""
+        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="連絡", shift="1",
+                               line="L-1", group="B", writer_group="B",
+                               registered_at="2026/07/25 14:05:33")]
+        text = build_day_tooltip(records)
+        self.assertNotIn("直残業", text)
+        self.assertEqual(text, "L-1 B班からの連絡　2026/07/25 14:05")
+
+    def test_comments_follow_line_filter(self) -> None:
+        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="連絡", line="HVC",
+                               writer_group="A")]
+        self.assertEqual(build_day_tooltip(records, "L-1"), "")
+        self.assertIn("HVC A班からの連絡", build_day_tooltip(records, config.LINE_SUPERVISOR))
 
 
 class BuildDetailTest(unittest.TestCase):
@@ -306,10 +325,21 @@ class BuildDetailTest(unittest.TestCase):
         self.assertIn("2直早出: 鈴木", text)
 
     def test_comment_detail(self) -> None:
-        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="朝礼あり", group="D")]
+        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="朝礼あり", group="D",
+                               line="L-1", writer_group="D",
+                               registered_at="2026/07/25 06:40:00")]
         text = build_day_detail(records)
-        self.assertIn("D班", text)
+        self.assertIn("[連絡] L-1 D班からの連絡　2026/07/25 06:40", text)
         self.assertIn("朝礼あり", text)
+
+    def test_old_comment_detail(self) -> None:
+        """前の版の行: 班(宛先)を「から」と出さず、時刻が無いことも言う。"""
+        records = [make_record(kubun=config.KUBUN_OTHER, naiyou="朝礼あり", group="D",
+                               line="L-1")]
+        text = build_day_detail(records)
+        self.assertNotIn("D班", text)
+        self.assertIn("L-1 連絡(班なし)", text)
+        self.assertIn("時刻の記録なし", text)
 
     def test_separator_between_entries(self) -> None:
         records = [make_record(id=1, naiyou="一人目"), make_record(id=2, naiyou="二人目")]

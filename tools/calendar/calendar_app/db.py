@@ -29,6 +29,19 @@ from typing import Any, Iterable
 from . import config
 from .dbkit import outbox_sync, sqlite_toolkit
 
+#: 休み管理の「送信用の写し」(下の _SCHEMA の説明を参照)。**列を足したら作り直す**
+#: (``_upgrade_data_columns``)── ビューは列の一覧を作った時点で固めるので、
+#: 古いビューのままだと足した列が取り込み元へ届かない
+_DATA_SEND_VIEW_COLUMNS = (
+    "ID", "日付", "区分", "登録内容", "識別コード", "直", "残業者", "早出者", "班", "ライン",
+    *config.DATA_ADDED_COLUMNS,
+)
+_DATA_SEND_VIEW = (
+    f'CREATE VIEW IF NOT EXISTS "{config.TABLE_DATA}_送信用" AS\n'
+    "SELECT " + ",".join(f'"{name}"' for name in _DATA_SEND_VIEW_COLUMNS) + "\n"
+    f'FROM "{config.TABLE_DATA}";'
+)
+
 _SCHEMA = f"""
 PRAGMA foreign_keys = ON;
 
@@ -44,7 +57,10 @@ CREATE TABLE IF NOT EXISTS "{config.TABLE_DATA}" (
     "残業者"     TEXT NOT NULL DEFAULT '',
     "早出者"     TEXT NOT NULL DEFAULT '',
     "班"        TEXT NOT NULL DEFAULT '',
-    "ライン"     TEXT NOT NULL DEFAULT ''
+    "ライン"     TEXT NOT NULL DEFAULT '',
+    -- ここから下は後から足した列 (VER4.2.4)。古い DB には _upgrade_data_columns が足す
+    "{config.COL_WRITER_GROUP}"     TEXT NOT NULL DEFAULT '',   -- 連絡を残した班
+    "{config.COL_REGISTERED_AT}"   TEXT NOT NULL DEFAULT ''    -- 保存した時刻
 );
 CREATE INDEX IF NOT EXISTS "idx_data_date" ON "{config.TABLE_DATA}" ("日付");
 CREATE INDEX IF NOT EXISTS "idx_data_access_id" ON "{config.TABLE_DATA}" ("access_id");
@@ -90,9 +106,7 @@ CREATE TABLE IF NOT EXISTS "アクセス権限" (
 -- 含めてしまうと INSERT が「そんな列は無い」で失敗する。
 -- そのため access_id を除いたビューを経由させる
 -- (outbox_sync は読み取りしかしないためビューで問題ない)。
-CREATE VIEW IF NOT EXISTS "{config.TABLE_DATA}_送信用" AS
-SELECT "ID","日付","区分","登録内容","識別コード","直","残業者","早出者","班","ライン"
-FROM "{config.TABLE_DATA}";
+{_DATA_SEND_VIEW}
 
 CREATE VIEW IF NOT EXISTS "{config.TABLE_DEL_HISTORY}_送信用" AS
 SELECT "ID","削除日時","削除実行者","対象日付","区分","登録内容","識別コード","班","ライン"
@@ -133,6 +147,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         #  二段目の備え。詳しくは sqlite_toolkit.execute_with_retry を参照)
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.executescript(_SCHEMA)
+        _upgrade_data_columns(conn)
         # dbkit.outbox_sync 自身の管理テーブルも、他のスキーマと同じタイミングで
         # 用意しておく (queue_delete 等が先に参照しても失敗しないように)。
         outbox_sync.ensure_sync_table(conn)
@@ -143,6 +158,35 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         conn.close()
         raise
     return conn
+
+
+def _upgrade_data_columns(conn: sqlite3.Connection) -> None:
+    """前の版が作った手元の休み管理に、後から足した列を**後ろに**足す (VER4.2.4)。
+
+    ``CREATE TABLE IF NOT EXISTS`` は、表がもうあれば何もしない。列が足りない
+    まま書くと「そんな列は無い」で登録が全部失敗するので、開くたびに確かめる
+    (見るのは ``PRAGMA`` 2回で、足すのは1度だけ)。前からの列には触らない。
+
+    送信用の写し(ビュー)も、足した列を含んでいなければ作り直す。同時に
+    2本が開いても困らないよう、「もうある」は成功として扱う。
+    """
+    present = {row[1] for row in conn.execute(
+        f'PRAGMA table_info("{config.TABLE_DATA}")')}
+    for name in config.DATA_ADDED_COLUMNS:
+        if name in present:
+            continue
+        try:
+            conn.execute(f'ALTER TABLE "{config.TABLE_DATA}" '
+                         f'ADD COLUMN "{name}" TEXT NOT NULL DEFAULT \'\'')
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+    view = f"{config.TABLE_DATA}_送信用"
+    shown = [row[1] for row in conn.execute(f'PRAGMA table_info("{view}")')]
+    if shown != list(_DATA_SEND_VIEW_COLUMNS):
+        conn.execute(f'DROP VIEW IF EXISTS "{view}"')
+        conn.execute(_DATA_SEND_VIEW)
 
 
 #: 作業用DBの付き添い(よけるときは一緒に)

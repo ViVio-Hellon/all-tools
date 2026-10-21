@@ -5,7 +5,7 @@
     GET  /api/calendar          月のビューモデル
     GET  /api/day/<date>        1日の登録内容(閲覧と削除が読む)
     GET  /api/workers           休みにする作業者の選択肢
-    GET  /api/comment-targets   コメントの宛先(ライン→班)
+    GET  /api/comment-targets   連絡を残す班(ライン→班。ラインは作業長だけ選べる)
     POST /api/rest              休みの登録
     POST /api/comment           コメント・連絡の登録
     POST /api/delete            削除
@@ -112,7 +112,7 @@ def workers():
 
 @bp.get("/api/comment-targets")
 def comment_targets():
-    """コメント・連絡の宛先(ライン → 班)。"""
+    """コメント・連絡を残す班(ライン → 班)。作業長以外はこの端末のラインだけ。"""
     return jsonify(presenter.comment_targets(get_db()))
 
 
@@ -212,6 +212,13 @@ def register_comment():
     if not text:
         return _refuse("empty_text", "連絡の内容を入力してください。")
 
+    # **ラインを選べるのは作業長の端末だけ**(VER4.2.4)。画面は欄を押せなく
+    # してあるが、要求を直接投げられても・画面の守りを外されても通さない。
+    # 黙って自分のラインに直すと、打った人の思ったラインと違う所に入るので断る
+    refusal = presenter.comment_line_refusal(user_settings.get_my_line(), line)
+    if refusal:
+        return _refuse("line_locked", refusal)
+
     conn = get_db()
     # **実在する組み合わせだけ。** 画面のプルダウンは絞ってあるが、
     # 要求を直接投げられても通らないようにする
@@ -219,12 +226,15 @@ def register_comment():
         return _refuse("not_listed", "そのライン・班の組み合わせはありません。")
 
     def save() -> Optional[Any]:
+        # 班は**連絡を残した班**(書いた人の班)。前からの「班」の列にも同じ値を
+        # 入れる ── 前の版の端末・ほかのツールが読んでも、残した班が出る。
+        # 「記入班」の列があることで、前の版の行(班が宛先だった)と見分ける
         Repository(conn).save_record(day, config.KUBUN_OTHER, text, "-",
-                                     group=group, line=line)
-        log.info("連絡を登録しました: %s %s %s班", day, line, group)
+                                     group=group, line=line, writer_group=group)
+        log.info("連絡を登録しました: %s %s %s班から", day, line, group)
         return None
 
-    return _register(conn, body, day, f"{line} {group}班 への連絡を登録しました", save)
+    return _register(conn, body, day, f"{line} {group}班からの連絡を登録しました", save)
 
 
 @bp.post("/api/delete")

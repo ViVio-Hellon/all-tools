@@ -126,8 +126,9 @@ def _import_data_table(conn: sqlite3.Connection,
         conn.execute(
             f'INSERT INTO "{config.TABLE_DATA}" '
             '("ID","access_id","日付","区分","登録内容","識別コード",'
-            '"直","残業者","早出者","班","ライン") '
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            '"直","残業者","早出者","班","ライン",'
+            f'"{config.COL_WRITER_GROUP}","{config.COL_REGISTERED_AT}") '
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 source_id,
                 source_id,
@@ -140,6 +141,10 @@ def _import_data_table(conn: sqlite3.Connection,
                 db.sanitize(row.get("早出者")),
                 db.sanitize(row.get("班")),
                 db.sanitize(row.get("ライン")),
+                # 後から足した列 (VER4.2.4)。**まだ足されていない共有の表・
+                # 前の版の行は空**として読む(列が無くても止めない)
+                db.sanitize(row.get(config.COL_WRITER_GROUP)),
+                _to_datetime_string(row.get(config.COL_REGISTERED_AT)),
             ),
         )
     _align_autoincrement(conn, config.TABLE_DATA, rows)
