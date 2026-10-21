@@ -142,7 +142,10 @@
     healthPollMs: {{ health_poll_ms }},
     heartbeatMs: {{ heartbeat_ms }},
     syncPollMs: {{ sync_poll_ms }},
-    theme: {{ theme | tojson }}
+    theme: {{ theme | tojson }},
+    // この端末で見た目を選んだか(VER4.2.3)。前は渡しておらず、`theme.js` はいつも「選んでいない」と
+    // みなして、手元に残った大設定の既定で選んだ明暗を上書きしていた
+    theme_chosen: {{ (theme_chosen or false) | tojson }}
   };
 </script>
 {# 画面のエラーをサーバへ送る見張り。**app.js より先に**普通のスクリプトで読む

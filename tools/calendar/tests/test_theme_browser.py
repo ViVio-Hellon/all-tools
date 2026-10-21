@@ -124,5 +124,27 @@ class ThemeBrowserTests(PageBrowserCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_この端末で選んだ明暗は_大設定の既定が残っていても上書きされない(self) -> None:
+        """カレンダー VER4.2.3 で直した不具合(段階1の試験で見つかった)。
+
+        画面へ渡す値(`window.APP`)に「この端末で選んだか」が入っておらず、`theme.js` はいつも
+        「選んでいない」とみなしていました。ダークを選んでも、手元に大設定の既定(ライト)が残っていると
+        帯のボタンが「暗くする」になり、押しても見た目が変わらず、大設定の既定が届くと上書きされた。
+        """
+        user_settings.set_theme("dark")
+        ctx = self.new_context(color_scheme="light")
+        ctx.add_init_script("try { localStorage.setItem('calendar.theme_default', 'light'); } catch (e) {}")
+        page = self.open("/calendar", ctx)
+        root = "document.documentElement.dataset.theme || ''"
+        self.assertEqual(page.evaluate(root), "dark")
+        page.wait_for_function("document.getElementById('theme-toggle-label').textContent !== '見た目'")
+        self.assertEqual(page.inner_text("#theme-toggle-label"), "明るくする",
+                         "選んだダークではなく、大設定の既定(ライト)を今の見た目とみなしています")
+        page.click("#theme-toggle")                         # 1回押せば明るくなる
+        page.wait_for_function(f"({root}) === 'light'")
+        self.wait_until(page, lambda: user_settings.get_theme() == "light", "サーバがライトを覚える")
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
