@@ -378,13 +378,8 @@ class DueSoundTokenTests(WebTestCase):
                               headers={"Host": "127.0.0.1"})
         self.assertEqual(res.status_code, 401)
 
-    def test_画面は鍵から組み立て直す(self) -> None:
-        root = Path(__file__).resolve().parent.parent
-        text = (root / "app" / "static" / "js" / "sound.js").read_text(
-            encoding="utf-8")
-        self.assertIn("playKey(due.key)", text)
-        # 素の `due.url` を鳴らしに行かない
-        self.assertNotIn("play(due.url)", text)
+    # 画面が鍵から組み立て直してトークンを付けること(素の `due.url` を鳴らしに行かない)は、
+    # **本物のブラウザで鳴らした道を見て確かめます**(`test_sound_browser.WatchSoundTests`)
 
 
 if __name__ == "__main__":

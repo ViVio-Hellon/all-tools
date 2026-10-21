@@ -33,7 +33,6 @@ from nippou.logic import pages  # noqa: E402
 from nippou.presenters import entry as presenter  # noqa: E402
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
 DONE = {"LOT": "N7131T0", "KZ": "08", "KH": "00", "SZ": "08", "SH": "15"}
 
 
@@ -325,11 +324,8 @@ class WebTests(WebTestCase):
         self.assertIn('id="page-guide-back"', html)
         self.assertNotIn("page-guide__steps", html, "手順を並べない")
         self.assertIn("12行目を終了まで打つと出せます", html)
-        js = (ROOT / "app" / "static" / "js" / "views" / "entry.js").read_text(encoding="utf-8")
-        for needle in ("function paintPageGuide", "guide?.confirm",
-                       'getElementById("page-guide-back")'):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, js)
+        # 案内を応答のたびに塗り直す・発行の確かめはサーバの文言・「最新のページに戻る」で戻る、は
+        # **本物のブラウザで確かめます**(`test_entry_bands_browser`。守りを外すと落ちる)
 
     def test_ページが2つ以上なら戻り方の説明(self) -> None:
         self.post("/api/entry/newpage", self.body(full_rows()))

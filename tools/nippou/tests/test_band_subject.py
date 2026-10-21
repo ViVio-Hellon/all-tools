@@ -173,10 +173,8 @@ class BandScreenTests(WebTestCase):
         self.assertLess(html.index('id="handover"'),
                         html.index('id="shift-findings"'))
 
-    def test_塗り直しでも主語を入れる(self) -> None:
-        """JS が帯を塗り直したときに、札だけ前のまま残らないこと。"""
-        self.assertIn('getElementById("handover-about")', ENTRY_JS)
-        self.assertIn('getElementById("shift-findings-about")', ENTRY_JS)
+    # JS が帯を塗り直したときに、札(主語)だけ前のまま残らないことは、**本物のブラウザで
+    # 塗り直させて確かめます**(`test_entry_bands_browser`。守りを外すと落ちる)
 
     def test_応答にも主語が乗る(self) -> None:
         body = self.post("/api/entry/state", {
@@ -202,20 +200,16 @@ class FoldedTextTests(unittest.TestCase):
             self.assertIn("tip__mark", block)
             self.assertIn("tip__more", block)
 
-    def test_残りは載せたときだけ出す(self) -> None:
-        self.assertIn(".tip__more{ display:none; }", CSS)
-        self.assertIn(".tip:hover .tip__more", CSS)
-        self.assertIn(".tip:focus .tip__more", CSS)
-        self.assertIn(".tip:focus-within .tip__more", CSS)
-
-    def test_下の行を動かさない(self) -> None:
-        """**浮かせて出します。** 押そうとしたボタンが手元で動かない。"""
-        found = re.search(r"\.tip:focus-within \.tip__more\{(.*?)\}", CSS, re.S)
-        self.assertIsNotNone(found)
-        self.assertIn("position:absolute", found.group(1))
+    # 残りは乗せたとき・焦点を当てたときだけ出し、**浮かせて出して下の行を動かさない**ことは、
+    # 前は CSS の字を探していました。いまは**本物のブラウザで乗せて・焦点を当てて、下の行の
+    # 位置を測ります**(`test_entry_bands_browser`。守りを外すと落ちる)
 
     def test_キーボードでも開く(self) -> None:
-        """マウスが無い人にも開けること(`tabindex` が要ります)。"""
+        """マウスが無い人にも開けること(`tabindex` が要ります)。
+
+        焦点を当てると開くことはブラウザで1つ確かめています(`test_entry_bands_browser`)。
+        ここは**どの畳んだ説明にも** `tabindex` が付いているかを見ます。
+        """
         for block in re.findall(self.OPEN, ENTRY_HTML):
             self.assertIn('tabindex="0"', block)
 

@@ -426,15 +426,12 @@ class GraphTests(WebTestCase):
 
         タイルの見出しには「いつのぶんか」が出ています(`2026-08-01 〜
         2026-08-31` / `本日`)。数字だけ入れ替えると、期間を変えたことに
-        画面から気づけません ── サーバは正しい札を返しているので、
-        塗り忘れているかどうかは字面で見張ります。
+        画面から気づけません。
+
+        画面が塗り直すことは、前は `graph.js` の字を探していました。いまは**本物のブラウザで
+        期間を変えて、札を見ます**(`test_graph_browser`。守りを外すと落ちる)。ここはサーバ側が
+        期間の札を返していること(画面が写す元)を見ます。
         """
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parent.parent
-        view = (root / "app/static/js/views/graph.js").read_text(encoding="utf-8")
-        self.assertIn(".tile__note", view)
-
         # サーバ側が期間の札を返していること(画面が写す元)
         body = self.post("/api/graph/dashboard",
                          {"start": "2026-08-01", "end": "2026-08-31"}).get_json()

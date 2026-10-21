@@ -211,7 +211,13 @@ class VersionDisplayTests(WebTestCase):
 
     def test_画面が自分の印を拾う仕掛けがある(self) -> None:
         """`app.js` は `<script src="app.js?v=印">` から読まれるので、
-        自分の URL に印が入っている(`import.meta.url`)。"""
+        自分の URL に印が入っている(`import.meta.url`)。
+
+        **この字探しは通りますが、実際の画面では印を拾えていません。** 印はいま道の一部
+        (`/sv/<印>/js/app.js`)で `?v=` が無く、`runningStamp()` はいつも空です。本物の
+        ブラウザで開いた試験が落ちることで分かりました(`test_shell_browser.StampTests`、
+        直すまで `expectedFailure`)。直したら、この字探しはそちらに任せて消します。
+        """
         text = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
         self.assertIn("import.meta.url", text)
         self.assertIn("window.APP.stamp", text)

@@ -465,10 +465,8 @@ class TokenTests(unittest.TestCase):
         self.assertIn(".chart .line--halo", css)
         # 種類色に負けないよう、同じ詳しさでも書いてある
         self.assertIn(".tile[data-tone] .chart .line--halo", css)
-
-        js = (Path(__file__).resolve().parent.parent
-              / "app" / "static" / "js" / "chart.js").read_text(encoding="utf-8")
-        self.assertIn("line--halo", js)
+        # 同じ道を2回描いて縁を付けること(`chart.js`)は、**本物のブラウザで描かせて
+        # 確かめます**(`test_graph_browser`。守りを外すと落ちる)
 
     def test_棒と線でなかまが違う(self) -> None:
         """棒は枚数の緑、線は目標の紫。**見本も絵と同じ色にする。**"""
@@ -810,18 +808,11 @@ class StackedShiftBarTests(unittest.TestCase):
         だけになります。**地の色の細い線で切っておきます。**"""
         self.assertIn(".chart .bar--seg{ stroke:var(--surface); stroke-width:1; }",
                       self.css("components.css"))
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "chart.js").read_text(encoding="utf-8")
-        self.assertIn('s.stack ? " bar--seg" : ""', js)
+        # 積んだ段に `bar--seg` を付けること(`chart.js`)は本物のブラウザで(`test_graph_browser`)
 
-    def test_目盛りの頭は積んだ高さで決める(self) -> None:
-        """足さずに測ると、**棒が枠を突き抜けます。**"""
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "chart.js").read_text(encoding="utf-8")
-        top = js[js.index("const topOf = (axis) => {"):]
-        top = top[:top.index("\n  };")]
-        self.assertIn("stacked", top)
-        self.assertIn('s.kind === "bar" && s.stack', top)
+    # 目盛りの頭は積んだ高さで決める(足さずに測ると、**棒が枠を突き抜けます**)。前は
+    # `chart.js` の字を探していました。いまは**本物のブラウザで2直ぶん積ませて、棒が枠に
+    # 収まるかを見ます**(`test_graph_browser`。守りを外すと落ちる)
 
 
 class NeonSkinTests(WebTestCase):
@@ -873,12 +864,9 @@ class NeonSkinTests(WebTestCase):
         # 読めない場面(プライベート窓)でも落ちない
         self.assertIn("catch", head)
 
-    def test_端末が覚える(self) -> None:
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "skin.js").read_text(encoding="utf-8")
-        self.assertIn("localStorage", js)
-        # 読み書きは必ず try/catch(プライベート窓では投げます)
-        self.assertGreaterEqual(js.count("catch"), 3)
+    # 端末が覚える(読み直しても残る)・覚えられない端末(プライベート窓では `localStorage` が
+    # 投げる)でも転ばないことは、**本物のブラウザで確かめます**(`test_shell_browser.SkinTests`。
+    # 守りを外すと落ちる)
 
     def test_つまみが集計グラフの画面にある(self) -> None:
         html = self.client.get("/graph", headers=HEADERS).get_data(as_text=True)
@@ -950,9 +938,7 @@ class NeonSkinTests(WebTestCase):
         self.assertIn(".chart.line{fill:none;stroke:var(--accent);stroke-width:3;}",
                       css)
         self.assertIn("stroke:var(--cumulative);stroke-width:4;", css)
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "chart.js").read_text(encoding="utf-8")
-        self.assertIn("const DOT_R = 4;", js)
+        # 点の半径4(`chart.js` の `DOT_R`)は本物のブラウザで描かせて見ます(`test_graph_browser`)
 
     def test_Plotlyは入れない(self) -> None:
         """**依存を足さないのが約束。** 指定は Plotly の形で来ましたが、

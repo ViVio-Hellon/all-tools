@@ -83,14 +83,9 @@ class PrintSaveRouteTests(WebTestCase):
         self.assertIn("LOT1", text)
         self.assertIn("印刷用HTMLを出力先へ残せませんでした", text)
 
-    def test_日報入力の印刷ボタンは残すと頼む(self) -> None:
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "views" / "entry.js"
-              ).read_text(encoding="utf-8")
-        start = js.index('getElementById("print-page")')
-        self.assertIn('save: "1"', js[start:start + 600])
-        records = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "views" / "records.js"
-                   ).read_text(encoding="utf-8")
-        self.assertNotIn("save:", records, "記録を見るは見るだけ")
+    # 日報入力の「印刷」は残すと頼み(`save=1`)、記録を見るの紙は見るだけ ── は、前は
+    # `entry.js` / `records.js` の字を探していました。いまは**本物のブラウザで押して、開いた紙の
+    # 道を見ます**(`test_desktop_print_browser`。守りを外すと落ちる)
 
 
 try:

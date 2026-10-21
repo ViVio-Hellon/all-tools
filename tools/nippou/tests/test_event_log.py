@@ -524,16 +524,10 @@ class WebTests(WebTestCase):
         from nippou import config, distribution
         self.assertIn(config.KEY_LOG_DIR, distribution.ITEM_KEYS)
 
-    def test_画面は画面名とタブを名乗り_エラーを届ける(self) -> None:
-        static = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-        api = (static / "api.js").read_text(encoding="utf-8")
-        self.assertIn('"X-Screen": location.pathname', api)
-        self.assertIn('"X-Quiet"', api)
-        errors = (static / "errors.js").read_text(encoding="utf-8")
-        self.assertIn("/api/log/client", errors)
-        self.assertIn("unhandledrejection", errors)
-        app_js = (static / "app.js").read_text(encoding="utf-8")
-        self.assertIn("startErrorReport()", app_js)
+    # 画面が要求で画面名を名乗り(`X-Screen`)、見張りの通信は「押していない」と名乗り(`X-Quiet`)、
+    # 画面のエラー・握られなかった失敗を `/api/log/client` へ届けて番号を出すことは、前は JS の字を
+    # 探していました。いまは**本物のブラウザで送った要求を見て確かめます**
+    # (`test_shell_browser.EventLogTests`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

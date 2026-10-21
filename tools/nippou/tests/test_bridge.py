@@ -428,23 +428,18 @@ class IntegratedShellTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
-    """画面の別窓・フォルダ選択が、デスクトップ版では外枠へ頼む作りになっている。"""
+    """画面の別窓・フォルダ選択が、デスクトップ版では外枠へ頼む作りになっている。
 
-    def test_紙と早見表は外枠の別窓で開く(self) -> None:
-        js = ROOT / "app" / "static" / "js"
-        for name in ("views/entry.js", "views/records.js", "views/gw.js"):
-            text = (js / name).read_text(encoding="utf-8")
-            with self.subTest(name=name):
-                self.assertIn('from "../desktop.js"', text)
-                self.assertNotIn('window.open(tokenUrl(', text)
-        vc = (js / "views" / "vc.js").read_text(encoding="utf-8")
-        self.assertIn('label: "vc-quick"', vc)
-        desktop = (js / "desktop.js").read_text(encoding="utf-8")
-        self.assertIn('invoke("open_window"', desktop)
-        self.assertIn('invoke("pick_path"', desktop)
-        self.assertIn("desktop.install()", (js / "app.js").read_text(encoding="utf-8"))
-        self.assertIn('desktop.pickPath("folder"',
-                      (js / "views" / "settings.js").read_text(encoding="utf-8"))
+    日報入力・記録を見るの紙・VC 早見表・参照設定の「フォルダを選ぶ…」・`desktop.install()` は、
+    **本物のブラウザに偽の外枠を置いて押して確かめます**(`test_desktop_print_browser`。
+    守りを外すと落ちる)。GW計算の紙だけは、刷るまでに資材マスタを置いて計算を通す手間が
+    要るので、ここで字を見張ります。
+    """
+
+    def test_GWの紙も外枠の別窓で開く(self) -> None:
+        text = (ROOT / "app" / "static" / "js" / "views" / "gw.js").read_text(encoding="utf-8")
+        self.assertIn('from "../desktop.js"', text)
+        self.assertNotIn('window.open(tokenUrl(', text)
 
 
 if __name__ == "__main__":

@@ -23,8 +23,6 @@ from nippou.logic import standard_time as logic  # noqa: E402
 from nippou.presenters import standard_time as view  # noqa: E402
 from tests._web import WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 class GuideNumbersTests(unittest.TestCase):
     """例の数が、計算そのものと合っている。"""
@@ -102,10 +100,8 @@ class GuidePageTests(WebTestCase):
         page = self.get("/standard-time").get_data(as_text=True)
         self.assertIn('href="#guide-power" data-goto-tab="guide"', page)
         self.assertIn('href="#guide-calc" data-goto-tab="guide"', page)
-        js = (ROOT / "app" / "static" / "js" / "views" / "standard_time.js").read_text(
-            encoding="utf-8")
-        self.assertIn("a[data-goto-tab]", js)
-        self.assertIn("scrollIntoView", js)
+        # 押すと閉じた「しくみ」の面を開いてその節まで連れて行くことは、**本物のブラウザで
+        # 押して確かめます**(`test_standard_time_browser`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

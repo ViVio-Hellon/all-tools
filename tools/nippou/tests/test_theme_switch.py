@@ -60,22 +60,15 @@ class TokensTests(unittest.TestCase):
 
 
 class ScriptTests(unittest.TestCase):
-    def js(self, name: str) -> str:
-        return (STATIC / "js" / name).read_text(encoding="utf-8")
+    """覚える場所(読み直しても残る)・帯を作り直すたびに繋ぐ、は**本物のブラウザで押して
+    確かめます**(`test_shell_browser.ThemeTests`。守りを外すと落ちる)。ここは、ブラウザの試験が
+    見ている名前が**コイル・平板の道具の覚えと同じ**かだけを見ます(別の道具なので、名前が
+    ずれても日報の画面だけでは気づけない)。"""
 
-    def test_覚える場所とコイルの覚え(self) -> None:
-        theme = self.js("theme.js")
-        self.assertIn('const KEY = "nippou.theme";', theme)
+    def test_コイルの覚えの名前がコイルの道具と同じ(self) -> None:
         coil = (STATIC / "vc" / "coil" / "coil-theme.js").read_text(encoding="utf-8")
-        coil_key = re.search(r"const KEY = '([^']+)'", coil).group(1)
-        self.assertIn(f'const COIL_KEY = "{coil_key}";', theme)
-
-    def test_帯を作り直すたびに繋ぐ(self) -> None:
-        app = self.js("app.js")
-        self.assertIn('import * as theme from "./theme.js";', app)
-        body = app[app.index("function wireShell()"):]
-        body = body[:body.index("\n}\n")]
-        self.assertIn('theme.wire(document.getElementById("theme-switch"))', body)
+        self.assertEqual(re.search(r"const KEY = '([^']+)'", coil).group(1),
+                         "vc-calculator.coil.theme")
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

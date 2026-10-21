@@ -121,55 +121,19 @@ class ViewModuleTests(unittest.TestCase):
 
 
 class NavTests(unittest.TestCase):
-    """差し替えの側の約束。"""
+    """差し替えの側の約束。
 
-    def setUp(self) -> None:
-        self.nav = (ROOT / "app" / "static" / "js" / "nav.js").read_text(
-            encoding="utf-8")
-        self.app = (ROOT / "app" / "static" / "js" / "app.js").read_text(
-            encoding="utf-8")
+    次の4つは、前はここで字を探していました。いまは**本物のブラウザで動かして確かめます**
+    (守りを外すと落ちる):
 
-    def test_差し替えのあとにstartを呼ぶ(self) -> None:
-        self.assertIn("export async function mountViews", self.nav)
-        self.assertIn("mod.start()", self.nav)
-        # 差し替えの流れ(`go`)からも呼ばれること
-        self.assertIn("  mountViews();", self.nav)
-
-    def test_最初の1回も同じ道を通る(self) -> None:
-        """初回だけ効く/初回だけ効かない、を作らない。"""
-        self.assertIn("nav.mountViews()", self.app)
-
-    def test_起動の見張りが素のスクリプトで入っている(self) -> None:
-        """`type="module"` は**読めなかったとき何も言わずに止まります。**
-
-        404・構文の誤り・import の失敗のどれでも、画面はふつうに出たまま
-        どのボタンも効きません ── 押す人からは「効いていない」としか
-        見えず、手がかりが画面のどこにもありませんでした。実際に
-        入れ替えのあと全画面で起きています。
-
-        見張りは **module ではない**素のスクリプトに置きます。module が
-        転んでも動く場所でないと、見張りごと死にます。
-        """
-        base = (ROOT / "app" / "templates" / "base.html").read_text(
-            encoding="utf-8")
-        head, _, tail = base.partition('<script type="module"')
-        self.assertIn("APP.booted", head, "見張りが module より後にあります")
-        self.assertIn("bootProblem", head)
-        # module 側は、繋ぎ終わったら見張りを解く
-        app = (ROOT / "app" / "static" / "js" / "app.js").read_text(
-            encoding="utf-8")
-        self.assertIn("booted = true", app)
-
-    def test_JSが死んだら面を全部開く(self) -> None:
-        """面を切り替えるのは JS。転んだままだと開いていない面へ
-        **二度と辿り着けません**(版の印を出す面も含めて)。"""
-        base = (ROOT / "app" / "templates" / "base.html").read_text(
-            encoding="utf-8")
-        nav = (ROOT / "app" / "static" / "js" / "nav.js").read_text(
-            encoding="utf-8")
-        for name, text in (("base.html", base), ("nav.js", nav)):
-            with self.subTest(where=name):
-                self.assertIn(".tabpanel[hidden]", text)
+        ・差し替えのあとに `start()` を呼ぶ(2度目に来た画面でもボタンが効く)
+          … `test_sound_browser.SettingsSoundTests`(別の画面へ移って戻ってから押す)
+        ・最初の1回も同じ道を通る … 画面を開いて押す試験のすべて(`test_sound_browser` ほか)
+        ・起動の見張りは素のスクリプト(`app.js` が読めなくても断りを出し、1回だけ取り直す)
+          … `test_shell_browser.BootWatchTests`
+        ・JS が死んだら面を全部開く(`base.html` の見張りと `nav.js` の両方)
+          … `test_shell_browser.BootWatchTests`
+    """
 
     def test_画面の中でlocation_reloadしない(self) -> None:
         """`location.reload()` は外枠ごと作り直す。

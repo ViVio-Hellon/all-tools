@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import re
 import sys
 import threading
 import unittest
@@ -34,8 +33,6 @@ except Exception:                                 # noqa: BLE001
 SKIP = "Flask が入っていません"
 
 ROOT = Path(__file__).resolve().parent.parent
-SETTINGS_JS = (ROOT / "app/static/js/views/settings.js").read_text(
-    encoding="utf-8")
 SETTINGS_HTML = (ROOT / "app/templates/settings.html").read_text(
     encoding="utf-8")
 CSS = (ROOT / "app/static/css/components.css").read_text(encoding="utf-8")
@@ -195,24 +192,9 @@ class ScreenTests(WebTestCase):
     def test_見えるように塗ってある(self) -> None:
         self.assertIn(".job__bar", CSS)
 
-    def test_押したら見に行き_終わったら止める(self) -> None:
-        """**止め忘れると棒が残ります。**"""
-        for name in ("async function applyImport", "async function sendFiles"):
-            found = re.search(name + r"\([^)]*\) \{(.*?)\n\}",
-                              SETTINGS_JS, re.S)
-            self.assertIsNotNone(found, name)
-            body = found.group(1)
-            self.assertIn("watchProgress(true)", body, name)
-            self.assertIn("finally", body, name)
-            self.assertIn("watchProgress(false)", body, name)
-
-    def test_数は画面で数えない(self) -> None:
-        """**出どころは1つ。** 画面がページ数を数えると必ずずれます。"""
-        found = re.search(r"function paintProgress\(now\) \{(.*?)\n\}",
-                          SETTINGS_JS, re.S)
-        self.assertIsNotNone(found)
-        self.assertIn("now.headline", found.group(1))
-        self.assertIn("now.percent", found.group(1))
+    # 押したら見に行き、終わったら(**断られても**)止める・数は画面で数えずサーバの字を写す、は
+    # 前は `settings.js` の字を探していました。いまは**本物のブラウザで取り込みの答えを止めて、
+    # そのあいだの棒を見ます**(`test_import_progress_browser`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

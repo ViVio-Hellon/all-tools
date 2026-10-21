@@ -291,12 +291,8 @@ class ScreenTests(WebTestCase):
         self.assertTrue(tiles["today_rate"]["steps"])
         self.assertTrue(tiles["today_productivity"]["steps"])
 
-    def test_期間を変えても式が消えない(self) -> None:
-        """**画面を作り直すのはJS。** 式を作り直し忘れると式だけ消える。"""
-        js = (Path(__file__).resolve().parent.parent / "app" / "static"
-              / "js" / "views" / "graph.js").read_text(encoding="utf-8")
-        self.assertIn("calcBox", js)
-        self.assertIn("body.append(calc)", js)
+    # 期間を変えても式が消えない(**画面を作り直すのはJS**。式を作り直し忘れると式だけ消える)
+    # ことは、**本物のブラウザで期間を変えて確かめます**(`test_graph_browser`。守りを外すと落ちる)
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

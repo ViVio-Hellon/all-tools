@@ -29,7 +29,7 @@ from unittest.mock import patch  # noqa: E402
 
 from tests import test_standard_time as base  # noqa: E402
 from tests._web import WebTestCase  # noqa: E402
-from tests.test_standard_time import ROOT, TEAMS, WorksFixture, sample  # noqa: E402
+from tests.test_standard_time import TEAMS, WorksFixture, sample  # noqa: E402
 
 
 def standard_for(samples):
@@ -342,11 +342,8 @@ class PowerWebTests(WebTestCase):
         # 説明は**1行だけ**。式は乗せたときに(長い説明は読まれない)
         self.assertIn('data-hint="梱包力 = 標準人分の合計', page)
         self.assertLess(len(view.POWER_LEAD), 50)
-        js = (ROOT / "app" / "static" / "js" / "views" / "standard_time.js").read_text(
-            encoding="utf-8")
-        for needle in ("/api/standard-time/power", "/api/standard-time/power/csv",
-                       '"tab:select"', 'key === "power"'):
-            self.assertIn(needle, js)
+        # 面を開いたときに初めて訊きに行く(`tab:select`)・CSVに書き出す、は**本物のブラウザで
+        # 押して確かめます**(`test_standard_time_browser`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

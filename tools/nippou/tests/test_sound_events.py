@@ -23,9 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HAS_FLASK, NO_TOKEN_HEADERS, SKIP_REASON, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-JS = ROOT / "app" / "static" / "js"
-
 
 def _write_wav(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,15 +247,8 @@ class ShiftLeftTests(SoundEventCase):
         self.choose(auto_closed="あと5分.wav")
         self.assertIn("auto_closed", self.cues())
 
-    def test_見張りの通信でも出来事を知らせる(self) -> None:
-        """残り5分の確定は1分ごとの見張り(誰も押していない通信)が叩く。"""
-        api = (JS / "api.js").read_text(encoding="utf-8")
-        ok = api[api.index("throw error;"):]
-        ok = ok[:ok.index("return body;")]
-        self.assertIn('if (body && body.sound_cue) announce("sound:cue", body.sound_cue);', ok)
-        self.assertNotIn("quiet", ok)
-        shift_end = (JS / "shift_end.js").read_text(encoding="utf-8")
-        self.assertIn('background.post("/api/entry/close"', shift_end)
+    # 見張りの通信(残り5分の確定は1分ごとの見張りが叩く)でも出来事を鳴らすことは、
+    # **本物のブラウザで確かめます**(`test_sound_browser.WatchSoundTests`。守りを外すと落ちる)
 
 
 class ShiftStartedTests(SoundEventCase):
@@ -314,46 +304,9 @@ class DailyResultTests(SoundEventCase):
         self.assertEqual(self.cue(), "")
 
 
-class WiringTests(unittest.TestCase):
-    """画面の配線(ブラウザが無くても見られるもの)。"""
-
-    def test_応答の出来事と断りを知らせる(self) -> None:
-        api = (JS / "api.js").read_text(encoding="utf-8")
-        self.assertIn('if (body && body.sound_cue) announce("sound:cue", body.sound_cue);', api)
-        self.assertIn('announce("api:failed"', api)
-        # 見張りの通信(誰も押していない)と自動保存(mute)では断りを鳴らさない
-        failed = api[api.index("if (!res.ok)"):]
-        failed = failed[:failed.index("throw error;")]
-        self.assertIn("else if (!quiet && !mute)", failed)
-        entry = (JS / "views" / "entry.js").read_text(encoding="utf-8")
-        auto = entry[entry.index("async function maybeAutosave"):]
-        auto = auto[:auto.index("\n}\n")]
-        self.assertIn("{ mute: true }", auto)
-
-    def test_鳴らせる出来事だけ鳴らす(self) -> None:
-        js = (JS / "sound.js").read_text(encoding="utf-8")
-        play = js[js.index("export async function playKey"):]
-        play = play[:play.index("\n}\n")]
-        self.assertIn("if (cues && !cues.has(key)) return false;", play)
-        self.assertIn("setCues(body.cues);", js)
-        failed = js[js.index("function onFailed"):]
-        failed = failed[:failed.index("\n}\n")]
-        # 決まった音がある断り・聞き返しは「断られた」にしない
-        self.assertIn("if (body?.sound) return;", failed)
-        self.assertIn("body?.shift_changed?.crossed || body?.needs_confirm", failed)
-        self.assertIn('cue("error")', failed)
-        self.assertIn('cue("refused")', failed)
-
-    def test_画面のエラーと全画面確認(self) -> None:
-        errors = (JS / "errors.js").read_text(encoding="utf-8")
-        self.assertIn('new CustomEvent("sound:cue", { detail: "error" })', errors)
-        review = (JS / "views" / "review.js").read_text(encoding="utf-8")
-        self.assertIn('cue(document.getElementById("review")?.dataset.soundCue);', review)
-
-    def test_設定を保存したら一覧を読み直す(self) -> None:
-        js = (JS / "views" / "settings.js").read_text(encoding="utf-8")
-        self.assertIn("loadCues();", js)
-        self.assertIn("previewFile(name)", js)
+# 画面の配線(応答の出来事・断りを鳴らす/鳴らさない・鳴らせる一覧・画面のエラー・
+# 全画面確認・設定を保存したら一覧を読み直す・試聴)は、前は JS の字を探していました。
+# いまは**本物のブラウザで鳴らした道を見て確かめます**(`test_sound_browser`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":
