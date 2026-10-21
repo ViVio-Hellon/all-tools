@@ -271,17 +271,26 @@ class TabDesk:
         self.editor = token
         return self._verdict(token, now)
 
-    def release(self, token: str, *, now: float) -> None:
-        """タブが閉じた。**待たずに次へ渡す。**
+    def release(self, token: str, *, now: float,
+                loaded: Optional[float] = None) -> bool:
+        """タブが閉じた。**待たずに次へ渡す。** 外したら True。
 
         落ちた場合は心拍が途切れるまで分かりませんが、ふつうに閉じた
         ときはその場で分かります ── 20秒黙って待たせない。
+
+        `loaded` は閉じた画面を描いた時刻(v4.39.3)。**同じ名札がそれより新しい画面で
+        もう名乗り直していれば、外さない。** 読み直し(F5・「このタブで入力する」)は
+        閉じる合図と名乗り直しが同じ名札で続けて飛ぶので、閉じる合図のほうが遅れて
+        届くと、名乗り直したばかりのタブの権利を外していた(ほかのタブの次の心拍へ移る)。
         """
+        if loaded is not None and self.loaded.get(token, float("-inf")) > loaded:
+            return False
         self.tabs.pop(token, None)
         self.loaded.pop(token, None)
         if self.editor == token:
             self.editor = ""
         self._sweep(now)
+        return True
 
     def note_write(self, token: str, *, now: float) -> None:
         """書き込みが通った。**誰が書いたか**を覚える(`stale` が見る)。"""

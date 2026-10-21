@@ -74,6 +74,28 @@ class DeskTests(unittest.TestCase):
         self.desk.release("A", now=2.0)
         self.assertTrue(self.desk.ping("B", now=3.0).may_edit)
 
+    def test_読み直した先が名乗ったあとの閉じる合図では外さない(self) -> None:
+        """F5・「このタブで入力する」。**閉じる合図が名乗り直しより遅れて届いても権利を保つ**(v4.39.3)。"""
+        self.desk.claim("A", now=0.0, loaded=0.0)          # 古い画面(0.0 に描いた)
+        self.desk.claim("B", now=1.0, loaded=1.0)
+        self.desk.claim("A", now=5.0, loaded=4.5)          # 読み直した画面が先に名乗る
+        self.assertFalse(self.desk.release("A", now=5.1, loaded=0.0))   # 古い画面の合図
+        self.assertTrue(self.desk.ping("A", now=6.0).may_edit)
+        self.assertFalse(self.desk.ping("B", now=6.0).may_edit)
+
+    def test_いまの画面の閉じる合図なら外す(self) -> None:
+        self.desk.claim("A", now=0.0, loaded=0.0)
+        self.desk.claim("B", now=1.0, loaded=1.0)
+        self.assertTrue(self.desk.release("A", now=2.0, loaded=0.0))
+        self.assertTrue(self.desk.ping("B", now=3.0).may_edit)
+
+    def test_描いた時刻の無い閉じる合図は今までどおり外す(self) -> None:
+        """日報入力の外(グラフなど)で閉じた画面は時刻を持たない。"""
+        self.desk.claim("A", now=0.0, loaded=4.0)
+        self.desk.claim("B", now=1.0, loaded=1.0)
+        self.assertTrue(self.desk.release("A", now=5.0))
+        self.assertTrue(self.desk.ping("B", now=6.0).may_edit)
+
     def test_落ちたら心拍が途切れて次が打てる(self) -> None:
         """閉じる合図が届かないこともあります(落ちた・電源が切れた)。
 
@@ -162,6 +184,17 @@ class TabApiTests(WebTestCase):
                                json={"tab": "A"})
         self.assertEqual(res.status_code, 200)
         self.assertTrue(self.post("/api/tab/ping", "B").get_json()["may_edit"])
+
+    def test_遅れて届いた閉じる合図では外さない(self) -> None:
+        """読み直した画面が先に名乗ったあと、古い画面の閉じる合図が届く(v4.39.3)。"""
+        self.client.post("/api/tab/claim", headers={**HEADERS, "X-Tab": "A"}, json={"loaded": 1.0})
+        self.post("/api/tab/claim", "B")
+        self.client.post("/api/tab/claim", headers={**HEADERS, "X-Tab": "A"}, json={"loaded": 9e9})
+        res = self.client.post("/api/tab/release", headers=HEADERS,
+                               json={"tab": "A", "loaded": 1.0})
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(self.post("/api/tab/ping", "A").get_json()["may_edit"])
+        self.assertFalse(self.post("/api/tab/ping", "B").get_json()["may_edit"])
 
 
 class WriteGuardTests(WebTestCase):

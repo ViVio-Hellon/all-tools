@@ -388,6 +388,26 @@ class BrowserTests(WebTestCase):
                             timeout=5000)
         self.assertEqual(self.errors, [])
 
+    def test_閉じる合図に描いた時刻を添える(self) -> None:
+        """読み直したとき、遅れて届いた閉じる合図で権利を外さないため(v4.39.3)。"""
+        self.ctx.add_init_script("""
+            window.__beacons = [];
+            navigator.sendBeacon = (url, blob) => {
+              blob.text().then(t => window.__beacons.push({url: String(url), body: t}));
+              return true;
+            };""")
+        a = self.open_tab()
+        drawn = a.evaluate("Number(document.getElementById('sheet-key').dataset.tabLoaded)")
+        a.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+        a.wait_for_function("window.__beacons.some(b => b.url.includes('/api/tab/release'))",
+                            timeout=3000)
+        import json
+        sent = [json.loads(b["body"]) for b in a.evaluate("window.__beacons")
+                if "/api/tab/release" in b["url"]]
+        self.assertEqual(sent[-1]["tab"], self.tab_of(a))
+        self.assertAlmostEqual(sent[-1]["loaded"], drawn)
+        self.assertEqual(self.errors, [])
+
     def test_複製したタブは別の名札で見るだけ(self) -> None:
         a = self.open_tab()
         with self.ctx.expect_page() as got:

@@ -130,5 +130,7 @@ def release():
     """
     token = _beacon_token()
     if token:
-        tab_lock.get_desk().release(token, now=awake_clock.now())
+        # 閉じた画面を描いた時刻も受ける。**読み直した先がもう名乗っていれば外さない**(v4.39.3)
+        if not tab_lock.get_desk().release(token, now=awake_clock.now(), loaded=_loaded()):
+            log.info("閉じる合図より先に、同じタブの新しい画面が名乗っていました(外しません)")
     return jsonify({"ok": True})

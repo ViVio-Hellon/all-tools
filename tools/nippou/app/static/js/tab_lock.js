@@ -280,11 +280,19 @@ function listen() {
   });
 }
 
-/** 閉じ際・隠れ際の合図。`sendBeacon` はヘッダを付けられない。 */
+/**
+ * 閉じ際・隠れ際の合図。`sendBeacon` はヘッダを付けられない。
+ *
+ * **閉じる合図にはこの画面を描いた時刻を添える**(v4.39.3)。読み直したときは閉じる合図と
+ * 新しい画面の名乗りが同じ名札で続けて飛ぶので、閉じる合図が遅れて届いても、サーバは
+ * 「もっと新しい画面が名乗っている」と分かって外さない。
+ */
 function signal(path) {
   try {
     const url = `${path}?t=${encodeURIComponent(window.APP.token)}`;
-    const body = JSON.stringify({ tab: tabId });
+    const payload = { tab: tabId };
+    if (path === "/api/tab/release") payload.loaded = loadedAt();
+    const body = JSON.stringify(payload);
     const queued = navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }));
     // デスクトップ版(日報複合ツールの窓)の中では、離れるページの `sendBeacon` が
     // 届かないことがある(看板のデスクトップ版で実際に起きた)。送れなかったとき・
