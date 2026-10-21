@@ -167,6 +167,10 @@ KEY_ACCESS_LINE_APPLIED = "access_rights_line"
 # 変えるには管理者パスワード(設定・管理者 →「管理者」の面)。既定はオフ
 KEY_TIME_SPLIT = "time_split_enabled"
 
+# 「時間を割り振る」の倍率(v4.42.0。`logic/time_split.Factors`)。EX のロット・ロットの変わり目の
+# 1梱包目(段取り)・VC交換。`{"ex": 1.2, "setup": 1.5, "vc": 1.5}`。変えるのは管理者モードだけ
+KEY_TIME_SPLIT_FACTORS = "time_split_factors"
+
 # CSV と印刷用HTMLの書き出し先。**どこに出たのか分からない**という
 # 声があったので、設定できるようにした(既定はローカル領域の `work`)。
 # 共有のフォルダを指せば、出したCSVを他の人がそのまま開ける

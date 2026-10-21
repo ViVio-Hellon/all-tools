@@ -558,6 +558,10 @@ class DistributeWebTests(WebTestCase):
 
     def test_包数が空なら1と数える(self) -> None:
         self.enable()
+        # ここは梱包数の数え方だけを見る。ロットの変わり目の1梱包目を長くする倍率(v4.42.0)は外す
+        from nippou import user_settings
+        from nippou.config import KEY_TIME_SPLIT_FACTORS
+        user_settings.save(KEY_TIME_SPLIT_FACTORS, {"ex": 1, "setup": 1, "vc": 1})
         screen = {"rows": {"1": row("A", MAI="10", TUT=""), "2": row("B", MAI="5", TUT="2")},
                   "header": {"worker": "山田"}, "day_shift": True}
         plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()

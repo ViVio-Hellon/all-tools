@@ -3086,6 +3086,8 @@ export function start() {
     ];
     // 梱包数に合わせるか・均等か(v4.34.0。文言はサーバが決める)
     if (plan.weight_note) lines.push(plan.weight_note);
+    // EX・段取り・VC交換で長めにする所(v4.42.0。文言はサーバが決める)
+    for (const note of plan.adjust_notes || []) lines.push(`・${note}`);
     // 休憩の時間は飛ばす(v4.31.0)。どの行にかかって、休憩を入れるのかも先に言う
     const rest = plan.rest;
     if (rest?.skipped) {

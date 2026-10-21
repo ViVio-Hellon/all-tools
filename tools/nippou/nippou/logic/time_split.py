@@ -59,6 +59,29 @@
       区切る。停止がある行は、停止を刻みに切り上げた分が下限)。例: 梱包 1 と 1000 で 480 分なら
       0〜5 分・5〜480 分
 
+【EX・ロットの変わり目・VC交換(v4.42.0)】
+
+    EX が付いている場合は作業時間が EX でないものより多いです
+    (EX:そのLOTすべてが長くなるEX梱包のため)
+    LOTが変わるタイミングの1梱包目は通常よりもやや長いです
+    (1梱包目の前に段取りが入るためです 1梱包目だけ長めです)
+    LOTが変わるタイミングで前のLOTとVCが違う場合も通常より長くなります
+    (1梱包目の前にVC交換が入るためです 1梱包目だけ長めです)
+
+梱包数の重みに、さらに倍率を掛けます(`adjust_weights`。倍率は設定で変えられる `Factors`)。
+
+    ・**ロット**は行のロット№。空の行は**上の行と同じロット**(続きの行はロット№を打たない)。
+      ページをまたいでも続く
+    ・**EX** は etc 欄に「EX」がある行。**そのロットの行すべて**を EX の倍率で(EX の印は
+      ロット№を引いた行にしか付かないので、ロットで数える)
+    ・**ロットの変わり目**はロット№が上と違う行。その行の**1梱包目だけ**を段取りの倍率で
+      長くする(1梱包 = その行の梱包数 ÷ 包数。包数が空なら 1 包)
+    ・変わり目で**前のロットと VC(両面・片面)が違えば**、1梱包目にさらに VC交換のぶんを足す
+      (段取り 1.5倍・VC交換 1.5倍なら 1梱包目は 1 + 0.5 + 0.5 = 2倍)。VC が空の行は上の行と同じ
+    ・直の**最初の行**は、前の直の最後のロット(手元に保存があれば)と比べる。同じロットなら
+      変わり目ではない。前の直の保存が無ければ変わり目として数える(段取りから始まる)。
+      VC は比べる相手が無ければ足さない
+
 ここは計算だけ。どの行を数えるか・ページをまたいで書くのは `app/routes/entry.distribute_times`。
 """
 from __future__ import annotations
@@ -227,6 +250,149 @@ WEIGHT_NOTES: dict[bool, str] = {
     True: "梱包数に合わせて割り振ります(梱包数が無い行は平均で数えます)",
     False: "梱包数が無いので均等に割り振ります",
 }
+
+
+@dataclass(frozen=True)
+class Factors:
+    """EX・段取り・VC交換の倍率(v4.42.0)。設定・管理者で変えられる(`KEY_TIME_SPLIT_FACTORS`)。"""
+
+    #: EX のロットの行すべて
+    ex: Decimal = Decimal("1.2")
+    #: ロットの変わり目の1梱包目(段取り)
+    setup: Decimal = Decimal("1.5")
+    #: 変わり目で前のロットと VC が違うときの1梱包目(VC交換)。段取りのぶんに足す
+    vc: Decimal = Decimal("1.5")
+
+    #: 設定で選べる範囲(1 = 長くしない)
+    LOW = Decimal("1")
+    HIGH = Decimal("5")
+
+    @classmethod
+    def read(cls, raw: object) -> "Factors":
+        """設定に書いた値(`{"ex": 1.2, ...}`)から。読めない・範囲の外の値は既定のまま。"""
+        base = cls()
+        if not isinstance(raw, dict):
+            return base
+        values = {}
+        for name in ("ex", "setup", "vc"):
+            got = parse_factor(raw.get(name))
+            values[name] = got if got is not None else getattr(base, name)
+        return cls(**values)
+
+    def as_dict(self) -> dict[str, float]:
+        return {"ex": float(self.ex), "setup": float(self.setup), "vc": float(self.vc)}
+
+
+def parse_factor(value: object) -> Optional[Decimal]:
+    """倍率の1つ(1〜5、小数第2位まで)。読めなければ None。"""
+    import unicodedata
+    from decimal import InvalidOperation
+
+    text = unicodedata.normalize("NFKC", str(value if value is not None else "")).strip()
+    if not text:
+        return None
+    try:
+        got = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not got.is_finite() or got < Factors.LOW or got > Factors.HIGH:
+        return None
+    return got.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP).normalize()
+
+
+def _norm(text: object) -> str:
+    import unicodedata
+
+    return unicodedata.normalize("NFKC", str(text or "")).strip().upper()
+
+
+def is_ex(values: dict[str, str]) -> bool:
+    """etc 欄に「EX」がある行か(全角の「ＥＸ」も同じ)。"""
+    return "EX" in _norm(values.get("ET", ""))
+
+
+@dataclass
+class RowKind:
+    """行ごとの、割り振りの重みにかかわる事実(`lot_runs`)。"""
+
+    lot: str
+    ex: bool = False
+    #: ロットの変わり目(1梱包目に段取りが入る)
+    change: bool = False
+    #: 変わり目で前のロットと VC が違う(1梱包目に VC交換が入る)
+    vc_change: bool = False
+
+
+def lot_runs(rows: Sequence[dict[str, str]],
+             before: Optional[tuple[str, str]] = None) -> list[RowKind]:
+    """行の並び(ページ順・行順)を、ロットの続きで読む。
+
+    ``before`` は前の直の最後の(ロット№, VC)。無ければ None(最初の行は変わり目として数える)。
+    """
+    kinds: list[RowKind] = []
+    lot, vc = (_norm(before[0]), _norm(before[1])) if before else ("", "")
+    known_before = before is not None and bool(lot)
+    for index, values in enumerate(rows):
+        mine = _norm(values.get("LOT", ""))
+        my_vc = _norm(values.get("VC", ""))
+        change = False
+        vc_change = False
+        if mine and (mine != lot or (index == 0 and not known_before)):
+            change = True
+            vc_change = bool(my_vc) and bool(vc) and my_vc != vc
+            lot = mine
+            vc = my_vc
+        elif my_vc:
+            # 同じロットの続きの行(ロット№が空でも)。最初の行にロット№が無い(停止だけ)ときも
+            # 変わり目とは言わない ── 何から何へ変わったのか分からない
+            vc = my_vc
+        kinds.append(RowKind(lot=lot, change=change, vc_change=vc_change))
+    ex_lots = {k.lot for k, values in zip(kinds, rows) if k.lot and is_ex(values)}
+    for k, values in zip(kinds, rows):
+        k.ex = (k.lot in ex_lots) if k.lot else is_ex(values)
+    return kinds
+
+
+def pack_count(values: dict[str, str]) -> int:
+    """その行の包数(梱包単位 包数)。空・読めなければ 1。"""
+    from .numeric import is_numeric, to_float
+
+    tut = str(values.get("TUT", "") or "").strip()
+    count = int(to_float(tut)) if tut and is_numeric(tut) else 1
+    return max(count, 1)
+
+
+def adjust_weights(weights: Sequence[Decimal], rows: Sequence[dict[str, str]],
+                   kinds: Sequence[RowKind], factors: Factors) -> tuple[list[Decimal], list[str]]:
+    """梱包数の重みに、EX・段取り・VC交換の倍率を掛ける。返すのは(重み, 確かめの窓に出す一言)。"""
+    out: list[Decimal] = []
+    ex_rows = changes = vc_changes = 0
+    for weight, values, kind in zip(weights, rows, kinds):
+        w = weight * (factors.ex if kind.ex else Decimal(1))
+        extra = Decimal(0)
+        if kind.change:
+            extra += factors.setup - 1
+            changes += 1
+        if kind.vc_change:
+            extra += factors.vc - 1
+            vc_changes += 1
+        if extra > 0:
+            w += w / pack_count(values) * extra
+        ex_rows += 1 if kind.ex and factors.ex != 1 else 0
+        out.append(w)
+    notes: list[str] = []
+    if ex_rows:
+        notes.append(f"EX のロットの {ex_rows} 行は {_times(factors.ex)}倍で数えます")
+    if changes and factors.setup != 1:
+        notes.append(f"ロットの変わり目 {changes} か所の1梱包目は段取りのぶん長め({_times(factors.setup)}倍)")
+    if vc_changes and factors.vc != 1:
+        notes.append(f"そのうち VC が前のロットと違う {vc_changes} か所は、VC交換のぶんさらに長め"
+                     f"(+{_times(factors.vc - 1)}倍)")
+    return out, notes
+
+
+def _times(value: Decimal) -> str:
+    return format(value.normalize(), "f")
 
 
 def parse_hhmm(text: str) -> Optional[int]:

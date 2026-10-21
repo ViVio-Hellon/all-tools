@@ -1323,6 +1323,28 @@ export function start() {
     });
   }
 
+  // ---- 時間を割り振るの倍率(v4.42.0)── EX・段取り・VC交換。管理者モードだけ ----
+  document.getElementById("factor-save")?.addEventListener("click", async () => {
+    const box = document.getElementById("time-split-note");
+    const read = (name) => document.getElementById(`factor-${name}`)?.value ?? "";
+    try {
+      const body = await api.post("/api/settings/time-split-factors",
+                                  { ex: read("ex"), setup: read("setup"), vc: read("vc") });
+      for (const [name, value] of Object.entries(body.factors || {})) {
+        const input = document.getElementById(`factor-${name}`);
+        if (input) input.value = String(value);
+      }
+      toast(body.message, body.remembered === false ? "warn" : "ok");
+      if (box) box.hidden = true;
+    } catch (err) {
+      if (box) {
+        box.hidden = false;
+        box.textContent = err.message;
+        box.className = "msg msg--error";
+      }
+    }
+  });
+
   // ---- アクセス権限の表(v4.12.0)── 読み直して、ラインが変わっていれば当てる ----
   document.getElementById("access-reload")?.addEventListener("click", async () => {
     const box = document.getElementById("access-note");

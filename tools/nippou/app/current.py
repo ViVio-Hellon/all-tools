@@ -87,6 +87,15 @@ def time_split_enabled() -> bool:
     return bool(value)
 
 
+def time_split_factors():
+    """「時間を割り振る」の倍率(EX・段取り・VC交換。v4.42.0)。書いていなければ既定。"""
+    from nippou import user_settings
+    from nippou.config import KEY_TIME_SPLIT_FACTORS
+    from nippou.logic.time_split import Factors
+
+    return Factors.read(user_settings.get(KEY_TIME_SPLIT_FACTORS, None))
+
+
 def build_service(ctx, calc) -> NippouService:
     """このリクエスト用のサービス。**状態は入れものから借りる。**
 

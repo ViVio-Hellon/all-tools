@@ -47,7 +47,8 @@ from .. import error_body, get_repo, shell
 # どの画面からも使う「いまの直」の組み立て(段階2: 画面の道どうしで借りないよう `app/current.py` へ)。
 # 日報入力の道の中では、これまでどおりの名前で使う
 from ..current import (build_service, build_shift_calculator, current_calculator,  # noqa: F401
-                       current_flow, ribbon_now, time_split_enabled)
+                       current_flow, ribbon_now, time_split_enabled,
+                       time_split_factors)
 from ..current import current_target as _target  # noqa: F401
 
 log = get_logger("app.routes.entry")
@@ -1181,6 +1182,10 @@ def distribute_times():
     # その行は梱包数がある行の平均で数える(`time_split.pack_weights`)
     weights, by_packs = time_split.pack_weights(
         [time_split.row_packs(pages[n].rows[row]) for n, row in targets])
+    # EX のロットはすべて長め・ロットの変わり目の1梱包目は段取り・VC が変われば VC交換(v4.42.0)
+    target_rows = [pages[n].rows[row] for n, row in targets]
+    kinds = time_split.lot_runs(target_rows, _last_lot_before(report_date, line, shift))
+    weights, adjust_notes = time_split.adjust_weights(weights, target_rows, kinds, time_split_factors())
     # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
     day_work = any(p.day_shift for p in pages.values())
     rest = None if day_work else time_split.break_window(shift, start, total)
@@ -1230,6 +1235,8 @@ def distribute_times():
         "rest": rest_info,
         # 確かめの窓に出す、割り振り方の一言(梱包数に合わせたか・均等か)
         "by_packs": by_packs, "weight_note": time_split.WEIGHT_NOTES[by_packs],
+        # EX・段取り・VC交換で長めにした所(v4.42.0)。無ければ空
+        "adjust_notes": adjust_notes,
     }
     if payload.get("dry_run"):
         return jsonify(summary)
@@ -1275,6 +1282,34 @@ def distribute_times():
     if rest_info and rest_info.get("start"):
         body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
     return jsonify(body)
+
+
+def _last_lot_before(report_date: str, line: str, shift: str) -> Optional[tuple[str, str]]:
+    """前の直の最後のロット№と VC(手元に保存があれば)。無ければ None(v4.42.0)。
+
+    割り振りで、直の最初の行がロットの変わり目かを決めるのに使う。読めなくても割り振りは止めない。
+    """
+    from nippou.logic.prev_shift import previous_of
+
+    try:
+        today = parse_business_date(report_date)
+        found = previous_of(shift, today) if today else None
+        if found is None:
+            return None
+        repo = get_repo()
+        stamp = format_business_date(found[1])
+        lot = vc = ""
+        for number in sorted(repo.saved_pages(stamp, line, found[0])):
+            loaded = repo.load(stamp, line, found[0], number)
+            for d in sorted(loaded[1] if loaded else [], key=lambda d: d.row_no):
+                if (d.lot or "").strip():
+                    lot, vc = d.lot.strip(), (d.vc or "").strip()
+                elif (d.vc or "").strip() and lot:
+                    vc = d.vc.strip()
+        return (lot, vc) if lot else None
+    except Exception:                               # noqa: BLE001 - 分からないとして割り振る
+        log.exception("前の直の最後のロットを読めませんでした")
+        return None
 
 
 def _gather_rest(shift, rest, plan, targets, pages, shift_start, parts) -> dict:

@@ -102,6 +102,8 @@ def index():
         state=state,
         # 日報入力の「時間を割り振る」(v4.30.0)。変えるのは管理者モードだけ
         time_split=_time_split_enabled(),
+        # その倍率(EX・段取り・VC交換。v4.42.0)
+        time_split_factors=_time_split_factors().as_dict(),
         paths=state["paths"],
         # 面ごとに欄を置くので、鍵で引ける形も渡す(出どころは `paths` と同じ)
         path_map=state["path_map"],
@@ -562,6 +564,46 @@ def time_split():
         "enabled": _time_split_enabled(), "remembered": remembered,
         "message": ("日報入力に「時間を割り振る」を出します" if enabled
                     else "日報入力の「時間を割り振る」を出さないようにしました"),
+    })
+
+
+def _time_split_factors():
+    from ..current import time_split_factors
+
+    return time_split_factors()
+
+
+@bp.post("/api/settings/time-split-factors")
+def time_split_factors_save():
+    """「時間を割り振る」の倍率(EX・段取り・VC交換。v4.42.0)。**変えるのは管理者モードだけ。**
+
+    1〜5 の数(小数第2位まで)。1 にすると、それでは長くしない。読めない値は断る(黙って既定に
+    戻さない ── 打った人は変えたつもりでいる)。
+    """
+    from nippou import user_settings
+    from nippou.config import KEY_TIME_SPLIT_FACTORS
+    from nippou.logic.time_split import Factors, parse_factor
+
+    ctx = work_context.get_context()
+    if not ctx.admin:
+        return jsonify(error_body(
+            "not_admin", "割り振りの倍率は管理者モードでのみ変えられます")), 403
+    payload = request.get_json(silent=True) or {}
+    names = {"ex": "EX", "setup": "段取り(ロットの変わり目)", "vc": "VC交換"}
+    values = {}
+    for key, label in names.items():
+        got = parse_factor(payload.get(key))
+        if got is None:
+            return jsonify(error_body(
+                "bad_factor", f"{label}の倍率は {Factors.LOW}〜{Factors.HIGH} の数で入れてください",
+                field=key)), 400
+        values[key] = float(got)
+    remembered = user_settings.save(KEY_TIME_SPLIT_FACTORS, values)
+    log_button_click("time_split_factors", line=ctx.line,
+                     extra=" ".join(f"{k}={v}" for k, v in values.items()))
+    return jsonify({
+        "factors": _time_split_factors().as_dict(), "remembered": remembered,
+        "message": "割り振りの倍率を変えました",
     })
 
 

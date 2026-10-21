@@ -1558,6 +1558,23 @@ LVC,119
         休憩をまたぐ行は60分のばし(例 11:40〜12:20 → 11:40〜13:20)、その行に休憩(停止の記号「0」60分)を
         入れます(昼稼働「有」の直は飛ばしません)。入っている開始・終了の時刻は書き換えます(押す前に確かめます)。
       </p>
+      {# EX・段取り・VC交換の倍率(v4.42.0。`logic/time_split.Factors`) #}
+      <div class="btn-row" id="time-split-factors" style="margin-top:var(--sp-2)">
+        <label>EX のロット <input class="input" type="text" inputmode="decimal" size="4" style="width:5em"
+               id="factor-ex" value="{{ time_split_factors.ex }}" {% if not admin %}disabled{% endif %}> 倍</label>
+        <label>ロットの変わり目の1梱包目(段取り) <input class="input" type="text" inputmode="decimal" size="4" style="width:5em"
+               id="factor-setup" value="{{ time_split_factors.setup }}" {% if not admin %}disabled{% endif %}> 倍</label>
+        <label>VC が変わるときの1梱包目(VC交換) <input class="input" type="text" inputmode="decimal" size="4" style="width:5em"
+               id="factor-vc" value="{{ time_split_factors.vc }}" {% if not admin %}disabled{% endif %}> 倍</label>
+        <button class="btn btn--sm" type="button" id="factor-save"
+                {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>倍率を保存</button>
+      </div>
+      <p class="lead" style="margin-top:var(--sp-2)">
+        梱包数の比で分けるときに、<b>EX のロットの行はすべて</b>この倍率で長めにします。ロット№が変わる行は
+        <b>1梱包目だけ</b>段取りのぶん長め、前のロットと VC(両面・片面)が違えば VC交換のぶんも足します
+        (段取り 1.5倍・VC交換 1.5倍なら 1梱包目は 2倍)。ロット№が空の行は上の行と同じロットです。
+        1 にすると、それでは長くしません(1〜5)。
+      </p>
       <div class="msg" id="time-split-note" hidden style="margin-top:var(--sp-2)"></div>
     </div>
 
