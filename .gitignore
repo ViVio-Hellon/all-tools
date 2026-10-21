@@ -8,6 +8,8 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/settings.local.json
+# 並行の作業者が使う一時の作業コピー(git worktree)。リポジトリへは上げない
+.claude/worktrees/
 
 # 日報複合ツールのローカル実行領域・作るもの(リポジトリ直下だけ。tools/ の下は各ツールの .gitignore が決める)
 /logs/
