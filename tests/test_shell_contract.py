@@ -159,18 +159,16 @@ class DialogTests(unittest.TestCase):
     """
 
     def test_ブラウザの確認ダイアログを_dialogより先に固定する(self) -> None:
+        """外枠(Rust)が台本を入れる順番。台本そのものが固定できるか(置き換えを断るか)は
+        `test_shell_frames_browser.py` の DialogTests が本物のブラウザで確かめる。"""
         main = rust("main.rs")
         guard = main.index('include_str!("native_dialogs.js")')
         self.assertIn("js_init_script_on_all_frames", main[main.rindex(".plugin(", 0, guard):guard + 40])
         self.assertLess(guard, main.index("tauri_plugin_dialog::init()"))
-        script = (ROOT / "src-tauri" / "src" / "native_dialogs.js").read_text(encoding="utf-8")
-        for name in ("alert", "confirm", "prompt"):
-            self.assertIn(f'"{name}"', script)
-        self.assertIn("writable: false", script)
 
     def test_起動確認がどの画面の確認ダイアログも見る(self) -> None:
-        self.assertIn("確認ダイアログ", (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8"))
-        self.assertIn("dialogsKind()", (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8"))
+        """大きなタブの画面とツールの画面が記録に「[確認ダイアログ: native/replaced]」を残すことは
+        `test_shell_frames_browser.py` の DialogTests。ここは起動確認がその記録を読むこと。"""
         self.assertIn("確認ダイアログ", (ROOT / "scripts" / "desktop_smoke.py").read_text(encoding="utf-8"))
 
 
@@ -206,19 +204,8 @@ class ConsoleEncodingTests(unittest.TestCase):
 
 
 
-class UploadTests(unittest.TestCase):
-    """ファイルを送る(FormData)は、embed.js が中身を読んでから1つのバイト列にして送る。
-
-    WebView2 は外枠の宛先へ送る FormData のファイル(ディスクのファイルを指す部分)を
-    外枠へ渡さず、看板の「Access の最新で表の中身を入れ替える」が「ファイルが小さすぎます」
-    になっていた(ブラウザ版では起きない)。
-    """
-
-    def test_ファイル入りのFormDataを組み立て直して送る(self) -> None:
-        embed = (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8")
-        self.assertIn("window.fetch = function", embed)
-        self.assertIn("arrayBuffer()", embed)
-        self.assertIn("multipart/form-data; boundary=", embed)
+# ファイルを送る(FormData)は、embed.js が中身を読んでから1つのバイト列にして送る(WebView2 は
+# FormData のファイルを外枠へ渡さない)── `test_shell_frames_browser.py` の UploadTests で確かめる
 
 
 class DropTests(unittest.TestCase):
@@ -237,16 +224,10 @@ class DropTests(unittest.TestCase):
         self.assertIn("drops::shell_dropped_file", main)
 
     def test_画面へ渡すのは位置と名前だけで中身は落とされた枠の頼みにだけ(self) -> None:
+        """外枠(Rust)が呼ぶ口の名前。大きなタブの画面とツールの画面の動き(位置の割り戻し・
+        落とす枠の外では断る・ほかの枠には渡さない)は `test_shell_frames_browser.py` の DropTests。"""
         drops = (ROOT / "src-tauri" / "src" / "drops.rs").read_text(encoding="utf-8")
         self.assertIn("window.__shell.fileDrag", drops)
-        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-        self.assertIn("fileDrag(info)", shell)
-        self.assertIn("drag.drop.id !== id || drag.drop.seq !== data.seq", shell)
-        self.assertIn("devicePixelRatio", shell)
-        embed = (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8")
-        for needle in ('d.type === "alltools:drag"', 'fire("drop"', "over.defaultPrevented",
-                       "alltools:dropped-file", "alltools:drop-refused"):
-            self.assertIn(needle, embed)
 
 
 class ThemeDefaultTests(unittest.TestCase):
@@ -291,43 +272,16 @@ class ThemeDefaultTests(unittest.TestCase):
         self.assertIn('const DEFAULT = "light";', self.text("tools", "inspection", "app", "static", "js", "theme.js"))
 
 
-class LocationViewTests(unittest.TestCase):
-    """大設定の「共有の DB の置き場所」: 反映しているか、打ちかけかを見分けられる。"""
-
-    def test_反映済みと打ちかけで見え方が変わる(self) -> None:
-        js = (ROOT / "portal" / "static" / "js" / "settings.js").read_text(encoding="utf-8")
-        css = (ROOT / "portal" / "static" / "css" / "shell.css").read_text(encoding="utf-8")
-        self.assertIn("function paintLocState", js)
-        self.assertIn("まだ反映していません", js)
-        self.assertIn("反映しています", js)
-        self.assertIn(".pathform input.is-edited", css)
-        self.assertIn('id="loc-state"', (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8"))
+# 大設定の「共有の DB の置き場所」の反映済み/打ちかけの見え方は `test_settings_browser.py` の LocationTests
 
 
 if __name__ == "__main__":
     unittest.main()
 
 
-class ManualAndEndTests(unittest.TestCase):
-    """説明書の Esc・F1 と、終了したあとの問い合わせ(通しの点検で見つかったもの)。"""
-
-    def setUp(self) -> None:
-        self.shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-
-    def test_説明書の中でも_Esc_F1_で閉じる(self) -> None:
-        """説明書をクリックするとキーは説明書のページへ行き、外枠に届かなかった。"""
-        self.assertIn('manualFrame.addEventListener("load"', self.shell)
-        self.assertIn("doc.addEventListener(\"keydown\"", self.shell)
-
-    def test_説明書を開いたままタブを替えてもツールへ入らない(self) -> None:
-        self.assertIn("if (!manualBox.hidden) return;", self.shell)
-
-    def test_終了したら定期の問い合わせを止める(self) -> None:
-        self.assertNotIn("setInterval(followTabs", self.shell)
-        self.assertNotIn("setInterval(pollStatus", self.shell)
-        self.assertNotIn("setInterval(beat", self.shell)
-        ended = self.shell[self.shell.index("function ended()"):]
-        self.assertIn("timers.forEach(clearInterval)", ended[:200])
+# 説明書の Esc・F1(説明書の中にいても)・開いたままタブを替えてもツールへ入らない は
+# `test_shell_frames_browser.py` の ManualTests、終了したら定期の問い合わせを止める は
+# `test_shell_close_browser.py` の BrowserQuitTests で確かめる
 
 
 class PrepareCloseTests(unittest.TestCase):
@@ -342,29 +296,9 @@ class PrepareCloseTests(unittest.TestCase):
         self.assertIn("wait_prepared(&rx, limit, PREPARE_WAITING_LIMIT)", shell_rs)
         self.assertIn("services::shell_prepared", rust("main.rs"))
 
-    def test_大きなタブの画面が各枠へ頼む(self) -> None:
-        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-        self.assertIn("async prepareClose()", shell)
-        self.assertIn('invoke("shell_prepared", { ok })', shell)
-        self.assertIn('type: "alltools:before-close"', shell)
-        # ブラウザ版の「終了」も同じ頼みを通る
-        quit_ = shell[shell.index('getElementById("quit")'):]
-        self.assertLess(quit_.index("prepareFrames()"), quit_.index('"/api/shutdown"'))
-        self.assertIn('"/api/shutdown", { screens_ready: true }', quit_, "置いたあとは入口に頼み直させない")
-
-    def test_外からの停止もブラウザ版の画面に頼む(self) -> None:
-        """ランチャー・stop.bat の停止でも、開いている画面に打ちかけを置いてもらう(docs/ランチャー連携.md)。"""
-        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-        watch = shell[shell.index("async function watchCloseAsk()"):]
-        watch = watch[:watch.index("\n}\n")]
-        self.assertIn("/api/close-ask?page=", watch)
-        # 確認の窓は画面を止めるので、先に「置いています」を返してから置く
-        self.assertLess(watch.index('state: "working"'), watch.index("prepareFrames()"))
-        self.assertIn('state: ok ? "ok" : "refused"', watch)
-        self.assertIn("every(watchCloseAsk, 1000)", shell)
-        # 閉じた画面には頼まない(閉じ際の合図)
-        self.assertIn("leaving: true", shell)
-        self.assertIn('window.addEventListener("pagehide"', shell)
+    # 大きなタブの画面が各枠へ頼む(デスクトップ版の prepareClose・ブラウザ版の「終了」)・
+    # 外からの停止もブラウザ版の画面に頼む(先に「置いています」・閉じ際の合図)は
+    # `test_shell_close_browser.py`(DesktopPrepareTests・BrowserQuitTests・CloseAskTests)
 
 
 def js(name: str) -> str:
@@ -385,30 +319,20 @@ class CloseWaitTests(unittest.TestCase):
     画面は 12 秒・外枠は 15 秒で見切って閉じていた。
     """
 
-    def test_画面は受けたあと短い上限で閉じない(self) -> None:
-        shell = js("shell.js")
-        ask = between(shell, "function askFrameToSave(", "\n}\n")
-        self.assertNotIn("DONE_MS", shell)
-        after_ack = ask[ask.index('"alltools:before-close-ack"'):]
-        self.assertIn("ACKED_MS", after_ack)
-        self.assertIn("finish(false)", after_ack, "受けたあと上限が来たら閉じない")
-        self.assertRegex(shell, r"const ACKED_MS = 10 \* 60000;")
+    # 画面は受けたあと短い上限で閉じない(10 分待って、来なければ閉じない)は
+    # `test_shell_close_browser.py` の BrowserQuitTests
 
     def test_画面は先に待っていますを外枠へ返す(self) -> None:
-        shell = js("shell.js")
-        prep = between(shell, "async prepareClose()", "\n  },")
-        self.assertLess(prep.index('invoke("shell_prepared", { ok: true, waiting: true })'),
-                        prep.index("prepareFrames()"))
+        """画面が先に `{ ok: true, waiting: true }` を返すことは `test_shell_close_browser.py` の
+        DesktopPrepareTests。ここは外枠(Rust)がその `waiting` を受けること(言語をまたぐ取り決め)。"""
         services = rust("services.rs")
         self.assertIn("waiting: Option<bool>", services)
         self.assertIn("Prepared::Waiting", services)
 
     def test_外枠は待っていますのあと上限で閉じない(self) -> None:
-        shell_rs = rust("shell.rs")
-        wait = between(shell_rs, "pub fn wait_prepared(", "\n}\n")
-        self.assertIn("return !acked", wait)
-        self.assertNotIn("unwrap_or(true)", shell_rs)
-        self.assertIn("Duration::from_secs(30 * 60)", shell_rs)
+        """待っていますのあと上限が来たら閉じない動きは Rust の試験(`cargo test`、`shell.rs` の
+        `待っていますのあと上限が来たら閉じない`)。ここは上限の長さ(本人が読むあいだ)。"""
+        self.assertIn("Duration::from_secs(30 * 60)", rust("shell.rs"))
 
     def test_確認のあとでもう一度打ちかけを置いてから止める(self) -> None:
         closing = rust("closing.rs")
@@ -424,38 +348,19 @@ class CloseWaitTests(unittest.TestCase):
         self.assertNotIn("if !matches!(reply, Ok((409, _)))", closing)
 
 
-class BrowserOriginTests(unittest.TestCase):
-    """ブラウザ版の「終了」で、各ツールに打ちかけを置く頼みが届く。
-
-    入口はブラウザ版のツールに宛先を渡さない(`origin: ""`)。以前は宛先が空のままで、
-    頼みを1つも送らず、返事も捨てていた。
-    """
-
-    def test_枠の宛先を覚えてどこでも使う(self) -> None:
-        shell = js("shell.js")
-        origin = between(shell, "function originOf(", "\n}\n")
-        self.assertIn("entry.origin", origin)
-        self.assertIn("new URL(url, location.href).origin", shell)
-        self.assertIn("entry.origin = frameOrigin(id, entry.url);", shell)
-        self.assertIn("event.origin !== originOf(id)", shell)
-        self.assertIn("postMessage(message, originOf(id))", shell)
-        self.assertIn('postMessage({ type: "alltools:before-close", seq }, originOf(id))', shell)
+# ブラウザ版の「終了」で各ツールに打ちかけを置く頼みが届く(枠の宛先を覚えて使う)は
+# `test_shell_close_browser.py` の BrowserQuitTests
 
 
 class LostToolTests(unittest.TestCase):
     """処理が止まった・終わったツールの画面を、黙って読み直さない・消さない。"""
 
-    def test_ツールが落ちても枠は読み直さず知らせを重ねる(self) -> None:
-        shell = js("shell.js")
-        lost = between(shell, "  toolLost(id) {", "\n  },")
-        self.assertNotIn("reloadTool(id)", lost)
-        self.assertIn('postToFrame(id, { type: "alltools:python-lost" })', lost)
-        self.assertIn("showLost(", lost)
-        self.assertIn('invoke("shell_restart_tool", { tool: id })', lost)
-        self.assertIn("confirmDiscard(id)", lost)
-        self.assertIn('"alltools:python-lost"', js("embed.js"))
+    # ツールが落ちても枠は読み直さず知らせを重ねる・ブラウザ版は印が消えるまで終わったとしない は
+    # `test_shell_frames_browser.py` の LostToolTests・BrowserEndedTests
 
     def test_入口が落ちても窓ごと読み直さない(self) -> None:
+        """外枠(Rust)の側。大きなタブの画面が知らせを出す(portalLost / portalBack / portalDown)のは
+        `test_shell_frames_browser.py` の LostToolTests。"""
         main = rust("main.rs")
         self.assertNotIn('tell_shell("location.reload()")', main)
         self.assertIn("lost_shell.portal_lost()", main)
@@ -465,104 +370,14 @@ class LostToolTests(unittest.TestCase):
         self.assertIn("finish_restart()", restart)
         self.assertNotIn("location.reload", restart)
         self.assertIn("if self.exiting.load(Ordering::SeqCst)", shell_rs, "終えるときに起こし直さない")
-        shell = js("shell.js")
-        for name in ("portalLost()", "portalBack()", "portalDown(text)"):
-            self.assertIn(name, shell)
-        self.assertIn('id="portal-state"', (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8"))
+        # 外枠が呼ぶ口の名前(画面の側はこの名前で呼んで確かめている)
+        for name in ("portalLost()", "portalBack()", "portalDown("):
+            self.assertIn(f"window.__shell.{name}", shell_rs)
         self.assertIn("Some(t) if t.is_portal() =>", rust("services.rs"))
 
-    def test_ブラウザ版は印が消えるまで終わったとしない_枠は消さない(self) -> None:
-        shell = js("shell.js")
-        watch = between(shell, "async function watchBrowserTools()", "\n}\n")
-        self.assertIn("item.ended === false", watch)
-        self.assertNotIn("showNote(", watch)
-        self.assertIn("showLost(", watch)
-        self.assertNotIn(".remove()", watch)
 
-
-class ReloadTests(unittest.TestCase):
-    """F5 / Ctrl+R は、打ちかけを置いてもらってから、その画面だけ読み直す。"""
-
-    def test_帯のF5は打ちかけを置いてから(self) -> None:
-        shell = js("shell.js")
-        keys = between(shell, 'document.addEventListener("keydown"', "\n});\n")
-        self.assertIn("userReload(current)", keys)
-        self.assertNotIn("reloadTool(current)", keys)
-        reload_ = between(shell, "async function userReload(", "\n}\n")
-        self.assertLess(reload_.index("askFrameToSave(id, win)"), reload_.index("reloadTool(id)"))
-        self.assertIn('data.action === "reload"', shell)
-
-    def test_ツールの画面の中のF5は大きなタブに頼む(self) -> None:
-        embed = js("embed.js")
-        keys = between(embed, "  // ---- キー(このツールの画面にいるとき) ----", "\n  });\n")
-        self.assertNotIn("location.reload()", keys)
-        self.assertIn("askReload()", keys)
-        ask = between(embed, "function askReload()", "\n  }\n")
-        self.assertIn('tellShell({ action: "reload" })', ask)
-        self.assertIn("location.reload()", ask, "大きなタブの外(単体)では今までどおり")
-
-
-class FallbackCloseTests(unittest.TestCase):
-    """自分で「閉じる前」を受けないツールの画面は、embed.js が受け皿になる。"""
-
-    def test_受けるツールには任せ_受けないツールでは打ちかけを訊く(self) -> None:
-        embed = js("embed.js")
-        before = between(embed, "function beforeClose(d)", "\n  }\n")
-        self.assertLess(before.index("window.__alltoolsHandlesClose"), before.index('"alltools:before-close-ack"'))
-        self.assertIn("保存していない入力があります。閉じますか?", before)
-        self.assertIn('reply("alltools:before-close-done", { ok: ok })', before)
-        self.assertIn("el.defaultValue", embed)
-        self.assertIn("dialog[open]", embed)
-
-
-class SettingsFormTests(unittest.TestCase):
-    """大設定の打ちかけ(置き場所・行の窓)を消さない・2重に書かない。"""
-
-    def setUp(self) -> None:
-        self.js = js("settings.js")
-
-    def test_置き場所の打ちかけは描き直しで消さない(self) -> None:
-        source = between(self.js, "function paintSource(", "\n}\n")
-        self.assertIn("if (reset || !typed) input.value = saved;", source)
-        self.assertIn("s.set_folder ?? s.folder", source)
-        self.assertIn("{ location: true }", self.js)
-
-    def test_反映していない置き場所があれば配布設定を書き出さない(self) -> None:
-        export = between(self.js, '$("dist-export").addEventListener', "\n  });\n")
-        self.assertLess(export.index("locEdited()"), export.index('write("/api/distribution/export"'))
-        # まとめて書き出すも大設定の分を書き出すので同じ
-        export_all = between(self.js, '$("dist-export-all").addEventListener', "\n  });\n")
-        self.assertLess(export_all.index("locEdited()"), export_all.index("exportAll()"))
-
-    def test_まとめて書き出すとツールごとに1行出し_一覧も描き直す(self) -> None:
-        run = between(self.js, "async function exportAll()", "\n}\n")
-        self.assertIn('api.post("/api/distribution/export-all"', run)
-        self.assertLess(run.index("paintIfFresh(seq, body)"), run.index("paintExportAll(body.exported"))
-        self.assertIn("button.disabled = true;", run, "書き出しているあいだに2度押させない")
-        paint = between(self.js, "function paintExportAll(", "\n}\n")
-        self.assertIn("`${r.title}: ${r.line}`", paint)
-
-    def test_保存するの2度押しで2行足さない(self) -> None:
-        save = between(self.js, "async function saveRow(", "\n}\n")
-        self.assertLess(save.index("if (rowBusy) return;"), save.index("await write("))
-        self.assertIn('$("row-save").disabled = true;', save)
-
-    def test_断られても打った値を残し_行のいまに差し替える(self) -> None:
-        refused = between(self.js, "function rowRefused(", "\n}\n")
-        self.assertIn("editing = fresh;", refused)
-        self.assertIn('$("row-unlock").hidden = false;', refused)
-        self.assertNotIn('$("row-dialog").close()', refused)
-
-    def test_古い答えで描き直さない(self) -> None:
-        self.assertIn("if (seq < shown)", self.js)
-
-    def test_やめる_Escは打った値があれば訊く(self) -> None:
-        close = between(self.js, "function closeRow()", "\n}\n")
-        self.assertIn("rowEdited()", close)
-        self.assertIn('$("row-dialog").addEventListener("cancel"', self.js)
-
-    def test_閉じる前に大設定の打ちかけも見る(self) -> None:
-        shell = js("shell.js")
-        prepare = between(shell, "async function prepareFrames()", "\n}\n")
-        self.assertLess(prepare.index("settingsView.unsaved()"), prepare.index("askFrameToSave("))
-        self.assertIn("export function unsaved()", self.js)
+# F5 / Ctrl+R(大きなタブの帯でも、ツールの画面の中でも)は打ちかけを置いてから、その画面だけ
+# 読み直す・自分で受けないツールの画面は embed.js が受け皿になる は `test_shell_close_browser.py`
+# (ReloadTests・FallbackCloseTests)。大設定の打ちかけ(置き場所・行の窓)を消さない・2重に書かない・
+# 古い答えで描き直さない・断られても打った値を残す・やめる/Esc は訊く は `test_settings_browser.py`、
+# 閉じる前に大設定の打ちかけも見る は `test_shell_close_browser.py` の BrowserQuitTests で確かめる

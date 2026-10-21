@@ -118,12 +118,8 @@ class ShellTests(unittest.TestCase):
             with self.subTest(tool=tool["id"]):
                 self.assertEqual(tool["version"], catalog_mod.load().by_id(tool["id"]).version())
                 self.assertRegex(tool["version"], r"^\d+\.\d+\.\d+$")
-        self.assertIn('id="help"', text)
-        self.assertIn('id="manual-frame"', text)
-        js = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-        self.assertIn("/static/manual/", js)
-        self.assertIn('"F1"', js)
-        self.assertIn('"F1"', (ROOT / "portal" / "static" / "js" / "embed.js").read_text(encoding="utf-8"))
+        # 「説明書」ボタン・F1(大きなタブの帯でも、ツールの画面の中でも)で、いまのタブの説明書を
+        # 重ねて開くことは `test_shell_frames_browser.py` の ManualTests・DesktopManualTests
 
 
 if __name__ == "__main__":

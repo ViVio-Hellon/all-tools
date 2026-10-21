@@ -174,10 +174,8 @@ class ToolSettingsTests(unittest.TestCase):
         self.assertTrue(found["nippou"]["path"].endswith(str(Path("nippou") / "配布設定")))
         self.assertFalse(found["kanban"]["exists"])
 
-    def test_大設定の画面に一覧と手順がある(self) -> None:
-        html = (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8")
-        self.assertIn('id="dist-tools"', html)
-        self.assertIn("scripts\\make_dist.bat", html)
+    # 大設定の画面に各ツールの一覧(あり/なし)と手順(make_dist.bat)が出ることは
+    # `test_settings_browser.py` の ExportAllTests
 
 
 class ExportAllTests(unittest.TestCase):
@@ -311,12 +309,7 @@ class ExportAllTests(unittest.TestCase):
         self.assertEqual([r["state"] for r in body["exported"]], ["nothing"] * 5)
         self.assertIn("tools", body["distribution"], "各ツールの配布設定の一覧(あり/なし)も描き直せる")
 
-    def test_大設定の画面にボタンと手順がある(self) -> None:
-        html = (ROOT / "portal" / "templates" / "settings.html").read_text(encoding="utf-8")
-        self.assertIn('id="dist-export-all" data-admin>4ツールの分もまとめて書き出す</button>', html)
-        self.assertIn('id="dist-all-results"', html)
-        steps = html[html.index('<ol class="lead dist-steps">'):html.index("</ol>", html.index("dist-steps"))]
-        self.assertIn("「4ツールの分もまとめて書き出す」を押す", steps)
+    # 大設定の画面のボタン・手順・ツールごとの結果の行は `test_settings_browser.py` の ExportAllTests
 
 
 class MakeDistTests(unittest.TestCase):

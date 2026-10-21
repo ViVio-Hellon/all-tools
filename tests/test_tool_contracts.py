@@ -202,13 +202,11 @@ class ThemeDefaultTests(unittest.TestCase):
     1 つのツールだけ受け忘れると、そのタブだけ色が揃わない。
     """
 
-    def test_大きなタブの画面は枠を開くたびと変えたときに渡す(self) -> None:
-        shell = (ROOT / "portal" / "static" / "js" / "shell.js").read_text(encoding="utf-8")
-        self.assertIn('{ type: "alltools:theme", theme: themeDefault }', shell)
-        self.assertIn("sendTheme(id);", shell, "枠の load のたびに渡す")
-        self.assertIn('window.addEventListener("alltools:theme-default"', shell, "大設定で変えたらその場で渡す")
+    # 大きなタブの画面が枠を開くたびと変えたときに渡すことは `test_shell_frames_browser.py` の ThemeTests
 
     def test_4ツールとも受けて覚え_自分で選んでいなければ従う(self) -> None:
+        """受ける側(各ツールの画面)の合図の名前と覚える鍵。4ツールの画面は入口の試験からは
+        立てられない(どれも `app` という名前のパッケージ)ので、字で揃っていることを見る。"""
         for tool, (script, template) in THEME_FILES.items():
             with self.subTest(tool=tool):
                 js = (TOOLS / tool / script).read_text(encoding="utf-8")
