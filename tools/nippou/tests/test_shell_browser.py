@@ -99,26 +99,22 @@ class SkinTests(ScreenBrowserCase):
 
 
 class StampTests(ScreenBrowserCase):
-    """**いまは2本とも落ちます(見つけた不具合。直していません)。**
+    """**画面(JS)の版の印を、自分の URL の道(`/sv/<印>/js/app.js`)から拾う**(v4.40.2 で直した)。
 
-    `app.js` の `runningStamp()` は自分の URL の `?v=` から印を拾いますが、印は途中から
-    **道の一部**(`/sv/<印>/js/app.js`)になり、`?v=` はもう付きません。画面(JS)の印は
-    いつも空で、設定の「この端末」は「(取れません)/ 確かめられません」、古い控えを
-    掴んでいても帯に印が付きません。直したら `expectedFailure` を外します(外し忘れは
-    「思わぬ成功」で分かります)。
+    前は `?v=` から拾っていて、印が道へ移ったあと**いつも空**でした ── 設定の「この端末」は
+    「(取れません)/ 確かめられません」、古い控えを掴んでいても帯に印が付かなかった。
+    この2本は、本物のブラウザで開いて初めて見つかりました(字を探す試験は通っていた)。
     """
 
     def stamp(self) -> str:
         return self.app.config["STATIC_STAMP"]
 
-    @unittest.expectedFailure
     def test_画面の印がサーバの印と並んで一致と出る(self) -> None:
         page = self.open_screen("/settings?tab=terminal")
         self.assertEqual(page.text_content("#client-stamp").strip(), self.stamp())
         self.assertEqual(page.text_content("#stamp-verdict").strip(), "一致")
         self.assertIsNone(page.get_attribute("#app-version", "data-stale"))
 
-    @unittest.expectedFailure
     def test_印が食い違えば帯に印を付けて読み直しを促す(self) -> None:
         """サーバの印だけ新しい(=画面の JS が古い控え)。"""
         path = "/settings?tab=terminal"

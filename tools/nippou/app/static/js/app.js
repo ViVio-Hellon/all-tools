@@ -42,8 +42,10 @@ import * as theme from "./theme.js";
    いつでも新しく見えますが、JS はブラウザが控えているかもしれません
    ── 「入れ替えたのに古いまま」は、そこで起きます。
 
-   このファイルは `<script src="app.js?v=<印>">` から読まれるので、
-   **自分の URL に印が入っています**(`import.meta.url`)。サーバが
+   このファイルは `/sv/<印>/js/app.js` から読まれるので、**自分の URL の
+   道に印が入っています**(`import.meta.url`)。前は `?v=<印>` から拾っていて、
+   印が道へ移ったあと**いつも空**でした(設定の「この端末」が「取れません」になり、
+   古い控えでも知らせが出なかった。v4.40.2 で直す)。サーバが
    HTML に埋めた印(`window.APP.stamp`)と突き合わせれば、
    *画面* が古いかどうかがその場で分かります。
 
@@ -54,7 +56,10 @@ import * as theme from "./theme.js";
 /** 自分が読まれた URL に入っている印。取れなければ空。 */
 export function runningStamp() {
   try {
-    return new URL(import.meta.url).searchParams.get("v") || "";
+    const url = new URL(import.meta.url);
+    // 道の `/sv/<印>/…`。読めなければ古い形の `?v=<印>`
+    const found = /\/sv\/([^/]+)\//.exec(url.pathname);
+    return (found ? decodeURIComponent(found[1]) : url.searchParams.get("v")) || "";
   } catch (err) {
     return "";
   }
