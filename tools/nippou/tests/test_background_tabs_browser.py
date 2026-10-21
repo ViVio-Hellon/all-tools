@@ -62,7 +62,9 @@ class BackgroundCase(EntryBrowserCase):
     @staticmethod
     def pause(page) -> None:
         """時計を止める(時計は1つの文脈で1つ。タブを何枚開いても止めるのは1回)。"""
-        page.clock.pause_at((page.evaluate("Date.now()") + 50) / 1000)     # Python の側は秒
+        # 少し先で止める。**50ms 先では足りなかった**(重い Windows の CI では読んでから止めるまでに
+        # 50ms 過ぎ、「過去へは進められない」で落ちた)。2秒先(この間の周期の心拍は試験が数える前)
+        page.clock.pause_at((page.evaluate("Date.now()") + 2000) / 1000)   # Python の側は秒
         page.wait_for_timeout(300)
 
     def _note(self, request) -> None:

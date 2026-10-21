@@ -105,8 +105,22 @@ class ShortcutTests(EntryBrowserCase):
 
     def test_開始の時をダブルクリックするといまの時刻が時と分に入る(self) -> None:
         page = self.open_entry()
-        page.dblclick("#KZ2")
-        page.wait_for_function("document.getElementById('KH2').value !== ''", timeout=5000)
+        # 先に見える所まで動かして落ち着かせてから押す(押すあいだに表が動くと、2回目が別の所に
+        # 当たってダブルクリックにならない。Windows の CI で2回続けて落ちた)
+        box = page.locator("#KZ2")
+        box.scroll_into_view_if_needed()
+        page.wait_for_timeout(300)
+        box.dblclick()
+        try:
+            page.wait_for_function("document.getElementById('KH2').value !== ''", timeout=10000)
+        except Exception as exc:                    # noqa: BLE001 - 何が起きていたかを残す
+            state = page.evaluate("""() => ({
+                kz2: document.getElementById('KZ2').value, kh2: document.getElementById('KH2').value,
+                focus: document.activeElement && document.activeElement.id,
+                toasts: [...document.querySelectorAll('.toast__text')].map(t => t.textContent),
+                scroll: [scrollX, scrollY]})""")
+            stamps = [b.get("stamp") for path, b in self.sent if path.startswith("/api/entry/state")]
+            self.fail(f"ダブルクリックで時刻が入りません: {exc}\n画面: {state}\n送った stamp: {stamps}")
         self.assertEqual((self.value(page, "KZ2"), self.value(page, "KH2")), ("10", "00"))
         self.assertEqual(self.value(page, "KZ1"), "")
         self.assertEqual(self.errors, [])
