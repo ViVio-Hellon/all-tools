@@ -149,12 +149,9 @@ class ReadOnlyRecallTests(WebTestCase):
         start = html.index('id="read-only"')
         self.assertIn("hidden", html[start:start + 90])
 
-    def test_描かれた直後から触れなくする(self) -> None:
-        """`paint()` を待つと、**最初の1回だけ打ててしまいます。**"""
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "entry.js").read_text(encoding="utf-8")
-        self.assertIn(
-            'applyReadOnly(!document.getElementById("read-only")?.hidden)', js)
+    # 描かれた直後から触れなくする(`paint()` を待つと最初の1回だけ打ててしまう)は、
+    # 字を探すのではなく**本物のブラウザで、答えを止めた画面を見て確かめます**
+    # (`test_entry_shell_browser.ReadOnlyTests`。守りを外すと落ちる)
 
 
 class ClockShiftTests(RibbonTestCase):
@@ -264,14 +261,9 @@ class ChipExitTests(RibbonTestCase):
                         if c["text"].startswith("いま "))
         self.assertNotIn("action", now_chip)
 
-    def test_画面が印を押す道を持っている(self) -> None:
-        root = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-        app_js = (root / "app.js").read_text(encoding="utf-8")
-        self.assertIn("/api/settings/back", app_js)
-        self.assertIn('"/api/settings/admin", { enable: false }', app_js)
-        ribbon = (root / "ribbon.js").read_text(encoding="utf-8")
-        self.assertIn("wireChips", ribbon)
-        self.assertIn("data-chip-action", ribbon)
+    # 画面が印を押す道を持っている(帯の「過去データ ✕」→ `/api/settings/back`、
+    # 「管理者 ✕」→ `/api/settings/admin` へ `enable: false`)は、字を探すのではなく
+    # **本物のブラウザで印を押して確かめます**(`test_entry_shell_browser.ChipTests`)
 
 
 class VerifyShiftTests(WebTestCase):

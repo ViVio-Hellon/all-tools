@@ -19,9 +19,13 @@
 分からないからです。
 
 【どう防ぐか】
-画面を動かすテストはこの一式では走らせられない(ブラウザが要る)ので、
-**呼び出し側の形**を見ます: 画面の状態を変える口を叩いたら、その
-すぐあとで塗り直しているか。
+口は増えていくので、1つずつ画面を動かして確かめるのでは足し忘れを止められません。
+そこで**呼び出し側の形**を見ます(書き方の決まりとして): 画面の状態を変える口を
+叩いたら、そのすぐあとで塗り直しているか。
+
+**実際に出た件は、本物のブラウザで押して確かめます**(`test_shift_watch_browser` の
+`RepaintTests`: 自動確定の確定でも拾いでも塗り直す・打っている最中は見送る・
+共有へ保存したら設定画面を塗り直す・前の直を引き継いだら塗り直す)。
 
 塗り直しと認めるのは3つです:
 
@@ -111,43 +115,10 @@ class RepaintAfterChangeTests(unittest.TestCase):
              *bad]))
 
 
-class KnownCasesTests(unittest.TestCase):
-    """**実際に出た3件**が、ちゃんと塗り直す形になっていること。
-
-    一般の走査だけだと、直したはずの場所が別の形で戻っても気づけません。
-    出たものは名指しで押さえます。
-    """
-
-    def source(self, name: str) -> str:
-        return (JS / name).read_text(encoding="utf-8")
-
-    def test_直の確定も拾いも塗り直す(self) -> None:
-        """`ran` のときだけ・`swept` のときだけ、に**分かれていない**こと。
-
-        片方だけ塗り直すと、同じ症状が残る側と消える側ができます。
-        """
-        text = self.source("shift_end.js")
-        self.assertIn("refreshUnlessTyping()", text)
-        # 条件つきで呼んでいないか(`if (swept.length) refresh...` に戻す
-        # と、残り5分の確定のほうが古いまま残ります)
-        self.assertNotIn("if (swept.length) refreshUnlessTyping()", text)
-
-    def test_打っている最中は塗り直さない(self) -> None:
-        """塗り直しは本文を差し替えるので、入力中の欄は消えます。"""
-        text = self.source("shift_end.js")
-        self.assertIn("INPUT", text)
-        self.assertIn("TEXTAREA", text)
-
-    def test_共有へ保存したら設定画面を塗り直す(self) -> None:
-        text = self.source("views/settings.js")
-        head = text.index('api.post("/api/settings/push"')
-        # 打ちかけの置き場所を持ち越す塗り直し(`refreshKeeping`、v4.24.0)
-        self.assertIn("refreshKeeping()", text[head:head + 900])
-
-    def test_前の直を引き継いだら塗り直す(self) -> None:
-        text = self.source("views/entry.js")
-        head = text.index('api.post("/api/entry/handover"')
-        self.assertIn("refresh()", text[head:head + 700])
+# **実際に出た3件**(直の確定も拾いも塗り直す・打っている最中は塗り直さない・共有へ保存したら
+# 設定画面を塗り直す)と、前の直を引き継いだら塗り直す は、字を探すのではなく
+# **本物のブラウザで見張りを回して確かめます**(`test_shift_watch_browser.RepaintTests`。
+# 塗り直しを外す・`ran` だけ/`swept` だけにする・入力中の見送りを外すと落ちる)。
 
 
 if __name__ == "__main__":

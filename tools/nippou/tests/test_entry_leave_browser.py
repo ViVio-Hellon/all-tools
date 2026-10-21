@@ -133,6 +133,9 @@ class WindowCloseTests(EntryBrowserCase):
         drafts = self.saves(draft=True)[before:]
         self.assertTrue(drafts, "閉じる前に打ちかけを置いていません")
         self.assertEqual(drafts[-1]["rows"]["1"].get("HIT"), "4")
+        # 外枠へ「この画面は閉じる前の頼みに自分で答えます」と名乗っている。名乗らないと、
+        # 外枠の受け皿(`embed.js`)も同じ頼みに答えて、2重に訊きます
+        self.assertIs(tool.evaluate("window.__alltoolsHandlesClose"), True)
         self.assertEqual(self.errors, [])
 
     def close_once(self, page, seq: int) -> None:

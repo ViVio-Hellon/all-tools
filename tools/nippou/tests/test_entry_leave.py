@@ -7,8 +7,9 @@
 * 時の欄に「18」と打ち終えて分へ移った直後、「1」のときに頼んだ答えが返って
   「1」へ戻り、そのまま自動保存されていた
 
-どちらも画面(JS)の動きなので、ここでは仕組みが入っていることを確かめる
-(画面で確かめた手順は tests の外 ── 変更の説明にある)。
+どちらも画面(JS)の動きなので、**本物のブラウザで打って確かめます**(下の指し示し)。
+ここに残っているのは、ブラウザで区別できないもの(守りが何重にもある)と、
+ほかの画面(梱包資材・VC計算・マスタ・設定)の字探しです。
 """
 from __future__ import annotations
 
@@ -22,17 +23,12 @@ def read(name: str) -> str:
     return (JS / name).read_text(encoding="utf-8")
 
 
-class LeaveTests(unittest.TestCase):
-    def test_終了の前にも確かめる(self) -> None:
-        app = read("app.js")
-        quit_ = app[app.index("function wireQuit("):]
-        self.assertLess(quit_.index("nav.leaving()"), quit_.index('"/api/shutdown"'))
-
-
-# 窓の × ・終了で打ちかけを置く(外枠の頼み `alltools:before-close`)・どの欄でも打ったら数える・
+# 「終了」の前にも打ちかけを置く(`/api/shutdown` より先に置く)・窓の × ・終了で打ちかけを置く
+# (外枠の頼み `alltools:before-close`、外枠へ「自分で答える」と名乗る)・どの欄でも打ったら数える・
 # 保存は1本ずつ(`inOrder`)・移る前に打ちかけを置く・置けなければ訊く・打ちかけは中身で見る・
 # 共有へ保存の前に打ちかけを置く は、字を探すのではなく
-# **本物のブラウザで打って確かめます**(`test_entry_leave_browser`。守りを外すと落ちる)。
+# **本物のブラウザで打って確かめます**(`test_entry_leave_browser`・`test_entry_shell_browser` の
+# `QuitTests`。守りを外すと落ちる)。
 
 
 class PageOverwriteTests(unittest.TestCase):
@@ -44,6 +40,9 @@ class PageOverwriteTests(unittest.TestCase):
     """
 
     def test_引き直したあとの画面へ前の答えを塗らない(self) -> None:
+        """**字のまま残す。** 引き直した画面へ前の答えが塗られるのは、守りが何重にもあって
+        (画面を出たら要求を取り消す `pageSignal`・サーバの `screen_mismatch`・`paint` の `since`)、
+        ブラウザで動かしても、この印(`gen`/`live`)を外しただけでは見た目が変わらないため。"""
         entry = read("views/entry.js")
         start = entry[entry.index("export function start()"):]
         self.assertIn("gen += 1;", start[:300])
@@ -54,57 +53,35 @@ class PageOverwriteTests(unittest.TestCase):
             body = entry[entry.index(fn):]
             self.assertIn("if (!live(mine))", body[:1400], fn)
 
-    def test_画面を出たら要求を取り消す(self) -> None:
-        entry = read("views/entry.js")
-        self.assertIn("signal: pageSignal()", entry)
-        api = read("api.js")
-        self.assertIn("...(signal ? { signal } : {})", api)
 
-    def test_済んだ操作のあとは書いたものにしてから移る(self) -> None:
-        entry = read("views/entry.js")
-        newpage = entry[entry.index('api.post("/api/entry/newpage"'):]
-        self.assertLess(newpage.index("markSaved();"), newpage.index("refresh();"))
-        back = entry[entry.index("async function backToCurrent()"):]
-        self.assertLess(back.index("markSaved();"), back.index("location.href"))
-        modals = read("views/modals.js")
-        run = modals[modals.index('"formstop-run"'):]
-        self.assertLess(run.index("await leaving()"), run.index('"/api/formstop/execute"'))
-        self.assertLess(run.index("markSaved();"), run.index("location.href"))
-
-    def test_帯の閉じるは置いてから戻る(self) -> None:
-        app = read("app.js")
-        back = app[app.index("    back: async"):]
-        self.assertLess(back.index("await nav.leaving()"), back.index('"/api/settings/back"'))
-        off = app[app.index("    adminOff: async"):]
-        self.assertLess(off.index("await nav.leaving()"), off.index('"/api/settings/admin"'))
-        self.assertIn("window.__alltoolsHandlesClose = true;", app)
-
-    def test_見張りは打ちかけごと連れて行かない(self) -> None:
-        watch = read("shift_end.js")
-        review = watch[watch.index("async function reviewCheck()"):]
-        self.assertNotIn("location.href = REVIEW_URL", review)
-        self.assertIn("await go(REVIEW_URL)", review)
-        self.assertIn("typedHere()", review)
-        refresh = watch[watch.index("function refreshUnlessTyping()"):]
-        self.assertIn("!savesTyped() && typedHere()", refresh[:900])
-
-    def test_押したボタンは押した直後だけ待ちにする(self) -> None:
-        busy = read("busy.js")
-        self.assertIn("setTimeout(drop, PRESS_MS)", busy)
-        self.assertIn('addEventListener("keydown", drop, true)', busy)
+# 次の5つは、字を探すのではなく**本物のブラウザで押して確かめます**(守りを外すと落ちる):
+#
+#   画面を出たら要求を取り消す       … `test_entry_shell_browser.LeaveCancelTests`
+#   済んだ操作のあとは書いたものにしてから移る(次ページ発行・最新のページに戻る・全停入力)
+#                                     … `test_entry_shell_browser.DoneThenMoveTests`
+#   帯の閉じるは置いてから戻る(過去データ ✕・管理者 ✕)
+#                                     … `test_entry_shell_browser.ChipTests`
+#   見張りは打ちかけごと連れて行かない(確認画面へ・自動確定のあとの塗り直し)
+#                                     … `test_shift_watch_browser`
+#   押したボタンは押した直後だけ待ちにする … `test_entry_shell_browser.BusyTests`
 
 
 class OtherScreensTests(unittest.TestCase):
-    """v4.24.0: 梱包資材・VC計算・マスタ・設定の「打った値が戻る」。"""
+    """v4.24.0: 梱包資材・VC計算・マスタ・設定の「打った値が戻る」。
 
-    def test_梱包資材は古いロットの答えを捨てる(self) -> None:
+    梱包資材のロットの引き(古いロットの答え・打ち直したロット・引いているあいだに打った寸法)と、
+    梱包数・表の行数を戻ってきても残す は、**本物のブラウザで答えを止めて確かめます**
+    (`test_gw_lot_browser`。守りを外すと落ちる)。
+
+    ここに残っているのは字のまま: 梱包資材の計算の追い越し(答えの形が大きく、試験で
+    作るのが割に合わない)と、VC計算・マスタ・設定(画面の準備が重い。VC の2度押しは
+    返事を待つあいだボタンも押せなくなるので、守りが2重で見た目では区別できない)。
+    """
+
+    def test_梱包資材は古い計算の答えを捨てる(self) -> None:
         gw = read("views/gw.js")
-        lot = gw[gw.index("async function lookupLot()"):]
-        self.assertIn("if (mine !== lotSeq || current() !== lotNo) return;", lot)
-        self.assertIn("}, since);", lot, "引いているあいだに打った寸法を戻す")
         calc = gw[gw.index("async function calculate()"):]
         self.assertIn("if (mine !== calcSeq) return;", calc[:400])
-        self.assertIn('"print-packs", "per-pack-rows"', gw)
 
     def test_VC計算は2度押しで2回書かない(self) -> None:
         vc = read("views/vc.js")

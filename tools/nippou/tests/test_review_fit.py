@@ -28,12 +28,6 @@ from nippou.presenters import push_log  # noqa: E402
 from tests._web import HEADERS, WebTestCase  # noqa: E402
 from tests._browser import chromium_or_skip  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-STATIC = ROOT / "app" / "static"
-
-
-def _read(*parts: str) -> str:
-    return ROOT.joinpath(*parts).read_text(encoding="utf-8")
 
 
 class PresetTests(unittest.TestCase):
@@ -67,50 +61,14 @@ class PresetTests(unittest.TestCase):
         ように、画面は合うもののうち1つだけに印を付ける(日付によって落ちていた)。"""
         spans = self.spans(date(2026, 9, 30))
         self.assertEqual(spans["今月"], spans["直近30日"])
-        root = Path(__file__).resolve().parent.parent
-        html = (root / "app/templates/agg.html").read_text(encoding="utf-8")
-        self.assertIn("marked.done", html)
-        js = (root / "app/static/js/views/agg.js").read_text(encoding="utf-8")
-        self.assertIn("pickedPreset", js)
-        self.assertIn("|| fits[0]", js)
+        # 描いたときの印は `PageTests.test_同じ幅のボタンが2つある日も印は1つで描く`、
+        # 押したほうに印が移るのは本物のブラウザで(`test_agg_page_browser`)
 
 
-class WiringTests(unittest.TestCase):
-    """画面の配線(ブラウザが無くても見られるもの)。"""
-
-    def test_履歴はカードの期間で引く(self) -> None:
-        js = _read("app", "static", "js", "views", "agg.js")
-        self.assertIn('getElementById("push-log-start")', js)
-        self.assertIn('getElementById("push-log-end")', js)
-        # 上の表の「表示」は、もう履歴を引き直さない(期間が別なので)
-        reload_handler = js[js.index('getElementById("reload")'):js.index('getElementById("push-log-reload")')]
-        self.assertNotIn("loadPushLog", reload_handler)
-
-    def test_直の実績は枠の大きさで描く(self) -> None:
-        self.assertIn("{ fit: true }", _read("app", "static", "js", "views", "review.js"))
-        chart = _read("app", "static", "js", "chart.js")
-        self.assertIn("export function paintCharts(host, history, { fit = false } = {})", chart)
-        self.assertIn("ResizeObserver", chart)
-        html = _read("app", "templates", "graph_review.html")
-        for part in ('class="review__side"', 'class="fit-charts" id="review-charts"',
-                     "review__card--grow"):
-            self.assertIn(part, html)
-
-    def test_濃紺の画面でも字が地に溶けない(self) -> None:
-        """集計・グラフ・直の実績(`data-page=graph/agg`)の濃紺の地。
-
-        載せたときのボタンの地・知らせの地が明るい画面の値のままで、
-        明るい字が淡い地に溶けていました(ボタンの名前・直すところの一覧)。
-        """
-        css = _read("app", "static", "css", "tokens.css")
-        # v4.19.0 から「ライトを選んでいなければ」の条件つき(`test_theme_switch`)
-        block = css[css.index(':root[data-skin="neon"]:not([data-theme="light"]) '
-                              'body[data-page="graph"]'):]
-        block = block[:block.index("}")]
-        for token in ("--btn-hover:", "--state-error-bg:", "--state-warn-bg:",
-                      "--state-ok-bg:", "--state-info-bg:", "--accent-soft:"):
-            with self.subTest(token=token):
-                self.assertIn(token, block)
+# 画面の配線(履歴はカードの期間で引く・上の「表示」では引き直さない・濃紺の島の地)は、
+# 字を探すのではなく**本物のブラウザで押して確かめます**(`test_agg_page_browser`)。
+# 直の実績を枠の大きさで描く(`{ fit: true }`・描き直しの `ResizeObserver`・左右に分ける枠)は、
+# 下の `ReviewFitTests` が開いて測っています(どれを外しても測った値で落ちる)。
 
 
 class PageTests(WebTestCase):
@@ -147,12 +105,23 @@ class PageTests(WebTestCase):
                                              "scope": "line"}).get_json()
         self.assertEqual(len(got["table"]["rows"]), 1)
 
+    def test_同じ幅のボタンが2つある日も印は1つで描く(self) -> None:
+        """9月30日は「今月」と「直近30日」が同じ幅。**描いたときから2つとも押されて見えない。**"""
+        from datetime import datetime as real_datetime
+
+        from tests.test_scenario_shift_flow import _Now, install_clock
+
+        self.addCleanup(setattr, _Now, "value", _Now.value)
+        _Now.value = real_datetime(2026, 9, 30, 10, 0)
+        install_clock(self)
+        body = self.get("/agg").get_data(as_text=True)
+        pressed = re.findall(r'data-preset="(\w+)"\s+aria-pressed="true"', body)
+        self.assertEqual(pressed, ["this_month"])
+
     def test_逆さの期間は断る(self) -> None:
         res = self.post("/api/agg/push-log", {"start": "2026-09-30", "end": "2026-09-01"})
         self.assertEqual(res.status_code, 422)
         self.assertIn("開始日は終了日以前", res.get_json()["error"]["message"])
-
-
 
 
 _MEASURE = """() => {

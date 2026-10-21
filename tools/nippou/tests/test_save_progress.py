@@ -131,15 +131,9 @@ class PushProgressTests(WebTestCase):
     def test_中止は走っていなければ断る(self) -> None:
         self.assertEqual(self.post("/api/progress/stop", {}).status_code, 409)
 
-    def test_画面は押す前に下見を見る(self) -> None:
-        progress_js = (JS / "progress.js").read_text(encoding="utf-8")
-        # 下見は押したボタンの範囲ぶん(いまの直 / 過去分。v4.35.0)
-        self.assertIn('export async function confirmPush(scope = "")', progress_js)
-        self.assertIn("/api/settings/push/plan${q}", progress_js)
-        self.assertIn('"/api/progress/stop"', progress_js)
-        for view in ("views/entry.js", "views/settings.js", "views/review.js"):
-            text = (JS / view).read_text(encoding="utf-8")
-            self.assertIn("if (!(await confirmPush(scope))) return;", text, view)
+    # 画面は押す前に下見を見る(数が多ければ訊く・いいえなら送らない。日報入力・設定・直の実績)は、
+    # 字を探すのではなく**本物のブラウザで押して確かめます**(`test_save_progress_browser`。
+    # 守りを外すと落ちる)
 
     def test_idle_answer(self) -> None:
         body = self.get("/api/progress").get_json()
@@ -238,23 +232,21 @@ class MasterProgressTests(WebTestCase):
 
 
 class ScreenWiringTests(unittest.TestCase):
-    """画面は投げたあと `/api/progress` を見に来て、**終われば必ず消す。**"""
+    """画面は投げたあと `/api/progress` を見に来て、**終われば必ず消す。**
 
-    def test_progress_module_polls_the_holder(self) -> None:
-        text = (JS / "progress.js").read_text(encoding="utf-8")
-        self.assertIn('background.get("/api/progress")', text)
-        self.assertIn("SHOW_AFTER_MS", text)          # 一瞬で終わるものには出さない
+    共有へ保存(日報入力・設定・直の実績)は、字を探すのではなく**本物のブラウザで押して
+    確かめます**(`test_save_progress_browser`: 0.3 秒より早く終わるものには出さない・
+    サーバの字のまま出す・中止を頼む・終われば消す。守りを外すと落ちる)。
 
-    def test_every_save_button_watches_and_stops(self) -> None:
-        for name, label in (("views/settings.js", "共有へ保存しています"),
-                            ("views/entry.js", "共有へ保存しています"),
-                            ("views/review.js", "共有へ保存しています"),
-                            ("views/master.js", "マスタに書いています")):
-            with self.subTest(name=name):
-                text = (JS / name).read_text(encoding="utf-8")
-                self.assertIn('from "../progress.js"', text)
-                self.assertIn(f'watchJob("{label}")', text)
-                self.assertRegex(text, r"finally \{\s*(?://[^\n]*\n\s*)?stop\(\)")
+    **マスタの1行を直すは字のまま残す。** マスタの画面を開いて行を直すところまでの
+    準備が重く(元のファイル・表・行を用意する)、出す枠そのものは上と同じ部品なので。
+    """
+
+    def test_マスタを直すときも進み具合を出して必ず消す(self) -> None:
+        text = (JS / "views/master.js").read_text(encoding="utf-8")
+        self.assertIn('from "../progress.js"', text)
+        self.assertIn('watchJob("マスタに書いています")', text)
+        self.assertRegex(text, r"finally \{\s*(?://[^\n]*\n\s*)?stop\(\)")
 
 
 if __name__ == "__main__":
