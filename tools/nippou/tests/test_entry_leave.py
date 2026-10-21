@@ -170,16 +170,9 @@ class OtherScreensTests(unittest.TestCase):
         self.assertIn("beforeLeave(keepOrAsk);", settings)
 
 
-class StaleReplyTests(unittest.TestCase):
-    def test_頼んだあとに打った欄は書き換えない(self) -> None:
-        entry = read("views/entry.js")
-        self.assertIn("function paint(view, { forceRow = 0, since = null } = {})", entry)
-        self.assertIn('Number(el.dataset.editAt || 0) > since', entry)
-        settle = entry[entry.index("async function settle("):]
-        self.assertIn("paint(body, { since })", settle[:400])
-        lookup = entry[entry.index("async function lookupLot("):]
-        self.assertIn("since })", lookup[:600])
-
+# 「頼んだあとに打った欄は書き換えない」(`paint(..., { since })`)は、字を探すのではなく
+# **答えをわざと止めて打つ**本物のブラウザの試験で確かめます(`test_late_reply_browser`。
+# 欄を離れた答えの遅れ・追い越し・ロットの引き・保存の4つ。守りを外すと4件とも落ちる)。
 
 if __name__ == "__main__":
     unittest.main()

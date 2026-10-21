@@ -25,11 +25,11 @@ jobs:
       fail-fast: false
       matrix:
         part:
-          - { name: 入口, dir: ".", args: "-s tests -t ." }
+          - { name: 入口, dir: ".", args: "-s tests -t .", browser: "1" }
           - { name: 日報, dir: "tools/nippou", args: "-s tests", browser: "1" }
           - { name: 看板, dir: "tools/kanban", args: "-s tests", browser: "1" }
           - { name: カレンダー, dir: "tools/calendar", args: "-s tests -t .", browser: "1" }
-          - { name: 点検表, dir: "tools/inspection", args: "-s tests -t ." }
+          - { name: 点検表, dir: "tools/inspection", args: "-s tests -t .", browser: "1" }
     name: Python の試験(${{ matrix.part.name }})
     steps:
       - uses: actions/checkout@v4
