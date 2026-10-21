@@ -243,10 +243,10 @@ class BridgeProcessTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(b.request("GET", path, query=query)[0]["status"], 200)
 
-        # 印刷の窓には「印刷する」「閉じる」があり、閉じるは外枠に頼める
+        # 印刷の窓が外枠を通って届く(「閉じる」で外枠に閉じてもらうのは
+        # test_print_margin.BrowserTests.test_デスクトップ版の窓なら閉じるで外枠に閉じてもらう が押して見る)
         _, page = b.request("GET", "/print", query=f"year=2026&month=9&t={b.TOKEN}")
         self.assertIn(b'id="do-print"', page)
-        self.assertIn(b"close_window", page)
 
         # 業務の API(設定・カレンダー)。操作の記録も残る
         head, body = b.request("GET", "/api/calendar", query="year=2026&month=9")

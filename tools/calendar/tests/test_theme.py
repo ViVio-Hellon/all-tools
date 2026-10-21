@@ -8,10 +8,10 @@
 - 明暗どちらでも、文字が読める濃さ(コントラスト比)。とくに
   **塗りの上の文字**(押すボタンなど)── ダークでは塗りが明るくなるので、
   白い字のままだと読めない
+  (この2つは画面に当たった色で ``test_theme_browser`` が見る。比べる組と計算はここに置く)
 """
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
 
@@ -22,33 +22,6 @@ _isolation.ensure_isolated()
 from calendar_app import settings as user_settings  # noqa: E402
 
 from . import _web  # noqa: E402
-
-TOKENS = (Path(__file__).resolve().parent.parent / "app" / "static" / "css"
-          / "tokens.css").read_text(encoding="utf-8")
-
-
-def _block(start: str) -> str:
-    i = TOKENS.index(start)
-    j = TOKENS.index("{", i)
-    depth = 0
-    for k in range(j, len(TOKENS)):
-        if TOKENS[k] == "{":
-            depth += 1
-        elif TOKENS[k] == "}":
-            depth -= 1
-            if depth == 0:
-                return TOKENS[j + 1:k]
-    raise AssertionError(start)
-
-
-def _vars(text: str) -> dict[str, str]:
-    return dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})\b", text))
-
-
-LIGHT = _vars(_block(":root{"))
-DARK_MEDIA = _vars(_block(':root:not([data-theme="light"]){'))
-DARK_CHOSEN = _vars(_block(':root[data-theme="dark"]{'))
-DARK = {**LIGHT, **DARK_CHOSEN}
 
 
 def _contrast(a: str, b: str) -> float:
@@ -75,17 +48,8 @@ TEXT_PAIRS = (
 
 
 class ColorTests(unittest.TestCase):
-    def test_ダークの2つの節は同じ値(self) -> None:
-        """OS がダークのときと、選んでダークにしたときで色が違うと、どちらかが古い。"""
-        self.assertTrue(DARK_CHOSEN)
-        self.assertEqual(DARK_MEDIA, DARK_CHOSEN)
-
-    def test_明暗どちらでも文字が読める(self) -> None:
-        for name, theme in (("ライト", LIGHT), ("ダーク", DARK)):
-            for ink, ground in TEXT_PAIRS:
-                with self.subTest(theme=name, pair=(ink, ground)):
-                    ratio = _contrast(theme[ink], theme[ground])
-                    self.assertGreaterEqual(ratio, 4.5, f"{name}: {ink} on {ground} = {ratio:.2f}")
+    # ダークの2つの節が同じ値・明暗どちらでも文字が読める・入力欄やスクロールバーも明暗に
+    # 合わせる(color-scheme)は、画面に当たった色で test_theme_browser.ThemeBrowserTests が見る
 
     def test_塗りの上に白い字を直に書かない(self) -> None:
         """白のままだと、ダークの明るい塗りの上で読めない(色は tokens から)。"""
@@ -94,11 +58,6 @@ class ColorTests(unittest.TestCase):
             text = (css_dir / name).read_text(encoding="utf-8")
             with self.subTest(file=name):
                 self.assertNotRegex(text, r"color:\s*#fff\b")
-
-    def test_入力欄やスクロールバーも明暗に合わせる(self) -> None:
-        self.assertIn("color-scheme:light", _block(":root{"))
-        self.assertIn("color-scheme:dark", _block(':root[data-theme="dark"]{'))
-        self.assertIn("color-scheme:dark", _block(':root:not([data-theme="light"]){'))
 
 
 class SettingTests(unittest.TestCase):
@@ -171,10 +130,8 @@ class WebTests(unittest.TestCase):
         self.assertEqual(res.get_json()["error"]["code"], "not_listed")
         self.assertEqual(user_settings.get_theme(), "dark")     # 変わっていない
 
-    def test_帯に切り替えのボタンがある(self) -> None:
-        html = self.page()
-        self.assertIn('id="theme-toggle"', html)
-        self.assertIn('theme: "auto"', html)                  # 画面の JS が読む値
+    # 帯の切り替えのボタン(押すと何になるかの文字・送ってサーバが覚える・断られたら戻す)は
+    # test_theme_browser.ThemeBrowserTests が押して見る
 
     def test_設定画面に選べるものが届く(self) -> None:
         payload = self.client.get("/api/settings", headers=_web.auth()).get_json()

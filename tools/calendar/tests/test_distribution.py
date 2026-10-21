@@ -323,13 +323,24 @@ class FreshTerminalTests(DistributionTestCase):
 
 class StartupTests(unittest.TestCase):
     def test_同期より先に読む(self) -> None:
-        """置き場所が入っているので、読む前に同期を始めると既定の場所を見る。"""
-        text = (_ROOT / "start_app.py").read_text(encoding="utf-8")
-        body = text[text.index("def _initialize"):]
-        self.assertLess(body.index("distribution.apply_on_start()"),
-                        body.index("terminals.apply_reservation()"))
-        self.assertLess(body.index("distribution.apply_on_start()"),
-                        body.index("sync_service.get_service().start()"))
+        """置き場所が入っているので、読む前に同期を始めると既定の場所を見る(起動の手順を実際に呼んで順を見る)。"""
+        import start_app
+        from calendar_app import access_control, terminals
+        from calendar_app import distribution as dist
+        from calendar_app import sync_service
+
+        order: list[str] = []
+        service = mock.Mock()
+        service.start.side_effect = lambda: order.append("同期を始める")
+        service.reload.side_effect = lambda: order.append("同期を読み直す")
+        with mock.patch.object(dist, "apply_on_start",
+                               lambda: order.append("配布設定") or dist.Result(True, "", applied=[])), \
+                mock.patch.object(start_app, "_open_local_db", lambda db: order.append("手元のDB")), \
+                mock.patch.object(terminals, "apply_reservation", lambda: order.append("ラインの予約")), \
+                mock.patch.object(access_control, "enforce", lambda conn: order.append("アクセス権限")), \
+                mock.patch.object(sync_service, "get_service", lambda: service):
+            start_app._initialize(mock.Mock(), watch_idle=False)
+        self.assertEqual(order, ["配布設定", "手元のDB", "ラインの予約", "アクセス権限", "同期を始める"])
 
     def test_配布設定は追跡しない(self) -> None:
         done = subprocess.run(["git", "check-ignore", "-q", "配布設定/設定.json"],

@@ -57,9 +57,13 @@ class LayoutTests(unittest.TestCase):
         self.assertGreaterEqual(printing.SAFE_MM, 5)
 
     def test_ページの余白に頼らない(self) -> None:
-        """ダイアログの「余白: なし」で消えるものに頼らない。"""
+        """ダイアログの「余白: なし」で消えるものに頼らない。
+
+        **残す理由**: 余白を足されても1枚に収める作り(下の BrowserTests)なので、``@page`` の余白を
+        0 から変えても紙の上の結果では見分けられない(守りが二重)。安全な余白(台紙の padding)は
+        ``BrowserTests`` が刷った位置で見る。
+        """
         self.assertIn("@page { size: A4 landscape; margin: 0; }", self.html)
-        self.assertIn(f"padding: {printing.SAFE_MM}mm", self.html)
 
     def test_描くものはすべて台紙の中(self) -> None:
         body = self.html.split("<body>", 1)[1]
@@ -73,17 +77,8 @@ class LayoutTests(unittest.TestCase):
         outside = re.sub(r"<script>.*?</script>", "", outside, flags=re.S)
         self.assertEqual(outside.replace("</body>", "").replace("</html>", "").strip(), "")
 
-    def test_印刷するボタンがある(self) -> None:
-        """Ctrl+P を知らない人でも印刷できるように。**紙には出さない**(.noprint の中)。"""
-        notice = self.html.split('<div class="noprint">', 1)[1].split('<div class="sheet">', 1)[0]
-        self.assertIn('id="do-print"', notice)
-        self.assertIn(">印刷する</button>", notice)
-        self.assertIn('id="do-close"', notice)
-        self.assertIn("window.print()", self.html)
-        self.assertIn(".noprint { display: none; }", self.html)
-
-    def test_色帯をプレビューのとおりに刷る(self) -> None:
-        self.assertIn("print-color-adjust: exact", self.html)
+    # 印刷する・閉じるのボタン(押すと印刷ダイアログ・紙には出ない)と、色帯をプレビューのとおりに
+    # 刷る(print-color-adjust)は、下の BrowserTests が押して・刷って見る
 
     def test_余白を足されても2枚目にこぼれない高さ(self) -> None:
         """Chrome は幅が収まるよう全体を縮める。縮めた高さが余白の内側に収まること。"""
@@ -211,6 +206,31 @@ class BrowserTests(unittest.TestCase):
         page.click("#do-close")
         page.wait_for_selector("#close-note:not([hidden])")
         self.assertIn("タブの×で閉じてください", page.inner_text("#close-note"))
+
+    def test_色帯は印刷でもプレビューのとおりに刷る(self) -> None:
+        """「背景のグラフィック」を入れなくても、曜日の見出し・土日祝の色が白く抜けない。"""
+        page = self._open(4)
+        page.emulate_media(media="print")
+        got = page.evaluate("""() => ['body', 'th', 'td.sat'].map((sel) => {
+            const e = document.querySelector(sel);
+            const s = getComputedStyle(e);
+            return [sel, s.printColorAdjust || s.webkitPrintColorAdjust];
+        })""")
+        self.assertEqual(got, [["body", "exact"], ["th", "exact"], ["td.sat", "exact"]])
+
+    def test_デスクトップ版の窓なら閉じるで外枠に閉じてもらう(self) -> None:
+        """外枠(Tauri)が開いた窓は window.close() では閉じない。外枠に頼む。"""
+        page = self._browser.new_page()
+        self.addCleanup(page.close)
+        page.add_init_script("""window.__invoked = [];
+            window.__TAURI__ = { core: { invoke: (cmd) => { window.__invoked.push(cmd); return Promise.resolve(); } } };""")
+        path = Path(self._tmp.name) / "desk.html"
+        path.write_text(_document(4), encoding="utf-8")
+        page.goto(path.as_uri())
+        page.click("#do-close")
+        self.assertEqual(page.evaluate("window.__invoked"), ["close_window"])
+        page.wait_for_timeout(400)
+        self.assertFalse(page.is_visible("#close-note"), "外枠に頼んだのに閉じ方を伝えた")
 
     def test_余白を足されても1枚(self) -> None:
         """ダイアログで「最小」「カスタム」を選ばれた場合。"""

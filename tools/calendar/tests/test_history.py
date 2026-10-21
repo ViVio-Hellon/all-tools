@@ -4,7 +4,7 @@
 1. 選べるのは**登録がある最も古い月から先月まで**(一覧に無いものは選べない)
 2. 途中の登録が無い月も選べる(0件も記録)
 3. 今月以降・登録より前は、画面を通さずに叩いても断る
-4. **書き込む道が無い** ── API にも画面のスクリプトにも
+4. **書き込む道が無い** ── API にも画面にも(画面は ``test_history_browser``)
 5. 日の中身は読める。削除に使う印(ID・中身の印)は返さない
 6. マス目はカレンダー画面と同じ組み立て(見え方が食い違わない)
 """
@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import re
 import unittest
 from pathlib import Path
 
@@ -161,47 +160,22 @@ class ReadOnlyTests(unittest.TestCase):
         for rule in rules:
             self.assertEqual(rule.methods - {"GET", "HEAD", "OPTIONS"}, set(), rule.rule)
 
-    def test_画面のスクリプトは書き込むAPIを呼ばない(self) -> None:
-        js = (_ROOT / "app" / "static" / "js" / "views" / "history.js").read_text(
-            encoding="utf-8")
-        self.assertNotIn("api.post", js)
-        for path in ("/api/rest", "/api/comment", "/api/delete", "/api/day/"):
-            self.assertNotIn(path, js, path)
-
-    def test_画面にもボタンが無い(self) -> None:
-        html = (_ROOT / "app" / "templates" / "history.html").read_text(encoding="utf-8")
-        self.assertIsNone(re.search(r">\s*(休み|削除|コメント・連絡)\s*<", html))
-        self.assertIn("閲覧のみ", html)
+    # 画面のスクリプトが書き込む API を呼ばない・画面に休み/削除/コメントのボタンが無い・
+    # 「閲覧のみ」と出すは、日を押して回って test_history_browser.HistoryBrowserTests が見る
 
 
 class LookTests(unittest.TestCase):
-    """**現行のカレンダーと見た目を変える**(取り違えない)。"""
+    """**現行のカレンダーと見た目を変える**(取り違えない)。
 
-    def setUp(self) -> None:
-        css = _ROOT / "app" / "static" / "css"
-        self.tokens = (css / "tokens.css").read_text(encoding="utf-8")
-        self.components = (css / "components.css").read_text(encoding="utf-8")
-        self.html = (_ROOT / "app" / "templates" / "history.html").read_text(
-            encoding="utf-8")
+    マス目が明暗どちらでも履歴の色になり、カレンダー画面と違う色に見えることは、画面に
+    当たった色で test_history_browser.HistoryBrowserTests が見る。ここは書き方の決まりだけ。
+    """
 
-    def test_履歴の色は明暗どちらにもある(self) -> None:
-        """明るい表示・OSのダーク・明示のダークの3か所。"""
-        self.assertEqual(self.tokens.count("--hist-accent:"), 3)
-        self.assertEqual(self.tokens.count("--hist-day-bg:"), 3)
-
-    def test_マス目の色を履歴の色に差し替える(self) -> None:
-        block = self.components.split(".cal--history{", 1)[1].split("}", 1)[0]
-        for token in ("--day-bg:var(--hist-day-bg)", "--head-bg:var(--hist-head-bg)",
-                      "--day-sun-bg:var(--hist-day-sun-bg)",
-                      "--day-sat-bg:var(--hist-day-sat-bg)"):
-            self.assertIn(token, block)
-        # 色はトークンからだけ取る(直書きしない)
+    def test_履歴の差し替えは色をトークンからだけ取る(self) -> None:
+        """直書きすると、明暗を切り替えても履歴のマスだけ変わらない。"""
+        css = (_ROOT / "app" / "static" / "css" / "components.css").read_text(encoding="utf-8")
+        block = css.split(".cal--history{", 1)[1].split("}", 1)[0]
         self.assertNotRegex(block, r"#[0-9a-fA-F]{3,6}")
-
-    def test_色だけで運ばない(self) -> None:
-        """文字でも「履歴・閲覧のみ」と出す。"""
-        self.assertIn('class="cal cal--history"', self.html)
-        self.assertIn("履歴・閲覧のみ", self.html)
 
 
 class NavTests(_Base):

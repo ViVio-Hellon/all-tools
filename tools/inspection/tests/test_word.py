@@ -881,24 +881,11 @@ class OpenElsewhereTest(_FakeWordCase):
 class WordWordingTest(unittest.TestCase):
     """Word の点検表のときは「Word を…」と出す(画面とサーバの両方)。"""
 
-    def read(self, *parts):
-        with open(os.path.join(ROOT, *parts), encoding="utf-8") as fp:
-            return fp.read()
+    # プレビューの読み込み中は点検表の種類で言い分ける・サーバの知らせを出す・画面とサーバで同じ拡張子は、
+    # 見本の点検表でプレビューを開いて test_preview_browser.PreviewBrowserTests が見る
 
-    def test_プレビューの読み込み中は点検表の種類で言い分ける(self):
-        js = self.read("app", "static", "js", "preview.js")
-        self.assertIn("${sheet.appOf(item)} で画像を作成しています", js)
-        self.assertNotIn('"Excel で画像を作成しています"', js)
-        self.assertIn("data.notice", js)
-        inspection = self.read("app", "static", "js", "inspection.js")
-        self.assertIn('const WORD_EXTS = new Set(["doc", "docx", "docm"]);', inspection)
-        self.assertEqual(set(WORD_EXTENSIONS), {"doc", "docx", "docm"}, "画面とサーバで同じ拡張子")
-
-    def test_印刷の待ちと知らせ(self):
-        js = self.read("app", "static", "js", "printing.js")
-        self.assertIn('${job.app || "Excel"} の空き待ち...', js)
-        self.assertNotIn('"Excel の空き待ち..."', js)
-        self.assertIn("item.notice", js)
+    # 印刷の待ち(「Word の空き待ち...」)と、刷れたものにも出す知らせは、見本の Word の点検表で
+    # 「印刷」を押して test_print_browser.PrintBrowserTests が見る
 
     def test_種類の名前(self):
         self.assertEqual(excel_service.app_label(["word"]), "Word")

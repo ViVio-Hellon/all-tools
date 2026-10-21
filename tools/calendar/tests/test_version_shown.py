@@ -40,15 +40,8 @@ class RibbonTests(unittest.TestCase):
     def test_設定にも出る(self) -> None:
         self.assertIn(app_config.version_label(), self.page("/settings"))
 
-    def test_読める大きさで出す(self) -> None:
-        """出しても読めなければ、探させることになる。"""
-        from pathlib import Path
-
-        css = (Path(__file__).resolve().parent.parent
-               / "app/static/css/layout.css").read_text(encoding="utf-8")
-        block = css.split(".ver{", 1)[1].split("}", 1)[0]
-        size = int(block.split("font-size:", 1)[1].split("px", 1)[0])
-        self.assertGreaterEqual(size, 12)
+    # 読める大きさで出す(12px 以上)は、画面に当たった大きさで
+    # test_settings_browser.SettingsBrowserTests が見る
 
 
 class PrintTests(unittest.TestCase):

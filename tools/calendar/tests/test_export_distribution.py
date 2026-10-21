@@ -71,11 +71,8 @@ class ExportEntryTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, distribution.REFUSE_NEED_PASSWORD)
 
-    def test_書き出す項目は画面の既定のチェックと同じ(self) -> None:
-        js = (_ROOT / "app" / "static" / "js" / "views" / "settings.js").read_text(encoding="utf-8")
-        self.assertIn("input.checked = it.default;", js)
-        script = (_ROOT / "export_distribution.py").read_text(encoding="utf-8")
-        self.assertIn("if default]", script)
+    # 書き出す項目が画面の既定のチェックと同じことは、設定画面で既定のまま「書き出す」を押して
+    # test_settings_browser.SettingsBrowserTests が見る
 
     def test_配布用フォルダに入る(self) -> None:
         spec = importlib.util.spec_from_file_location("calendar_make_dist_t", _ROOT / "tools" / "make_dist.py")

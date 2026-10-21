@@ -63,11 +63,8 @@ class ExportEntryTests(unittest.TestCase):
         self.assertEqual(settings, {"root_folder": r"\\srv\点検表", "log_keep_days": 30},
                          "表示(ダーク/ライト)は既定で外す(画面と同じ)")
 
-    def test_書き出す項目は画面の既定のチェックと同じ(self) -> None:
-        js = (_ROOT / "app" / "static" / "js" / "settings.js").read_text(encoding="utf-8")
-        self.assertIn("(it.default && it.set)", js)
-        script = (_ROOT / "export_distribution.py").read_text(encoding="utf-8")
-        self.assertIn("if default]", script)
+    # 書き出す項目が画面の既定のチェックと同じことは、設定の「配布設定」を既定のまま書き出して
+    # test_settings_browser.DistributionBrowserTests が入口の書き出しと中身を比べて見る
 
     def test_配布用フォルダに入る(self) -> None:
         """点検表は make_dist を持たない。日報複合ツールの一式の make_dist が一覧で写す。"""

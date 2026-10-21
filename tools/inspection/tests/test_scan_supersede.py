@@ -103,30 +103,59 @@ class ScanSupersedeTests(unittest.TestCase):
 
 
 class SettingsRouteSupersedeTests(unittest.TestCase):
-    """設定の API が、走っている検索を捨てさせる(``supersede=True``)。"""
+    """設定の API が、走っている検索を捨てさせる(``supersede=True``)。API を実際に呼んで見る。"""
 
-    def test_フォルダ変更は走っている検索を捨てさせる(self) -> None:
+    def setUp(self) -> None:
         try:
             import flask  # noqa: F401
         except ImportError:                       # pragma: no cover
             self.skipTest("Flask が入っていない")
-        from pathlib import Path
-        source = (Path(__file__).resolve().parent.parent / "app" / "routes" / "settings.py").read_text(
-            encoding="utf-8")
-        self.assertIn('start_scan("フォルダ設定の変更", supersede=True)', source)
-        self.assertIn('start_scan("配布設定の読み込み", supersede=True)', source)
+        from unittest import mock
+
+        from app import create_app
+        from core import idle_exit
+        idle_exit.reset()
+        self.addCleanup(idle_exit.reset)
+        self._tmp = temp_dir()
+        self.addCleanup(self._tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"INSPECTION_DISTRIBUTION_DIR": os.path.join(self._tmp.name, "配布設定")})
+        env.start()
+        self.addCleanup(env.stop)
+        app = create_app(token="t", port=8795, options={})
+        self.biz = app.extensions["inspection"]
+        self.biz.settings.put_many({k: None for k in list(self.biz.settings.values())})
+        self.addCleanup(self.biz.settings.put_many, {"root_folder": None})
+        app.config["READY"] = True
+        self.client = app.test_client()
+        self.calls = []
+        patcher = mock.patch.object(self.biz.inspection, "start_scan",
+                                    lambda reason, **kw: self.calls.append((reason, kw)) or True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def post(self, path, body):
+        return self.client.post(path, json=body, headers={"X-Tool-Token": "t"})
+
+    def test_フォルダ変更は走っている検索を捨てさせる(self) -> None:
+        folder = os.path.join(self._tmp.name, "新しい")
+        os.makedirs(folder)
+        res = self.post("/api/settings", {"root_folder": folder})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.calls, [("フォルダ設定の変更", {"supersede": True})])
+
+    def test_配布設定の読み込み直しでフォルダが替われば走っている検索を捨てさせる(self) -> None:
+        self.biz.settings.update(root_folder=self._tmp.name)
+        self.assertEqual(self.post("/api/settings/distribution/export",
+                                   {"items": ["root_folder"], "password": "nisk"}).status_code, 200)
+        self.biz.settings.put("root_folder", None)
+        self.calls.clear()
+        res = self.post("/api/settings/distribution/reapply", {"password": "nisk"})
+        self.assertTrue(res.get_json()["rescan"])
+        self.assertEqual(self.calls, [("配布設定の読み込み", {"supersede": True})])
 
 
-class SelectionHeldJsTests(unittest.TestCase):
-    """一部のフォルダが読めなかっただけで、その中の選択を永久に消さない(画面側)。"""
-
-    def test_読めなかったフォルダの選択はいったん外して戻す(self) -> None:
-        from pathlib import Path
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "inspection.js").read_text(
-            encoding="utf-8")
-        self.assertIn("unreadableFor(inv)", js)
-        self.assertIn('const HELD_KEY = "isp.held";', js)
-        self.assertIn("読めたら戻します", js)
+# 一部のフォルダが読めなかっただけで、その中の選択を永久に消さない(画面側)は、「再読込」で読めない
+# サブフォルダのある一覧を返して test_selection_held_browser.SelectionHeldBrowserTests が見る
 
 
 if __name__ == "__main__":

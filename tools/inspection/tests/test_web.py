@@ -114,10 +114,8 @@ class PageTests(WebTestBase):
         self.assertIn('data-theme="light"', body, "既定はライト(日報複合ツールの4ツールでそろえる)")
         self.assertIn("css/inspection.css?v=", body, "静的ファイルに版が付いていない")
 
-    def test_明暗を選んでいなければ大設定の既定を描く前に当てる(self) -> None:
-        body = self.client.get("/").get_data(as_text=True)
-        self.assertIn('localStorage.getItem("inspection.theme_default")', body)
-        self.assertIn('themeChosen: false', body)
+    # 明暗を選んでいなければ大設定の既定を描く前に当てるは、画面の JS を止めて開いて
+    # test_theme_browser.ThemeBrowserTests が見る
 
     def test_版がどこでも読める(self) -> None:
         """ダイアログだけを写した画面写しでも、どの版かが分かること。"""

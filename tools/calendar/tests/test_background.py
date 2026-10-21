@@ -12,21 +12,16 @@
 3. 裏のまま閉じたら、ふつうどおり終わる(閉じた合図は効く)
 4. 表に戻れば、ふつうの見張りに戻る
 5. **スリープから戻った瞬間に終わらない**(プロセスごと止まっていた)
-6. 画面は裏に回る瞬間・表に戻る瞬間・スリープ明けに合図を送る
+6. 画面は裏に回る瞬間・表に戻る瞬間・スリープ明けに合図を送る(``test_background_browser``)
 """
 
 from __future__ import annotations
 
-import re
 import time
 import unittest
-from pathlib import Path
 
 from . import _web
 from calendar_app import idle_exit, screen_lock
-
-_ROOT = Path(__file__).resolve().parent.parent
-_JS = (_ROOT / "app" / "static" / "js" / "health.js").read_text(encoding="utf-8")
 
 
 class _Box:
@@ -238,33 +233,9 @@ class AliveApiTests(unittest.TestCase):
         self.assertFalse(self.box.watch.in_background())
 
 
-class ScreenScriptTests(unittest.TestCase):
-    """画面側(``health.js``)が合図を送っているか。"""
-
-    def test_裏に回る瞬間は_sendBeacon_で送る(self) -> None:
-        """凍らされる直前は fetch が届かないことがある。"""
-        self.assertIn('addEventListener("visibilitychange"', _JS)
-        self.assertRegex(_JS, r'send\("hidden", \{ beacon: true \}\)')
-        self.assertRegex(_JS, r'addEventListener\("freeze".*beacon: true',)
-
-    def test_表に戻る_スリープ明けを拾う(self) -> None:
-        for event in ("resume", "pageshow", "online"):
-            self.assertIn(f'addEventListener("{event}"', _JS, event)
-        self.assertIn("WAKE_GAP_MS", _JS)
-        self.assertIn('resume("wake")', _JS)
-
-    def test_心拍の間隔はサーバから受け取る(self) -> None:
-        """見張る側と送る側が別々に持つと、片方だけ変えたときに途切れと誤る。"""
-        self.assertIn("window.APP.heartbeatMs", _JS)
-        html = (_ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
-        self.assertIn("heartbeatMs: {{ heartbeat_ms }}", html)
-
-    def test_閉じた合図のあとは何も送らない(self) -> None:
-        self.assertIn("if (closing && !leaving) return;", _JS)
-        self.assertRegex(_JS, r"leaving: true, beacon: true \}\);\s*closing = true;")
-
-    def test_心拍には見え方を添える(self) -> None:
-        self.assertTrue(re.search(r"JSON\.stringify\(\{ leaving, state, screen_id", _JS))
+# 画面側(``health.js``)が合図を送っているか(裏に回る瞬間・凍る直前は sendBeacon、表に戻る・
+# スリープ明けを拾う、心拍の間隔はサーバから受け取る、閉じた合図のあとは送らない、心拍に見え方を
+# 添える)は、画面を開いて合図を起こし test_background_browser.BackgroundSignalTests が見る
 
 
 if __name__ == "__main__":

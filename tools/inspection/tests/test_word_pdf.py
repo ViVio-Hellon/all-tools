@@ -246,60 +246,10 @@ class WorkerSourceTest(unittest.TestCase):
         self.assertIn("doc.PrintOut False, , , , , , , copies", self.text)
 
 
-class ScreenTest(unittest.TestCase):
-    """画面: Word は PDF の枠、Excel はこれまでの画像。PDF を出せない画面の断り。"""
-
-    def setUp(self):
-        with open(os.path.join(ROOT, "app", "static", "js", "preview.js"), encoding="utf-8") as fp:
-            self.js = fp.read()
-        with open(os.path.join(ROOT, "app", "templates", "main.html"), encoding="utf-8") as fp:
-            self.html = fp.read()
-
-    def test_PDFの枠がある(self):
-        self.assertIn('<iframe class="preview__pdf" id="pv-pdf"', self.html)
-        self.assertIn('<img id="pv-image"', self.html, "Excel は画像のまま")
-        self.assertIn('data.format === "pdf"', self.js)
-        self.assertIn("tokenUrl(data.pdf_url)", self.js)
-        self.assertNotIn("download", self.js, "ダウンロードさせない")
-
-    def test_PDFを出せない画面では枠に入れずに断る(self):
-        self.assertIn("navigator.pdfViewerEnabled !== false", self.js)
-        self.assertIn("この画面では PDF を表示できません。", self.js)
-        self.assertIn("画像で表示する", self.js)
-        body = self.js[self.js.index("async function show("):]
-        self.assertLess(body.index("pdfUnavailable(item)"), body.index('api.post("/api/preview"'),
-                        "作る前に断る")
-
-    def test_閉じたら枠を空にする(self):
-        close = self.js[self.js.index('addEventListener("close"'):]
-        self.assertIn("clearPdf();", close[:300])
+# 画面(Word は PDF の枠・Excel は画像・ダウンロードにしない・PDF を出せない画面では作る前に断る・
+# 閉じたら枠を空にする)と、プレビューの画面に移っただけでは作らない(選んでから作る)は、見本の点検表で
+# プレビューを開いて test_preview_browser.PreviewBrowserTests が見る
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class PreviewOpenTest(unittest.TestCase):
-    """VER2.4.1: プレビューの画面に移っただけでは作らない(選んでから作る)。"""
-
-    def setUp(self):
-        with open(os.path.join(ROOT, "app", "static", "js", "preview.js"), encoding="utf-8") as fp:
-            self.js = fp.read()
-
-    def body(self, header):
-        start = self.js.index(header)
-        return self.js[start:self.js.index("\n}\n", start)]
-
-    def test_ボタンで開いたときは何も選ばない(self):
-        body = self.body("export function open(focusId)")
-        self.assertIn("focusId == null ? -1", body)
-        self.assertIn("if (start >= 0) select(start); else idle();", body)
-        self.assertNotIn("Math.max(0, view.items.findIndex", body, "見つからなければ1件目、をしない")
-
-    def test_何も選んでいない画面は作りかけを出さない(self):
-        body = self.body("function idle()")
-        self.assertIn("view.index = -1;", body)
-        self.assertIn("view.req += 1;", body)
-        self.assertIn("clearPdf();", body)
-        self.assertNotIn("show(", body)
-        self.assertNotIn("api(", body)

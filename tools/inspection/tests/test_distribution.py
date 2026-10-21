@@ -237,11 +237,23 @@ class ApplyTests(DistributionTestCase):
 
 class StartupTests(unittest.TestCase):
     def test_一覧より先に読む(self):
-        """点検表フォルダが入っているので、読む前に探すと既定の場所を見る。"""
-        text = (_ROOT / "app" / "business.py").read_text(encoding="utf-8")
-        body = text[text.index("def on_startup"):]
-        self.assertLess(body.index("distribution.apply_on_start()"), body.index("load_cache()"))
-        self.assertLess(body.index("distribution.apply_on_start()"), body.index("start_scan("))
+        """点検表フォルダが入っているので、読む前に探すと既定の場所を見る(起動の順を実際に呼んで見る)。"""
+        try:
+            import flask  # noqa: F401
+        except ImportError:                       # pragma: no cover
+            self.skipTest("Flask が入っていない")
+        from app import create_app
+        tmp = temp_dir()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.dict(os.environ, {"INSPECTION_DISTRIBUTION_DIR": str(Path(tmp.name) / "配布設定")}):
+            biz = create_app(token="t", port=8796, options={}).extensions["inspection"]
+        order = []
+        with mock.patch.object(biz.distribution, "apply_on_start", lambda: order.append("配布設定")), \
+                mock.patch.object(biz.inspection, "load_cache", lambda: order.append("前回の一覧")), \
+                mock.patch.object(biz.inspection, "start_scan",
+                                  lambda *a, **k: order.append("フォルダを探す")):
+            biz.on_startup()
+        self.assertEqual(order, ["配布設定", "前回の一覧", "フォルダを探す"])
 
     def test_配布設定は追跡しない(self):
         text = (_ROOT / ".gitignore").read_text(encoding="utf-8")

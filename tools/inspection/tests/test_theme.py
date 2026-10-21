@@ -28,11 +28,10 @@ from app.services import distribution
 from app.services.admin_password import AdminPassword
 from app.services.distribution import Distribution
 from app.services.settings_service import SettingsService
-from core import app_config, boot_screen
+from core import app_config
 
 ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "app" / "static" / "js"
-TEMPLATES = ROOT / "app" / "templates"
 NODE = shutil.which("node")
 
 
@@ -131,21 +130,8 @@ class PageTest(WebTestBase):
     def page(self) -> str:
         return self.client.get("/").get_data(as_text=True)
 
-    def test_選んでいなければ描く前に大設定の既定を当てる(self):
-        body = self.page()
-        self.assertIn('localStorage.getItem("inspection.theme_default")', body)
-        self.assertIn('theme: "default"', body)
-        self.assertIn("◇ 既定", body)
-
-    def test_選んだら大設定の既定は当てない(self):
-        self.assertEqual(self.post("/api/settings", {"theme": "dark"}).status_code, 200)
-        body = self.page()
-        self.assertIn('data-theme="dark"', body)
-        self.assertNotIn('localStorage.getItem("inspection.theme_default")', body)
-        self.assertIn('theme: "dark"', body)
-        self.assertIn("☾ ダーク", body)
-        self.post("/api/settings", {"theme": "default"})
-        self.assertIn('localStorage.getItem("inspection.theme_default")', self.page(), "既定に戻せる")
+    # 選んでいなければ描く前に大設定の既定を当てる・選んだら当てない・帯のボタンの文字は、
+    # 画面の JS を止めて開いて test_theme_browser.ThemeBrowserTests が見る
 
     def test_知らない明暗は断る_前の版の画面の送り方も受ける(self):
         res = self.post("/api/settings", {"theme": "auto"})
@@ -156,20 +142,19 @@ class PageTest(WebTestBase):
 
 
 class SourceTest(unittest.TestCase):
+    """**残す理由**: 合図を読み込んだ時点で受ける(`listenShell()` を読み込みの最上段で呼ぶ・app.js が
+    theme.js を最初に読む)は、帯のボタンを繋ぐ `wireThemeToggle` も同じ受け口を開くので、画面が
+    ふつうに動いているかぎり動きでは見分けられない(守りが二重。配線の途中で止まったときのための守り)。
+
+    親の枠からの合図だけを受ける・ボタンの回り順は test_theme_browser と下の BehaviourTest が動かして見る。
+    起動待機画面が既定を覚えるのも test_theme_browser が見る。
+    """
+
     def test_合図は読み込んだ時点で受ける(self):
         js = (JS / "theme.js").read_text(encoding="utf-8")
         self.assertIn("\nlistenShell();\n", js)
-        self.assertIn('"alltools:theme"', js)
-        self.assertIn("event.source !== window.parent", js)
-        self.assertIn('ORDER = ["light", "dark", DEFAULT_CHOICE]', js)
         app = (JS / "app.js").read_text(encoding="utf-8")
         self.assertLess(app.index('import "./theme.js";'), app.index('import { api }'), "最初に読む")
-
-    def test_起動待機画面も大設定の既定を覚える(self):
-        page = boot_screen.render(display_name="点検表", version_label="VER", token="t", app_id="a",
-                                  poll_ms=300, home_url="/", log_dir="x")
-        self.assertIn('"alltools:theme"', page)
-        self.assertIn('localStorage.setItem("inspection.theme_default"', page)
 
 
 @unittest.skipUnless(NODE, "node が無い(画面の JS を動かして確かめる試験)")
