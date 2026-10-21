@@ -23,111 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tests._browser import chromium_or_skip  # noqa: E402
-from tests._web import HAS_FLASK, HEADERS, SKIP_REASON, WebTestCase  # noqa: E402
+# 取り次ぎ・答えを止める・時計を止める・日報入力を開くは土台にまとめた(`tests/_entry_browser.py`)
+from tests._entry_browser import EntryBrowserCase  # noqa: E402
 
 
-@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
-class LateReplyTests(WebTestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.pw, cls.browser = chromium_or_skip()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls.browser.close()
-        cls.pw.stop()
-
-    def setUp(self) -> None:
-        super().setUp()
-        from datetime import date, datetime, time as clock_time
-        from tests.test_scenario_shift_flow import _Now, install_clock
-
-        _Now.value = datetime.combine(date.today(), clock_time(10, 0))
-        install_clock(self)
-        self.ctx = self.browser.new_context(viewport={"width": 1400, "height": 900})
-        self.addCleanup(self.ctx.close)
-        self.ctx.route("http://app.test/**", self._route)
-        self.errors: list[str] = []
-        #: 止める要求の道(先頭一致)。空なら全部そのまま通す
-        self.hold: tuple[str, ...] = ()
-        self.held: list = []
-        # 止めたまま終わった要求は**閉じる前に片付ける**(放っておくと Playwright が待ちを
-        # 取り消して CancelledError を出す)。後片付けは逆順なので ctx.close より先に走る
-        self.addCleanup(self._drain)
-
-    def _drain(self) -> None:
-        self.hold = ()
-        while self.held:
-            route = self.held.pop()
-            try:
-                route.abort()
-            except Exception:                       # noqa: BLE001 - もう閉じた画面の要求
-                pass
-
-    # -- 要求の取り次ぎ --------------------------------------------------
-    def _route(self, route) -> None:
-        path = route.request.url.split("http://app.test", 1)[1]
-        if self.hold and path.startswith(self.hold):
-            self.held.append(route)                 # 返すのは試験が決める
-            return
-        self._forward(route)
-
-    def _forward(self, route) -> None:
-        req = route.request
-        path = req.url.split("http://app.test", 1)[1]
-        headers = dict(HEADERS)
-        if req.headers.get("x-tab"):
-            headers["X-Tab"] = req.headers["x-tab"]
-        res = self.client.open(path, method=req.method, headers=headers,
-                               data=req.post_data_buffer,
-                               content_type=req.headers.get("content-type"))
-        try:
-            route.fulfill(status=res.status_code, body=res.get_data(),
-                          headers={"content-type": res.headers.get("Content-Type", "text/plain")})
-        finally:
-            res.close()
-
-    def wait_held(self, page, count: int, timeout: float = 8.0) -> None:
-        deadline = time.monotonic() + timeout
-        while len(self.held) < count:
-            if time.monotonic() > deadline:
-                self.fail(f"止めた要求が {count} 本になりません(いま {len(self.held)} 本)")
-            page.wait_for_timeout(50)
-
-    def release(self, page, index: int = 0) -> None:
-        """止めた要求を1本返し、画面が塗り終えるのを待つ。"""
-        self._forward(self.held.pop(index))
-        page.wait_for_timeout(400)
-
-    # -- 画面 ------------------------------------------------------------
-    def open_entry(self):
-        page = self.ctx.new_page()
-        page.on("pageerror", lambda e: self.errors.append(str(e)))
-        page.on("dialog", lambda d: d.accept())
-        page.goto("http://app.test/", wait_until="load")
-        page.wait_for_selector("#grid-body")
-        page.wait_for_timeout(600)
-        if page.evaluate("document.body.classList.contains('needs-worker')"):
-            page.fill("#hd-worker", "山田")
-            page.dispatch_event("#hd-worker", "change")
-            page.wait_for_function("!document.body.classList.contains('needs-worker')",
-                                   timeout=5000)
-        page.wait_for_timeout(300)
-        return page
-
-    @staticmethod
-    def type_in(page, field: str, text: str) -> None:
-        """人と同じに打つ(焦点を当てて1文字ずつ)。離れはしない。"""
-        box = page.locator(f"#{field}")
-        box.click()
-        box.press("Control+a")
-        box.press_sequentially(text, delay=20)
-
-    @staticmethod
-    def value(page, field: str) -> str:
-        return page.input_value(f"#{field}")
-
+class LateReplyTests(EntryBrowserCase):
     # -- 試験 ------------------------------------------------------------
     def test_離れた答えが遅れても_そのあいだに打った欄は戻らない(self) -> None:
         page = self.open_entry()

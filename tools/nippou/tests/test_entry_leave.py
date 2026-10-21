@@ -23,52 +23,15 @@ def read(name: str) -> str:
 
 
 class LeaveTests(unittest.TestCase):
-    def test_画面を移る前に確かめる(self) -> None:
-        nav = read("nav.js")
-        self.assertIn("export function beforeLeave", nav)
-        go = nav[nav.index("export async function go("):]
-        self.assertIn("await leaving()", go[:400], "移る前に確かめていない")
-
     def test_終了の前にも確かめる(self) -> None:
         app = read("app.js")
         quit_ = app[app.index("function wireQuit("):]
         self.assertLess(quit_.index("nav.leaving()"), quit_.index('"/api/shutdown"'))
 
-    def test_日報入力は打ちかけを置いてから出る(self) -> None:
-        entry = read("views/entry.js")
-        self.assertIn("beforeLeave(keepTyped)", entry)
-        self.assertIn('window.addEventListener("pagehide"', entry)
-        keep = entry[entry.index("async function keepTyped()"):]
-        self.assertIn("placeDraft()", keep[:400])
-        self.assertIn("confirm(", keep[:1200], "置けなかったときに黙って捨てる")
 
-
-class CloseTests(unittest.TestCase):
-    """日報複合ツールの窓の × ・「終了」でも打ちかけを置く(外枠が頼んでくる)。"""
-
-    def test_外枠の頼みに答える(self) -> None:
-        app = read("app.js")
-        hook = app[app.index('"alltools:before-close"'):]
-        self.assertIn("event.source !== window.parent", app)
-        self.assertIn('reply("alltools:before-close-ack")', hook[:600])
-        self.assertIn("await nav.leaving()", hook[:800])
-        self.assertIn('reply("alltools:before-close-done", { ok })', hook[:900])
-
-    def test_どの欄でも打ったら数える(self) -> None:
-        """材・寸法のような自由な欄が数えられず、閉じる前に置かれなかった。"""
-        entry = read("views/entry.js")
-        start = entry[entry.index("export function start()"):]
-        self.assertIn('"[data-row][data-family], [data-header], [data-check]")) touched(el)',
-                      start[:2400])
-
-    def test_保存は1本ずつ_中身は送る瞬間に集める(self) -> None:
-        """古い自動保存が、新しい保存のあとに着いて上書きしていた。"""
-        entry = read("views/entry.js")
-        self.assertEqual(entry.count('api.post("/api/entry/save"'), 3)
-        for fn in ("async function maybeAutosave", "async function saveNow",
-                   "async function saveDraft"):
-            body = entry[entry.index(fn):]
-            self.assertIn("inOrder(() => {", body[:1200], fn)
+# 窓の × ・終了で打ちかけを置く(外枠の頼み `alltools:before-close`)・どの欄でも打ったら数える・
+# 保存は1本ずつ(`inOrder`)・移る前に打ちかけを置く・置けなければ訊く は、字を探すのではなく
+# **本物のブラウザで打って確かめます**(`test_entry_leave_browser`。守りを外すと落ちる)。
 
 
 class PageOverwriteTests(unittest.TestCase):
