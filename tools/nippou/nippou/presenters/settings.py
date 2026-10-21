@@ -47,13 +47,22 @@ PATH_FIELDS = (
      "下の3つ(仕掛・梱包資材マスタ・伝送用ファイル)を空にしておくと、このフォルダを見ます。"
      "ライン毎目標・停止内訳・VC計算マスタの既定の置き場所でもあります"),
     # 置き場所ごとに分ける(v4.16.0)。**空なら参照用マスタと同じフォルダ**
-    (config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所",
-     "仕掛ロット(SIKALOT)・仕掛引当(SIKAHIKI)・仕掛受注(SIKAODR)・コイル割り数(LS4LOT)が"
-     "あるフォルダ(既定: 参照用マスタと同じフォルダ)"),
-    (config.KEY_WIP_DIR2, "仕掛ロット・引当・受注の置き場所(2つ目)",
-     "ロット番号から引くとき、1つ目に仕掛のファイル(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT)が"
+    # 第1パス(v4.40.0 から LS4LOT は別の置き場所)
+    (config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所(第1パス)",
+     "仕掛ロット(SIKALOT)・仕掛引当(SIKAHIKI)・仕掛受注(SIKAODR)があるフォルダ。"
+     "ファイル名は決まった名前です(既定: 参照用マスタと同じフォルダ)"),
+    (config.KEY_COIL_DIR, "コイル割り数(LS4LOT)の置き場所(第1パス)",
+     "コイル割り数があるフォルダ。仕掛ロット・引当・受注とは別に決められます"
+     "(空なら仕掛ロット・引当・受注の置き場所と同じ)。機側・NS1 のときだけ読みます"),
+    (config.KEY_COIL_FILE, "コイル割り数のファイル名(第1パス)",
+     "第1パスで探すコイル割り数のファイル名(例: LS4LOT_機側.sqlite3)。空なら LS4LOT.sqlite3。"
+     "名前を変えても、中身の要る列はそろえておいてください"),
+    # 第2パス(4つとも名前を決められる)
+    (config.KEY_WIP_DIR2, "仕掛の置き場所(第2パス)",
+     "ロット番号から引くとき、第1パスに仕掛のファイル(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT)が"
      "無い・壊れている・ファイルはあるがそのロット(引当・受注)が無いときに、ここを見ます。"
-     "1つ目の SIKALOT に BOX最終実績の寸法が無いときは、ここの BOX設計の寸法を使います。空なら見ません"),
+     "第1パスの SIKALOT に BOX最終実績の寸法が無いときは、ここの BOX設計の寸法を使います。"
+     "4つとも下の欄でファイル名を決められます。空なら見ません"),
     # 2つ目のファイル名(v4.28.0)。**1つ目は名前を決め打ち**(SIKALOT / SIKAHIKI / SIKAODR)、
     # 2つ目だけ名前も決められる(python-web-tools と同じ)
     (config.KEY_WIP2_LOT_FILE, "仕掛ロットのファイル名(2つ目)",
@@ -63,9 +72,11 @@ PATH_FIELDS = (
      "2つ目の置き場所で探す仕掛引当のファイル名。空なら1つ目と同じ SIKAHIKI"),
     (config.KEY_WIP2_ORDER_FILE, "仕掛受注のファイル名(2つ目)",
      "2つ目の置き場所で探す仕掛受注のファイル名。空なら1つ目と同じ SIKAODR"),
+    (config.KEY_WIP2_COIL_FILE, "コイル割り数のファイル名(2つ目)",
+     "2つ目の置き場所で探すコイル割り数のファイル名。空なら第1パスのコイル割り数と同じ名前"),
     (config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所",
      "梱包資材マスタがあるフォルダ(既定: 参照用マスタと同じフォルダ)。"
-     "コイル割り数(LS4LOT)は、仕掛の置き場所(1つ目・2つ目)に無いときだけここを見ます"),
+     "コイル割り数(LS4LOT)は、第1パス・第2パスに無いときだけここを見ます(前の置き場所)"),
     (config.KEY_TRANSMISSION_DIR, "伝送用ファイルの置き場所",
      "伝送用ファイル(停止理由内訳・直の境界時刻)があるフォルダ"
      "(既定: 参照用マスタと同じフォルダ)"),
@@ -218,10 +229,13 @@ PATH_TAB: dict[str, str] = {
     config.KEY_ACCESS_DIR: "paths",
     config.KEY_REFERENCE_DIR: "paths",
     config.KEY_WIP_DIR: "paths",
+    config.KEY_COIL_DIR: "paths",
+    config.KEY_COIL_FILE: "paths",
     config.KEY_WIP_DIR2: "paths",
     config.KEY_WIP2_LOT_FILE: "paths",
     config.KEY_WIP2_HIKI_FILE: "paths",
     config.KEY_WIP2_ORDER_FILE: "paths",
+    config.KEY_WIP2_COIL_FILE: "paths",
     config.KEY_MATERIAL_DIR: "paths",
     config.KEY_TRANSMISSION_DIR: "paths",
     config.KEY_SOUND_DIR: "paths",
@@ -261,6 +275,9 @@ SHOWN_PATH_KEYS: tuple[str, ...] = (
     config.KEY_REFERENCE_DIR,
     # 置き場所ごとに分ける(v4.16.0)。空なら参照用マスタと同じ
     config.KEY_WIP_DIR,
+    # コイル割り数の第1パス(v4.40.0)。仕掛ロット・引当・受注とは置き場所も名前も分ける
+    config.KEY_COIL_DIR,
+    config.KEY_COIL_FILE,
     # 仕掛の2つ目(v4.23.0)。1つ目で見つからないときに見る。空なら見ない
     config.KEY_WIP_DIR2,
     # 2つ目のファイル名(v4.28.0)。2つ目の置き場所のすぐ下に並べる
@@ -306,7 +323,8 @@ FIXED_NAME_KEYS: dict[str, str] = {
 #: 参照設定の面での区切り。**読みに行く先と、書き出す先を分ける。**
 PATH_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("read", "読みに行く先",
-     (config.KEY_REFERENCE_DIR, config.KEY_WIP_DIR, config.KEY_WIP_DIR2,
+     (config.KEY_REFERENCE_DIR, config.KEY_WIP_DIR,
+      config.KEY_COIL_DIR, config.KEY_COIL_FILE, config.KEY_WIP_DIR2,
       *config.WIP2_FILE_KEYS,
       config.KEY_MATERIAL_DIR,
       config.KEY_TRANSMISSION_DIR, config.KEY_SOUND_DIR,
@@ -332,6 +350,9 @@ PATH_KEY_NAMES: dict[str, str] = {
     "wip2_lot_file": config.KEY_WIP2_LOT_FILE,
     "wip2_hiki_file": config.KEY_WIP2_HIKI_FILE,
     "wip2_order_file": config.KEY_WIP2_ORDER_FILE,
+    "wip2_coil_file": config.KEY_WIP2_COIL_FILE,
+    "coil_dir": config.KEY_COIL_DIR,
+    "coil_file": config.KEY_COIL_FILE,
     "material_dir": config.KEY_MATERIAL_DIR,
     "transmission_dir": config.KEY_TRANSMISSION_DIR,
     "sound_dir": config.KEY_SOUND_DIR,
@@ -411,7 +432,9 @@ EXPECTED_FILES = {
         ("lot", "仕掛ロット", lambda: SETTINGS.gw_lot_master_path),
         ("hiki", "仕掛引当", lambda: SETTINGS.gw_hiki_master_path),
         ("order", "仕掛受注", lambda: SETTINGS.gw_order_master_path),
-        # v4.25.0 から仕掛と同じ置き場所(無ければ梱包資材マスタのフォルダも見る)
+    ),
+    # v4.40.0 から仕掛ロット・引当・受注と置き場所を分ける(無ければ2つ目・梱包資材マスタのフォルダも見る)
+    config.KEY_COIL_DIR: (
         ("coil", "コイル割り数(LS4LOT)",
          lambda: SETTINGS.gw_coil_master_path),
     ),
@@ -651,6 +674,7 @@ def _resolved_dir(key: str) -> Path:
         config.KEY_REFERENCE_DIR: lambda: SETTINGS.gw_reference_dir,
         config.KEY_WIP_DIR: lambda: SETTINGS.wip_master_dir,
         config.KEY_WIP_DIR2: lambda: SETTINGS.wip_master_dir_2 or Path(""),
+        config.KEY_COIL_DIR: lambda: SETTINGS.coil_master_dir,
         config.KEY_MATERIAL_DIR: lambda: SETTINGS.material_master_dir,
         config.KEY_TRANSMISSION_DIR: lambda: SETTINGS.transmission_master_dir,
         config.KEY_SOUND_DIR: lambda: SETTINGS.sound_dir,
@@ -670,6 +694,9 @@ def _resolved_dir(key: str) -> Path:
         config.KEY_WIP2_LOT_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_lot_master_filename) or Path(""),
         config.KEY_WIP2_HIKI_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_hiki_master_filename) or Path(""),
         config.KEY_WIP2_ORDER_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_order_master_filename) or Path(""),
+        config.KEY_WIP2_COIL_FILE: lambda: SETTINGS.wip2_path(SETTINGS.gw_coil_master_filename) or Path(""),
+        # 第1パスで実際に読むコイル割り数のファイル
+        config.KEY_COIL_FILE: lambda: SETTINGS.gw_coil_master_paths[0],
     }[key]()
 
 
@@ -683,7 +710,7 @@ def _sound_file_keys() -> tuple[str, ...]:
 
 SOUND_FILE_KEYS = _sound_file_keys()
 FILE_KEYS = ((config.KEY_ACCESS_DB_FILE, config.KEY_LINE_TARGET_FILE,
-              config.KEY_STOP_REASON_FILE)
+              config.KEY_STOP_REASON_FILE, config.KEY_COIL_FILE)
              + config.WIP2_FILE_KEYS
              + SOUND_FILE_KEYS)
 
@@ -716,7 +743,10 @@ OPTIONAL_PATH_KEYS = (config.KEY_LINE_TARGET_FILE,
                       config.KEY_BACKUP_DIR,
                       # 2つ目のファイル名。2つ目は1つ目で見つからないときの控えなので、
                       # 無くても困りごとに数えない(欄には「ありません」を出す)
-                      *config.WIP2_FILE_KEYS)
+                      *config.WIP2_FILE_KEYS,
+                      # 第1パスのコイル割り数の名前。あるかは置き場所の欄(`EXPECTED_FILES`)が言う
+                      # ので、ここでは数えない(2回言わない)
+                      config.KEY_COIL_FILE)
 
 # **空なら使わない欄。** 既定の道が無い(空 = 出さない)ので、空のときは
 # 道も「ありません」も出さず「使っていません」と言う
@@ -730,6 +760,9 @@ EMPTY_TEXT: dict[str, str] = {
     config.KEY_WIP2_LOT_FILE: "空なら1つ目と同じ SIKALOT",
     config.KEY_WIP2_HIKI_FILE: "空なら1つ目と同じ SIKAHIKI",
     config.KEY_WIP2_ORDER_FILE: "空なら1つ目と同じ SIKAODR",
+    config.KEY_WIP2_COIL_FILE: "空なら第1パスと同じ名前",
+    config.KEY_COIL_DIR: "空なら仕掛ロット・引当・受注の置き場所と同じ",
+    config.KEY_COIL_FILE: "空なら LS4LOT.sqlite3",
     config.KEY_STANDARD_TIME_OUT_DIR: "空なら集計CSVと同じ先",
     config.KEY_LOG_DIR: "空ならこの端末の logs",
     config.KEY_BACKUP_DIR: "空なら共有の日報管理のパスと同じフォルダ",
@@ -737,7 +770,7 @@ EMPTY_TEXT: dict[str, str] = {
 
 # そのファイルを**読むだけ**の欄。あるかどうかはファイル自身で見る
 READ_FILE_KEYS = (config.KEY_LINE_TARGET_FILE, config.KEY_STOP_REASON_FILE,
-                  *config.WIP2_FILE_KEYS)
+                  *config.WIP2_FILE_KEYS, config.KEY_COIL_FILE)
 
 
 def file_views() -> list[FileView]:

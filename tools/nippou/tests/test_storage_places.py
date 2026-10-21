@@ -55,7 +55,8 @@ class StoragePlacesTests(WebTestCase):
         # 参照用マスタは置き場所ごとに3行(v4.16.0)。空なら参照用マスタと同じフォルダ
         self.assertNotIn("参照用マスタ", shared)
         for label, setting, path in (
-                ("仕掛ロット・引当・受注", "仕掛ロット・引当・受注の置き場所", SETTINGS.wip_master_dir),
+                ("仕掛ロット・引当・受注(第1パス)", "仕掛ロット・引当・受注の置き場所(第1パス)",
+                 SETTINGS.wip_master_dir),
                 ("梱包資材マスタ", "梱包資材マスタの置き場所", SETTINGS.material_master_dir),
                 ("伝送用ファイル", "伝送用ファイルの置き場所", SETTINGS.transmission_master_dir)):
             with self.subTest(label=label):

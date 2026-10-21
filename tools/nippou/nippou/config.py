@@ -128,7 +128,18 @@ KEY_WIP_DIR2 = "wip_master_dir_2"
 KEY_WIP2_LOT_FILE = "wip_master_2_lot_file"
 KEY_WIP2_HIKI_FILE = "wip_master_2_hiki_file"
 KEY_WIP2_ORDER_FILE = "wip_master_2_order_file"
-WIP2_FILE_KEYS = (KEY_WIP2_LOT_FILE, KEY_WIP2_HIKI_FILE, KEY_WIP2_ORDER_FILE)
+# コイル割り数(LS4LOT)の**2つ目のファイル名**(v4.40.0)。2つ目は4つとも名前を決められる。
+# 空なら1つ目と同じ名前(1つ目の名前も決められる ── `KEY_COIL_FILE`)
+KEY_WIP2_COIL_FILE = "wip_master_2_coil_file"
+WIP2_FILE_KEYS = (KEY_WIP2_LOT_FILE, KEY_WIP2_HIKI_FILE, KEY_WIP2_ORDER_FILE,
+                  KEY_WIP2_COIL_FILE)
+# コイル割り数(LS4LOT)の**1つ目は、仕掛ロット・引当・受注と置き場所を分ける**(v4.40.0)。
+#   「LS4LOT.sqlite3用のパス(SIKALOT / SIKAHIKI / SIKAODR 用とは分ける必要があります)
+#    LS4LOT.sqlite3 に関してはファイル名の変更も認めてください」
+# 置き場所が空なら仕掛ロット・引当・受注の1つ目と同じフォルダ(v4.39 までと同じ)。
+# 名前が空なら LS4LOT.sqlite3
+KEY_COIL_DIR = "coil_master_dir"
+KEY_COIL_FILE = "coil_master_file"
 KEY_MATERIAL_DIR = "material_master_dir"          # 梱包資材マスタ / LS4LOT
 KEY_TRANSMISSION_DIR = "transmission_master_dir"  # 伝送用ファイル
 
@@ -213,7 +224,8 @@ def sound_file_key(sound_key: str) -> str:
     return f"sound_file_{sound_key}"
 
 # 設定画面から変えられる参照パス。**表示名はここが唯一の出どころ**
-PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_WIP_DIR2, KEY_MATERIAL_DIR,
+PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_COIL_DIR, KEY_COIL_FILE,
+             KEY_WIP_DIR2, KEY_MATERIAL_DIR,
              KEY_TRANSMISSION_DIR, KEY_SOUND_DIR,
              KEY_MONTHLY_DIR, KEY_REPORT_OUT_DIR, KEY_REPORT_OUT_DIR2,
              KEY_STANDARD_TIME_OUT_DIR,
@@ -557,17 +569,20 @@ class Settings:
     def wip2_filename(self, filename: str) -> str:
         """2つ目で探すファイル名。**決めてあればその名前、無ければ1つ目と同じ名前。**
 
-        決められるのは仕掛ロット・引当・受注の3つ(`WIP2_FILE_KEYS`)。コイル割り数(LS4LOT)は
-        1つ目と同じ名前で探します。
+        決められるのは仕掛ロット・引当・受注・コイル割り数の4つ(`WIP2_FILE_KEYS`。コイル割り数は
+        v4.40.0 から)。コイル割り数を決めていなければ**1つ目のコイル割り数の名前**(`coil_master_filename`)。
         """
         from . import user_settings
 
         key = {self.gw_lot_master_filename: KEY_WIP2_LOT_FILE,
                self.gw_hiki_master_filename: KEY_WIP2_HIKI_FILE,
-               self.gw_order_master_filename: KEY_WIP2_ORDER_FILE}.get(filename)
+               self.gw_order_master_filename: KEY_WIP2_ORDER_FILE,
+               self.gw_coil_master_filename: KEY_WIP2_COIL_FILE}.get(filename)
         configured = user_settings.get(key) if key else None
         text = configured.strip() if isinstance(configured, str) else ""
-        return text or filename
+        if text:
+            return text
+        return self.coil_master_filename if filename == self.gw_coil_master_filename else filename
 
     def wip2_path(self, filename: str) -> Optional[Path]:
         """2つ目で実際に読むファイル。**2つ目の置き場所を決めていなければ None。**"""
@@ -589,8 +604,22 @@ class Settings:
         return paths
 
     @property
+    def coil_master_dir(self) -> Path:
+        """コイル割り数(LS4LOT)の1つ目のフォルダ。**空なら仕掛ロット・引当・受注の1つ目と同じ**(v4.40.0)。"""
+        return _configured_dir(KEY_COIL_DIR, self.wip_master_dir)
+
+    @property
+    def coil_master_filename(self) -> str:
+        """コイル割り数(LS4LOT)の1つ目のファイル名。**空なら LS4LOT.sqlite3**(v4.40.0)。"""
+        from . import user_settings
+
+        configured = user_settings.get(KEY_COIL_FILE)
+        text = configured.strip() if isinstance(configured, str) else ""
+        return text or self.gw_coil_master_filename
+
+    @property
     def material_master_dir(self) -> Path:
-        """梱包資材マスタ・コイル割り数(LS4LOT)のフォルダ。"""
+        """梱包資材マスタのフォルダ(コイル割り数は v4.24.0 までここ。いまは見つからないときだけ見る)。"""
         return _configured_dir(KEY_MATERIAL_DIR, self.gw_reference_dir)
 
     @property
@@ -682,11 +711,17 @@ class Settings:
     def gw_coil_master_paths(self) -> list[Path]:
         """コイルの割り数(`LS4LOT`)を探す順。機側・NS1 のときだけ読む。
 
-        **仕掛ロット・引当・受注と同じく 1つ目 → 2つ目**(v4.25.0)。最後に梱包資材マスタの
-        フォルダ(v4.24.0 までの置き場所)も見る ── 置き場所を移していない端末も読める。
+            1つ目  コイル割り数の置き場所 / 名前(v4.40.0。空なら仕掛の1つ目のフォルダ / LS4LOT)
+            2つ目  仕掛の2つ目の置き場所 / コイル割り数の名前(2つ目)
+            最後   梱包資材マスタのフォルダ(v4.24.0 までの置き場所)/ 1つ目の名前
+
+        置き場所を移していない端末も読める。同じファイルは1つにまとめる。
         """
-        paths = self._wip_paths(self.gw_coil_master_filename)
-        legacy = _pick_source(self.material_master_dir, self.gw_coil_master_filename)
+        paths = [_pick_source(self.coil_master_dir, self.coil_master_filename)]
+        second = self.wip2_path(self.gw_coil_master_filename)
+        if second is not None and second not in paths:
+            paths.append(second)
+        legacy = _pick_source(self.material_master_dir, self.coil_master_filename)
         if legacy not in paths:
             paths.append(legacy)
         return paths

@@ -89,7 +89,8 @@ class ReferenceDirTests(WebTestCase):
         self.assertEqual((sources["lot"], sources["hiki"], sources["order"]),
                          (c.KEY_WIP_DIR,) * 3)
         self.assertEqual(sources["material"], c.KEY_MATERIAL_DIR)
-        self.assertEqual(sources["coil"], c.KEY_WIP_DIR, "LS4LOT は仕掛と同じ置き場所(v4.25.0)")
+        # v4.40.0 から LS4LOT は自分の置き場所(空なら仕掛と同じフォルダ)
+        self.assertEqual(sources["coil"], c.KEY_COIL_DIR, "LS4LOT は仕掛と分けた置き場所(v4.40.0)")
         self.assertEqual(sources["transmission"], c.KEY_TRANSMISSION_DIR)
 
     def test_配布設定に入れられる(self) -> None:

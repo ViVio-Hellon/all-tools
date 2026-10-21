@@ -12361,3 +12361,29 @@ XX:XX〜ZZ:ZZ を先に入れて60分なのに、欄に50と入れても素通�
   自動確定のあと確認画面へ移り、必ず落ちていた)
 - 試験: `test_tab_lock`(+4件)・`test_multi_tab`(閉じる合図に描いた時刻が載るか、本物のブラウザで)
 
+## 仕掛パス: 第1パスは LS4LOT を分ける・第2パスは4つとも名前を決める・写してから読む (v4.40.0)
+
+現場から:
+
+> 仕掛パス
+> 第1パス: SIKALOT / SIKAHIKI / SIKAODR 用のパス、LS4LOT 用のパス(分ける必要があります。LS4LOT はファイル名の変更も認めてください)
+> 第2パス: SIKALOT / SIKAHIKI / SIKAODR / LS4LOT 用のパス。全てファイル名の変更も認めてください
+> 第1パス、第2パス含めて読むときはローカルに保存してから読むを徹底しているかのチェックをお願いします
+
+| | 置き場所の設定 | ファイル名 |
+|---|---|---|
+| 第1パス 仕掛ロット・引当・受注 | `wip_master_dir`(空なら参照用マスタ) | SIKALOT / SIKAHIKI / SIKAODR(固定) |
+| 第1パス コイル割り数 | **`coil_master_dir`(新。空なら上と同じ)** | **`coil_master_file`(新。空なら LS4LOT.sqlite3)** |
+| 第2パス | `wip_master_dir_2`(空なら見ない) | 4つとも決められる(**LS4LOT は `wip_master_2_coil_file` を新設**。空なら第1パスと同じ名前) |
+
+- LS4LOT を探す順: 第1パス → 第2パス → 梱包資材マスタのフォルダ(v4.24.0 までの置き場所)。設定が空ならこれまでと同じ道を見る
+- 参照設定の面・置き場所の一覧・配布設定に欄を足した。ファイル名の欄にフォルダは書けない。拡張子は .sqlite3 / .db / .accdb / .mdb
+- **写してから読むの点検**: 仕掛の4つを読むのは `access_bridge/gw_master._search_wip_at` の1か所。sqlite3 は
+  `importer._import_sqlite` → `source_db.read_query` → `local_copy` で手元へ写してから開いていた(前から)。
+  ただしファイル名に **.accdb を決めると Access の道(cscript + ACE・ODBC)が共有のファイルを直接開いていた**
+  (1つ目は名前が固定だったので、2つ目の名前を .accdb にしたときだけ)。`source_db.local_copy_file` で手元へ
+  写してから、写したほうを Access の道に渡す(控えは sqlite3 と同じく大きさと更新時刻で見る)
+- 設定の画面の「ファイルがあるか」は stat だけ(開かない)。sqlite3 の中身の確かめ(`source_db.probe`)は写しを開く
+- 試験: `test_wip_paths_4400`(11件。第1パス・第2パスの置き場所と名前、引けること、
+  sqlite3 で開いたのが手元の写しだけであること、.accdb も写してから渡すこと)
+

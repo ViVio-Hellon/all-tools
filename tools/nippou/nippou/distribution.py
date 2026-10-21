@@ -129,11 +129,14 @@ ITEM_LINE = "terminal_line"
 #: 全端末が同じラインになります)
 ITEMS: tuple[Item, ...] = (
     Item(config.KEY_REFERENCE_DIR, "参照用マスタの参照パス", True),
-    Item(config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所", True),
-    Item(config.KEY_WIP_DIR2, "仕掛ロット・引当・受注の置き場所(2つ目)", True),
+    Item(config.KEY_WIP_DIR, "仕掛ロット・引当・受注の置き場所(第1パス)", True),
+    Item(config.KEY_COIL_DIR, "コイル割り数の置き場所(第1パス)", True),
+    Item(config.KEY_COIL_FILE, "コイル割り数のファイル名(第1パス)", True),
+    Item(config.KEY_WIP_DIR2, "仕掛の置き場所(第2パス)", True),
     Item(config.KEY_WIP2_LOT_FILE, "仕掛ロットのファイル名(2つ目)", True),
     Item(config.KEY_WIP2_HIKI_FILE, "仕掛引当のファイル名(2つ目)", True),
     Item(config.KEY_WIP2_ORDER_FILE, "仕掛受注のファイル名(2つ目)", True),
+    Item(config.KEY_WIP2_COIL_FILE, "コイル割り数のファイル名(2つ目)", True),
     Item(config.KEY_MATERIAL_DIR, "梱包資材マスタの置き場所", True),
     Item(config.KEY_TRANSMISSION_DIR, "伝送用ファイルの置き場所", True),
     Item(config.KEY_LINE_TARGET_FILE, "ライン毎目標の置き場所", True),

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .. import source_db
 from ..config import SETTINGS
 from ..logging_setup import get_logger
 from ..logic import g_course
@@ -203,7 +204,12 @@ def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRu
     answered = False
     for index, path in enumerate(paths):
         try:
-            result = import_table(path, SETTINGS.gw_shared_table_name,
+            # **手元に写してから読む**(v4.40.0)。sqlite3 は読む側(`importer._import_sqlite` →
+            # `source_db.local_copy`)が写す。Access(.accdb)はここで写して、写したほうを開く
+            # ── 共有のファイルを Access の道で直接開かない
+            read_from = (path if path.suffix.lower() in source_db.SUFFIXES
+                         else source_db.local_copy_file(path))
+            result = import_table(read_from, SETTINGS.gw_shared_table_name,
                                   sql_filter=sql_filter, runner=runner)
         except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
             _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + first_no, path, exc)

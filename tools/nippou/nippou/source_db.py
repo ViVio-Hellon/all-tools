@@ -283,6 +283,50 @@ def local_copy(path: Path) -> Path:
         "書き込みが終わってからもう一度お試しください。")
 
 
+def local_copy_file(path: Path) -> Path:
+    """sqlite3 で**ない**ファイル(Access の .accdb / .mdb)も、手元に写してから読む(v4.40.0)。
+
+        仕掛パス(第1パス・第2パス)を読むときはローカルに保存してから読むを徹底
+
+    仕掛のファイル名は決められるので(`.accdb` も通る)、そのままだと Access の道
+    (cscript + ACE・ODBC)が**共有のファイルを直接開いて**いました。開いているあいだ上流は
+    置き換えられず(`local_copy` の「控えを先に見る」と同じ理由)、ほかのラインも待たされます。
+    写して、写したほうを開きます。中身の確かめ(`_is_intact`)は sqlite3 専用なので行いません
+    ── 読めなければ読む側(Access の道)が失敗を返します。
+
+    控えは `local_copy` と同じ(大きさと更新時刻が同じなら写し直さない・置き換えで入れる)。
+    """
+    path = Path(path)
+    resolved = Path(os.path.abspath(path))
+    key = "file:" + str(resolved)
+    try:
+        stat = resolved.stat()
+    except FileNotFoundError:
+        raise SourceError(f"ファイルが見つかりません: {path}") from None
+    except OSError as exc:
+        raise SourceError(f"{path.name} を確かめられません: {exc}") from exc
+    stamp = (stat.st_size, stat.st_mtime_ns)
+    known = _COPIES.get(key)
+    if known is not None and known[0] == stamp and known[1].exists():
+        return known[1]
+    with _refresh_lock(key):
+        known = _COPIES.get(key)
+        if known is not None and known[0] == stamp and known[1].exists():
+            return known[1]
+        target = copy_dir() / _copy_name(resolved)
+        part = target.with_name(f".{target.name}.{os.getpid()}.part")
+        try:
+            try:
+                shutil.copyfile(resolved, part)
+            except OSError as exc:
+                raise SourceError(f"{path.name} を手元に写せません: {exc}") from exc
+            _swap_in(part, target, path.name)
+            _COPIES[key] = (stamp, target)
+            return target
+        finally:
+            _discard(part)
+
+
 # 写し直しの鍵(元のファイルごと)。**別のマスタの写し直しは待たせない**
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _REFRESH_GUARD = threading.Lock()

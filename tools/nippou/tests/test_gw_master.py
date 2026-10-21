@@ -1,5 +1,6 @@
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -50,9 +51,33 @@ ORDER_CSV = (
 )
 
 
-class SearchLotTests(unittest.TestCase):
+
+class _AccdbCase(unittest.TestCase):
+    """**Access の名前のファイルを本当に置く**(v4.40.0)。仕掛は Access の名前でも手元へ写してから
+    読むので(`source_db.local_copy_file`)、無いファイルは写す前に断られる。中身は偽物の runner が返す。
+    写しは試験の一時フォルダへ。"""
+
+    def setUp(self) -> None:
+        from unittest.mock import patch
+
+        from nippou import source_db
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dummy = Path(tmp.name) / "dummy.accdb"
+        self.dummy.write_bytes(b"Standard ACE DB")
+        cache = Path(tmp.name) / "cache"
+        cache.mkdir()
+        mocked = patch.object(source_db, "_COPY_DIR", cache)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        source_db.forget()
+        self.addCleanup(source_db.forget)
+
+
+class SearchLotTests(_AccdbCase):
     def test_parses_matching_row(self) -> None:
-        info = gw_master.search_lot("R4085Q0", master_path=Path("dummy.accdb"), runner=FakeCsvRunner(LOT_CSV))
+        info = gw_master.search_lot("R4085Q0", master_path=self.dummy, runner=FakeCsvRunner(LOT_CSV))
         self.assertIsNotNone(info)
         self.assertEqual(info.order_no, "06016307")
         self.assertEqual(info.material, "R61S")
@@ -65,17 +90,17 @@ class SearchLotTests(unittest.TestCase):
 
     def test_returns_none_when_not_found(self) -> None:
         empty_csv = "ﾛｯﾄ番号,ｵｰﾀﾞｰ番号\r\n"
-        info = gw_master.search_lot("NOPE", master_path=Path("dummy.accdb"), runner=FakeCsvRunner(empty_csv))
+        info = gw_master.search_lot("NOPE", master_path=self.dummy, runner=FakeCsvRunner(empty_csv))
         self.assertIsNone(info)
 
     def test_returns_none_on_connection_failure_without_raising(self) -> None:
-        info = gw_master.search_lot("R4085Q0", master_path=Path("dummy.accdb"), runner=FakeEmptyRunner())
+        info = gw_master.search_lot("R4085Q0", master_path=self.dummy, runner=FakeEmptyRunner())
         self.assertIsNone(info)
 
 
-class SearchOrderTests(unittest.TestCase):
+class SearchOrderTests(_AccdbCase):
     def test_parses_matching_row(self) -> None:
-        info = gw_master.search_order("06016307", master_path=Path("dummy.accdb"), runner=FakeCsvRunner(ORDER_CSV))
+        info = gw_master.search_order("06016307", master_path=self.dummy, runner=FakeCsvRunner(ORDER_CSV))
         self.assertIsNotNone(info)
         self.assertEqual(info.vc_front, "K21S-VC-A")
         self.assertEqual(info.vc_back, "")
@@ -85,7 +110,7 @@ class SearchOrderTests(unittest.TestCase):
 
     def test_interleaf_false_when_not_one(self) -> None:
         csv_text = "受注番号,VC_表,VC_裏,取引先名称,納入先名称,送り先名称,合紙,製品単重\r\n06016307,,,,,,0,0\r\n"
-        info = gw_master.search_order("06016307", master_path=Path("dummy.accdb"), runner=FakeCsvRunner(csv_text))
+        info = gw_master.search_order("06016307", master_path=self.dummy, runner=FakeCsvRunner(csv_text))
         self.assertFalse(info.has_interleaf)
 
 

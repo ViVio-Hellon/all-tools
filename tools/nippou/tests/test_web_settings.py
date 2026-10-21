@@ -175,7 +175,7 @@ class PasswordGateTests(WebTestCase):
 
         for key in config.PATH_KEYS:
             with self.subTest(key=key):
-                value = ("べつ.sqlite3" if key in config.WIP2_FILE_KEYS   # 仕掛の2つ目のファイル名
+                value = ("べつ.sqlite3" if key in (*config.WIP2_FILE_KEYS, config.KEY_COIL_FILE)  # 仕掛のファイル名
                          else "べつ.csv" if key.endswith("_file")
                          else "べつ.sqlite3" if key.endswith("_filename")
                          else str(self.tmp / f"別-{key}"))

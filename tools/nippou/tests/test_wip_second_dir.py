@@ -301,7 +301,7 @@ class SecondWipDirTests(WebTestCase):
         from nippou import config, distribution
 
         html = self.get("/settings?tab=paths").get_data(as_text=True)
-        self.assertIn("仕掛ロット・引当・受注の置き場所(2つ目)", html)
+        self.assertIn("仕掛の置き場所(第2パス)", html)          # v4.40.0 から第1パス・第2パスの名前
         self.assertIn(config.KEY_WIP_DIR2, [item.key for item in distribution.ITEMS])
 
     def test_2つ目を変えるには管理者パスワードが要る(self) -> None:
