@@ -2374,9 +2374,41 @@ def lookup_lot():
         "message": found.message,
         # Gコースのロット(寸法は BOX最終実績)。**引いたときに言う**(v4.17.0)
         "g_course": found.fill.g_course.as_dict() if found.fill.g_course else None,
+        # 前の直から続くロット。**検入枚数を残りの枚数にするか訊く**(v4.41.0 `logic/lot_carry`)
+        "carry": _lot_carry(ctx, calc, key, row, lot_no, state.value(row, "KEN")),
     }
     log_button_click("lot_lookup", line=ctx.line, extra=lot_no)
     return jsonify(body)
+
+
+def _lot_carry(ctx, calc, key, row: int, lot_no: str, ken: str) -> Optional[dict]:
+    """前の直で同じロットを作業していれば、その枚数と「検入数を変えますか?」(`logic/lot_carry`)。
+
+    **読めなくても引いた値はそのまま返す**(訊かないだけ)。数えるのは手元の作業用DBの保存済みの行。
+    """
+    from nippou.logic import lot_carry
+
+    try:
+        report_date, line, shift, _page = key or _target(ctx, calc)
+        today = parse_business_date(report_date)
+        if today is None:
+            return None
+        repo = get_repo()
+
+        def details_of(prev_shift: str, day) -> list:
+            stamp = format_business_date(day)
+            rows: list = []
+            for number in repo.saved_pages(stamp, line, prev_shift):
+                loaded = repo.load(stamp, line, prev_shift, number)
+                if loaded:
+                    rows.extend(loaded[1])
+            return rows
+
+        worked = lot_carry.walk_back(shift, today, details_of, lot_no)
+        return lot_carry.decide(row=row, lot_no=lot_no, ken=ken, worked=worked, today=today)
+    except Exception:                               # noqa: BLE001 - 訊かないだけ
+        log.exception("前の直のロットを数えられませんでした: %s", lot_no)
+        return None
 
 
 @bp.post("/api/entry/mark")

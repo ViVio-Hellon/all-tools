@@ -1743,9 +1743,34 @@ async function lookupLot(row, hikiNo = "") {
     // 移っているので、守ると材・調質だけが入らない(引いているあいだに
     // 打った欄だけは、打った値のまま)
     paint(body, { forceRow: row, since });
+    // 前の直から続くロット。**検入枚数を残りの枚数にするか訊く**(v4.41.0。決めるのはサーバ)
+    if (body.lot && body.lot.carry) await askCarry(body.lot.carry, mine);
   } catch (err) {
     toastError(err);
   }
+}
+
+/*
+  前の直で同じロットを途中まで作業していた(`logic/lot_carry`)。
+
+      2直に LOTA を入力した場合に「1直で15枚作業しています」と出し「検入数を変えますか?」
+
+  はい → 検入枚数を残りの枚数へ(打ったのと同じに数え、欄を離れたときと同じ道で決め直す)。
+  いいえ → 仕掛ロットの枚数のまま。作業した枚数が検入枚数以上のときは訊かずに知らせる。
+*/
+async function askCarry(carry, mine) {
+  if (!carry.ask) {
+    toast(carry.message, "warn");
+    return;
+  }
+  if (!confirm(carry.message)) return;
+  if (!live(mine)) return;
+  const box = document.getElementById(`KEN${carry.row}`);
+  if (!box || box.readOnly || box.disabled) return;
+  box.value = carry.next;
+  touched(box);
+  toast(`${carry.row}行目の検入枚数を ${carry.next} にしました`, "ok");
+  await settle(carry.row, "KEN");
 }
 
 /** 欄から離れたときに、決まる値を決めてもらう。 */
