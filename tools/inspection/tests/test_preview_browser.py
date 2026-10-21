@@ -74,7 +74,8 @@ class PreviewBrowserTests(PageBrowserCase):
         self.hold = ("/api/preview",)
         page.click("#pv-list li:nth-child(1)")
         self.wait_held(page)
-        self.assertIn("Word で PDF を作成しています", self.message(page))
+        # 要求が止まった直後は、まだ文言を塗っていないことがある(重い CI)。出るまで待つ
+        page.wait_for_function("document.getElementById('pv-message').innerText.includes('Word で PDF を作成しています')")
         self.hold = ()
         self.release(page)
         page.wait_for_selector("#pv-pdf:not([hidden])")
@@ -89,8 +90,9 @@ class PreviewBrowserTests(PageBrowserCase):
         self.hold = ("/api/preview",)
         page.click("#pv-list li:nth-child(2)")
         self.wait_held(page)
-        self.assertIn("Excel で画像を作成しています", self.message(page))
-        self.assertTrue(page.is_hidden("#pv-pdf"))
+        # 要求が止まった直後は、まだ文言を塗っていないことがある(重い CI)。出るまで待つ
+        page.wait_for_function("document.getElementById('pv-message').innerText.includes('Excel で画像を作成しています')")
+        page.wait_for_selector("#pv-pdf", state="hidden")
         self.assertIsNone(page.get_attribute("#pv-pdf", "src"))
         self.hold = ()
         self.release(page)
@@ -102,7 +104,8 @@ class PreviewBrowserTests(PageBrowserCase):
         page.wait_for_selector("#pv-pdf:not([hidden])")
         page.click("#pv-close")
         page.wait_for_selector("#preview-dialog:not([open])", state="attached")
-        self.assertIsNone(page.get_attribute("#pv-pdf", "src"))
+        # `open` の印は close() ですぐ消えるが、後始末の `close` の合図はあとから届く。済むまで待つ
+        page.wait_for_function("!document.getElementById('pv-pdf').hasAttribute('src')", timeout=3000)
         self.assertTrue(page.is_hidden("#pv-pdf"))
 
         self.assertEqual(self.downloads, [], "PDF をダウンロードさせた")
