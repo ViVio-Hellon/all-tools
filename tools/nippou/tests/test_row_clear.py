@@ -31,32 +31,9 @@ class AskNearTheButtonTests(unittest.TestCase):
     def setUp(self) -> None:
         self.js = JS.read_text(encoding="utf-8")
 
-    def test_画面の上に出る確かめを使わない(self) -> None:
-        self.assertNotIn("行目を空にします。よろしいですか", self.js)
-        body = self.js[self.js.index("async function clearRow"):]
-        body = body[:body.index("\n}\n")]
-        self.assertNotIn("confirm(", body)
-
-    def test_押したボタンの位置に出す(self) -> None:
-        ask = self.js[self.js.index("function askClearRow"):]
-        ask = ask[:ask.index("\n}\n")]
-        self.assertIn("btn.getBoundingClientRect()", ask)
-        self.assertIn("at.bottom + 4", ask)                     # ✕ のすぐ下
-        self.assertIn('getElementById("row-ask-yes").focus()', ask)
-        # 空の行は黙って何もしない(確かめを出しても答えは1つ)
-        self.assertIn("if (!filled) { closeRowAsk(); return; }", ask)
-        # どの行かは番号と LOT で言う
-        self.assertIn("行目${lot ? `(${lot})` : \"\"}を空にしますか?", ask)
-
-    def test_閉じかた(self) -> None:
-        for needle in ('event.key === "Escape"', '"pointerdown"',
-                       'addEventListener("scroll"', 'closest?.("#row-ask, [data-clear-row]")'):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, self.js)
-        # 画面を出たら聞き手も外す(nav の画面差し替え)
-        wiring = self.js[self.js.index('getElementById("row-ask-yes")?.addEventListener'):]
-        wiring = wiring[:wiring.index("\n  }\n")]
-        self.assertIn("{ signal }", wiring)
+    # 確かめの窓(confirm)を使わない・✕ のすぐ下に出て「空にする」に焦点・どの行かを番号とロットで言う・
+    # 空の行では出さない・やめる/Esc/外/巻き戻しで閉じる は、**本物のブラウザで押して確かめます**
+    # (`test_row_clear_browser`。守りを外すと落ちる)。ここは作り(CSS・HTML)だけ
 
     def test_吹き出しはボタンに寄せて固定で出す(self) -> None:
         css = CSS.read_text(encoding="utf-8")

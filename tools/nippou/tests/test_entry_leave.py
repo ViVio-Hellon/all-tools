@@ -30,7 +30,8 @@ class LeaveTests(unittest.TestCase):
 
 
 # 窓の × ・終了で打ちかけを置く(外枠の頼み `alltools:before-close`)・どの欄でも打ったら数える・
-# 保存は1本ずつ(`inOrder`)・移る前に打ちかけを置く・置けなければ訊く は、字を探すのではなく
+# 保存は1本ずつ(`inOrder`)・移る前に打ちかけを置く・置けなければ訊く・打ちかけは中身で見る・
+# 共有へ保存の前に打ちかけを置く は、字を探すのではなく
 # **本物のブラウザで打って確かめます**(`test_entry_leave_browser`。守りを外すと落ちる)。
 
 
@@ -41,11 +42,6 @@ class PageOverwriteTests(unittest.TestCase):
     画面は、済んだ操作のあとに「書いたもの」にしてから移り、引き直したあとの
     画面へ前の画面の答えを塗らない。
     """
-
-    def test_打ちかけは中身で見る(self) -> None:
-        entry = read("views/entry.js")
-        self.assertIn("const unsaved = () => snap() !== lastSavedSnap;", entry)
-        self.assertNotIn("savedSeq", entry, "数えるやり方が残っている")
 
     def test_引き直したあとの画面へ前の答えを塗らない(self) -> None:
         entry = read("views/entry.js")
@@ -96,11 +92,6 @@ class PageOverwriteTests(unittest.TestCase):
         busy = read("busy.js")
         self.assertIn("setTimeout(drop, PRESS_MS)", busy)
         self.assertIn('addEventListener("keydown", drop, true)', busy)
-
-    def test_共有へ保存の前に打ちかけを置く(self) -> None:
-        entry = read("views/entry.js")
-        push = entry[entry.index("async function pushShared("):]
-        self.assertLess(push.index("saveDraft()"), push.index('"/api/settings/push"'))
 
 
 class OtherScreensTests(unittest.TestCase):

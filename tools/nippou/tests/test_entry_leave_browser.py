@@ -57,6 +57,21 @@ class LeaveTests(EntryBrowserCase):
         page.wait_for_function("location.pathname === '/records'", timeout=8000)  # 「はい」で移る
         self.assertTrue(any("保存していない行は消えます" in m for m in self.dialogs), self.dialogs)
 
+    def test_共有へ保存の前に打ちかけを置く(self) -> None:
+        page = self.open_entry()
+        self.type_in(page, "HIT1", "3")
+        mark = len(self.sent)
+        page.click("#push-shared")
+        is_push = lambda p: p.split("?")[0] == "/api/settings/push"      # 下見(/plan)ではなく送る要求
+        self.wait_until(page, lambda: any(is_push(p) for p, _ in self.sent[mark:]), "共有へ保存の要求")
+        paths = [p for p, _ in self.sent[mark:]]
+        draft_at = next((i for i, (p, b) in enumerate(self.sent[mark:])
+                         if p.startswith("/api/entry/save") and b.get("draft")), None)
+        push_at = next(i for i, p in enumerate(paths) if is_push(p))
+        self.assertIsNotNone(draft_at, f"打ちかけを置いていません: {paths}")
+        self.assertLess(draft_at, push_at, "共有へ送ってから置いています")
+        self.assertEqual(self.sent[mark:][draft_at][1]["rows"]["1"].get("HIT"), "3")
+
     def test_保存は1本ずつ_中身は送る瞬間に集める(self) -> None:
         page = self.open_entry()
         self.type_in(page, "MAI1", "10")
@@ -119,6 +134,27 @@ class WindowCloseTests(EntryBrowserCase):
         self.assertTrue(drafts, "閉じる前に打ちかけを置いていません")
         self.assertEqual(drafts[-1]["rows"]["1"].get("HIT"), "4")
         self.assertEqual(self.errors, [])
+
+    def close_once(self, page, seq: int) -> None:
+        page.evaluate(f"askClose({seq})")
+        page.wait_for_function(
+            f"window.__replies.some(r => r.type === 'alltools:before-close-done' && r.seq === {seq})",
+            timeout=8000)
+
+    def test_打ちかけは中身で見る_打って戻したら置き直さない(self) -> None:
+        """打った回数ではなく**中身**で見る(`unsaved = snap() !== lastSavedSnap`)。"""
+        page, tool = self.open_framed()
+        self.type_in(tool, "HIT1", "3")
+        self.close_once(page, 1)                      # 置く(ここで「書いたもの」になる)
+        self.assertEqual(self.saves(draft=True)[-1]["rows"]["1"].get("HIT"), "3")
+        self.type_in(tool, "HIT1", "4")
+        self.type_in(tool, "HIT1", "3")               # 打ったが、中身は置いたときと同じ
+        before = len(self.saves(draft=True))
+        self.close_once(page, 2)
+        self.assertEqual(self.saves(draft=True)[before:], [], "中身が同じなのに置き直しています")
+        self.type_in(tool, "HIT1", "5")               # 中身が変われば置く
+        self.close_once(page, 3)
+        self.assertEqual(self.saves(draft=True)[-1]["rows"]["1"].get("HIT"), "5")
 
     def test_外枠でない相手からの頼みには答えない(self) -> None:
         page = self.open_entry()                        # 埋め込まれていない(親が自分)
