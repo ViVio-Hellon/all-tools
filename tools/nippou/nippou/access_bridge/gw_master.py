@@ -20,7 +20,9 @@ VBAの ``寸法表示``（LotNo検索、標準モジュール~7868行）/ ``VC�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -383,21 +385,23 @@ def search_order(
 
 @dataclass
 class CoilSplit:
-    """コイルの割り数 (`LS4LOT` の `当工程設計_縦割数` / `横割数`)。
+    """コイルの割り数。名前が LS4LOT なら `当工程設計_縦割数` / `横割数`、そうでなければ
+    `BOX設計_縦割数` / `横割数`(今の年月の行。`search_coil_split`)。
 
     紙の印刷範囲のさらに外(AR列・AS列)に出る2つです。VBA も
     `OthersT` の5番目・6番目としてここから入れていました。
     """
 
     lot_no: str = ""
-    vertical: str = ""      # 当工程設計_縦割数 → コイル縦割(others5)
-    horizontal: str = ""    # 当工程設計_横割数 → コイル横縦割(others6)
+    vertical: str = ""      # 当工程設計_縦割数(BOX設計_縦割数)→ コイル縦割(others5)
+    horizontal: str = ""    # 当工程設計_横割数(BOX設計_横割数)→ コイル横縦割(others6)
 
 
 def search_coil_split(
     lot_no: str,
     master_path: Optional[Path] = None,
     runner: Optional[ScriptRunner] = None,
+    now: Optional[datetime] = None,
 ) -> Optional[CoilSplit]:
     """port of ``SQLiteLot検索`` のコイル縦横。該当なしなら ``None``。
 
@@ -405,36 +409,87 @@ def search_coil_split(
     v4.21.0 で外した ── `logic/lot_fill.COIL_SPLIT_LINES`)。ほかのラインは
     コイルを扱わないので、引く意味がありません。
 
+    **読むファイルの名前で、見る列を変えます**(v4.40.1。`docs/仕掛ファイルとカラム.md`):
+
+        名前が LS4LOT        ﾛｯﾄ番号 で引き、当工程設計_縦割数 / 当工程設計_横割数
+        名前が LS4LOT でない  ﾛｯﾄ番号 で引き、BOX実績_作業開始_日付 が**今の年月**
+                             (2026-10-21 00:01:56 なら 2026-10)の行だけを拾い、
+                             BOX設計_縦割数(= 当工程設計_縦割数)/ BOX設計_横割数(= 当工程設計_横割数)
+
+    置き場所ごとに名前を見ます(第1パス → 第2パス → 前の置き場所。どこかで見つかればそこで終わり)。
+    今の年月の行が無いファイルは「無い」とみなして次を見ます。
+
     VBA はこのファイルだけ `SimpleArr`(=Access のまま)で読んでいました
-    が、ほかの参照と同じく **sqlite3 として扱います** ── 上流の
-    書き出しが .accdb から .sqlite3 へ移るのに合わせたもので、
-    `_pick_source` は同じ名前の `.sqlite3` / `.db` を探します(`.accdb` は
-    拾いません ── v4.36.0 で説明を動きに合わせました)。
+    が、ほかの参照と同じく **sqlite3 として扱います**(Access の名前なら手元へ写してから)。
 
     **読めなくても例外にしません。** 縦横が空になるだけで、日報の入力
     そのものは続けられます(VBA も `GoTo skipCoilErr` で続けていました)。
     """
     sql_filter = f"[ﾛｯﾄ番号]={script_gen.sql_literal(lot_no, 'TEXT')}"
-    # **仕掛ロット・引当・受注と同じく 1つ目 → 2つ目**(v4.25.0)。最後に梱包資材マスタの
-    # フォルダ(以前の置き場所)も見る
     paths = _paths(master_path, SETTINGS.gw_coil_master_paths)
-    try:
-        rows = _search_wip(paths, sql_filter, runner, f"コイル縦横 lot_no={lot_no}")
-    except Exception:                             # noqa: BLE001 - 入力は止めない
-        _logger.exception("LS4LOT を読めませんでした lot_no=%s", lot_no)
-        return None
-    if not rows:
-        # VBA も `DebugLog("LS4LOTヒットなし")` を残して続けていた
-        _logger.info("LS4LOT にヒットなし lot_no=%s", lot_no)
-        return None
+    month = (now or datetime.now()).strftime("%Y-%m")
+    for index, path in enumerate(paths):
+        named_ls4lot = is_ls4lot_name(path)
+        keep = None if named_ls4lot else (
+            lambda rows: [r for r in rows if year_month(r.get(COIL_DATE_COLUMN)) == month])
+        try:
+            rows, _ = _search_wip_at([path], sql_filter, runner, f"コイル縦横 lot_no={lot_no}",
+                                     keep=keep, first_no=index + 1)
+        except Exception:                         # noqa: BLE001 - 入力は止めない・次を見る
+            _logger.exception("コイル割り数を読めませんでした(%dつ目 %s) lot_no=%s",
+                              index + 1, path, lot_no)
+            continue
+        if not rows:
+            continue
+        if named_ls4lot:
+            # VBA は**最後にあたった行**を採っていた(ループで上書き)。実データでは1ロット1行
+            row = rows[-1]
+            vertical, horizontal = COIL_COLUMNS_LS4LOT
+        else:
+            # 今の年月の行が複数なら、作業開始がいちばん新しい行
+            row = max(rows, key=lambda r: _sortable_date(r.get(COIL_DATE_COLUMN)))
+            vertical, horizontal = COIL_COLUMNS_OTHER
+        return CoilSplit(
+            lot_no=row.get("ﾛｯﾄ番号", ""),
+            vertical=str(row.get(vertical, "") or "").strip(),
+            horizontal=str(row.get(horizontal, "") or "").strip())
+    # VBA も `DebugLog("LS4LOTヒットなし")` を残して続けていた
+    _logger.info("コイル割り数にヒットなし lot_no=%s(今の年月 %s)", lot_no, month)
+    return None
 
-    # VBA は**最後にあたった行**を採っていた(ループで上書き)。
-    # 実データでは1ロット1行なので、どちらでも同じ
-    row = rows[-1]
-    return CoilSplit(
-        lot_no=row.get("ﾛｯﾄ番号", ""),
-        vertical=row.get("当工程設計_縦割数", ""),
-        horizontal=row.get("当工程設計_横割数", ""))
+
+#: 名前が LS4LOT のファイルで読む列(縦割・横割)
+COIL_COLUMNS_LS4LOT: tuple[str, str] = ("当工程設計_縦割数", "当工程設計_横割数")
+#: 名前が LS4LOT でないファイルで読む列(縦割・横割)。BOX設計_縦割数 = 当工程設計_縦割数、
+#: BOX設計_横割数 = 当工程設計_横割数
+COIL_COLUMNS_OTHER: tuple[str, str] = ("BOX設計_縦割数", "BOX設計_横割数")
+#: 名前が LS4LOT でないとき、今の年月の行だけに絞る列(`2026-10-21 00:01:56` の形)
+COIL_DATE_COLUMN = "BOX実績_作業開始_日付"
+#: 「名前が LS4LOT」の名前(拡張子を除く。大文字小文字は見ない)
+COIL_LS4LOT_STEM = "LS4LOT"
+
+
+def is_ls4lot_name(path: Path) -> bool:
+    """そのファイルの名前が LS4LOT か(`LS4LOT.sqlite3` / `LS4LOT.accdb` など)。"""
+    return Path(path).stem.casefold() == COIL_LS4LOT_STEM.casefold()
+
+
+_YEAR_MONTH = re.compile(r"^\s*(\d{4})[-/.](\d{1,2})")
+
+
+def year_month(value: object) -> str:
+    """`2026-10-21 00:01:56` → `2026-10`。`2026/10/21` も同じ。読めなければ空。"""
+    found = _YEAR_MONTH.match(str(value or ""))
+    return f"{found.group(1)}-{int(found.group(2)):02d}" if found else ""
+
+
+def _sortable_date(value: object) -> str:
+    """並べるための日時の字(`/` を `-` に、月日を2桁に)。"""
+    text = str(value or "").strip().replace("/", "-")
+    found = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})(.*)$", text)
+    if not found:
+        return text
+    return f"{found.group(1)}-{int(found.group(2)):02d}-{int(found.group(3)):02d}{found.group(4)}"
 
 
 def lookup_material_rate(rows: list[dict], material_name: str) -> MaterialRate:

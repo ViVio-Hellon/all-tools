@@ -24,6 +24,8 @@ from tests.test_web_entry_lot import HIKI_COLUMNS, LOT_COLUMNS, ODR_COLUMNS  # n
 from tests.test_wip_second_dir import HIKI, ODR, _lot  # noqa: E402
 
 COIL_COLUMNS = ("ﾛｯﾄ番号", "製造材質", "当工程設計_縦割数", "当工程設計_横割数")
+#: 名前が LS4LOT でないファイル(v4.40.1)。BOX実績_作業開始_日付 が今の年月の行の BOX設計_縦割数・横割数
+BOX_COIL_COLUMNS = ("ﾛｯﾄ番号", "BOX実績_作業開始_日付", "BOX設計_縦割数", "BOX設計_横割数")
 
 
 class WipPathsTests(WebTestCase):
@@ -58,7 +60,15 @@ class WipPathsTests(WebTestCase):
         conn.close()
 
     def coil_file(self, path: Path, vertical: str = "2") -> None:
+        """LS4LOT の形(名前が LS4LOT のファイルに置く)。"""
         self.write(path, COIL_COLUMNS, [("H5422S0", "F52S", vertical, "14")])
+
+    def box_coil_file(self, path: Path, vertical: str = "2", *, when: str = "") -> None:
+        """名前が LS4LOT でないファイルの形。作業開始は既定で今の年月。"""
+        from datetime import datetime
+
+        when = when or datetime.now().strftime("%Y-%m-01 00:01:56")
+        self.write(path, BOX_COIL_COLUMNS, [("H5422S0", when, vertical, "14")])
 
     @staticmethod
     def coil_split(lot_no: str = "H5422S0"):
@@ -95,7 +105,7 @@ class WipPathsTests(WebTestCase):
     def test_第1パスのLS4LOTは名前を変えられる(self) -> None:
         self.use(coil_master_dir=str(self.coil), coil_master_file="LS4LOT_機側.sqlite3")
         self.assertEqual(self.settings().gw_coil_master_paths[0], self.coil / "LS4LOT_機側.sqlite3")
-        self.coil_file(self.coil / "LS4LOT_機側.sqlite3", vertical="3")
+        self.box_coil_file(self.coil / "LS4LOT_機側.sqlite3", vertical="3")   # 名前が LS4LOT でない
         self.assertEqual(self.coil_split().vertical, "3")
 
     def test_第1パスの仕掛ロット引当受注は名前を変えられない(self) -> None:
@@ -121,7 +131,7 @@ class WipPathsTests(WebTestCase):
         self.write(self.second / "SIKALOT2.sqlite3", LOT_COLUMNS, [_lot("H5422S0")])
         self.write(self.second / "SIKAHIKI2.sqlite3", HIKI_COLUMNS, [HIKI])
         self.write(self.second / "SIKAODR2.sqlite3", ODR_COLUMNS, [ODR])
-        self.coil_file(self.second / "LS4LOT2.sqlite3", vertical="4")
+        self.box_coil_file(self.second / "LS4LOT2.sqlite3", vertical="4")   # 名前が LS4LOT でない
         body = self.post("/api/entry/lot", {"rows": {"1": {"LOT": "H5422S0"}}, "row": 1,
                                             "hiki_no": ""}).get_json()
         self.assertEqual(body["lot"]["state"], "filled", body)
@@ -140,6 +150,64 @@ class WipPathsTests(WebTestCase):
                           self.material / "LS4LOT.sqlite3"])
         self.coil_file(self.material / "LS4LOT.sqlite3", vertical="7")   # 前の置き場所だけにある
         self.assertEqual(self.coil_split().vertical, "7")
+
+    # -- 名前で見る列を変える(v4.40.1) ---------------------------------
+    def test_名前がLS4LOTなら当工程設計の割数(self) -> None:
+        self.use()
+        path = self.first / "LS4LOT.sqlite3"
+        self.write(path, ("ﾛｯﾄ番号", "当工程設計_縦割数", "当工程設計_横割数", "BOX設計_縦割数",
+                          "BOX実績_作業開始_日付"),
+                   [("H5422S0", "2", "14", "99", "2001-01-01 00:00:00")])
+        found = self.coil_split()
+        self.assertEqual((found.vertical, found.horizontal), ("2", "14"))   # 日付も BOX設計 も見ない
+
+    def test_名前がLS4LOTでなければ今の年月のBOX設計の割数(self) -> None:
+        from datetime import datetime
+        from nippou.access_bridge import gw_master
+
+        self.use(coil_master_file="SIKALOT_コイル.sqlite3")
+        self.write(self.first / "SIKALOT_コイル.sqlite3", BOX_COIL_COLUMNS, [
+            ("H5422S0", "2026-09-30 23:59:59", "8", "80"),    # 先月は拾わない
+            ("H5422S0", "2026-10-02 08:00:00", "3", "30"),
+            ("H5422S0", "2026-10-21 00:01:56", "5", "50"),    # 今月でいちばん新しい
+            ("H5422S0", "2025-10-21 00:01:56", "9", "90"),    # 去年の同じ月も拾わない
+        ])
+        found = gw_master.search_coil_split("H5422S0", now=datetime(2026, 10, 21, 9, 0))
+        self.assertEqual((found.vertical, found.horizontal), ("5", "50"))
+
+    def test_今の年月の行が無ければ次の置き場所を見る(self) -> None:
+        from datetime import datetime
+        from nippou.access_bridge import gw_master
+
+        self.use(coil_master_file="SIKALOT_コイル.sqlite3", wip_master_dir_2=str(self.second))
+        self.write(self.first / "SIKALOT_コイル.sqlite3", BOX_COIL_COLUMNS,
+                   [("H5422S0", "2026-09-30 23:59:59", "8", "80")])            # 先月だけ
+        self.write(self.second / "SIKALOT_コイル.sqlite3", BOX_COIL_COLUMNS, [])  # 2つ目は空
+        self.box_coil_file(self.material / "SIKALOT_コイル.sqlite3", vertical="6",
+                           when="2026/10/05 07:00:00")                       # `/` の日付も読む
+        found = gw_master.search_coil_split("H5422S0", now=datetime(2026, 10, 21))
+        self.assertEqual(found.vertical, "6")
+
+    def test_今の年月の行がどこにも無ければNone(self) -> None:
+        from datetime import datetime
+        from nippou.access_bridge import gw_master
+
+        self.use(coil_master_file="SIKALOT_コイル.sqlite3")
+        self.write(self.first / "SIKALOT_コイル.sqlite3", BOX_COIL_COLUMNS,
+                   [("H5422S0", "2026-09-30 23:59:59", "8", "80")])
+        self.assertIsNone(gw_master.search_coil_split("H5422S0", now=datetime(2026, 10, 1)))
+
+    def test_年月の読み方(self) -> None:
+        from nippou.access_bridge.gw_master import is_ls4lot_name, year_month
+
+        self.assertEqual(year_month("2026-10-21 00:01:56"), "2026-10")
+        self.assertEqual(year_month("2026/9/3 7:00"), "2026-09")
+        self.assertEqual(year_month(""), "")
+        self.assertEqual(year_month(None), "")
+        self.assertTrue(is_ls4lot_name(Path("LS4LOT.sqlite3")))
+        self.assertTrue(is_ls4lot_name(Path("ls4lot.accdb")))
+        self.assertFalse(is_ls4lot_name(Path("LS4LOT2.sqlite3")))
+        self.assertFalse(is_ls4lot_name(Path("LS4LOT_機側.sqlite3")))
 
     # -- 画面 ------------------------------------------------------------
     def test_設定の画面に第1パスと第2パスの欄が出る(self) -> None:
