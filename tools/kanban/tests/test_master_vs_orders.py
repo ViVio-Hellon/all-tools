@@ -294,12 +294,13 @@ class DroppedNoticeScreenTest(MasterVsOrdersTest):
         self.assertEqual(other["dropped"], [])
 
     def test_画面_帯を見て_わかったを押す(self) -> None:
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            self.skipTest("playwright が無い")
-        import os
+        # 無ければ飛ばす。**CI(`ALLTOOLS_REQUIRE_BROWSER=1`)では飛ばさずに失敗にする**
+        # (前は黙って飛ばしていて、CI では一度も動いていなかった)
+        from tests._browser import chromium_or_skip
 
+        pw, browser = chromium_or_skip()
+        self.addCleanup(pw.stop)
+        self.addCleanup(browser.close)
         self.make_lost_order()
         client = self.app_for("現場PC1")
 
@@ -312,30 +313,20 @@ class DroppedNoticeScreenTest(MasterVsOrdersTest):
             route.fulfill(status=res.status_code, body=res.get_data(),
                           headers={"content-type": res.headers.get("Content-Type", "text/plain")})
 
-        with sync_playwright() as pw:
-            exe = "/opt/pw-browsers/chromium"
-            launch = {"executable_path": exe} if os.path.exists(exe) else {}
-            try:
-                browser = pw.chromium.launch(**launch)
-            except Exception as exc:                      # noqa: BLE001
-                self.skipTest(f"ブラウザを起こせない: {exc}")
-            try:
-                page = browser.new_page()
-                errors: list[str] = []
-                page.on("pageerror", lambda e: errors.append(str(e)))
-                page.route("http://kanban.test/**", forward)
-                page.goto("http://kanban.test/board", wait_until="load")
-                page.wait_for_selector("#dropped:not([hidden])", timeout=8000)
-                text = page.text_content("#dropped-text")
-                self.assertIn("マスタ管理で消された看板への操作は届きませんでした", text)
-                self.assertIn(f"{LINE} 1番", text)
-                self.assertIn("発注", text)
-                page.click("#dropped-ok")
-                page.wait_for_selector("#dropped", state="hidden", timeout=5000)
-                self.assertEqual(self.t["現場PC1"].store.dropped_notices(), [])
-                self.assertEqual(errors, [])
-            finally:
-                browser.close()
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.route("http://kanban.test/**", forward)
+        page.goto("http://kanban.test/board", wait_until="load")
+        page.wait_for_selector("#dropped:not([hidden])", timeout=8000)
+        text = page.text_content("#dropped-text")
+        self.assertIn("マスタ管理で消された看板への操作は届きませんでした", text)
+        self.assertIn(f"{LINE} 1番", text)
+        self.assertIn("発注", text)
+        page.click("#dropped-ok")
+        page.wait_for_selector("#dropped", state="hidden", timeout=5000)
+        self.assertEqual(self.t["現場PC1"].store.dropped_notices(), [])
+        self.assertEqual(errors, [])
 
 
 class DroppedWhatTest(unittest.TestCase):
