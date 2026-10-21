@@ -48,7 +48,7 @@ from .. import error_body, get_repo, shell
 # 日報入力の道の中では、これまでどおりの名前で使う
 from ..current import (build_service, build_shift_calculator, current_calculator,  # noqa: F401
                        current_flow, ribbon_now, time_split_enabled,
-                       time_split_factors)
+                       time_split_factors, time_split_stop_kinds)
 from ..current import current_target as _target  # noqa: F401
 
 log = get_logger("app.routes.entry")
@@ -1186,7 +1186,7 @@ def distribute_times():
     target_rows = [pages[n].rows[row] for n, row in targets]
     kinds = time_split.lot_runs(target_rows, _last_lot_before(report_date, line, shift))
     weights, adjust_notes = time_split.adjust_weights(weights, target_rows, kinds, time_split_factors(),
-                                                      _setup_stop_codes())
+                                                      time_split_stop_kinds())
     # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
     day_work = any(p.day_shift for p in pages.values())
     rest = None if day_work else time_split.break_window(shift, start, total)
@@ -1283,18 +1283,6 @@ def distribute_times():
     if rest_info and rest_info.get("start"):
         body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
     return jsonify(body)
-
-
-def _setup_stop_codes() -> frozenset:
-    """段取りの停止の記号(停止理由の内訳の名前に「段取」。v4.42.1)。読めなければ空(長くしないで済ませない)。"""
-    from nippou.access_bridge import stop_master
-    from nippou.logic import time_split
-
-    try:
-        return time_split.setup_stop_codes(stop_master.load_all_categories())
-    except Exception:                               # noqa: BLE001 - 割り振りは止めない
-        log.exception("停止理由を読めませんでした(段取りの停止を見分けられません)")
-        return frozenset()
 
 
 def _last_lot_before(report_date: str, line: str, shift: str) -> Optional[tuple[str, str]]:

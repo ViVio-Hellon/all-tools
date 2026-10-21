@@ -104,6 +104,8 @@ def index():
         time_split=_time_split_enabled(),
         # その倍率(EX・段取り・VC交換。v4.42.0)
         time_split_factors=_time_split_factors().as_dict(),
+        # 段取り・VC交換と見た停止(停止理由の内訳の名前で見る。v4.42.2)
+        time_split_stops=_time_split_stops(),
         paths=state["paths"],
         # 面ごとに欄を置くので、鍵で引ける形も渡す(出どころは `paths` と同じ)
         path_map=state["path_map"],
@@ -565,6 +567,12 @@ def time_split():
         "message": ("日報入力に「時間を割り振る」を出します" if enabled
                     else "日報入力の「時間を割り振る」を出さないようにしました"),
     })
+
+
+def _time_split_stops():
+    from ..current import time_split_stop_kinds
+
+    return time_split_stop_kinds()
 
 
 def _time_split_factors():

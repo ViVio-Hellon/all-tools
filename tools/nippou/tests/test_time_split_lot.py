@@ -14,7 +14,8 @@
     ・前のロットと VC が違えば、1梱包目に VC交換のぶんを足す
     ・直の最初の行は前の直の最後のロットと比べる(同じなら変わり目ではない)
     ・倍率は設定・管理者で変えられる(1〜5。管理者モードだけ)
-    ・段取り変更の停止がある行は長くしない(v4.42.1。段取りは停止の分として先に渡してある)
+    ・段取りの停止(段取り(板))がある行は段取りのぶんを、VC交換の停止(VC交換(板))がある行は
+      VC交換のぶんを足さない(v4.42.2)。段取り変更(別のロットの準備に移った)では変えない
 """
 from __future__ import annotations
 
@@ -32,10 +33,10 @@ from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 D = Decimal
 
 
-def weights_of(rows, before=None, factors=None, setup_codes=frozenset()):
+def weights_of(rows, before=None, factors=None, stops=ts.StopKinds()):
     base, _ = ts.pack_weights([ts.row_packs(r) for r in rows])
     kinds = ts.lot_runs(rows, before)
-    return ts.adjust_weights(base, rows, kinds, factors or ts.Factors(), setup_codes)
+    return ts.adjust_weights(base, rows, kinds, factors or ts.Factors(), stops)
 
 
 class LotRunsTests(unittest.TestCase):
@@ -101,7 +102,7 @@ class AdjustWeightsTests(unittest.TestCase):
         w, notes = weights_of(rows, before=("A", "両面"))
         # A は前の直の続き(5)。B は 5 × (1 + 0.5 + 0.5)
         self.assertEqual(w, [D(5), D(10)])
-        self.assertIn("そのうち VC が前のロットと違う 1 か所は、VC交換のぶんさらに長め(+0.5倍)", notes)
+        self.assertIn("VC が前のロットと違う 1 か所の1梱包目は、VC交換のぶんさらに長め(+0.5倍)", notes)
 
     def test_EXの変わり目はEXの重さの1梱包目を長く(self) -> None:
         w, _ = weights_of([{"LOT": "A", "ET": "EX", "MAI": "5", "TUT": "1"}], before=("Z", ""))
@@ -132,42 +133,111 @@ class AdjustWeightsTests(unittest.TestCase):
         self.assertEqual(sum(spans), 420)
 
 
-class SetupStopTests(unittest.TestCase):
-    """段取り変更の停止がある行は長くしないでください (v4.42.1)"""
+#: 現場の停止内訳(停止内訳.csv の形。分類, 記号, 内訳)
+SITE_STOPS = """1\t0\t休憩食事
+1\t1\tTPM活動/清掃
+1\t2\t人員不足
+1\t3\t他設備応援
+1\t4\tミーティング
+1\t5\t天災(雨・雷・結露)
+1\t6\t教育
+1\t7\tタバコ休憩
+2\tイ\t突発停止(機械)
+2\tロ\t突発停止(電気)
+2\tハ\t突発停止(自家)
+2\tニ\tﾌｫｰｸ待ち
+2\tホ\t引当待ち
+2\tヘ\t判定待ち
+2\tト\t検査待ち
+2\tチ\t資材待ち
+2\tリ\t天井クレーン待ち
+2\tヌ\t冷却待ち
+2\tル\t屑切断、処理・整理
+2\tヲ\t材料待ち
+2\tワ\tTP採取
+2\tカ\t選別作業
+2\tヨ\t資材搬入
+2\tタ\tその他(理由記載)
+2\tレ\t段取り(板)
+2\tソ\tVC交換(板)
+3\tA\t段取り変更
+3\tB\t天井クレーン操作
+3\tC\t内径カット
+3\tD\tラベル貼り(+重量測定)
+3\tE\tデーター入力
+3\tF\t資材対応(加工)
+3\tG\tビニール交換(コイル)
+"""
 
-    CODES = ts.setup_stop_codes({
-        "設備停止": [StopReason("休憩食事", "0")],
-        "不稼働": [StopReason("突発停止(機械)", "ｲ")],
-        "ハンドリング": [StopReason("段取り変更", "A"), StopReason("内径カット", "B")],
-    })
 
-    def test_段取りの停止の記号は内訳の名前で見分ける(self) -> None:
-        self.assertEqual(self.CODES, frozenset({"A"}))
-        self.assertEqual(ts.setup_stop_codes({"x": [StopReason("段取替え", "Ｃ")]}), frozenset({"C"}))
+def site_stops() -> dict:
+    out: dict = {}
+    for line in SITE_STOPS.splitlines():
+        category, code, label = line.split("\t")
+        out.setdefault(category, []).append(StopReason(label, code))
+    return out
 
-    def test_段取り変更の停止がある変わり目は長くしない(self) -> None:
-        rows = [{"LOT": "A", "VC": "両面", "MAI": "5", "TUT": "1", "S": "A", "TH": "15"},
-                {"LOT": "B", "VC": "片面", "MAI": "5", "TUT": "1"}]
-        w, notes = weights_of(rows, before=("Z", "両面"), setup_codes=self.CODES)
-        self.assertEqual(w[0], D(5), "段取り変更の停止がある行は長くしない(VC交換も足さない)")
-        self.assertEqual(w[1], D(10), "停止の無い変わり目は今までどおり(段取り + VC交換)")
-        self.assertIn("段取り変更の停止がある 1 か所は長くしません(段取りは停止の分として渡します)", notes)
-        self.assertIn("ロットの変わり目 1 か所の1梱包目は段取りのぶん長め(1.5倍)", notes)
 
-    def test_停止の2つめ以降に打ってあっても同じ(self) -> None:
-        rows = [{"LOT": "A", "MAI": "5", "S": "ｲ", "TH": "5", "STH": "A", "THT": "10"}]
-        w, _ = weights_of(rows, setup_codes=self.CODES)
+class StopKindTests(unittest.TestCase):
+    """段取り変更 と 段取り(板) は違う。段取り(板) の停止がある行は長くしない。VC交換(板) がVC交換 (v4.42.2)"""
+
+    STOPS = ts.stop_kinds(site_stops())
+
+    def test_現場の停止内訳から段取りとVC交換を見分ける(self) -> None:
+        self.assertEqual(self.STOPS.setup, frozenset({"レ"}))
+        self.assertEqual(self.STOPS.vc, frozenset({"ソ"}))
+        self.assertEqual(self.STOPS.setup_labels, ("レ 段取り(板)",))
+        self.assertEqual(self.STOPS.vc_labels, ("ソ VC交換(板)",))
+
+    def test_名前が変わっても見分ける(self) -> None:
+        """停止内訳の文字列は可変なので 段取り・VC交換 になる可能性もある"""
+        for label in ("段取り(板)", "段取り", "段取", "段取替え", "段取り（板）"):
+            self.assertEqual(ts.stop_kind(label), "setup", label)
+        for label in ("VC交換(板)", "VC交換", "ＶＣ交換", "vc交換", "VC 交換"):
+            self.assertEqual(ts.stop_kind(label), "vc", label)
+        for label in ("段取り変更", "段取り変更(板)", "ビニール交換(コイル)", "休憩食事", ""):
+            self.assertIsNone(ts.stop_kind(label), label)
+
+    def test_段取りの停止がある変わり目は段取りのぶんを足さない(self) -> None:
+        rows = [{"LOT": "A", "VC": "両面", "MAI": "5", "TUT": "1", "S": "レ", "TH": "15"}]
+        w, notes = weights_of(rows, before=("Z", "両面"), stops=self.STOPS)
+        self.assertEqual(w, [D(5)])
+        self.assertIn("段取りの停止(レ 段取り(板))がある 1 か所は、段取りのぶんを足しません(停止の分として渡します)",
+                      notes)
+
+    def test_段取りの停止があってもVCが変わればVC交換のぶんは足す(self) -> None:
+        rows = [{"LOT": "A", "VC": "片面", "MAI": "5", "TUT": "1", "S": "レ", "TH": "15"}]
+        w, _ = weights_of(rows, before=("Z", "両面"), stops=self.STOPS)
+        self.assertEqual(w, [D("7.5")])
+
+    def test_VC交換の停止があればVC交換のぶんを足さず段取りは足す(self) -> None:
+        rows = [{"LOT": "A", "VC": "片面", "MAI": "5", "TUT": "1", "S": "ソ", "TH": "20"}]
+        w, notes = weights_of(rows, before=("Z", "両面"), stops=self.STOPS)
+        self.assertEqual(w, [D("7.5")])
+        self.assertIn("VC交換の停止(ソ VC交換(板))がある 1 か所は、VC交換のぶんを足しません(停止の分として渡します)",
+                      notes)
+
+    def test_両方の停止があれば長くしない(self) -> None:
+        rows = [{"LOT": "A", "VC": "片面", "MAI": "5", "TUT": "1", "S": "レ", "TH": "15", "SS": "ソ", "THS": "20"}]
+        w, _ = weights_of(rows, before=("Z", "両面"), stops=self.STOPS)
+        self.assertEqual(w, [D(5)])
+
+    def test_段取り変更の停止では変えない(self) -> None:
+        """あるロットの準備をやめて違うロットの準備を始めた → 段取り変更。段取りのぶんはそのまま足す。"""
+        rows = [{"LOT": "A", "VC": "片面", "MAI": "5", "TUT": "1", "S": "A", "TH": "10"}]
+        w, notes = weights_of(rows, before=("Z", "両面"), stops=self.STOPS)
+        self.assertEqual(w, [D(10)])                 # 5 × (1 + 0.5 + 0.5)
+        self.assertFalse([n for n in notes if "足しません" in n], notes)
+
+    def test_停止の5つめに打ってあっても同じ(self) -> None:
+        rows = [{"LOT": "A", "MAI": "5", "TUT": "1", "S": "イ", "TH": "5", "S5": "レ", "TH5": "10"}]
+        w, _ = weights_of(rows, stops=self.STOPS)
         self.assertEqual(w, [D(5)])
 
     def test_EXの倍率はそのまま(self) -> None:
-        rows = [{"LOT": "A", "ET": "EX", "MAI": "5", "S": "A", "TH": "10"}]
-        w, _ = weights_of(rows, setup_codes=self.CODES)
+        rows = [{"LOT": "A", "ET": "EX", "MAI": "5", "S": "レ", "TH": "10"}]
+        w, _ = weights_of(rows, stops=self.STOPS)
         self.assertEqual(w, [D(6)])
-
-    def test_ほかの停止では長くする(self) -> None:
-        rows = [{"LOT": "A", "MAI": "5", "TUT": "1", "S": "B", "TH": "10"}]
-        w, _ = weights_of(rows, setup_codes=self.CODES)
-        self.assertEqual(w, [D("7.5")])
 
 
 class FactorsTests(unittest.TestCase):
@@ -270,23 +340,33 @@ class DistributeLotWebTests(WebTestCase):
         self.assertEqual(plan["pages"], [1, 2], plan)
         self.assertIn("EX のロットの 2 行は 1.2倍で数えます", plan["adjust_notes"])
 
-    def test_段取り変更の停止がある行は長くしない(self) -> None:
-        """停止の分を引いた残り(作業の分)が、変わり目でない行と同じ。"""
+    def test_段取りの停止がある行は長くしない_段取り変更では変えない(self) -> None:
+        """停止の分を引いた残り(作業の分)で比べる。段取り(板)の行は続きの行と同じ、段取り変更の行は長め。"""
         from unittest import mock
 
-        reasons = {"ハンドリング": [StopReason("段取り変更", "A")]}
         self.save_previous_shift("A", "両面")
         rows = {"1": {"LOT": "A", "VC": "両面", "MAI": "5", "TUT": "1"},
-                "2": {"LOT": "B", "VC": "片面", "MAI": "5", "TUT": "1", "S": "A", "TH": "20"},
-                "3": {"LOT": "C", "VC": "片面", "MAI": "5", "TUT": "1"}}
-        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", return_value=reasons):
+                "2": {"LOT": "B", "VC": "両面", "MAI": "5", "TUT": "1", "S": "レ", "TH": "20"},
+                "3": {"LOT": "C", "VC": "両面", "MAI": "5", "TUT": "1", "S": "A", "TH": "20"}}
+        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", return_value=site_stops()):
             plan = self.plan(rows)
         spans = self.spans(plan)
-        work = [spans[0], spans[1] - 20, spans[2]]
+        work = [spans[0], spans[1] - 20, spans[2] - 20]
         self.assertLessEqual(abs(work[1] - work[0]), 5, work)   # 段取りは停止の20分だけ
-        self.assertGreater(work[2], work[0] + 5, work)           # 停止の無い変わり目は長め
-        self.assertIn("段取り変更の停止がある 1 か所は長くしません(段取りは停止の分として渡します)",
+        self.assertGreater(work[2], work[0] + 5, work)           # 段取り変更では変えない(長め)
+        self.assertIn("段取りの停止(レ 段取り(板))がある 1 か所は、段取りのぶんを足しません(停止の分として渡します)",
                       plan["adjust_notes"])
+
+    def test_設定に段取りとVC交換と見た停止を出す(self) -> None:
+        from unittest import mock
+
+        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", return_value=site_stops()):
+            page = self.get("/settings").get_data(as_text=True)
+        self.assertIn("段取りの停止: <b>レ 段取り(板)</b>", page)
+        self.assertIn("VC交換の停止: <b>ソ VC交換(板)</b>", page)
+        with mock.patch("nippou.access_bridge.stop_master.load_all_categories", return_value={}):
+            page = self.get("/settings").get_data(as_text=True)
+        self.assertIn("段取りの停止: <b>停止理由の内訳にありません</b>", page)
 
     def test_停止理由を読めなくても割り振る(self) -> None:
         from unittest import mock

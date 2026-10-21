@@ -96,6 +96,21 @@ def time_split_factors():
     return Factors.read(user_settings.get(KEY_TIME_SPLIT_FACTORS, None))
 
 
+def time_split_stop_kinds():
+    """段取り・VC交換の停止の記号(停止理由の内訳の名前で見る。v4.42.2)。読めなければ空。
+
+    読めなくても割り振りは止めない(その行も長くするだけ)。
+    """
+    from nippou.access_bridge import stop_master
+    from nippou.logic import time_split
+
+    try:
+        return time_split.stop_kinds(stop_master.load_all_categories())
+    except Exception:                               # noqa: BLE001 - 割り振りは止めない
+        log.exception("停止理由を読めませんでした(段取り・VC交換の停止を見分けられません)")
+        return time_split.StopKinds()
+
+
 def build_service(ctx, calc) -> NippouService:
     """このリクエスト用のサービス。**状態は入れものから借りる。**
 

@@ -81,10 +81,15 @@
     ・直の**最初の行**は、前の直の最後のロット(手元に保存があれば)と比べる。同じロットなら
       変わり目ではない。前の直の保存が無ければ変わり目として数える(段取りから始まる)。
       VC は比べる相手が無ければ足さない
-    ・**段取り変更の停止がある行は長くしない**(v4.42.1。「段取り変更の停止がある行は長くしないでください」)。
-      段取りの時間はその停止の分として先に渡してあるので、1梱包目を長くすると2回数える。VC交換のぶんも
-      足さない(段取り変更の停止に含まれる)。EX の倍率はそのまま。段取りの停止かどうかは、停止理由の
-      内訳(マスタ・停止内訳.csv)の名前に「段取」があるか(`setup_stop_codes`)
+    ・**段取りの停止がある行は段取りのぶんを、VC交換の停止がある行は VC交換のぶんを足さない**(v4.42.2)。
+      その時間は停止の分として先に渡してあるので、1梱包目を長くすると2回数える。EX の倍率はそのまま。
+
+          段取り変更 と 段取り(板) は違う(あるLOTの準備をしていたのをやめて違うLOTの準備を始めた
+          → 段取り変更)。段取り(板) の停止がある行は長くしないでください。VC交換(板) がVC交換。
+          停止内訳の文字列は可変なので 段取り・VC交換 になる可能性もある
+
+      どれが段取り・VC交換の停止かは、停止理由の内訳(マスタ・停止内訳.csv)の**名前**で見る(`stop_kind`):
+      段取り = 「段取」を含み「変更」を含まない、VC交換 = 「VC」と「交換」を含む。段取り変更では変えない
 
 ここは計算だけ。どの行を数えるか・ページをまたいで書くのは `app/routes/entry.distribute_times`。
 """
@@ -366,48 +371,83 @@ def pack_count(values: dict[str, str]) -> int:
     return max(count, 1)
 
 
-#: 段取りの停止と見る、停止理由の内訳の名前に含まれる字(「段取り変更」「段取替え」など)
-SETUP_STOP_WORD = "段取"
+@dataclass(frozen=True)
+class StopKinds:
+    """段取り・VC交換の停止の記号(v4.42.2。`stop_kinds`)。"""
+
+    #: 段取りの停止(「段取り(板)」など)。その行の1梱包目に段取りのぶんを足さない
+    setup: frozenset = frozenset()
+    #: VC交換の停止(「VC交換(板)」など)。その行の1梱包目に VC交換のぶんを足さない
+    vc: frozenset = frozenset()
+    #: 見つけた停止の「記号 内訳」(設定・確かめの窓に出す)
+    setup_labels: tuple = ()
+    vc_labels: tuple = ()
 
 
-def setup_stop_codes(by_category: dict) -> frozenset[str]:
-    """停止理由の一覧(`stop_master.load_all_categories`)から、段取りの停止の記号。"""
+def stop_kind(label: str) -> Optional[str]:
+    """停止理由の内訳の名前から、段取り("setup")か VC交換("vc")か。どちらでもなければ None。
+
+    内訳の名前は変わることがある(「段取り(板)」→「段取り」、「VC交換(板)」→「VC交換」)ので、
+    決まった字が含まれるかで見る:
+
+        段取り … 「段取」を含み、**「変更」を含まない**。段取り変更(あるロットの準備をやめて違うロットの
+                  準備を始めた)は別の停止で、これでは長さを変えない
+        VC交換 … 「VC」(全角の「ＶＣ」・小文字も)と「交換」を両方含む
+    """
     import unicodedata
 
-    codes = set()
+    text = unicodedata.normalize("NFKC", str(label or "")).upper()
+    if "VC" in text and "交換" in text:
+        return "vc"
+    if "段取" in text and "変更" not in text:
+        return "setup"
+    return None
+
+
+def stop_kinds(by_category: dict) -> StopKinds:
+    """停止理由の一覧(`stop_master.load_all_categories`)から、段取り・VC交換の停止の記号。"""
+    found: dict[str, list[tuple[str, str]]] = {"setup": [], "vc": []}
     for reasons in (by_category or {}).values():
         for reason in reasons:
-            label = unicodedata.normalize("NFKC", str(getattr(reason, "label", "") or ""))
+            label = str(getattr(reason, "label", "") or "").strip()
             code = str(getattr(reason, "code", "") or "").strip()
-            if code and SETUP_STOP_WORD in label:
-                codes.add(_norm(code))
-    return frozenset(codes)
+            kind = stop_kind(label)
+            if code and kind:
+                found[kind].append((code, label))
+    return StopKinds(setup=frozenset(_norm(c) for c, _ in found["setup"]),
+                     vc=frozenset(_norm(c) for c, _ in found["vc"]),
+                     setup_labels=tuple(f"{c} {l}" for c, l in found["setup"]),
+                     vc_labels=tuple(f"{c} {l}" for c, l in found["vc"]))
 
 
-def has_setup_stop(values: dict[str, str], codes: frozenset[str]) -> bool:
-    """その行の停止①〜⑤に、段取りの停止の記号があるか。"""
+def has_stop(values: dict[str, str], codes: frozenset) -> bool:
+    """その行の停止①〜⑤に、その記号の停止があるか。"""
     return bool(codes) and any(_norm(values.get(code, "")) in codes for code, _ in STOP_SLOTS)
 
 
 def adjust_weights(weights: Sequence[Decimal], rows: Sequence[dict[str, str]],
                    kinds: Sequence[RowKind], factors: Factors,
-                   setup_codes: frozenset[str] = frozenset()) -> tuple[list[Decimal], list[str]]:
+                   stops: StopKinds = StopKinds()) -> tuple[list[Decimal], list[str]]:
     """梱包数の重みに、EX・段取り・VC交換の倍率を掛ける。返すのは(重み, 確かめの窓に出す一言)。
 
-    ``setup_codes`` は段取りの停止の記号(`setup_stop_codes`)。その停止がある行は長くしない。
+    ``stops`` は段取り・VC交換の停止の記号(`stop_kinds`)。**段取りの停止がある行は段取りのぶんを、
+    VC交換の停止がある行は VC交換のぶんを足さない**(その時間は停止の分として先に渡してある。v4.42.2)。
     """
     out: list[Decimal] = []
-    ex_rows = changes = vc_changes = skipped = 0
+    ex_rows = changes = vc_changes = setup_skipped = vc_skipped = 0
     for weight, values, kind in zip(weights, rows, kinds):
         w = weight * (factors.ex if kind.ex else Decimal(1))
         extra = Decimal(0)
-        if (kind.change or kind.vc_change) and has_setup_stop(values, setup_codes):
-            # 段取りは停止として先に渡してある(2回数えない)
-            skipped += 1
-        elif kind.change:
-            extra += factors.setup - 1
-            changes += 1
-            if kind.vc_change:
+        if kind.change:
+            if has_stop(values, stops.setup):
+                setup_skipped += 1
+            else:
+                extra += factors.setup - 1
+                changes += 1
+        if kind.vc_change:
+            if has_stop(values, stops.vc):
+                vc_skipped += 1
+            else:
                 extra += factors.vc - 1
                 vc_changes += 1
         if extra > 0:
@@ -420,10 +460,14 @@ def adjust_weights(weights: Sequence[Decimal], rows: Sequence[dict[str, str]],
     if changes and factors.setup != 1:
         notes.append(f"ロットの変わり目 {changes} か所の1梱包目は段取りのぶん長め({_times(factors.setup)}倍)")
     if vc_changes and factors.vc != 1:
-        notes.append(f"そのうち VC が前のロットと違う {vc_changes} か所は、VC交換のぶんさらに長め"
+        notes.append(f"VC が前のロットと違う {vc_changes} か所の1梱包目は、VC交換のぶんさらに長め"
                      f"(+{_times(factors.vc - 1)}倍)")
-    if skipped:
-        notes.append(f"段取り変更の停止がある {skipped} か所は長くしません(段取りは停止の分として渡します)")
+    if setup_skipped:
+        notes.append(f"段取りの停止({'・'.join(stops.setup_labels)})がある {setup_skipped} か所は、"
+                     "段取りのぶんを足しません(停止の分として渡します)")
+    if vc_skipped:
+        notes.append(f"VC交換の停止({'・'.join(stops.vc_labels)})がある {vc_skipped} か所は、"
+                     "VC交換のぶんを足しません(停止の分として渡します)")
     return out, notes
 
 
