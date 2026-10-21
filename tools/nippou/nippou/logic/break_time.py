@@ -38,9 +38,10 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional, Sequence
 
 from .. import constants
+from .shift import hhmm_minutes          # 時:分の読み方は直の境界と同じ
 
 #: 休憩の記号。停止理由マスタの「休憩食事」。**休憩かどうかは `is_rest_code` の1か所で決める**
 #: (`save_checks`・`time_split`・`presenters/entry`・`packing_agg` もここを使う。v4.39.2)
@@ -178,19 +179,21 @@ def _number(text: object) -> float:
         return 0.0
 
 
-def break_minutes(values: Mapping[str, str]) -> float:
-    """その行で休憩(記号 0)に打った分の合計(作業停止①〜⑤)。"""
+def slot_minutes(values: Mapping[str, str], keep: Callable[[str], bool]) -> float:
+    """作業停止①〜⑤のうち、記号が `keep` に当たる組の分の合計。**組を回すのはここだけ**(段階2)。"""
     return sum(_number(values.get(minute_family, ""))
                for code_family, minute_family in constants.STOP_SLOTS
-               if is_rest_code(values.get(code_family, "")))
+               if keep(str(values.get(code_family, "") or "")))
+
+
+def break_minutes(values: Mapping[str, str]) -> float:
+    """その行で休憩(記号 0)に打った分の合計(作業停止①〜⑤)。"""
+    return slot_minutes(values, is_rest_code)
 
 
 def other_stop_minutes(values: Mapping[str, str]) -> float:
     """その行の、休憩でない停止の分の合計。"""
-    return sum(_number(values.get(minute_family, ""))
-               for code_family, minute_family in constants.STOP_SLOTS
-               if str(values.get(code_family, "") or "").strip()
-               and not is_rest_code(values.get(code_family, "")))
+    return slot_minutes(values, lambda code: bool(code.strip()) and not is_rest_code(code))
 
 
 def has_break(values: Mapping[str, str]) -> bool:
@@ -212,16 +215,7 @@ def row_span(values: Mapping[str, str]) -> Optional[tuple[int, int]]:
 
 def shift_window(start: str, end: str) -> Optional[tuple[int, int]]:
     """直の ``("07:00", "15:00")`` → 0 時からの分。日をまたげば終わりに 24 時間足す。読めなければ None。"""
-    def minute(text: str) -> Optional[int]:
-        parts = unicodedata.normalize("NFKC", str(text or "")).strip().split(":")
-        if len(parts) != 2:
-            return None
-        try:
-            return int(parts[0]) * 60 + int(parts[1])
-        except ValueError:
-            return None
-
-    s, e = minute(start), minute(end)
+    s, e = hhmm_minutes(start), hhmm_minutes(end)
     if s is None or e is None or s == e:
         return None
     return (s, e if e > s else e + DAY)

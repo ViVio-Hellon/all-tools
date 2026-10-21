@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from .. import constants
 from ..db.models import DetailRecord, HeaderRecord
 from .csv_import import Page, Parsed, Problem
-from .shift import parse_business_date, times_from_master
+from .shift import hhmm_minutes, parse_business_date, times_from_master
 
 #: 見出しの下、中身が並ぶ範囲
 FIRST_ROW, LAST_ROW = 8, 151
@@ -185,12 +185,8 @@ def _has_content(values: dict[str, str]) -> bool:
 
 
 def _minutes(text: str) -> int | None:
-    """「22:50」→ 1370。読めなければ None。"""
-    try:
-        hour, minute = str(text).strip().split(":")[:2]
-        return int(hour) * 60 + int(minute)
-    except (ValueError, AttributeError):
-        return None
+    """「22:50」→ 1370。読めなければ None(読み方は直の境界と同じ `shift.hhmm_minutes`)。"""
+    return hhmm_minutes(text)
 
 
 def shift_starts(times: dict | None = None) -> dict[str, int]:

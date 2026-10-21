@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .. import constants, layout
+from ..file_names import safe_name
 from ..db.models import DetailRecord, HeaderRecord, PackingReport
 from ..logic import line_names
 from ..logic.numeric import format_fixed
@@ -468,9 +469,6 @@ def build_shift_html(
     return _document(title, body, pages=len(pages), note=note)
 
 
-_UNSAFE_FILENAME_CHARS = '\\/:*?"<>|'
-
-
 def write_print_html(
     header: HeaderRecord,
     details: list[DetailRecord],
@@ -501,7 +499,7 @@ def default_output_path(base_dir: Path, header: HeaderRecord) -> Path:
     """
     from .csv_export import KIND_PRINT, dated_dir
 
-    safe_line = "".join(ch for ch in header.line if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
-    safe_date = "".join(ch for ch in header.report_date if ch not in _UNSAFE_FILENAME_CHARS).strip()
+    safe_line = safe_name(header.line)
+    safe_date = safe_name(header.report_date, default="")
     folder = dated_dir(base_dir, header.report_date, header.line, KIND_PRINT)
     return folder / f"印刷_{safe_date}_{safe_line}_{header.shift}_{header.page}.html"

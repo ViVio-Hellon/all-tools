@@ -115,6 +115,19 @@ def normalize_hhmm(value: object) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def hhmm_minutes(value: object) -> Optional[int]:
+    """「時:分」→ 0 時からの分(「22:50」→ 1370)。読み方は :func:`normalize_hhmm` と同じ。読めなければ None。
+
+    **時:分を分に直す所はみなここを通す**(段階2)。前は時間の割り振り・過去日報の取り込み・
+    休憩の窓がそれぞれ `split(":")` で読んでいて、全角・秒付き・25:00 の扱いが少しずつ違いました。
+    """
+    text = normalize_hhmm(value)
+    if not text:
+        return None
+    hh, mm = text.split(":")
+    return int(hh) * 60 + int(mm)
+
+
 def usable_pair(found: object) -> Optional[tuple[str, str]]:
     """マスタの1直ぶん `(開始, 終了)` が使えるなら、揃えた形で返す。
 

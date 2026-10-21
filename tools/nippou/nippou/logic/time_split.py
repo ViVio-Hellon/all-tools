@@ -69,6 +69,7 @@ from typing import Optional, Sequence
 
 from .. import constants
 from . import break_time
+from .shift import hhmm_minutes
 
 #: 区切りの刻み(分)。1 行に渡る分がこれより短いときは 1 分刻み
 STEP = 5
@@ -229,15 +230,8 @@ WEIGHT_NOTES: dict[bool, str] = {
 
 
 def parse_hhmm(text: str) -> Optional[int]:
-    """"07:00" → 420(0:00 からの分)。読めなければ None。"""
-    try:
-        hour, minute = str(text).strip().split(":")
-        h, m = int(hour), int(minute)
-    except (ValueError, AttributeError):
-        return None
-    if not (0 <= h <= 23 and 0 <= m <= 59):
-        return None
-    return h * 60 + m
+    """"07:00" → 420(0:00 からの分)。読めなければ None。読み方は直の境界と同じ(`shift.hhmm_minutes`)。"""
+    return hhmm_minutes(text)
 
 
 def clock(start: int, offset: int) -> tuple[str, str]:

@@ -62,7 +62,7 @@ def index():
     一緒に無くなる)。面の札も出さず、早見表の面だけを開きます。
     """
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     bare = request.args.get("window") == QUICK_WINDOW
     return render_template(
         "vc.html",
@@ -300,6 +300,6 @@ def product_delete():
 
 def _ribbon(ctx, calc):
     """帯(いま書いているページで。`entry.ribbon_now`)。"""
-    from .entry import ribbon_now
+    from ..current import ribbon_now
 
     return ribbon_now(ctx, calc)

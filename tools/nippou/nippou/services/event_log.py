@@ -35,6 +35,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from ..file_names import UNSAFE_OR_SPACE
 from ..logic import event_log as rule
 
 #: 残す日数。**半年**(同じエラーがまた起きたか、を見られる長さ)
@@ -66,7 +67,7 @@ def terminal_name() -> str:
 
 
 def _safe(name: str) -> str:
-    return re.sub(r'[\\/:*?"<>|\s]+', "_", name).strip("_") or "端末"
+    return UNSAFE_OR_SPACE.sub("_", name).strip("_") or "端末"
 
 
 #: 呼ぶ側が書き先を名指ししたとき(`init_logging(log_dir)`。試験が一時

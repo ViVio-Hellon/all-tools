@@ -60,7 +60,7 @@ bp = Blueprint("settings", __name__)
 @bp.get("/settings")
 def index():
     ctx = work_context.get_context()
-    from .entry import current_calculator, current_flow
+    from ..current import current_calculator, current_flow
     calc = current_calculator()
 
     pending = get_repo().pending_sync_headers()
@@ -237,7 +237,7 @@ def recall():
     if not (report_date and line and shift):
         return jsonify(error_body("empty", "呼び出す対象を選んでください")), 400
 
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
     current_shift, current_date = service.current_shift_info(
@@ -284,7 +284,8 @@ def backfill():
     if not (report_date and line and shift):
         return jsonify(error_body("empty", "作る直(報告日・ライン・直)を選んでください")), 400
 
-    from .entry import anchor_standing, current_calculator
+    from ..current import current_calculator
+    from .entry import anchor_standing
     calc = current_calculator()
     repo = get_repo()
     # この端末がまだ打てる直(作業者を選んで固定した直で、終わりの前)は作らせない
@@ -335,7 +336,7 @@ def back_to_current():
     としか思っていないので、保存を挟まないと直した内容が黙って消える。
     """
     ctx = work_context.get_context()
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
 
@@ -389,7 +390,7 @@ def _block_if_recall(action_name: str):
     `MsgBox ... vbYesNo` と同じ逃げ道。
     """
     ctx = work_context.get_context()
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
 
     service = build_service(ctx, current_calculator())
     reason = service.block_if_recall_mode(action_name)
@@ -445,7 +446,7 @@ def _save_recalled(ctx, calc, payload) -> bool:
 def page_state():
     """ページ移動の状態。**押せるかどうかもサーバが決める。**"""
     ctx = work_context.get_context()
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
     current_shift, current_date = service.current_shift_info(
@@ -478,7 +479,7 @@ def go_to_page():
         return jsonify(error_body("bad_page", "ページを選んでください",
                                   field="page")), 400
 
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
     current_shift, current_date = service.current_shift_info(
@@ -538,7 +539,7 @@ def empty_pages_list():
 
 
 def _time_split_enabled() -> bool:
-    from .entry import time_split_enabled
+    from ..current import time_split_enabled
 
     return time_split_enabled()
 
@@ -616,7 +617,7 @@ def restore_shift():
             "not_admin", "当直の復旧は管理者モードでのみ可能です")), 403
 
     payload = request.get_json(silent=True) or {}
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
     current_shift, current_date = service.current_shift_info(
@@ -965,7 +966,7 @@ def _nothing_text(scope: str, mine) -> str:
 
 def _current_key(ctx):
     """いまの直 `(報告日, ライン, 直)`。読めなければ None(そのときは前のとおり全部に効く)。"""
-    from .entry import current_calculator
+    from ..current import current_calculator
 
     try:
         return tuple(ctx.current_key(current_calculator()))
@@ -985,7 +986,7 @@ def _pressed(ctx, reports, worker=None, *, scope: str = ""):
     from nippou.logic import push_scope
     from nippou.services import shift_check
 
-    from .entry import current_calculator
+    from ..current import current_calculator
 
     via = push_scope.via_text(scope or push_scope.SCOPE_ALL,
                               skipped=any(r.skipped for r in reports),
@@ -2004,7 +2005,7 @@ def import_reshift():
     if not ctx.admin:
         return jsonify(error_body(
             "not_admin", "取り込み済みの日報を直すのは管理者モードでのみ可能です")), 403
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     service = build_service(ctx, current_calculator())
     _shift, today = service.current_shift_info(datetime.now(), ctx.force_day_shift())
     skip = (today if isinstance(today, str) else format_business_date(today),)
@@ -2133,6 +2134,6 @@ def fs_list():
 
 def _ribbon(ctx, calc):
     """帯(いま書いているページで。`entry.ribbon_now`)。"""
-    from .entry import ribbon_now
+    from ..current import ribbon_now
 
     return ribbon_now(ctx, calc)

@@ -34,6 +34,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Optional, Sequence
 
+# 名前の決まりは1か所(`file_names`)。ここから使う所のために名前を残す
+from ..file_names import safe_name  # noqa: F401
+
 
 @dataclass(frozen=True)
 class RollDecision:
@@ -98,15 +101,6 @@ def month_folder_name(year: int, month: int) -> str:
 def month_file_stem(year: int, month: int, line: str) -> str:
     """書き出すファイル名の頭。VBA ``yyyy年mm月_<ライン>.xlsx`` と同じ形。"""
     return f"{year:04d}年{month:02d}月_{safe_name(line)}"
-
-
-_UNSAFE = '\\/:*?"<>|'
-
-
-def safe_name(text: str) -> str:
-    """フォルダ名・ファイル名に使える形にする。空なら ``Unknown``。"""
-    cleaned = "".join(ch for ch in (text or "") if ch not in _UNSAFE).strip()
-    return cleaned or "Unknown"
 
 
 def next_month(year: int, month: int) -> tuple[int, int]:

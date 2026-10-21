@@ -231,7 +231,7 @@ def execute():
                 "一覧から選び直してください")), 422
 
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
 
     calc = current_calculator()
     now = datetime.now()

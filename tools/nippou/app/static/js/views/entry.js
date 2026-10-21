@@ -359,7 +359,21 @@ function advance(el) {
    ・記号を空のまま Enter を押したら、残りの組は飛ばして枚数へ
    ・右の「停止」の欄に、どの組に入っているか(押すとその組へ)と合計の分
    ================================================================ */
-const STOP_SLOTS = [["S", "TH"], ["SS", "THS"], ["STH", "THT"], ["S4", "TH4"], ["S5", "TH5"]];
+/*
+  作業停止①〜⑤の (記号, 時間) の欄の組と印。**組はサーバの `constants.STOP_SLOTS` の1か所**で、
+  `entry.html` が JSON で渡します(前はここにも同じ組を書いていて、組を変えると画面だけ古いまま動いた)。
+  このモジュールは日報入力の画面に入ったときに読まれるので、そのとき JSON はもうあります。
+*/
+const STOP_SEED = (() => {
+  try {
+    return JSON.parse(document.getElementById("entry-stop-slots")?.textContent || "null") || {};
+  } catch (err) {
+    console.warn("[entry] 作業停止の組を読めません:", err);
+    return {};
+  }
+})();
+const STOP_SLOTS = STOP_SEED.slots || [];
+const STOP_MARKS = STOP_SEED.marks || [];
 const STOP_SLOT_OF = Object.fromEntries(
   STOP_SLOTS.flatMap((pair, i) => pair.map((family) => [family, i + 1])));
 const STOP_CODES = new Set(STOP_SLOTS.map(([code]) => code));
@@ -400,7 +414,7 @@ function paintStopSums() {
       used.add(i + 1);
       const n = Number(t);
       if (t && !Number.isNaN(n)) minutes += n;
-      const mark = "①②③④⑤"[i];
+      const mark = STOP_MARKS[i] || String(i + 1);
       parts.push(`<button type="button" class="stopsum__b${i + 1 === shown ? " is-shown" : ""}"`
         + ` data-stop-jump="${i + 1}" data-row="${row}" tabindex="-1"`
         + ` title="作業停止${mark}: ${c || "(記号なし)"} ${t ? `${t}分` : ""}">${mark}</button>`);

@@ -66,7 +66,7 @@ def _range(payload: dict):
 @bp.get("/agg")
 def index():
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     calc = current_calculator()
 
     # 既定は月初〜当日。VBA の集計シートが常にその範囲を描いていた
@@ -188,6 +188,6 @@ def push_log_csv():
 
 def _ribbon(ctx, calc):
     """帯(いま書いているページで。`entry.ribbon_now`)。"""
-    from .entry import ribbon_now
+    from ..current import ribbon_now
 
     return ribbon_now(ctx, calc)

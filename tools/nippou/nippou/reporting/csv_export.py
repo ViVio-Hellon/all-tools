@@ -62,7 +62,8 @@ from pathlib import Path
 from typing import Optional
 
 from .. import layout
-from ..constants import STOP_SLOTS
+from ..file_names import safe_name
+from ..constants import STOP_MARKS, STOP_SLOTS
 from ..db.models import PackingReport
 from ..db.repository import NippouRepository
 from ..logic.aggregation import (
@@ -71,7 +72,6 @@ from ..logic.aggregation import (
     stop_kind_label,
     stop_kind_sort_key,
 )
-from ..logic.month_roll import safe_name
 from ..logic.numeric import format_fixed
 from ..logic.packing_agg import LotRow, stop_rollup
 from ..logic.shift import parse_business_date
@@ -284,7 +284,7 @@ STOP_KIND_TOTAL = "直の合計"
 STOP_KIND_ONE = "1件ずつ"
 
 #: 作業停止①〜⑤(紙は③まで。④⑤は v4.24.0)
-STOP_SLOT_LABELS = {n: f"作業停止{'①②③④⑤'[n - 1]}" for n in range(1, 6)}
+STOP_SLOT_LABELS = {n: f"作業停止{mark}" for n, mark in enumerate(STOP_MARKS, start=1)}
 
 STOP_FIELDNAMES = [
     "日付", "ライン", "直", "区分", "分類", "記号", "内訳",
@@ -517,14 +517,10 @@ def write_detail_rows(rows: list[dict[str, str]], out_path: Path) -> int:
     return len(rows)
 
 
-_UNSAFE_FILENAME_CHARS = '\\/:*?"<>|'
-
-
 def _name_parts(report_date: str, line: str) -> tuple[str, str]:
     parsed = parse_business_date(report_date)
     date_part = parsed.isoformat() if parsed else report_date
-    safe_line = "".join(ch for ch in line
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
+    safe_line = safe_name(line)
     return date_part, safe_line
 
 
@@ -820,8 +816,7 @@ def standard_time_output_path(base_dir: Path, today, line: str, *,
     作業者ごとは ``標準作業時間_作業者ごと_…``、オペレーター構成ごとは
     ``標準作業時間_オペレーター構成ごと_…``(班ごとのCSVを上書きしない)。
     """
-    safe_line = "".join(ch for ch in line
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
+    safe_line = safe_name(line)
     head = ("標準作業時間_作業者ごと" if by_worker
             else "標準作業時間_オペレーター構成ごと" if by_operator else "標準作業時間")
     return base_dir / f"{head}_{today}_{safe_line}.csv"
@@ -836,18 +831,15 @@ def works_output_path(base_dir: Path, today, line: str, criteria) -> Path:
     word = "_" if criteria.join == "and" else "_又は_"
     parts = [("・".join(values)) for _, _, values in criteria.fields]
     cond = word.join(parts)
-    safe = "".join(ch for ch in cond if ch not in _UNSAFE_FILENAME_CHARS).strip()[:80] or "-"
-    safe_line = "".join(ch for ch in (line or "全ライン")
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "-"
+    safe = safe_name(cond, "-", limit=80)
+    safe_line = safe_name(line or "全ライン", "-")
     return base_dir / f"同条件作業_{today}_{safe_line}_{safe}.csv"
 
 
 def power_output_path(base_dir: Path, today, line: str, group_label: str) -> Path:
     """例: ``梱包力_班ごと_2026-10-03_L1.csv``"""
-    safe_line = "".join(ch for ch in (line or "全ライン")
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "-"
-    safe_group = "".join(ch for ch in group_label
-                         if ch not in _UNSAFE_FILENAME_CHARS).strip() or "-"
+    safe_line = safe_name(line or "全ライン", "-")
+    safe_group = safe_name(group_label, "-")
     return base_dir / f"梱包力_{safe_group}ごと_{today}_{safe_line}.csv"
 
 
@@ -855,8 +847,7 @@ def agg_output_path(base_dir: Path, key: str, start, end, line: str) -> Path:
     """例: ``集計_ロット別_2026-08-01_2026-08-31_L1.csv``"""
     names = {"days": "日別", "shifts": "直別", "by_key": "ロット別",
              "lots": "ロット一覧", "push_log": "共有保存の履歴"}
-    safe_line = "".join(ch for ch in line
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
+    safe_line = safe_name(line)
     return base_dir / (f"集計_{names.get(key, key)}_{start}_{end}"
                        f"_{safe_line}.csv")
 
@@ -868,7 +859,6 @@ def lot_search_output_path(base_dir: Path, lot: str, start, end, line: str) -> P
     入れます ── 別のロットを探して出し直しても、前のファイルを上書きしない。
     同じロット・同じ期間なら同じ名前(出し直せば新しい中身に置き換わる)。
     """
-    safe_lot = "".join(ch for ch in lot if ch not in _UNSAFE_FILENAME_CHARS).strip() or "-"
-    safe_line = "".join(ch for ch in line
-                        if ch not in _UNSAFE_FILENAME_CHARS).strip() or "Unknown"
+    safe_lot = safe_name(lot, "-")
+    safe_line = safe_name(line)
     return base_dir / f"ロットを探す_{safe_lot}_{start}_{end}_{safe_line}.csv"

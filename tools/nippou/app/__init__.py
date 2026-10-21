@@ -340,7 +340,7 @@ def _register_rollover(app: Flask) -> None:
         try:
             from nippou import work_context
 
-            from .routes.entry import current_calculator
+            from .current import current_calculator
 
             note = work_context.get_context().roll_over(current_calculator())
         except Exception:                       # noqa: BLE001 - 要求は通す

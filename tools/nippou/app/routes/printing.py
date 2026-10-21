@@ -315,7 +315,7 @@ def index():
     from nippou.presenters import settings as settings_view
 
     ctx = work_context.get_context()
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
     calc = current_calculator()
     service = build_service(ctx, calc)
     report_date, line, shift = ctx.current_key(calc)
@@ -335,7 +335,7 @@ def index():
                        "この画面の初期値も、その過去データです。")
 
     saved = get_repo().saved_pages(report_date, line, shift)
-    from .entry import current_flow
+    from ..current import current_flow
 
     # どの行が**いま自分が入力している直**か。**比べ方はサービスに聞く**
     # (`is_current_key`)── ここで自分で比べると、日報入力のページ移動で
@@ -800,6 +800,6 @@ def lot_search_csv():
 
 def _ribbon(ctx, calc):
     """帯(いま書いているページで。`entry.ribbon_now`)。"""
-    from .entry import ribbon_now
+    from ..current import ribbon_now
 
     return ribbon_now(ctx, calc)

@@ -121,6 +121,9 @@ STOP_FIELD_PAIRS: tuple[tuple[str, str], ...] = tuple(
     (code.lower(), minutes.lower()) for code, minutes in STOP_SLOTS)
 STOP_CODE_FAMILIES: tuple[str, ...] = tuple(code for code, _ in STOP_SLOTS)
 STOP_TIME_FAMILIES: tuple[str, ...] = tuple(minutes for _, minutes in STOP_SLOTS)
+#: 組の印(画面の切り替え・停止のまとめ・CSV の見出し)。**組の数だけ**。画面の JS へは
+#: `entry.html` が組と一緒に JSON で渡す(JS に組を書かない)
+STOP_MARKS: tuple[str, ...] = tuple("①②③④⑤⑥⑦⑧⑨"[:len(STOP_SLOTS)])
 
 # Families whose text is force-cleared when not numeric (all families
 # *except* this text-like set, per MoveText's second Select Case).

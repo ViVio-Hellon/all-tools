@@ -709,9 +709,9 @@
           <th class="{{ cls|join(' ') }} stop-head" colspan="{{ span }}" data-stop-slot="{{ slot }}">
             <span class="stop-head__t">作業停止</span>
             <span class="stopsw" role="group" aria-label="出す組">
-              {% for n in range(1, 6) %}<button type="button" class="stopsw__b" data-stop-to="{{ n }}"
-                title="作業停止{{ '①②③④⑤'[n - 1] }}を出す"
-                aria-pressed="{{ 'true' if n == slot else 'false' }}">{{ '①②③④⑤'[n - 1] }}</button>{% endfor %}
+              {% for n in range(1, stop_marks|length + 1) %}<button type="button" class="stopsw__b" data-stop-to="{{ n }}"
+                title="作業停止{{ stop_marks[n - 1] }}を出す"
+                aria-pressed="{{ 'true' if n == slot else 'false' }}">{{ stop_marks[n - 1] }}</button>{% endfor %}
             </span>
           </th>
           {% if col.family == 'S5' %}
@@ -1460,6 +1460,8 @@
    ボタンが点きません(サーバへ1度投げるまで分からない)。
    判断そのものはサーバ(`etc_marks.active`)が持ったままです。 #}
 <script type="application/json" id="entry-marks">{{ view.marks | tojson }}</script>
+{# 作業停止①〜⑤の組と印。**JS は組を自分で持たない**(`constants.STOP_SLOTS` の1か所) #}
+<script type="application/json" id="entry-stop-slots">{{ stop_seed | tojson }}</script>
 <script type="module" data-view="{{ url_for('static', filename='js/views/entry.js') }}"></script>
 <script type="module" data-view="{{ url_for('static', filename='js/views/modals.js') }}"></script>
 {% endblock %}

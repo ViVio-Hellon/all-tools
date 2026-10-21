@@ -137,7 +137,7 @@ def due():
     ごとに真になり続けるので、押さえないと1分おきに鳴ります。画面側に
     覚えさせると、タブを開き直すたびに鳴ります。
     """
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
 
     ctx = work_context.get_context()
     calc = current_calculator()

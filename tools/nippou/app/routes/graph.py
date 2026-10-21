@@ -167,7 +167,7 @@ def _target_of(line: str):
 @bp.get("/graph")
 def index():
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     calc = current_calculator()
 
     # VBAの集計シートが常に「月初〜出力タイミングまで」を描いていたのに
@@ -205,7 +205,7 @@ def dashboard_reload():
             "bad_range", "開始日は終了日以前にしてください", field="start")), 422
 
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     report_date = format_business_date(ctx.business_date(current_calculator()))
     # 目標線は画面のチェック(VBA `Targetline`)。**既定は出す**
     with_target = bool(payload.get("with_target", True))
@@ -286,7 +286,7 @@ def export_csv():
     """
     payload = request.get_json(silent=True) or {}
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     calc = current_calculator()
 
     # 1日だけ名指しされたら、その日(保存のあとの自動書き出しと同じ道)。
@@ -464,7 +464,7 @@ def _review_state(ctx):
     """
     from nippou.logic import shift_review
 
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
 
     calc = current_calculator()
     service = build_service(ctx, calc)
@@ -531,7 +531,7 @@ def review_page():
     置いてあり、そちらは押した操作が起点なので通る。
     """
     ctx = work_context.get_context()
-    from .entry import current_calculator
+    from ..current import current_calculator
     calc = current_calculator()
 
     end = ctx.business_date(calc)
@@ -583,7 +583,7 @@ def _closing_target(ctx) -> tuple[str, str]:
     直を拾います ── 直が変わった直後に開いた画面で「前の直を片付ける」
     ためです。
     """
-    from .entry import build_service, current_calculator
+    from ..current import build_service, current_calculator
 
     state = _review_state(ctx)
     if state.due:
@@ -638,7 +638,7 @@ def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False):
         unsynced = 0
 
     try:
-        from .entry import current_calculator
+        from ..current import current_calculator
         shown = format_business_date(ctx.business_date(current_calculator()))
     except Exception:                             # noqa: BLE001 - 日を添えないだけ
         shown = ""
@@ -691,6 +691,6 @@ def review_ack():
 
 def _ribbon(ctx, calc):
     """帯(いま書いているページで。`entry.ribbon_now`)。"""
-    from .entry import ribbon_now
+    from ..current import ribbon_now
 
     return ribbon_now(ctx, calc)
