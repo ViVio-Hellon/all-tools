@@ -250,10 +250,9 @@ class RouteTraceTest(RouteTestBase):
         self.post("/api/line", {"line": "LS", "password": "ちがう"})
         self.assertTrue(list((new / "KanbanSystem" / "記録").rglob("*.jsonl")), "新しい場所に書いていない")
 
-    def test_settings_page_has_the_records_tab(self):
-        html = self.get("/settings").get_data(as_text=True)
-        for part in ('id="tab-trace"', 'id="trace-sheet"', 'id="log-dir-card"', "記録番号で開く"):
-            self.assertIn(part, html)
+    # 設定画面の「記録」の面(開くと探す・行を押すか記録番号を入れるとなぜなぜ分析シートの下書きが出る)は、
+    # 字を探すのではなく**本物のブラウザで押して確かめます**(`test_settings_cards_browser.TraceTabTest`)。
+    # 記録の置き場所の欄(log-dir-card)は `test_settings_places_browser` で変えて確かめます。
 
 
 if __name__ == "__main__":

@@ -71,46 +71,16 @@ def _head_script(html: str) -> str:
     return head[start + len("<script>"):head.index("</script>", start)]
 
 
-class ShellDefaultTest(unittest.TestCase):
-    """日報複合ツールの大設定「画面の色の既定」に付いていく(portal/static/js/shell.js の sendTheme)。
-
-    VER3.4.0 では付いていかなかった ── 帯のボタンを 1 度でも押すと「選んだ」ことになり、
-    選ばない状態へ戻る手段が無かった(大設定の既定ができる前に選んだものも残っていた)。
-    """
-
-    def setUp(self) -> None:
-        self.js = (JS / "theme.js").read_text(encoding="utf-8")
-        self.base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-
-    def test_listener_is_registered_when_the_module_loads(self):
-        """帯のボタンを繋ぐ処理とは切り離して、読み込んだ時点で受け付ける。"""
-        self.assertIn("\nlistenShell();\n", self.js)
-        self.assertIn("'alltools:theme'", self.js)
-        self.assertIn("ev.source !== window.parent", self.js)
-
-    def test_the_choice_can_go_back_to_the_default(self):
-        """「◇ 既定」で覚えを消せる(選ばない = 大設定に従う)。"""
-        self.assertIn("ORDER = ['light', 'dark', 'auto', DEFAULT_CHOICE]", self.js)
-        self.assertIn("localStorage.removeItem(THEME_KEY)", self.js)
-
-    def test_the_old_choice_is_not_read(self):
-        """前の版の `kanban.theme`(大設定の既定が無かったころの選択)は読まずに消す。"""
-        self.assertIn("localStorage.removeItem(LEGACY_THEME_KEY)", self.js)
-        self.assertNotIn("getItem(LEGACY_THEME_KEY)", self.js)
-        head = _head_script(self.base)
-        self.assertNotIn("getItem('kanban.theme')", head)
-        self.assertIn("kanban.theme_choice", head)
-        self.assertIn("kanban.theme_default", head)
-
-    def test_boot_screen_uses_the_same_rule_and_listens(self):
-        from kanban import boot_screen
-
-        page = boot_screen.render(display_name="看板", version_label="VER", token="t",
-                                  app_id="a", poll_ms=300, home_url="/")
-        self.assertIn("kanban.theme_choice", page)
-        self.assertIn("kanban.theme_default", page)
-        self.assertIn("'alltools:theme'", page)
-        self.assertNotIn("getItem('kanban.theme')", page)
+# 日報複合ツールの大設定「画面の色の既定」に付いていく(portal/static/js/shell.js の sendTheme)こと
+# ── 読み込んだ時点で受け付ける・「◇ 既定」で覚えを消せる・前の版の `kanban.theme` は読まずに消す・
+# 起動待機画面も同じ決め方で同じ合図を受ける ── は、字を探すのではなく**本物のブラウザで
+# 親の画面から合図を送って確かめます**(`test_theme_browser`。守りを外すと落ちる):
+#   大設定の既定に付いていく・親の画面からだけ受ける・回り順と既定へ戻す
+#                                     … `test_theme_browser.ShellDefaultTest`
+#   外枠の配線(app.js)が止まっても合図を受ける(読み込んだ時点で受け付ける)
+#                                     … `test_theme_browser.ShellDefaultTest.test_外枠の配線が途中で止まっても_色の合図は受ける`
+#   前の版の選択は読まずに消す       … `test_theme_browser.BeforePaintTest`
+#   起動待機画面                     … `test_theme_browser.BootScreenTest`
 
 
 NODE = shutil.which("node")
@@ -183,60 +153,14 @@ console.log(JSON.stringify(seen));
                 self.assertEqual(got, [expected])
 
 
-class PlacesRefreshTest(unittest.TestCase):
-    """設定画面「ファイルの場所」は、置き場所を変えたらその場で描き直す(views/settings.js)。"""
-
-    def setUp(self) -> None:
-        self.js = (JS / "views" / "settings.js").read_text(encoding="utf-8")
-
-    def _body(self, head: str) -> str:
-        start = self.js.index(head)
-        return self.js[start:self.js.index("\n}\n", start)]
-
-    def test_connection_change_redraws_the_places(self):
-        self.assertIn("afterPathChange();", self._body("async function onAccdbChange()"))
-        after = self._body("function afterPathChange()")
-        self.assertIn("refreshPlaces();", after)
-        self.assertIn("/api/file-places", self._body("async function refreshPlaces()"))
-
-    def test_other_place_changes_redraw_too(self):
-        for head in ("function wireHistoryPath()", "async function onAccessPathChange()",
-                     "function wireLogDir()", "function wireCsvDir()"):
-            with self.subTest(head=head):
-                self.assertIn("refreshPlaces();", self._body(head))
-
-    def test_template_has_a_box_for_every_group(self):
-        html = (TEMPLATES / "settings.html").read_text(encoding="utf-8")
-        for key in ("shared", "local", "app"):
-            self.assertIn(f'<div data-places="{key}">', html)
+# 設定画面「ファイルの場所」を置き場所を変えたらその場で描き直すこと(views/settings.js の
+# refreshPlaces)と、組ごとの箱(shared / local / app)は、**本物のブラウザで置き場所を変えて
+# 確かめます**(`test_settings_places_browser`。守りを外すと落ちる)。
 
 
-try:
-    import flask  # noqa: F401
-    HAS_WEB = True
-except ImportError:  # pragma: no cover
-    HAS_WEB = False
-
-
-if HAS_WEB:
-    from test_web_app import RouteTestBase
-
-    class PagesTest(RouteTestBase):
-        def test_every_page_has_the_toggle_and_decides_before_painting(self):
-            for path in ("/board", "/settings"):
-                html = self.get(path).get_data(as_text=True)
-                self.assertIn('id="theme-toggle"', html, path)
-                head = html[:html.index("</head>")]
-                # CSS より先に決める(あとからだと白く光ってから暗くなる)
-                self.assertLess(head.index("kanban.theme"), head.index("tokens.css"), path)
-
-        def test_boot_screen_follows_the_same_choice(self):
-            from kanban import boot_screen
-
-            page = boot_screen.render(display_name="看板", version_label="VER", token="t",
-                                      app_id="a", poll_ms=300, home_url="/")
-            self.assertIn("kanban.theme", page)
-            self.assertIn(':root[data-theme="dark"]', page)
+# どの画面にも切り替えのボタンがあり、**CSS より先に、描く前に**明るさを決めること・起動待機画面も
+# 同じ選び方に従うことは、**本物のブラウザで CSS が届くのを止めて確かめます**
+# (`test_theme_browser.BeforePaintTest` / `BootScreenTest`。守りを外すと落ちる)。
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -459,39 +459,9 @@ class ReportTest(RouteTestBase):
         self.assertEqual(self.get("/report/site?line=LVC").status_code, 404)
 
 
-class PrintButtonTest(RouteTestBase):
-    """**どの帳票(印刷プレビュー)にも「🖨 印刷する」ボタンがある**(押すと印刷ダイアログ)。
-
-    帳票を足したときに道具立てを付け忘れないよう、出せる帳票を全部開いて確かめる。
-    """
-
-    MODE = config.MODE_SITE
-
-    def assert_print_button(self, kind):
-        html = self.get(f"/report/{kind}?line=LVC").get_data(as_text=True)
-        self.assertIn('id="go"', html, kind)
-        self.assertIn("🖨 印刷する", html, kind)
-        self.assertIn("window.print()", html, kind)
-        self.assertIn(".tools, th.pick, td.pick { display: none !important; }", html,
-                      f"{kind}: ボタンが紙に出る")
-
-    def test_every_report_of_this_mode(self):
-        from app.routes.report import MODE_KINDS
-
-        # 明細のある状態にする(0 件だと「明細はありません」の画面になる)
-        self.store.apply_transition("LVC", "6", models.order_button_changes, operation="order")
-        if self.MODE == config.MODE_WAREHOUSE:
-            self.store.apply_transition("LVC", "2", models.ship_button_changes, operation="ship")
-        kinds = MODE_KINDS[self.MODE]
-        self.assertTrue(kinds)
-        for kind in kinds:
-            with self.subTest(kind=kind):
-                self.assert_print_button(kind)
-
-
-class WarehousePrintButtonTest(PrintButtonTest):
-    MODE = config.MODE_WAREHOUSE
-    LINE = ""
+# **どの帳票(印刷プレビュー)にも「🖨 印刷する」ボタンがあり、押すと印刷ダイアログが出る**
+# (紙にはボタンとチェック欄が出ない)ことは、字を探すのではなく**本物のブラウザで出せる帳票を
+# 全部開いて押して確かめます**(`test_report_print_browser`。現場・倉庫。守りを外すと落ちる)。
 
 
 class SettingsTest(RouteTestBase):
@@ -831,10 +801,8 @@ class UnlockRouteTest(RouteTestBase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json["error"]["code"], "need_password_setup")
 
-    def test_the_screen_has_the_unlock_form(self):
-        html = self.get("/settings").get_data(as_text=True)
-        self.assertIn('id="unlock-form"', html)
-        self.assertIn('id="lockbar"', html)
+    # 設定画面「パスワード認証」で開けて帯で閉めることは、**本物のブラウザで打って確かめます**
+    # (`test_settings_auth_browser.UnlockTest`。守りを外すと落ちる)。
 
 
 class AdminPasswordTest(RouteTestBase):
@@ -891,24 +859,9 @@ class AdminPasswordTest(RouteTestBase):
         self.assertEqual(self.post("/api/admin/verify", {"password": "あたらしい"}).status_code, 200)
         self.assertEqual(self.post("/api/admin/verify", {"password": "もと"}).status_code, 401)
 
-    def test_without_a_password_the_screen_offers_to_set_it_right_there(self):
-        """**未設定なら、その場で決められること。** 以前は「下で設定すると、鍵を
-        開けられるようになります」と別の欄へ回していて、何をすればよいのか
-        分からなかった。"""
-        html = self.get("/settings").get_data(as_text=True)
-        auth = html[html.index('id="panel-auth"'):html.index('id="panel-dist"')]
-        self.assertIn('id="setup-form"', auth)
-        self.assertNotIn('id="setup-form" autocomplete="off" hidden', auth)
-        self.assertIn('id="unlock-form" autocomplete="off" hidden', auth)
-        self.assertIn("未設定", auth)
-
-    def test_the_screen_has_its_own_fields(self):
-        html = self.get("/settings").get_data(as_text=True)
-        self.assertIn('id="password-form"', html)
-        self.assertIn('id="admin-pw-new"', html)
-        # 「この端末」ではなく「パスワード認証」の面にある
-        auth = html[html.index('id="panel-auth"'):html.index('id="panel-dist"')]
-        self.assertIn('id="password-form"', auth)
+    # **未設定なら、その場で決められること**(以前は別の欄へ回していて、何をすればよいのか
+    # 分からなかった)と、「パスワード認証」の面でパスワードを変えられることは、**本物のブラウザで
+    # 打って確かめます**(`test_settings_auth_browser.SetupHereTest` / `UnlockTest`。守りを外すと落ちる)。
 
 
 class SettingsAdminRouteTest(RouteTestBase):
@@ -1731,8 +1684,6 @@ class ReimportTest(RouteTestBase):
         folder = self.dir / "新しい接続先"
         folder.mkdir()
         target = self.a_real_db("新しい接続先/看板マスタ.sqlite3")
-        self.assertNotIn(target, self.get("/settings").get_data(as_text=True))
-
         self.assertTrue(self.change(target).json["changed"])
 
         places = self.get("/api/file-places").json
@@ -1742,10 +1693,8 @@ class ReimportTest(RouteTestBase):
         self.assertEqual(shared["梱包資材マスタ"], str(folder / config.ACCESS_DB_NAME))
         self.assertTrue(places["shared"][0]["exists"])
         self.assertEqual(set(places), {"shared", "local", "app"})
-        # 読み直したときも新しい場所(設定は毎回読み直す)
-        html = self.get("/settings").get_data(as_text=True)
-        block = html[html.index('data-places="shared"'):html.index('data-places="local"')]
-        self.assertIn(target, block)
+        # 画面がこれで描き直すこと・読み直したときも新しい場所なことは、本物のブラウザで
+        # 置き場所を変えて確かめます(`test_settings_places_browser`)
 
     def test_file_places_needs_the_token(self):
         self.assertEqual(self.get("/api/file-places", token=None).status_code, 401)
@@ -2169,10 +2118,8 @@ class TableRefreshRouteTest(RouteTestBase):
                                content_type="application/octet-stream", headers={"X-Tool-Token": "test-token"})
         self.assertEqual(res.status_code, 401)
 
-    def test_the_settings_page_has_the_card(self):
-        html = self.get("/settings").get_data(as_text=True)
-        for needle in ('id="refresh-card"', 'id="rf-drop"', 'id="rf-run"'):
-            self.assertIn(needle, html)
+    # 設定画面の「Access の最新で表の中身を入れ替える」(落として・選んで・入れ替える)は、
+    # **本物のブラウザで押して確かめます**(`test_settings_cards_browser.RefreshCardTest`)。
 
 
 class TableAndRowLifecycleTest(RouteTestBase):
@@ -2545,12 +2492,8 @@ class StatsRouteTest(RouteTestBase):
         self.assertEqual(self.client.get("/api/stats/csv?kind=cycles").status_code, 401)
         self.assertEqual(self.get("/api/stats/csv?kind=なに").status_code, 400)
 
-    def test_settings_page_has_the_tab(self):
-        html = self.get("/settings").get_data(as_text=True)
-        self.assertIn('id="tab-stats"', html)
-        self.assertIn('id="panel-stats"', html)
-        for kind in ("cycles", "weekly", "monthly", "lead", "summary", "rate"):
-            self.assertIn(f'data-csv="{kind}"', html)
+    # 設定画面の「看板集計」の面(開くと読む・CSV のリンクで落とせる・「保存」でフォルダへ)は、
+    # **本物のブラウザで押して確かめます**(`test_settings_cards_browser.StatsTabTest`)。
 
 
 class AccessRouteTest(RouteTestBase):
@@ -2778,26 +2721,9 @@ class AccessRouteTest(RouteTestBase):
         self.assertEqual(res.json["path"], str(self.packing))
         self.assertFalse(res.json["configured"])
 
-    def test_settings_page_marks_modes_without_permission(self):
-        self.app.config["ACCESS_GRANT"] = self.ac.resolve([], self.me)
-        html = self.get("/settings").get_data(as_text=True)
-        self.assertIn('id="access-card"', html)
-        self.assertIn("(権限なし)", html)
-        self.assertIn('id="access-path-card"', html)
-
-    def test_board_offers_the_other_modes_this_terminal_may_use(self):
-        """Administrator は看板の画面から倉庫 ⇔ 現場へ切り替えられる(設定の奥まで行かない)。"""
-        admin = self.ac.Rule(no=1, login_id=self.me.login_id, pc_name=self.me.pc_name,
-                             permission="Administrator", enabled=True, note="")
-        self.app.config["ACCESS_GRANT"] = self.ac.resolve([admin], self.me)
-        html = self.get("/board").get_data(as_text=True)
-        self.assertIn('data-switch-mode="warehouse"', html)
-        self.assertNotIn('data-switch-mode="site"', html, "いまのモードは出さない")
-
-        self.app.config["ACCESS_GRANT"] = self.ac.resolve([], self.me)
-        html = self.get("/board").get_data(as_text=True)
-        self.assertNotIn('data-switch-mode="warehouse"', html, "権限の無いモードは出さない")
-        self.assertNotIn("data-switch-mode", html, "現場だけの端末には何も出さない(倉庫参照へも)")
+    # 設定画面で権限の無いモードを選べない(読み直すと付け直す)ことと、看板の画面の
+    # 「⇄ 〜モードへ」(権限のあるほかのモードだけ出て、押すと切り替えを頼む)は、**本物のブラウザで
+    # 押して確かめます**(`test_settings_cards_browser.AccessCardTest` / `ModeSwitchTest`)。
 
     def test_startup_notice_is_shown_on_every_page(self):
         self.app.config["STARTUP_NOTICE"] = "倉庫モードの権限がないので、現場モードで開きました。"
@@ -2938,11 +2864,8 @@ class HistoryAndCsvRouteTest(RouteTestBase):
         self.assertEqual(self.post("/api/stats/csv/save", {"kind": "なに"}).status_code, 400)
 
     def test_settings_page_tells_shared_files_from_local_ones(self):
-        html = self.get("/settings").get_data(as_text=True)
-        for part in ("複数の PC で共有するファイル", "この PC だけに置いて引き継ぐファイル",
-                     "看板履歴.sqlite3", 'id="history-path-card"', 'id="csv-dir-card"',
-                     'data-csv-save="history"', "全端末で共有", "この端末だけ"):
-            self.assertIn(part, html)
+        """画面の出し方(組ごとの見出し・置き場所を変える欄・履歴の CSV の「保存」)は、本物のブラウザで
+        確かめます(`test_settings_places_browser` / `test_settings_cards_browser.StatsTabTest`)。"""
         places = self.get("/api/settings").json["places"]
         self.assertEqual([f["label"] for f in places["shared"]], ["看板マスタ(共有DB)", "看板履歴", "梱包資材マスタ"])
         self.assertIn("手元の SQLite", [f["label"] for f in places["local"]])
