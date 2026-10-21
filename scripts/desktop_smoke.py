@@ -128,6 +128,31 @@ def command_line(pid: int) -> str:
         return ""
 
 
+def image_name(pid: int) -> str:
+    """その pid のプログラムの名前(msedgewebview2.exe など)。分からなければ空。
+
+    コマンド行は、終わりかけのプロセスでは読めないことがある(CI で「コマンド行を読めない」が
+    2つ残って落ちた)。名前は tasklist がプロセスの一覧から出すので、終わり際でも読める。
+    """
+    if not WINDOWS:
+        try:
+            return Path(f"/proc/{pid}/comm").read_text().strip()
+        except OSError:
+            return ""
+    done = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                          capture_output=True, text=True)
+    for line in done.stdout.splitlines():
+        cells = [c.strip().strip('"') for c in line.split('","')]
+        if len(cells) > 1 and cells[1] == str(pid):
+            return cells[0]
+    return ""
+
+
+def is_webview(name: str, cmd: str) -> bool:
+    """画面を描く部品(WebView2)のプロセスか。名前かコマンド行で見る。"""
+    return "msedgewebview2" in name.lower() or "msedgewebview2" in cmd.lower()
+
+
 def alive(pid: int) -> bool:
     """その pid のプロセスが居るか。**分からないときは「居る」と答える。**
 
@@ -341,11 +366,15 @@ def main() -> int:
         # 確かめたいのは「exe を止めたら Python(と私たちが起こした子)も終わる」こと。画面を描く
         # WebView2(msedgewebview2)は Edge の部品で、終わり際の片付けは OS とその部品が持つ ──
         # それだけが残ったときは知らせるだけにする(Windows の CI で2回、終わり際に1つ残った)
-        named = {p: command_line(p) for p in left}
-        webview = [p for p, cmd in named.items() if "msedgewebview2" in cmd.lower()]
-        ours = [p for p in left if p not in webview]
-        for p, cmd in named.items():
-            print(f"  残った pid={p}: {cmd[:300] or '(コマンド行を読めない)'}", flush=True)
+        # 名前はプロセスの一覧から(終わり際でも読める)、コマンド行は読めれば添える。名前も読めず
+        # もう一覧に居なければ、名前を調べるあいだに終わったもの(残っていない)
+        named = {p: (image_name(p), command_line(p)) for p in left}
+        named = {p: v for p, v in named.items() if v[0] or v[1] or alive(p)}
+        webview = [p for p, (name, cmd) in named.items() if is_webview(name, cmd)]
+        ours = [p for p in named if p not in webview]
+        for p, (name, cmd) in named.items():
+            print(f"  残った pid={p}: {name or '(名前を読めない)'} {cmd[:300] or '(コマンド行を読めない)'}",
+                  flush=True)
         if webview and not ours:
             print(f"[注意] 画面の部品(WebView2)だけが終わり際に残りました: {webview}", flush=True)
         result(not ours, "exe を止めたら子プロセス(Python など)も終わりました" if not ours

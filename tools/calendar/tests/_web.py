@@ -139,6 +139,31 @@ def make_source(folder: Path, name: str, schema: str) -> Path:
     return path
 
 
+#: 一時フォルダを消せるまで待つ長さ(秒)。Windows は開いているファイルを消せない
+RELEASE_WAIT_SEC = 15.0
+
+
+def _remove_when_released(tmp) -> None:
+    """取り込み元の一時フォルダを消す。**Windows で掴まれていれば、離されるまで待って消し直す。**
+
+    後始末は同期を止めてから(`sync_service.reset` は走っている同期を 5 秒まで待つ)。重い CI では
+    それでも同期の糸が取り込み元(連絡帳.sqlite3)を開いたままのことがあり、Windows では
+    「別のプロセスが使用中」で消せずに試験が落ちた(試験の中身とは関係ない)。同期が終わるのを待って
+    消し直す。待ちきれなければそのまま落とす ── ずっと離さないなら、それは本当の掴みっぱなし。
+    """
+    import time
+
+    deadline = time.monotonic() + RELEASE_WAIT_SEC
+    while True:
+        try:
+            tmp.cleanup()
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
 def with_source(case: unittest.TestCase, *, master: bool = False) -> Path:
     """参照パスを立てて、**登録できる状態**にする。
 
@@ -157,7 +182,7 @@ def with_source(case: unittest.TestCase, *, master: bool = False) -> Path:
     from calendar_app.dbkit import outbox_sync
 
     tmp = tempfile.TemporaryDirectory()
-    case.addCleanup(tmp.cleanup)
+    case.addCleanup(_remove_when_released, tmp)
     folder = Path(tmp.name)
     make_source(folder, config.SOURCE_FILE_DATA, SOURCE_SCHEMA)
     if master:
