@@ -344,7 +344,15 @@ function select(id) {
   try { localStorage.setItem(LAST_KEY, id); } catch (err) { /* 残せなくても困らない */ }
 }
 
-/** 最初のタブが開いたら、ほかのツールも順に裏で起こしておく */
+/*
+  **終わろうとしているか**(入口 VER1.5.42)。終了を押してから終わるまでと、終わったあと。
+  裏でツールを起こす順番待ち(`preloadOthers`)は定期の問い合わせと別のタイマーなので、前は終了しても
+  止まらず、**終了したあとに**ツールを起こす要求を送っていました(入口が止めるのと競り合い、起こした
+  ツールが残り得る)。
+*/
+let quitting = false;
+
+/** 最初のタブが開いたら、ほかのツールも順に裏で起こしておく(終わろうとしていれば起こさない) */
 async function preloadOthers(first) {
   const entry = frames.get(first);
   const started = Date.now();
@@ -354,6 +362,7 @@ async function preloadOthers(first) {
   for (const id of order) {
     if (id === SETTINGS || frames.get(id)?.iframe) continue;
     await new Promise((r) => setTimeout(r, PRELOAD_GAP_MS));
+    if (quitting) return;
     ensureFrame(id);
   }
 }
@@ -942,8 +951,10 @@ document.getElementById("quit").addEventListener("click", async () => {
     invoke("shell_close").catch(toastError);
     return;
   }
-  // ブラウザ版: 止める前に各ツールの画面の打ちかけを置く(デスクトップ版は外枠が頼む)
-  if (!(await prepareFrames())) return;
+  // ブラウザ版: 止める前に各ツールの画面の打ちかけを置く(デスクトップ版は外枠が頼む)。
+  // 頼んでいるあいだに新しいツールを起こさない(起こしたツールには頼んでいない)
+  quitting = true;
+  if (!(await prepareFrames())) { quitting = false; return; }
   try {
     // 打ちかけはいま置いた。入口に「画面へ頼む」をもう一度させない
     await api.post("/api/shutdown", { screens_ready: true });
@@ -951,10 +962,13 @@ document.getElementById("quit").addEventListener("click", async () => {
   } catch (err) {
     if (err.status === 409) {
       if (confirm(err.body.message || "実行中の処理があります。中断して終了しますか?")) {
-        try { await api.post("/api/shutdown", { force: true }); ended(); } catch (e) { toastError(e); }
+        try { await api.post("/api/shutdown", { force: true }); ended(); } catch (e) { quitting = false; toastError(e); }
+      } else {
+        quitting = false;                 // 終わらないことにした
       }
       return;
     }
+    quitting = false;
     toastError(err);
   }
 });
@@ -966,6 +980,7 @@ function every(fn, ms) {
 }
 
 function ended() {
+  quitting = true;
   timers.forEach(clearInterval);
   timers.length = 0;
   const dialog = document.getElementById("ended");

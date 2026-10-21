@@ -55,6 +55,26 @@ class BrowserQuitTests(ShellBrowserCase):
         self.wait_until(page, lambda: self.stopped, "入口が止まる")
         self.assertEqual(self.errors, [])
 
+    def test_起動してすぐ終了しても_終了したあとに残りのツールを起こしに行かない(self) -> None:
+        """入口 VER1.5.42 で直した不具合(段階1の試験で見つかった)。
+
+        最初のタブが開くと、ほかのツールも 1.5 秒おきに裏で起こします(`preloadOthers`)。この順番待ちは
+        定期の問い合わせと別のタイマーで、終了しても止まらず、**終了したあとに** ツールを起こす要求を
+        送っていました。入口が止める(`stop_all`)のと競り合い、起こしたツールが残り得ます。
+        """
+        self.tool_script["kanban"] = answering("kanban")
+        page = self.open_shell(first="kanban")
+        self.tool_frame(page, "kanban")
+        page.click("#quit")                               # 残りのツールを起こしきる前に終了
+        page.wait_for_selector("#ended[open]", timeout=10000)
+        at = next(i for i, (k, d) in enumerate(self.events)
+                  if k == "portal" and d["path"] == "/api/shutdown")
+        page.wait_for_timeout(6000)                       # 順番待ちが残っていれば、この間に送る
+        later = [d["path"] for k, d in self.events[at + 1:]
+                 if k == "portal" and d["path"].startswith("/api/tools/")]
+        self.assertEqual(later, [], "終了したあとにツールを起こしに行っています")
+        self.assertEqual(self.errors, [])
+
     def test_受けたあと済んだが来なければ_上限まで待って閉じない(self) -> None:
         """画面が固まった(受けたのに済まない)。10 分は待ち、来なければ**閉じない**ほうに倒す。"""
         self.ctx.clock.install()
