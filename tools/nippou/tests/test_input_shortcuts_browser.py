@@ -105,12 +105,10 @@ class ShortcutTests(EntryBrowserCase):
 
     def test_開始の時をダブルクリックするといまの時刻が時と分に入る(self) -> None:
         page = self.open_entry()
-        # 先に見える所まで動かして落ち着かせてから押す(押すあいだに表が動くと、2回目が別の所に
-        # 当たってダブルクリックにならない。Windows の CI で2回続けて落ちた)
-        box = page.locator("#KZ2")
-        box.scroll_into_view_if_needed()
-        page.wait_for_timeout(300)
-        box.dblclick()
+        # **欄そのものにダブルクリックの合図を送る。** マウスで位置を決めて押すと、決めてから押すまでに
+        # 表が1行ぶん動いて3行目に当たることがあった(Windows の CI。残した様子: 焦点 KZ3・stamp は3行目)。
+        # 受けるのは表に1つの見張り(`grid-body` の dblclick)で、どの欄かは合図の宛先で決まる
+        page.dispatch_event("#KZ2", "dblclick")
         try:
             page.wait_for_function("document.getElementById('KH2').value !== ''", timeout=10000)
         except Exception as exc:                    # noqa: BLE001 - 何が起きていたかを残す

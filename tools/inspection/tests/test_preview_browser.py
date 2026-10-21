@@ -37,6 +37,11 @@ class PreviewBrowserTests(PageBrowserCase):
         # ヘッドレスの Chromium は PDF の表示を持たない。ふつうの Edge・WebView2 のように「出せる」にする
         ctx.add_init_script("Object.defineProperty(navigator, 'pdfViewerEnabled', "
                             f"{{ get: () => {str(pdf_viewer).lower()} }});")
+        # PDF そのものは小さなページで返す。ヘッドレスの Chromium(とくに Windows の CI)は、枠に PDF を読むと
+        # 表示できずにダウンロードにする ── アプリの作りではなく試験のブラウザの事情なので、ここでは
+        # 「枠の src に PDF の道を入れる・ダウンロードの道(a[download])を作らない」までを見る
+        ctx.route("**/api/preview/pdf/**", lambda route: route.fulfill(
+            status=200, body="<p>PDF</p>", headers={"content-type": "text/html; charset=utf-8"}))
         page = self.open("/", ctx)
         page.on("download", lambda d: self.downloads.append(d.suggested_filename))
         page.wait_for_selector("#sel-list li")
