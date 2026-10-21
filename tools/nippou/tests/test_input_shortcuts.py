@@ -14,7 +14,7 @@
     6 作業者: 班でまとめて選ぶ・いまの名前に最初からチェック
 
 どれも**押した・離れたときだけ**入る(黙って先回りしない)ことも見ます。
-本物のブラウザでの確かめは README の v4.7.0 にあります。
+本物のブラウザでの確かめは `test_input_shortcuts_browser` にあります。
 """
 from __future__ import annotations
 
@@ -29,8 +29,6 @@ from nippou import constants  # noqa: E402
 from nippou.logic import input_shortcuts as sc  # noqa: E402
 from nippou.logic import staff  # noqa: E402
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 # ----------------------------------------------------------------------
@@ -358,19 +356,9 @@ class WebTests(WebTestCase):
         self.assertIn(f'data-hint="{sc.hint("MAI")}"', html)
         self.assertIn('id="staff-lead"', html)
 
-    def test_画面の配線(self) -> None:
-        js = (ROOT / "app" / "static" / "js" / "views" / "entry.js").read_text(encoding="utf-8")
-        for needle in ("copy_above: { row }", 'which: "shift_end"', "moveByEnter(",
-                       "event.isComposing", "paintFilled(view.filled)"):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, js)
-        app_js = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('import { startHints } from "./hint.js"', app_js)
-        hint_js = (ROOT / "app" / "static" / "js" / "hint.js").read_text(encoding="utf-8")
-        self.assertIn("[data-hint]", hint_js)
-        modals = (ROOT / "app" / "static" / "js" / "views" / "modals.js").read_text(encoding="utf-8")
-        self.assertIn("/api/staff/preselect", modals)
-        self.assertIn("data-staff-team", modals.replace("dataset.staffTeam", "data-staff-team"))
+    # 画面の配線(上の行と同じ・直の終わり・Enter・変換の確定・包数が光る・簡易説明・
+    # 作業者の窓の最初のチェックと班の見出し)は、**本物のブラウザで押して確かめます**
+    # (`test_input_shortcuts_browser`。守りを外すと落ちる)
 
     # ---- 6. 作業者 ----
     def test_作業者_最初からチェックする名前(self) -> None:

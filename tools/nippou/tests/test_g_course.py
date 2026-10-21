@@ -27,7 +27,6 @@ from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 from tests.test_gw_print import INPUTS  # noqa: E402
 from tests.test_web_entry_lot import HIKI_COLUMNS, LOT_COLUMNS, ODR_COLUMNS  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
 MADE = (20.0, 1528.0, 3053.0)
 BOX = (8.0, 1250.0, 2500.0)
 
@@ -184,10 +183,8 @@ class EntryTests(_Masters, WebTestCase):
                 self.assertEqual(body["rows"]["1"]["box_course"], "")
                 self.assertEqual(body["g_marks"], {})
 
-    def test_画面が描く(self) -> None:
-        js = (ROOT / "app" / "static" / "js" / "views" / "entry.js").read_text(encoding="utf-8")
-        self.assertIn("paintGMarks(view.g_marks)", js)
-        self.assertIn("lot.g_course.message", js)
+    # 画面が印を描き、引いたときに製造の寸法を言うのは、**本物のブラウザで打って確かめます**
+    # (`test_entry_screen_browser` の GCourseTests。守りを外すと落ちる)
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)
@@ -243,11 +240,8 @@ class GwTests(_Masters, WebTestCase):
     def test_画面に置き場所がある(self) -> None:
         page = self.get("/gw").get_data(as_text=True)
         self.assertRegex(page, r'id="g-course-note"[^>]*hidden')
-        js = (ROOT / "app" / "static" / "js" / "views" / "gw.js").read_text(encoding="utf-8")
-        self.assertIn("body.size.thickness_mm", js)
-        self.assertNotIn("body.lot.thickness_mm", js)        # 製造の寸法を直に入れない
-        self.assertIn("paintGCourse(body.g_course)", js)
-        self.assertIn('params.append("g_course", lastGCourse.stored)', js)
+        # 寸法の欄に BOX最終実績(製造の寸法を直に入れない)・一言と縁・紙にも書く は、
+        # **本物のブラウザで引いて確かめます**(`test_g_course_browser`。守りを外すと落ちる)
 
 
 

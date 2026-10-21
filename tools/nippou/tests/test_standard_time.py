@@ -45,7 +45,7 @@ from nippou.services import summary  # noqa: E402
 from tests._web import WebTestCase  # noqa: E402
 
 TEAMS = {"山田": "A", "鈴木": "A", "佐藤": "B", "高橋": "B", "田中": "C"}
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent      # ほかの試験(梱包力・作業者で見る)も使う
 
 
 def sample(**over) -> logic.Sample:
@@ -767,11 +767,8 @@ class WebTests(WebTestCase):
         self.assertIn('href="/standard-time"', agg)
         self.assertNotIn('id="standard-backfill"', self.get("/settings").get_data(as_text=True))
         self.assertEqual(self.post("/api/agg/standard-time", {}).status_code, 404)
-
-        js = (ROOT / "app" / "static" / "js" / "views" / "standard_time.js").read_text(encoding="utf-8")
-        for path in ("/api/standard-time/standards", "/api/standard-time/works",
-                     "/api/standard-time/works/csv", "/api/standard-time/backfill"):
-            self.assertIn(path, js)
+        # 画面がこの4つの道を引く(開く・引く・CSV・過去ぶん)のは、**本物のブラウザで押して確かめます**
+        # (`test_standard_time_screen_browser`。守りを外すと落ちる)
 
 
 class BreakSampleTests(ServiceTestCase):

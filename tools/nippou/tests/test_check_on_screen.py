@@ -96,10 +96,8 @@ class VerifyTests(WebTestCase):
         self.assertFalse(body["unsaved"])
         self.assertEqual(body["rows"], 12)
 
-    def test_画面はチェックに中身を送る(self) -> None:
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "views"
-              / "entry.js").read_text(encoding="utf-8")
-        self.assertIn('api.post("/api/entry/verify", collect())', js)
+    # 画面が「この直をチェック」に中身を送るのは、**本物のブラウザで押して確かめます**
+    # (`test_entry_screen_browser` の CheckShiftTests。守りを外すと落ちる)
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

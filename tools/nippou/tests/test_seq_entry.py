@@ -26,8 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests._browser import chromium_or_skip  # noqa: E402
 from tests._web import HAS_FLASK, HEADERS, SKIP_REASON, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 class MarkupTests(WebTestCase):
     """画面に窓と近道の説明があるか(ブラウザが無くても見られるところ)。"""
@@ -40,17 +38,8 @@ class MarkupTests(WebTestCase):
         self.assertIn('id="seq-entry-input"', page)
         self.assertIn("行の番号をダブルクリック", page)
 
-    def test_聞く順は作業開始から包数まで(self) -> None:
-        js = ROOT.joinpath("app", "static", "js", "views", "entry.js").read_text(encoding="utf-8")
-        start = js.index("const SEQ_STEPS = [")
-        block = js[start:js.index("];", start)]
-        order = [f for f in ("KZ", "SZ", "HIT", '"AI"', "MAI", "TUT") if f in block]
-        self.assertEqual(order, ["KZ", "SZ", "HIT", '"AI"', "MAI", "TUT"])
-        self.assertLess(block.index('"KZ", "KH"'), block.index('"SZ", "SH"'))
-        self.assertLess(block.index('"SZ", "SH"'), block.index('["HIT"]'))
-        self.assertLess(block.index('["HIT"]'), block.index('["AI"]'))
-        self.assertLess(block.index('["AI"]'), block.index('["MAI"]'))
-        self.assertLess(block.index('["MAI"]'), block.index('["TUT"]'))
+    # 聞く順(作業開始 → 作業終了 → 作業人数 → 合紙 → 枚数 → 包数)は、下の BrowserTests の
+    # 「入力とEnterだけで1行打てる」で**聞いた見出しの順に**確かめます(並べ替えると落ちる)
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

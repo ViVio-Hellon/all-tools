@@ -126,15 +126,13 @@ class StampWebTests(WebTestCase):
                 self.assertNotIn("stamp", body)
                 self.assertEqual(body["rows"]["1"]["KZ"], "")
 
-    def test_画面に印と案内とダブルクリックの口(self) -> None:
+    def test_画面に印と案内(self) -> None:
         html = self.get("/").get_data(as_text=True)
         self.assertIn('data-stamp="start"', html)
         self.assertIn('data-stamp="end"', html)
         self.assertIn('id="stamp-tip"', html)
-        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "entry.js").read_text(encoding="utf-8")
-        self.assertIn('addEventListener("dblclick"', js)
-        self.assertIn("stamp: { row, which }", js)
+        # ダブルクリックで時と分の両方に入るのは、**本物のブラウザで押して確かめます**
+        # (`test_input_shortcuts_browser`。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

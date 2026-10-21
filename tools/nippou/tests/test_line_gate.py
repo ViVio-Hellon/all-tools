@@ -22,8 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-
 
 def typed() -> dict:
     return {"rows": {"1": {"LOT": "N7131T0", "KZ": "08", "KH": "00", "SZ": "10",
@@ -130,13 +128,8 @@ class DecidedTerminalTests(WebTestCase):
 class WiringTests(unittest.TestCase):
     """画面の配線(ブラウザが無くても見られるもの)。"""
 
-    def test_表と作業者のカードを伏せる(self) -> None:
-        js = (ROOT / "app" / "static" / "js" / "views" / "entry.js").read_text(encoding="utf-8")
-        self.assertIn("const noLine = !!view?.needs_line;", js)
-        self.assertIn('document.body.classList.toggle("needs-line", noLine);', js)
-        self.assertIn('needs_line: !document.getElementById("terminal-line-note")?.hidden', js)
-        css = (ROOT / "app" / "static" / "css" / "components.css").read_text(encoding="utf-8")
-        self.assertIn('body.needs-line [data-step-for="worker"]', css)
+    # 表と作業者のカードを伏せる(最初の答えを待たずに)は、**本物のブラウザで開いて確かめます**
+    # (`test_entry_screen_browser` の LineGateTests。守りを外すと落ちる)
 
     def test_文言はL_1で保存すると言わない(self) -> None:
         from nippou import work_context

@@ -230,79 +230,18 @@ class EtcButtonTests(WebTestCase):
     出ないので、なおさら分かりません。
     """
 
-    JS = (Path(__file__).resolve().parent.parent
-          / "app" / "static" / "js" / "views" / "entry.js")
-
-    def source(self) -> str:
-        return self.JS.read_text(encoding="utf-8")
-
-    def test_押せなくしない(self) -> None:
-        """**ここが本体。** 押せない状態を作らない。"""
-        text = self.source()
-        head = text[text.index("function paintMarks"):]
-        body = head[:head.index("\n}")]
-        self.assertIn("btn.disabled = false", body)
-        self.assertNotIn("btn.disabled = !markRow", body)
-
-    def test_行が決まっていなければ押したときに決める(self) -> None:
-        text = self.source()
-        # 押したときの処理。**塗り直すほうではなく、click を付けるほう**
-        block = text[text.index('btn.addEventListener("click"'):]
-        self.assertIn("rowForMarks()", block[:700])
+    # 押せなくしない・行が決まっていなければ押したときに決める・打ちかけの行(etc 欄は数えない)は、
+    # **本物のブラウザで押して確かめます**(`test_entry_screen_browser`。守りを外すと落ちる)
 
     def test_どの行に効いたかは画面に出る(self) -> None:
         """勝手に決めますが、**決めた行は見えます。**"""
         html = self.client.get("/", headers=HEADERS).get_data(as_text=True)
         self.assertIn('id="marks-row"', html)
 
-    def test_打ちかけの行を選ぶ(self) -> None:
-        """何も入っていなければ1行目。入っていれば、その下の行。"""
-        text = self.source()
-        block = text[text.index("function rowForMarks"):]
-        body = block[:block.index("\n}")]
-        self.assertIn("last || 1", body)
-        # etc欄そのものが入っているかどうかで行を選ばない(押すたびに
-        # 下へずれてしまう)
-        self.assertIn('=== "ET"', body)
 
-
-class LotLookupTimingTests(WebTestCase):
-    """LOTNO は**欄を離れなくても引く**。
-
-    以前は離れたとき(blur)だけでした。現場の打ちかたは「LOTNOを打って、
-    そのまま画面を見る」なので、離れるまで材・調質が入らず、打ったのに
-    空のままに見えます。VBA は `LOT*_Change` で7桁そろった時点で
-    引いていました。
-    """
-
-    JS = (Path(__file__).resolve().parent.parent
-          / "app" / "static" / "js" / "views" / "entry.js")
-
-    def source(self) -> str:
-        return self.JS.read_text(encoding="utf-8")
-
-    def test_打ち終わった時点で引く(self) -> None:
-        text = self.source()
-        # 打っている最中(input)と、変換が確定したとき の両方から
-        for anchor in ('el.addEventListener("input"',
-                       'el.addEventListener("compositionend"'):
-            with self.subTest(anchor=anchor):
-                block = text[text.index(anchor):][:600]
-                self.assertIn("maybeLookup(el)", block)
-
-    def test_7桁ちょうどのときだけ引く(self) -> None:
-        """1〜6桁を打っているあいだに共有ファイルを6回読みに行かせない。"""
-        text = self.source()
-        block = text[text.index("function maybeLookup"):]
-        body = block[:block.index("\n}")]
-        self.assertIn("!== LOT_LENGTH", body)
-
-    def test_同じ番号は二度引かない(self) -> None:
-        """8桁目を打って消すたびに引き直さない。"""
-        text = self.source()
-        block = text[text.index("function maybeLookup"):]
-        body = block[:block.index("\n}")]
-        self.assertIn("lastLookedUp", body)
+# LOTNO は**欄を離れなくても引く**(打ち終わった時点・変換の確定でも、7桁ちょうどのときだけ、
+# 同じ番号は二度引かない)。**本物のブラウザで打って確かめます**
+# (`test_entry_screen_browser` の LotLookupTimingTests。守りを外すと落ちる)
 
 
 class ImeHintTests(WebTestCase):
@@ -396,12 +335,8 @@ class EntryLayoutTests(WebTestCase):
         self.assertLess(html.index('class="entry-foot"'), html.index('id="entry-notes"'))
         self.assertNotIn(" open", html[html.index('id="entry-notes"') - 40:html.index('id="entry-notes"') + 20])
 
-    def test_狭い画面では縦に落ちる(self) -> None:
-        """横に詰めると、どちらも読めない幅になります。"""
-        css = (Path(__file__).resolve().parent.parent / "app" / "static"
-               / "css" / "components.css").read_text(encoding="utf-8")
-        self.assertRegex(css, r"@media \(max-width:\d+px\)\{\s*\.entry-panels, \.entry-foot\{ "
-                              r"grid-template-columns:minmax\(0, 1fr\); \}")
+    # 狭い画面では縦に落ちるのは、**本物のブラウザで幅を変えて確かめます**
+    # (`test_entry_screen_browser`。守りを外すと落ちる)
 
 
 class SaveButtonRowTests(WebTestCase):

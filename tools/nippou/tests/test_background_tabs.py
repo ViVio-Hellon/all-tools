@@ -37,9 +37,6 @@ from nippou import awake_clock, idle_exit, running  # noqa: E402
 from nippou.logic import tab_lock  # noqa: E402
 from tests._web import HAS_FLASK, HEADERS, SKIP_REASON, TOKEN, WebTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-JS = ROOT / "app" / "static" / "js"
-
 HOUR = 3600.0
 DAY = 24 * HOUR
 
@@ -594,64 +591,24 @@ class TabHideApiTests(WebTestCase):
 
 # ------------------------------------------------------------------
 # 5. 画面 ── 裏に回る瞬間に知らせ、戻ったことに自分で気づく
+#
+# 隠れる瞬間に sendBeacon で知らせる(凍結でも)・心拍にいまの見え方と名札とページ番号・戻る/進むで
+# ページ番号を取り直す・戻ったことに自分で気づく(表に戻る・凍結が解ける・戻る/進む・回線・スリープ)・
+# スリープは見えているときだけ・打つ権利も隠れる瞬間に知らせる・見るだけのタブに一言・直の見張りも
+# 戻ったときに走る は、**本物のブラウザで裏へ回して確かめます**
+# (`test_background_tabs_browser`。守りを外すと落ちる)
 # ------------------------------------------------------------------
-class ScreenSignalTests(unittest.TestCase):
-    def read(self, name: str) -> str:
-        return (JS / name).read_text(encoding="utf-8")
-
-    def test_隠れる瞬間にsendBeaconで知らせる(self) -> None:
-        """この先ここのタイマーが動く保証は無いので、**待たずに**送る。"""
-        js = self.read("health.js")
-        self.assertIn('"visibilitychange"', js)
-        self.assertIn('state: "hidden"', js)
-        self.assertIn("navigator.sendBeacon", js)
-        # 凍結(Page Lifecycle)も拾う
-        self.assertIn('"freeze"', js)
-
-    def test_心拍にいまの見え方と名札を添える(self) -> None:
-        js = self.read("health.js")
-        self.assertIn("state: visibility()", js)
-        self.assertIn("tab: tabId", js)
-        # 読み込みごとのページ番号(閉じたページの遅れた合図を見分ける)
-        self.assertIn("tab: tabId, page", js)
-        # 戻る/進むで戻ったら取り直す
-        body = js[js.index('addEventListener("pageshow"'):]
-        self.assertIn("page = newPage()", body[:body.index("});")])
-
-    def test_戻ったことに自分で気づく(self) -> None:
-        """表に戻る・凍結が解ける・戻る/進む・スリープ明け・回線の復帰。"""
-        js = self.read("health.js")
-        for sign in ('wake("visible")', 'wake("resume")', 'wake("pageshow")',
-                     'wake("online")', 'wake("sleep"'):
-            with self.subTest(sign=sign):
-                self.assertIn(sign, js)
-        # 知らせる先は1つの合図
-        self.assertIn('"app:resume"', js)
-
-    def test_スリープはタイマーの空きで見る_見えているときだけ(self) -> None:
-        """裏のタブは間引かれて空くのが当たり前なので。"""
-        js = self.read("health.js")
-        body = js[js.index("WAKE_GAP_MS &&") - 40:]
-        body = body[:body.index("}")]
-        self.assertIn('document.visibilityState === "visible"', body)
-
-    def test_打つ権利も隠れる瞬間に知らせる(self) -> None:
-        js = self.read("tab_lock.js")
-        self.assertIn('"/api/tab/hide"', js)
-        self.assertIn("hidden: hiddenNow()", js)
-        self.assertIn('"app:resume"', js)
-        # 戻る/進むの控えから戻ったら名乗り直す
-        self.assertIn('"pageshow"', js)
-        # 一言はサーバが持つ
-        self.assertIn("body.note", js)
-
-    def test_直の見張りも戻ったときに走る(self) -> None:
-        self.assertIn('"app:resume"', self.read("shift_end.js"))
-
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class TabHideLockTests(unittest.TestCase):
     def test_錠の列に並ばない(self) -> None:
-        """`/api/tab/hide` も心拍の仲間。長い POST の後ろで待たせない。"""
-        text = (ROOT / "app" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"/api/tab"', text)
+        """`/api/tab/hide` も心拍の仲間。長い POST の後ろで待たせない(サーバの書く錠を取らない)。"""
+        from app import _is_write
+
+        class Req:
+            method = "POST"
+            path = "/api/tab/hide"
+
+        self.assertFalse(_is_write(Req()))
 
 
 if __name__ == "__main__":

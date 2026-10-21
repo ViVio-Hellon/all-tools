@@ -8,8 +8,8 @@
 - 直っていない行の印は ✕ をやめて、**行番号そのものを塗った札**にする
   (行番号の右には「空にする」の ✕ があるので、そこに記号を足すと紛れる)
 
-画面の動き(位置・Esc・外を押すと閉じる)はブラウザで確かめています
-(README の v4.3.0)。ここではブラウザが無くても見られる配線を確かめます。
+画面の動き(位置・Esc・外を押すと閉じる・札の色)は本物のブラウザで確かめています
+(`test_row_clear_browser`)。ここではブラウザが無くても見られる作りを確かめます。
 """
 from __future__ import annotations
 
@@ -23,44 +23,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-JS = ROOT / "app" / "static" / "js" / "views" / "entry.js"
 CSS = ROOT / "app" / "static" / "css" / "components.css"
 
 
-class AskNearTheButtonTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.js = JS.read_text(encoding="utf-8")
-
-    # 確かめの窓(confirm)を使わない・✕ のすぐ下に出て「空にする」に焦点・どの行かを番号とロットで言う・
-    # 空の行では出さない・やめる/Esc/外/巻き戻しで閉じる は、**本物のブラウザで押して確かめます**
-    # (`test_row_clear_browser`。守りを外すと落ちる)。ここは作り(CSS・HTML)だけ
-
-    def test_吹き出しはボタンに寄せて固定で出す(self) -> None:
-        css = CSS.read_text(encoding="utf-8")
-        rule = css[css.index(".rowask{"):]
-        rule = rule[:rule.index("}")]
-        self.assertIn("position:fixed", rule)
-        self.assertIn('.rowno__del[aria-expanded="true"]', css)
+# 確かめの窓(confirm)を使わない・✕ のすぐ下に出て「空にする」に焦点・どの行かを番号とロットで言う・
+# 空の行では出さない・やめる/Esc/外/巻き戻しで閉じる・吹き出しは画面に固定で、開いているあいだ ✕ は
+# 濃いまま・直っていない行は行番号を塗った札(✕ は使わない)は、**本物のブラウザで押して確かめます**
+# (`test_row_clear_browser`。守りを外すと落ちる)。ここは作り(HTML)と、ブラウザでは見分けられない札だけ
 
 
 class BadRowMarkTests(unittest.TestCase):
     def setUp(self) -> None:
         self.css = CSS.read_text(encoding="utf-8")
 
-    def test_印にバツを使わない(self) -> None:
-        """印に ✕ を使わない(「空にする」の ✕ と紛れる)。"""
-        self.assertNotRegex(self.css, r'td\.rowno::after\{\s*content:"✕"')
-        self.assertNotRegex(self.css, r'data-bad="1"\]\s*td\.rowno::after')
-
-    def test_行番号を塗った札にする(self) -> None:
-        for state, color in (('data-bad="1"', "--state-error"),
-                             ('data-problem="1"', "--stop-sudden")):
-            with self.subTest(state=state):
-                m = re.search(r"tr\[" + re.escape(state) + r"\] td\.rowno \.rowno__n\{([^}]*)\}",
-                              self.css)
-                self.assertIsNotNone(m)
-                self.assertIn(f"background:var({color})", m.group(1))
-                self.assertIn("border-radius:999px", m.group(1))
+    def test_時間の断りの行も行番号を塗った札にする(self) -> None:
+        """`data-problem`(いま出ている断り)の札。**ブラウザでは見分けられない**ので字で見る ──
+        断りの出る行は「直っていない行」(`data-bad`)にもなり、そちらの赤い札が上から塗る。"""
+        m = re.search(r'tr\[data-problem="1"\] td\.rowno \.rowno__n\{([^}]*)\}', self.css)
+        self.assertIsNotNone(m)
+        self.assertIn("background:var(--stop-sudden)", m.group(1))
+        self.assertIn("border-radius:999px", m.group(1))
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP_REASON)

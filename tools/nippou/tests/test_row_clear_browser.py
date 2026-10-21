@@ -6,6 +6,8 @@
     - ✕ のすぐ下に出て、「空にする」に焦点がある。どの行かを番号とロットで言う
     - 空にするを押すと行が空になる。やめる・Esc・外を押す・巻き戻す(スクロール)で閉じる
     - 空の行の ✕ では何も出さない(答えが1つしか無い確かめは出さない)
+    - 吹き出しは画面に固定で出し、開いているあいだ ✕ は濃いまま(マウスを離しても)
+    - 直っていない行の印は**行番号を塗った札**。✕ は使わない(「空にする」の ✕ と紛れる)
 """
 from __future__ import annotations
 
@@ -85,3 +87,48 @@ class RowClearTests(EntryBrowserCase):
         page.wait_for_timeout(500)
         self.assertTrue(page.locator("#row-ask").is_hidden())
         self.assertEqual(self.dialogs, [])
+
+    def test_吹き出しは画面に固定で_開いているあいだバツは濃いまま(self) -> None:
+        page = self.filled()
+        self.ask(page)
+        self.assertEqual(page.evaluate("getComputedStyle(document.getElementById('row-ask')).position"),
+                         "fixed")
+        button = '[data-clear-row="1"]'
+        self.assertEqual(page.get_attribute(button, "aria-expanded"), "true")
+        page.hover("#row-ask-text")                   # 行からマウスを離す(閉じはしない)
+        page.wait_for_timeout(200)
+        style = page.evaluate("""sel => { const s = getComputedStyle(document.querySelector(sel));
+                                          return [s.opacity, s.backgroundColor]; }""", button)
+        self.assertEqual(style, ["1", paint(page, "--state-error-bg")])
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#row-ask", state="hidden", timeout=3000)
+        self.assertNotEqual(page.get_attribute(button, "aria-expanded"), "true")
+
+
+class BadRowMarkTests(EntryBrowserCase):
+    def test_直っていない行は行番号を塗った札にする_印にバツを使わない(self) -> None:
+        page = self.open_entry()
+        self.type_in(page, "KZ1", "10")
+        self.type_in(page, "KH1", "75")               # 分が 75 ── 直すまで残る印
+        page.click("#LOT3")
+        page.wait_for_selector('#grid-body tr[data-row="1"][data-bad="1"]', timeout=5000)
+        badge = page.evaluate("""() => {
+            const n = document.querySelector('#grid-body tr[data-row="1"] .rowno__n');
+            const s = getComputedStyle(n);
+            return [s.backgroundColor, s.borderTopLeftRadius];
+        }""")
+        self.assertEqual(badge, [paint(page, "--state-error"), "999px"])
+        after = page.evaluate("""() => getComputedStyle(
+            document.querySelector('#grid-body tr[data-row="1"] td.rowno'), '::after').content""")
+        self.assertNotIn("✕", after)
+        # 直っている行は塗らない
+        plain = page.evaluate("""() => getComputedStyle(
+            document.querySelector('#grid-body tr[data-row="2"] .rowno__n')).backgroundColor""")
+        self.assertNotEqual(plain, paint(page, "--state-error"))
+
+
+def paint(page, var: str) -> str:
+    """色の変数を、ブラウザが塗る形(`rgb(…)`)にして返す。"""
+    return page.evaluate("""v => { const el = document.createElement('div');
+        el.style.backgroundColor = `var(${v})`; document.body.appendChild(el);
+        const c = getComputedStyle(el).backgroundColor; el.remove(); return c; }""", var)

@@ -165,18 +165,9 @@ class ScreenTests(unittest.TestCase):
         self.assertIsNone(constants.FOCUS_CHAIN["TH5"][0])
         self.assertEqual([c.family for c in layout.ADDED_COLUMNS], ["S4", "TH4", "S5", "TH5"])
 
-    def test_表は1組ずつ出して切り替える(self) -> None:
-        root = Path(__file__).resolve().parent.parent
-        html = (root / "app/templates/entry.html").read_text(encoding="utf-8")
-        self.assertIn('data-stop-show="1"', html)
-        self.assertIn('data-stop-to="{{ n }}"', html)
-        self.assertIn('data-stopsum-row="{{ row }}"', html)
-        css = (root / "app/static/css/components.css").read_text(encoding="utf-8")
-        for n in range(1, 6):
-            self.assertIn(f'table.grid[data-stop-show="{n}"] [data-stop-slot]:not([data-stop-slot="{n}"])', css)
-        js = (root / "app/static/js/views/entry.js").read_text(encoding="utf-8")
-        self.assertIn("function revealStop(", js)
-        self.assertIn("const skipStops =", js)
+    # 表は1組ずつ出して見出しで切り替える・打って次の組へ進めばその組を出す・空の記号で Enter なら
+    # 残りの組を飛ばす は、**本物のブラウザで打って確かめます**
+    # (`test_entry_screen_browser` の StopSlotTests。守りを外すと落ちる)
 
 
 if __name__ == "__main__":

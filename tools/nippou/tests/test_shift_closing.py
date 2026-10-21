@@ -235,29 +235,18 @@ class ScreenTests(WebTestCase):
 class LeaveAlwaysAnswersTests(unittest.TestCase):
     """**画面を出るときは、必ず答えを残す。**
 
-    詰まりの正体はサーバではなく画面のほうでした ── 「直しに戻る」だけ
-    ack を飛ばさずに `location.href` で出ていたので、戻った先で1分
-    タイマーに連れ戻されます。サーバのテストでは捕まらないので、ここで
-    **出口の形**を見ます(`test_stale_screen.py` と同じやり方)。
+    「直しに戻る」も「確認しました」も ack してから出る・覚えられなければ出ない は、
+    **本物のブラウザで押して確かめます**(`test_shift_closing_browser`。守りを外すと落ちる)。
+
+    ここに残すのは**作りの決まり**だけです: 出口(`location.href`)は1つ。出口が増えると、
+    ブラウザの試験が押していない新しいボタンから、覚えずに出る道ができます。
     """
 
-    def source(self) -> str:
+    def test_出口は1つ(self) -> None:
         path = (Path(__file__).resolve().parent.parent / "app" / "static" /
                 "js" / "views" / "review.js")
-        return path.read_text(encoding="utf-8")
-
-    def test_覚えずに出る道を作っていない(self) -> None:
-        self.assertNotIn("ack: false", self.source(),
-                         "覚えずに閉じると、1分タイマーに連れ戻されます")
-
-    def test_出口は1つで覚えたあとにある(self) -> None:
-        """`location.href` は ack のあとに1回だけ。"""
-        src = self.source()
-        self.assertEqual(src.count("location.href"), 1,
+        self.assertEqual(path.read_text(encoding="utf-8").count("location.href"), 1,
                          "出口が増えています(覚えずに出る道ができます)")
-        self.assertLess(src.index('"/api/graph/review/ack"'),
-                        src.index("location.href"),
-                        "覚える前に画面を出ています")
 
 
 @unittest.skipUnless(HAS_FLASK, SKIP)
