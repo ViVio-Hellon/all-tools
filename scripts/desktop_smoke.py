@@ -337,8 +337,19 @@ def main() -> int:
         while time.monotonic() < deadline and any(alive(p) for p in others):
             time.sleep(0.5)
         left = [p for p in others if alive(p)]
-        result(not left, "exe を止めたら子プロセス(Python など)も終わりました" if not left
-               else f"exe を止めても残ったプロセスがあります: {left}")
+        # **残ったものの名前とコマンド行を出す**(前は pid だけで、何が残ったのか分からなかった)。
+        # 確かめたいのは「exe を止めたら Python(と私たちが起こした子)も終わる」こと。画面を描く
+        # WebView2(msedgewebview2)は Edge の部品で、終わり際の片付けは OS とその部品が持つ ──
+        # それだけが残ったときは知らせるだけにする(Windows の CI で2回、終わり際に1つ残った)
+        named = {p: command_line(p) for p in left}
+        webview = [p for p, cmd in named.items() if "msedgewebview2" in cmd.lower()]
+        ours = [p for p in left if p not in webview]
+        for p, cmd in named.items():
+            print(f"  残った pid={p}: {cmd[:300] or '(コマンド行を読めない)'}", flush=True)
+        if webview and not ours:
+            print(f"[注意] 画面の部品(WebView2)だけが終わり際に残りました: {webview}", flush=True)
+        result(not ours, "exe を止めたら子プロセス(Python など)も終わりました" if not ours
+               else f"exe を止めても残ったプロセスがあります: {ours}")
     print("結果:", "OK" if ok else "NG")
     return 0 if ok else 1
 
