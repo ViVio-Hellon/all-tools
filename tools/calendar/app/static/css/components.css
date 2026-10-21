@@ -18,9 +18,11 @@
 .btn:hover:not(:disabled){background:var(--sunken)}
 .btn:disabled{opacity:.45}
 .btn--primary{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
-.btn--primary:hover:not(:disabled){filter:brightness(1.08)}
+/* **地の色を指定し直す**(VER4.2.5)。上の `.btn:hover` が地を淡い色に塗り替えるので、指定しないと
+   白い文字が淡い地に乗って、マウスを乗せたあいだ文字が消える(看板と同じ直し) */
+.btn--primary:hover:not(:disabled){background:var(--accent); filter:brightness(1.08)}
 .btn--danger{background:var(--state-error); border-color:var(--state-error); color:var(--on-error)}
-.btn--danger:hover:not(:disabled){filter:brightness(1.08)}
+.btn--danger:hover:not(:disabled){background:var(--state-error); filter:brightness(1.08)}
 .btn--quiet{background:transparent; border-color:transparent; color:var(--muted)}
 .btn--quiet:hover:not(:disabled){background:var(--sunken); color:var(--ink)}
 .btn--lg{height:38px; padding:0 18px; font-size:14px}
@@ -450,6 +452,7 @@
 }
 .cal--history .cal__title{color:var(--hist-accent)}
 .cal--history .btn--primary{background:var(--hist-accent); border-color:var(--hist-accent); color:var(--hist-accent-ink)}
+.cal--history .btn--primary:hover:not(:disabled){background:var(--hist-accent)}
 /* 「履歴」の札。**色だけで運ばない** ── 文字で「履歴・閲覧のみ」と書く */
 .hist-tag{
   display:inline-flex; align-items:center; gap:6px;
