@@ -4,11 +4,14 @@
     (coil-packing-tools のペナラベルがその仕組みを使っているので参照)
 
 ペナラベルの「計算・印刷の記録」(`work_record.py`・`material_repo.describe`)と同じ考え方です。
-計算・印刷のたびに1行ずつ、**月ごとのファイルへ足します**(JSON Lines。足すだけで、消さない・書き換えない):
+計算・印刷のたびに1行ずつ、**月ごとのファイルへ足します**(足すだけで、消さない・書き換えない):
 
-    この端末   <ローカル領域>/data/GW計算記録/GW計算記録_YYYY-MM.jsonl          (いつも)
-    出力先     <集計CSV・印刷用HTMLの出力先>/<ライン>/GW計算記録/GW計算記録_<PC名>_YYYY-MM.jsonl
+    この端末   <ローカル領域>/data/GW計算記録/GW計算記録_YYYY-MM.csv          (いつも)
+    出力先     <集計CSV・印刷用HTMLの出力先>/<ライン>/GW計算記録/GW計算記録_<PC名>_YYYY-MM.csv
                (設定で出力先を決めてあるときだけ。PC ごとにファイルを分けるので取り合わない)
+
+**形式は選べます**(設定・管理者。v4.44.1): **CSV(既定。Excel でそのまま開ける)**・JSON Lines(ほかの仕組みで
+読むとき)・両方。CSV は UTF-8 の BOM 付き(日報のほかの CSV と同じ)で、新しいファイルは見出しから始まります。
 
 1行に残すもの:
 
@@ -141,9 +144,69 @@ def version_label(version: dict) -> str:
 # ----------------------------------------------------------------------
 # 書く
 # ----------------------------------------------------------------------
-def _month_file(folder: Path, when: datetime, *, pc: str = "") -> Path:
+#: 記録の形式(設定・管理者で選ぶ。v4.44.1)。**既定は CSV**(Excel でそのまま開ける)
+FORMAT_CSV = "csv"
+FORMAT_JSONL = "jsonl"
+FORMAT_BOTH = "both"
+FORMATS: dict[str, str] = {
+    FORMAT_CSV: "CSV(Excel で開ける)",
+    FORMAT_JSONL: "JSON Lines(ほかの仕組みで読むとき)",
+    FORMAT_BOTH: "両方",
+}
+DEFAULT_FORMAT = FORMAT_CSV
+
+#: CSV の列(見出し, 記録の中身から取り出すもの)。**並びは見る人の順**(何を → 結果 → 誰が → 版 → 資材マスタ)
+CSV_COLUMNS: tuple[str, ...] = (
+    "時刻", "種類", "LotNo", "オーダーNo", "包装仕様", "梱包数",
+    "梱包資材重量(kg)", "風袋総重量(kg)", "GW(kg)",
+    "PC", "ライン", "利用者",
+    "日報の版", "日報複合ツールの版", "画面の中身の印",
+    "資材マスタの取得元", "資材マスタの場所", "資材マスタの時点", "資材マスタを読んだ時刻",
+    "使った値(単位質量×係数)",
+)
+
+
+def record_format() -> str:
+    """いまの記録の形式(`KEY_GW_RECORD_FORMAT`)。読めない値は既定(CSV)。"""
+    from .. import user_settings
+    from ..config import KEY_GW_RECORD_FORMAT
+
+    value = str(user_settings.get(KEY_GW_RECORD_FORMAT, DEFAULT_FORMAT) or "").strip().lower()
+    return value if value in FORMATS else DEFAULT_FORMAT
+
+
+def rates_text(rates: dict) -> str:
+    """「ダンプレート 0.25×1.0・外装紙 0.0842×1.0」の形。"""
+    return "・".join(f"{name} {v.get('単位質量')}×{v.get('係数')}" for name, v in (rates or {}).items())
+
+
+def _number(value: Any) -> str:
+    return "" if value is None or value == "" else f"{float(value):.2f}"
+
+
+def csv_row(entry: dict[str, Any]) -> list[str]:
+    """記録1件を CSV の1行に(`CSV_COLUMNS` の並び)。"""
+    subject = entry.get("subject") or {}
+    results = entry.get("results") or {}
+    who_ = entry.get("who") or {}
+    version = entry.get("version") or {}
+    material = entry.get("material") or {}
+    return [
+        entry.get("at", ""), entry.get("kind", ""),
+        subject.get("lot_no", ""), subject.get("order_no", ""), subject.get("pack_spec_no", ""),
+        str(entry.get("packs") or ""),
+        _number(results.get("material_total")), _number(results.get("tare_weight")),
+        _number(results.get("gross_weight")),
+        who_.get("pc", ""), who_.get("line", ""), who_.get("user", ""),
+        version.get("nippou", ""), version.get("app", ""), version.get("stamp", ""),
+        material.get("source", ""), material.get("path", ""), material.get("asOf", ""),
+        material.get("readAt", ""), rates_text(entry.get("rates") or {}),
+    ]
+
+
+def _month_file(folder: Path, when: datetime, *, pc: str = "", suffix: str = ".csv") -> Path:
     middle = f"_{pc}" if pc else ""
-    return folder / f"{FILE_PREFIX}{middle}_{when:%Y-%m}.jsonl"
+    return folder / f"{FILE_PREFIX}{middle}_{when:%Y-%m}{suffix}"
 
 
 def local_folder() -> Path:
@@ -163,27 +226,56 @@ def shared_folder(line: str) -> Optional[Path]:
     return Path(SETTINGS.report_output_dir) / name / FOLDER
 
 
-def append(entry: dict[str, Any], *, line: str = "", when: Optional[datetime] = None) -> dict[str, str]:
-    """1行足す。**書けなくても止めない**(返すのは 場所 → 書けなかった理由。書けたら空)。"""
+def _write_csv(path: Path, entry: dict[str, Any]) -> None:
+    """CSV へ1行足す。**新しいファイルなら見出しから**(UTF-8 の BOM 付き ── Excel で文字化けしない。
+    日報のほかの CSV と同じ)。足すときは BOM を付け直さない(Python が先頭でないと分かって省く)。"""
+    import csv
+
+    fresh = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.writer(fh)
+        if fresh:
+            writer.writerow(CSV_COLUMNS)
+        writer.writerow(csv_row(entry))
+
+
+def _write_jsonl(path: Path, entry: dict[str, Any]) -> None:
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def append(entry: dict[str, Any], *, line: str = "", when: Optional[datetime] = None,
+           fmt: Optional[str] = None) -> dict[str, str]:
+    """1行足す。**書けなくても止めない**(返すのは 場所 → 書けなかった理由。書けたら空)。
+
+    形式は設定(`record_format`。既定 CSV)。CSV のファイルを Excel で開いたままだと書けない
+    (Windows が掴む)── そのときは理由を残し、ほかの場所(この端末)には書く。
+    """
     when = when or datetime.now()
-    text = json.dumps(entry, ensure_ascii=False) + "\n"
-    targets = [("local", _month_file(local_folder(), when))]
+    fmt = fmt or record_format()
+    writers = []
+    if fmt in (FORMAT_CSV, FORMAT_BOTH):
+        writers.append((".csv", _write_csv))
+    if fmt in (FORMAT_JSONL, FORMAT_BOTH):
+        writers.append((".jsonl", _write_jsonl))
+    places = [("local", local_folder(), "")]
     shared = shared_folder(line)
     if shared is not None:
-        targets.append(("shared", _month_file(shared, when, pc=pc_name())))
+        places.append(("shared", shared, pc_name()))
     result: dict[str, str] = {}
     with _lock:
-        for key, path in targets:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with open(path, "a", encoding="utf-8") as fh:
-                    fh.write(text)
-                _problems[key] = ""
-                result[key] = ""
-            except OSError as exc:
-                _problems[key] = f"{path}: {exc}"
-                result[key] = _problems[key]
-                log.warning("GW計算の記録を書けませんでした(%s): %s", key, exc)
+        for key, folder, pc in places:
+            problems = []
+            for suffix, write in writers:
+                path = _month_file(folder, when, pc=pc, suffix=suffix)
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    write(path, entry)
+                except OSError as exc:
+                    problems.append(f"{path}: {exc}")
+                    log.warning("GW計算の記録を書けませんでした(%s): %s", key, exc)
+            _problems[key] = " / ".join(problems)
+            result[key] = _problems[key]
     return result
 
 
@@ -212,31 +304,86 @@ def record(kind: str, *, material: dict, rates: dict, subject: dict, results: di
 # ----------------------------------------------------------------------
 # 読む
 # ----------------------------------------------------------------------
+def display_row(entry: dict[str, Any]) -> dict[str, Any]:
+    """記録1件(JSON の形)を、記録の画面の1行に。"""
+    return _display_of(dict(zip(CSV_COLUMNS, csv_row(entry))))
+
+
+def _display_of(cells: dict[str, str]) -> dict[str, Any]:
+    """CSV の1行(見出し → 字)を、記録の画面の1行に。CSV と JSON Lines のどちらからも同じ形。"""
+    def num(text: str) -> Optional[float]:
+        try:
+            return float(text) if str(text).strip() else None
+        except ValueError:
+            return None
+
+    subject = " / ".join(x for x in (
+        f"LotNo {cells.get('LotNo')}" if cells.get("LotNo") else "",
+        f"オーダーNo {cells.get('オーダーNo')}" if cells.get("オーダーNo") else "",
+        f"包装仕様 {cells.get('包装仕様')}" if cells.get("包装仕様") else "") if x)
+    version = version_label({"nippou": cells.get("日報の版", ""), "app": cells.get("日報複合ツールの版", "")})
+    return {
+        "at": cells.get("時刻", ""), "kind": cells.get("種類", ""), "subject": subject,
+        "gross": num(cells.get("GW(kg)", "")), "tare": num(cells.get("風袋総重量(kg)", "")),
+        "packs": cells.get("梱包数", ""),
+        "who": cells.get("PC", "") + (f"({cells['ライン']})" if cells.get("ライン") else ""),
+        "version": version, "stamp": cells.get("画面の中身の印", ""),
+        "source": f"{cells.get('資材マスタの取得元', '')} {cells.get('資材マスタの場所', '')}".strip(),
+        "as_of": cells.get("資材マスタの時点") or "日時不明",
+        "rates": cells.get("使った値(単位質量×係数)", ""),
+    }
+
+
 def recent(limit: int = 300) -> list[dict[str, Any]]:
-    """この端末の記録を新しい順に(今月と先月のファイル)。読めない行は飛ばす。"""
+    """この端末の記録を新しい順に、記録の画面の形で(今月と先月。CSV と JSON Lines のどちらも読む)。
+
+    形式を途中で変えても前の記録が見えるように両方読む。「両方」で書いた記録は1つにする。
+    """
+    import csv
+
     folder = local_folder()
     try:
-        files = sorted(folder.glob(f"{FILE_PREFIX}_*.jsonl"), reverse=True)[:2]
+        months = sorted({p.stem.rsplit("_", 1)[-1] for p in folder.glob(f"{FILE_PREFIX}_*.*")},
+                        reverse=True)[:2]
     except OSError:
         return []
+    from collections import Counter
+
     rows: list[dict[str, Any]] = []
-    for path in files:
+    for month in months:
+        from_csv: list[dict[str, Any]] = []
+        path = folder / f"{FILE_PREFIX}_{month}.csv"
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                from_csv = [_display_of(cells) for cells in csv.DictReader(fh)]
         except OSError:
-            continue
-        for text in reversed(lines):
+            pass
+        rows.extend(from_csv)
+        # 「両方」で書いた月は、同じ記録が CSV と JSON Lines の両方にある。JSON の1件ごとに、同じ
+        # (時刻・種類・何を)の CSV の行を1つだけ打ち消す(同じ秒の別の計算まで1つにしない)
+        twins = Counter((r["at"], r["kind"], r["subject"]) for r in from_csv)
+        path = folder / f"{FILE_PREFIX}_{month}.jsonl"
+        try:
+            texts = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            texts = []
+        for text in texts:
             try:
-                rows.append(json.loads(text))
+                row = display_row(json.loads(text))
             except ValueError:
                 continue
-            if len(rows) >= limit:
-                return rows
-    return rows
+            key = (row["at"], row["kind"], row["subject"])
+            if twins[key] > 0:
+                twins[key] -= 1
+                continue
+            rows.append(row)
+    rows.sort(key=lambda r: r["at"], reverse=True)
+    return rows[:limit]
 
 
 def status(line: str = "") -> dict[str, str]:
     """どこへ書いているか・書けていないか(記録の画面に出す)。"""
     shared = shared_folder(line)
     return {"local": str(local_folder()), "localProblem": _problems["local"],
-            "shared": str(shared) if shared else "", "sharedProblem": _problems["shared"]}
+            "shared": str(shared) if shared else "", "sharedProblem": _problems["shared"],
+            "format": FORMATS[record_format()]}

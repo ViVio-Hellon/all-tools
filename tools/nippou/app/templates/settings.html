@@ -297,6 +297,30 @@
         <code>{{ path_map[keys.monthly_dir].resolved }}</code> です。
       </p>
     </div>
+
+    {# ---- GW計算の記録の形式(v4.44.1。`services/gw_record`)。変えるのは管理者モード ---- #}
+    <div class="card" id="gw-record-setting">
+      <div class="card__head">
+        <h2>GW計算の記録の形式</h2>
+        <span class="lead">どの版で・どの資材マスタ(いつ時点)で計算したかを残すファイルの形</span>
+      </div>
+      <div class="btn-row" id="gw-record-choices">
+        <span class="lead">いま: <b id="gw-record-now">{{ gw_record_formats[gw_record_format] }}</b></span>
+        {% for key, name in gw_record_formats.items() %}
+        <button class="btn btn--sm{% if key == gw_record_format %} btn--primary{% endif %}" type="button"
+                data-gw-record-format="{{ key }}"
+                {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>{{ name }}</button>
+        {% endfor %}
+      </div>
+      <p class="lead" style="margin-top:var(--sp-2)">
+        <b>CSV</b>(既定)は Excel でそのまま開けます(見出し付き・日報のほかの CSV と同じ文字コード)。
+        <b>JSON Lines</b> は、ほかの仕組みで読み込むときの形です。どの形でも、この端末の中と、
+        出力先を決めてあれば <code>&lt;出力先&gt;\&lt;ライン&gt;\GW計算記録\</code> に、月ごと・PC ごとのファイルで
+        足していきます(消さない・書き換えない)。CSV を Excel で開いたままだと、その間は出力先へ書けません
+        (この端末の中には書きます。書けなかったことは「計算の記録」の画面に出ます)。
+      </p>
+      <div class="msg" id="gw-record-note" hidden style="margin-top:var(--sp-2)"></div>
+    </div>
   </section>
 
   {# ==============================================================

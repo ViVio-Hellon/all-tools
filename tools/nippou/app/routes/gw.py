@@ -823,28 +823,7 @@ def records():
     ctx = work_context.get_context()
     from ..current import current_calculator
     calc = current_calculator()
-    rows = []
-    for entry in gw_record.recent(300):
-        subject = entry.get("subject") or {}
-        results = entry.get("results") or {}
-        who = entry.get("who") or {}
-        material = entry.get("material") or {}
-        rows.append({
-            "at": entry.get("at", ""), "kind": entry.get("kind", ""),
-            "subject": " / ".join(x for x in (
-                f"LotNo {subject['lot_no']}" if subject.get("lot_no") else "",
-                f"オーダーNo {subject['order_no']}" if subject.get("order_no") else "",
-                f"包装仕様 {subject['pack_spec_no']}" if subject.get("pack_spec_no") else "") if x),
-            "gross": results.get("gross_weight"), "tare": results.get("tare_weight"),
-            "packs": entry.get("packs") or "",
-            "who": who.get("pc", "") + (f"({who['line']})" if who.get("line") else ""),
-            "version": gw_record.version_label(entry.get("version") or {}),
-            "stamp": (entry.get("version") or {}).get("stamp", ""),
-            "source": f"{material.get('source', '')} {material.get('path', '')}".strip(),
-            "as_of": material.get("asOf") or "日時不明",
-            "rates": "・".join(f"{name} {v.get('単位質量')}×{v.get('係数')}"
-                              for name, v in (entry.get("rates") or {}).items()),
-        })
+    rows = gw_record.recent(300)
     return render_template("gw_records.html", rows=rows, where=gw_record.status(ctx.line),
                            **shell.shell_context("gw", ribbon=_ribbon(ctx, calc)))
 

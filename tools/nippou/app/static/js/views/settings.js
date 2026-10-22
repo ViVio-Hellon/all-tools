@@ -1323,6 +1323,29 @@ export function start() {
     });
   }
 
+  // ---- GW計算の記録の形式(v4.44.1)── CSV / JSON Lines / 両方。管理者モードだけ ----
+  for (const btn of document.querySelectorAll("#gw-record-choices [data-gw-record-format]")) {
+    btn.addEventListener("click", async () => {
+      const box = document.getElementById("gw-record-note");
+      try {
+        const body = await api.post("/api/settings/gw-record-format", { format: btn.dataset.gwRecordFormat });
+        for (const b of document.querySelectorAll("#gw-record-choices [data-gw-record-format]")) {
+          b.classList.toggle("btn--primary", b.dataset.gwRecordFormat === body.format);
+        }
+        const now = document.getElementById("gw-record-now");
+        if (now) now.textContent = body.name;
+        toast(body.message, body.remembered === false ? "warn" : "ok");
+        if (box) box.hidden = true;
+      } catch (err) {
+        if (box) {
+          box.hidden = false;
+          box.textContent = err.message;
+          box.className = "msg msg--error";
+        }
+      }
+    });
+  }
+
   // ---- 時間を割り振るの倍率(v4.42.0)── EX・段取り・VC交換。管理者モードだけ ----
   document.getElementById("factor-save")?.addEventListener("click", async () => {
     const box = document.getElementById("time-split-note");

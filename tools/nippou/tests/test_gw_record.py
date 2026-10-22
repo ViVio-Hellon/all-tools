@@ -9,6 +9,8 @@
       読んだ時刻・使った単位質量×係数・PC とライン・何を計算したか(LotNo・GW など)
     ・画面(計算の結果の下)と紙(下の段)にも同じ素性を出す。「計算の記録」の画面で一覧を見る
     ・出力先を設定で決めてあれば、そこにも PC ごとのファイルで書く
+    ・(v4.44.1)形式は CSV(既定。Excel で開ける見出し付き・BOM 付き)・JSON Lines・両方 から選ぶ(管理者モード)。
+      記録の画面はどちらの形式も読む(形式を変えても前の記録が見える)
     ・書けなくても計算・印刷は止めない
 """
 from __future__ import annotations
@@ -88,8 +90,23 @@ class GwRecordWebTests(GwWebTestCase):
         return Path(SETTINGS.gw_material_master_path)
 
     def lines(self) -> list[dict]:
+        """この端末の CSV の行(見出し → 字)。"""
+        import csv
+
+        out = []
+        for f in sorted(gw_record.local_folder().glob("GW計算記録_*.csv")):
+            with open(f, encoding="utf-8-sig", newline="") as fh:
+                out.extend(csv.DictReader(fh))
+        return out
+
+    def json_lines(self) -> list[dict]:
         files = sorted(gw_record.local_folder().glob("GW計算記録_*.jsonl"))
         return [json.loads(t) for f in files for t in f.read_text(encoding="utf-8").splitlines()]
+
+    def choose(self, fmt: str) -> None:
+        from nippou import user_settings
+        from nippou.config import KEY_GW_RECORD_FORMAT
+        user_settings.save(KEY_GW_RECORD_FORMAT, fmt)
 
     def test_計算すると版と資材マスタの素性を返して記録に残す(self) -> None:
         from nippou import app_config
@@ -107,22 +124,59 @@ class GwRecordWebTests(GwWebTestCase):
         saved = self.lines()
         self.assertEqual(len(saved), 1)
         line = saved[0]
-        self.assertEqual(line["kind"], "計算")
-        self.assertEqual(line["material"]["asOf"], "2026-10-20 14:03:11")
-        self.assertEqual(line["subject"]["lot_no"], "N7131T0")
-        self.assertEqual(line["results"]["gross_weight"], body["gross_weight"])
-        # 使った値(マスタが後で直されても、何で計算したかが分かる)
-        self.assertEqual(line["rates"]["ダンプレート"], {"単位質量": 0.25, "係数": 1.0})
-        self.assertEqual(line["rates"]["帯鉄シール無"], {"単位質量": 0.077, "係数": 1.0})
-        self.assertNotIn("合紙", line["rates"], "使わない資材は入れない")
-        self.assertEqual(line["version"]["nippou"], app_config.version())
+        self.assertEqual(line["種類"], "計算")
+        self.assertEqual(line["資材マスタの時点"], "2026-10-20 14:03:11")
+        self.assertEqual(line["資材マスタの取得元"], "sqlite3")
+        self.assertEqual(line["資材マスタの場所"], str(self.master()))
+        self.assertEqual(line["LotNo"], "N7131T0")
+        self.assertEqual(line["GW(kg)"], f'{body["gross_weight"]:.2f}')
+        self.assertEqual(line["日報の版"], app_config.version())
+        # 使った値(マスタが後で直されても、何で計算したかが分かる)。使わない資材は入れない
+        self.assertIn("ダンプレート 0.25×1.0", line["使った値(単位質量×係数)"])
+        self.assertIn("帯鉄シール無 0.077×1.0", line["使った値(単位質量×係数)"])
+        self.assertNotIn("合紙", line["使った値(単位質量×係数)"])
+        self.assertEqual(self.json_lines(), [], "既定は CSV だけ")
+
+    def test_CSVはExcelで開ける形_見出しは1回_BOM付き(self) -> None:
+        self.post("/api/gw/calculate", payload())
+        self.post("/api/gw/calculate", payload())
+        path = next(gw_record.local_folder().glob("GW計算記録_*.csv"))
+        raw = path.read_bytes()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), "BOM が無いと Excel で文字化けする")
+        self.assertEqual(raw.count(b"\xef\xbb\xbf"), 1, "足すたびに BOM を付けない")
+        text = raw.decode("utf-8-sig").splitlines()
+        self.assertEqual(text[0].split(",")[:3], ["時刻", "種類", "LotNo"])
+        self.assertEqual(len(text), 3, "見出し1行 + 2件")
+
+    def test_JSONLinesと両方も選べる(self) -> None:
+        self.choose("jsonl")
+        self.post("/api/gw/calculate", payload())
+        self.assertEqual(len(self.json_lines()), 1)
+        self.assertEqual(self.lines(), [])
+        self.choose("both")
+        self.post("/api/gw/calculate", payload())
+        self.assertEqual(len(self.json_lines()), 2)
+        self.assertEqual(len(self.lines()), 1)
+        # 記録の画面は両方を読み、同じ記録は1つにする(3件 = jsonl 1 + 両方 1)
+        page = self.get("/gw/records").get_data(as_text=True)
+        self.assertEqual(page.count("<td class=\"nowrap\">計算"), 2, page)
+
+    def test_形式は管理者モードで変える(self) -> None:
+        res = self.post("/api/settings/gw-record-format", {"format": "jsonl"})
+        self.assertEqual(res.status_code, 403)
+        self.post("/api/settings/admin", {"enable": True, "password": "nisk"})
+        self.assertEqual(self.post("/api/settings/gw-record-format", {"format": "xml"}).status_code, 400)
+        body = self.post("/api/settings/gw-record-format", {"format": "both"}).get_json()
+        self.assertEqual(body["format"], "both")
+        self.assertEqual(gw_record.record_format(), "both")
+        self.assertIn('id="gw-record-setting"', self.get("/settings").get_data(as_text=True))
 
     def test_マスタが差し替わればいつ時点かも変わる(self) -> None:
         os.utime(self.master(), (datetime(2026, 10, 20, 8, 0, 0).timestamp(),) * 2)
         self.post("/api/gw/calculate", payload())
         os.utime(self.master(), (datetime(2026, 10, 21, 9, 30, 0).timestamp(),) * 2)
         self.post("/api/gw/calculate", payload())
-        self.assertEqual([x["material"]["asOf"] for x in self.lines()],
+        self.assertEqual([x["資材マスタの時点"] for x in self.lines()],
                          ["2026-10-20 08:00:00", "2026-10-21 09:30:00"])
 
     def test_紙にも版と資材マスタの時点を載せて記録に残す(self) -> None:
@@ -135,7 +189,7 @@ class GwRecordWebTests(GwWebTestCase):
         self.assertIn("資材マスタの時点</b> 2026-10-20 14:03:11", html)
         self.assertIn(str(self.master()), html)
         line = self.lines()[-1]
-        self.assertEqual((line["kind"], line["packs"]), ("印刷画面", 3))
+        self.assertEqual((line["種類"], line["梱包数"]), ("印刷画面", "3"))
 
     def test_断った計算は残さない(self) -> None:
         bad = dict(payload(), count="")
@@ -160,7 +214,7 @@ class GwRecordWebTests(GwWebTestCase):
         out = self.tmp / "shared-out"
         user_settings.save(KEY_REPORT_OUT_DIR, str(out))
         self.post("/api/gw/calculate", payload())
-        found = list(out.rglob("GW計算記録_*.jsonl"))
+        found = list(out.rglob("GW計算記録_*.csv"))
         self.assertEqual(len(found), 1, found)
         self.assertIn(gw_record.pc_name(), found[0].name)
         self.assertEqual(found[0].parent.name, "GW計算記録")

@@ -23,7 +23,8 @@
     <b>印刷画面</b>は印刷の画面を開いた記録で、刷った証拠にはなりません(ブラウザは刷ったかどうかを教えません)。
   </p>
   <p class="lead" id="gw-records-where">
-    消えない控え(月ごとのファイル。足すだけで、消さない・書き換えない): <code>{{ where.local }}</code>
+    消えない控え(月ごとのファイル。足すだけで、消さない・書き換えない。形式: <b>{{ where.format }}</b>。
+    設定・管理者の「出力」の面で変えられます): <code>{{ where.local }}</code>
     {% if where.localProblem %}<br><b class="msg--error">書けていません: {{ where.localProblem }}</b>{% endif %}
     {% if where.shared %}<br>出力先にも PC ごとに書いています: <code>{{ where.shared }}</code>
       {% if where.sharedProblem %}<br><b class="msg--error">出力先に書けていません: {{ where.sharedProblem }}</b>{% endif %}

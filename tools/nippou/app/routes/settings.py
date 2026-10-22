@@ -106,6 +106,9 @@ def index():
         time_split_factors=_time_split_factors().as_dict(),
         # 段取り・VC交換と見た停止(停止理由の内訳の名前で見る。v4.42.2)
         time_split_stops=_time_split_stops(),
+        # GW計算の記録の形式(v4.44.1)
+        gw_record_format=_gw_record_format(),
+        gw_record_formats=_gw_record_formats(),
         paths=state["paths"],
         # 面ごとに欄を置くので、鍵で引ける形も渡す(出どころは `paths` と同じ)
         path_map=state["path_map"],
@@ -567,6 +570,39 @@ def time_split():
         "message": ("日報入力に「時間を割り振る」を出します" if enabled
                     else "日報入力の「時間を割り振る」を出さないようにしました"),
     })
+
+
+def _gw_record_format() -> str:
+    from nippou.services import gw_record
+    return gw_record.record_format()
+
+
+def _gw_record_formats() -> dict:
+    from nippou.services import gw_record
+    return dict(gw_record.FORMATS)
+
+
+@bp.post("/api/settings/gw-record-format")
+def gw_record_format_save():
+    """GW計算の記録の形式(CSV / JSON Lines / 両方。v4.44.1)。**変えるのは管理者モードだけ。**"""
+    from nippou import user_settings
+    from nippou.config import KEY_GW_RECORD_FORMAT
+    from nippou.services import gw_record
+
+    ctx = work_context.get_context()
+    if not ctx.admin:
+        return jsonify(error_body(
+            "not_admin", "GW計算の記録の形式は管理者モードでのみ変えられます")), 403
+    payload = request.get_json(silent=True) or {}
+    fmt = str(payload.get("format", "")).strip().lower()
+    if fmt not in gw_record.FORMATS:
+        return jsonify(error_body("bad_format", "形式は CSV・JSON Lines・両方 から選んでください",
+                                  field="format")), 400
+    remembered = user_settings.save(KEY_GW_RECORD_FORMAT, fmt)
+    log_button_click("gw_record_format", line=ctx.line, extra=fmt)
+    return jsonify({"format": gw_record.record_format(), "name": gw_record.FORMATS[gw_record.record_format()],
+                    "remembered": remembered,
+                    "message": f"GW計算の記録を「{gw_record.FORMATS[fmt]}」で残します"})
 
 
 def _time_split_stops():
