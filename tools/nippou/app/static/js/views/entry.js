@@ -3069,21 +3069,30 @@ export function start() {
     サーバが書き、いまのページは返ってきた12行を塗っていつもどおり保存する。
     停止を先に渡した残りは梱包数の比で分ける(v4.34.0。梱包数が無ければ均等)。
   */
-  document.getElementById("time-split")?.addEventListener("click", async () => {
+  /*
+    LOTで時間を割り振る(v4.43.0)も同じ道。違うのは、いまのロットの行だけを、その始まり(直の開始か
+    前のロットの終わり)から押した時刻までにすること。決めるのはサーバ(`/api/entry/distribute-lot`)。
+  */
+  const splitTimes = async (url) => {
     const mine = gen;
     let plan;
     try {
-      plan = await send("/api/entry/distribute-times", { ...collect(), dry_run: true });
+      plan = await send(url, { ...collect(), dry_run: true });
     } catch (err) {
       toastError(err);
       return;
     }
     if (!live(mine)) return;
     const pages = (plan.pages || []).map((n) => `${n}ページ`).join("・");
-    const lines = [
+    const lot = plan.lot;
+    const lines = lot ? [
+      `ロット ${lot.lot} の ${plan.count} 行(${lot.first_row}から)に、${plan.start}〜${plan.end}(${plan.minutes}分)を割り振ります。`,
+      `始まりは${lot.from}、終わりはいまの時刻/${plan.step === 5 ? "5分" : "1分"}刻み`,
+    ] : [
       `${plan.shift} ${plan.start}〜${plan.end}(${plan.minutes}分)を、打った ${plan.count} 行に割り振ります。`,
       `${pages}/最初の行 ${plan.first} 〜 最後の行 ${plan.last}/${plan.step === 5 ? "5分" : "1分"}刻み`,
     ];
+    if (lot?.note) lines.push(lot.note);
     // 梱包数に合わせるか・均等か(v4.34.0。文言はサーバが決める)
     if (plan.weight_note) lines.push(plan.weight_note);
     // EX・段取り・VC交換で長めにする所(v4.42.0。文言はサーバが決める)
@@ -3103,7 +3112,7 @@ export function start() {
     if (!confirm(lines.join("\n"))) return;
     try {
       const since = editSeq;
-      const body = await send("/api/entry/distribute-times", collect());
+      const body = await send(url, collect());
       if (!live(mine)) return;
       paint(body, { since });
       toast(body.message, "ok");
@@ -3111,7 +3120,9 @@ export function start() {
     } catch (err) {
       toastError(err);
     }
-  });
+  };
+  document.getElementById("time-split")?.addEventListener("click", () => splitTimes("/api/entry/distribute-times"));
+  document.getElementById("time-split-lot")?.addEventListener("click", () => splitTimes("/api/entry/distribute-lot"));
 
   document.getElementById("new-page")?.addEventListener("click", async () => {
     /*

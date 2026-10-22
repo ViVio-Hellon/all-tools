@@ -130,8 +130,13 @@ BREAKS: dict[str, tuple[str, str]] = {
 }
 
 
-def break_window(shift: str, start: int, total: int) -> Optional[tuple[int, int]]:
-    """その直の休憩を(直の始めから何分目, 長さ)で。直の中に収まらなければ None。"""
+def break_window(shift: str, start: int, total: int, *,
+                 from_start: bool = False) -> Optional[tuple[int, int]]:
+    """その直の休憩を(直の始めから何分目, 長さ)で。直の中に収まらなければ None。
+
+    ``from_start`` なら、休憩が**ちょうど始まりから**でも数える(v4.43.0。LOTで時間を割り振るは
+    前のロットが 12:00 に終わって始まることがある。その最初の行が休憩をまたぐ)。
+    """
     found = BREAKS.get(shift)
     if not found:
         return None
@@ -140,7 +145,7 @@ def break_window(shift: str, start: int, total: int) -> Optional[tuple[int, int]
         return None
     offset = (b_start - start) % (24 * 60)
     length = (b_end - b_start) % (24 * 60)
-    if length <= 0 or offset <= 0 or offset + length >= total:
+    if length <= 0 or (offset <= 0 and not from_start) or offset + length >= total:
         return None
     return offset, length
 
@@ -500,7 +505,7 @@ class Plan:
 
 def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
           rest: Optional[tuple[int, int]] = None,
-          weights: Optional[Sequence[Decimal]] = None) -> Plan:
+          weights: Optional[Sequence[Decimal]] = None, origin: int = 0) -> Plan:
     """`stops`(行ごとの停止の分)の行へ、`total` 分を割り振る。
 
     `rest` は休憩(直の始めから何分目, 長さ)。その長さを除いて割り振り、休憩にかかる行の
@@ -508,15 +513,20 @@ def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
 
     `weights` は行ごとの重み(梱包数。`pack_weights`)。停止の分を先に渡した残りを、この比で
     分けます。省けば全部 1 ── 均等も同じ道です。
+
+    `origin` は始まりの時刻が刻みからどれだけずれているか(分。始まりが 9:37 なら 2)。区切りは
+    **時計の5分刻み**(9:40・9:45 …)に寄せる(v4.43.0。LOTで時間を割り振るは前のロットの終わりから
+    始まるので、始まりが5分刻みとは限らない)。直の始まりから割り振るときは 0。
     """
     if rest is not None:
         at, length = rest
-        plan = split(stops, total - length, step=step, weights=weights)
+        plan = split(stops, total - length, step=step, weights=weights, origin=origin)
         if not plan.ok:
             return plan
         moved: list[tuple[int, int]] = []
         for index, (a, b) in enumerate(plan.slots):
-            if a >= at:
+            # 休憩がちょうど始まりからなら、最初の行がまたぐ(ずらさずにのばす)
+            if a >= at and a > 0:
                 moved.append((a + length, b + length))
             elif b >= at:
                 moved.append((a, b + length))
@@ -546,15 +556,18 @@ def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
     if work / n < step:
         step = 1
     unit = Decimal(step)
+    shift_by = Decimal(origin % step)
 
     def snap(value: Decimal) -> int:
-        return int((value / unit).quantize(Decimal(1), rounding=ROUND_HALF_UP) * unit)
+        """始めからの分 → 時計の刻みに寄せた、始めからの分。"""
+        return int(((value + shift_by) / unit).quantize(Decimal(1), rounding=ROUND_HALF_UP) * unit - shift_by)
 
     def ceil_step(value: Decimal) -> int:
         return int((value / unit).quantize(Decimal(1), rounding=ROUND_CEILING) * unit)
 
     def floor_step(value: Decimal) -> int:
-        return int((value / unit).quantize(Decimal(1), rounding=ROUND_FLOOR) * unit)
+        """始めからの分 → それ以下で、時計の刻みに当たる始めからの分。"""
+        return int(((value + shift_by) / unit).quantize(Decimal(1), rounding=ROUND_FLOOR) * unit - shift_by)
 
     # 行ごとに最低これだけは渡す(停止の分を刻みに切り上げたもの。停止が無くても 1 刻み)。
     # 後ろの行のぶんを残して区切るので、比が極端でも 0 分の行は出ない

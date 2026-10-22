@@ -2,6 +2,8 @@
 
     - 確かめの窓に「EX のロット…」「ロットの変わり目…1梱包目…」が出て、はいで EX の行が長く埋まる
     - 設定・管理者で倍率を変えて保存できる(管理者モードでないと押せない)
+    - LOTで時間を割り振る(v4.43.0): 確かめの窓にロットと始まりを出し、はいでそのロットの行を
+      直の開始から押した時刻まで埋める
 """
 from __future__ import annotations
 
@@ -104,6 +106,43 @@ class TimeSplitLotBrowserTests(WebTestCase):
         page.wait_for_selector("#time-split-note:not([hidden])")
         self.assertIn("段取り(ロットの変わり目)の倍率は", page.inner_text("#time-split-note"))
         self.assertEqual(float(ts.Factors.read(self._saved()).setup), 1.5)
+        self.assertEqual(self.errors, [])
+
+    def test_LOTで時間を割り振る(self) -> None:
+        from datetime import date, datetime, time
+
+        from nippou import user_settings, work_context
+        from nippou.config import KEY_TIME_SPLIT
+        from nippou.db.models import DetailRecord, HeaderRecord
+        from nippou.services import shift_check
+        from app.routes.entry import build_shift_calculator
+        from tests.test_scenario_shift_flow import _Now, install_clock
+
+        user_settings.save(KEY_TIME_SPLIT, True)
+        _Now.value = datetime.combine(date(2026, 10, 21), time(8, 12))     # 1直のなか
+        install_clock(self)
+        day, line, shift = work_context.get_context().current_key(
+            build_shift_calculator(self.repo().get_shift_times()))
+        at = dict(report_date=day, line=line, shift=shift, page=1)
+        self.repo().save(HeaderRecord(**at, worker="山田"),
+                         [DetailRecord(**at, row_no=1, lot="LOTA", mai="5", tut="1"),
+                          DetailRecord(**at, row_no=2, mai="5", tut="1"),
+                          DetailRecord(**at, row_no=3, mai="2", tut="1")])
+        start, _end = shift_check.bounds_of(self.repo().get_shift_times(), shift)
+
+        page = self.open("/")
+        page.wait_for_selector("#grid-body")
+        page.wait_for_function("document.getElementById('LOT1').value === 'LOTA'", timeout=5000)
+        page.click("#time-split-lot")
+        page.wait_for_function("document.getElementById('SZ3').value !== ''", timeout=5000)
+        self.assertTrue(self.dialogs, "確かめの窓が出ない")
+        self.assertIn("ロット LOTA の 3 行(1行目から)に", self.dialogs[0])
+        self.assertIn("始まりは直の開始、終わりはいまの時刻", self.dialogs[0])
+        self.assertEqual(f'{page.input_value("#KZ1")}:{page.input_value("#KH1")}', start)
+        self.assertEqual(f'{page.input_value("#SZ3")}:{page.input_value("#SH3")}', "08:10")
+        self.assertEqual(f'{page.input_value("#SZ1")}:{page.input_value("#SH1")}',
+                         f'{page.input_value("#KZ2")}:{page.input_value("#KH2")}', "行の時刻はつながる")
+        self.assertEqual(page.input_value("#KZ4"), "", "打っていない行は触らない")
         self.assertEqual(self.errors, [])
 
     @staticmethod

@@ -392,6 +392,11 @@
     <button class="btn btn--sm" type="button" id="time-split" data-need-worker
             data-hint="この直の開始〜終了を、打った行(全ページ)へ順に割り振ります。1行の長さは等しく5分刻み、停止の分はその行に先に渡し、休憩の時間は飛ばします。押す前に確かめます"
             >時間を割り振る</button>
+    {# LOTで時間を割り振る(v4.43.0)。いまのロットの行だけを、直の開始(1ロット目)か前のロットの続きから、
+       押した時刻まで(`app/routes/entry.distribute_lot`) #}
+    <button class="btn btn--sm" type="button" id="time-split-lot" data-need-worker
+            data-hint="いまのロットの行だけを、直の開始(1ロット目)か前のロットの終わりから、押した時刻まで割り振ります。停止・休憩・EX・VC交換は「時間を割り振る」と同じです。押す前に確かめます"
+            >LOTで時間を割り振る</button>
     {% endif %}
     {# 12行を使い切ったら次の紙へ。VBA の「新規発行」に当たる ──
        いまのページを保存してから、次のページを空で作って移る。

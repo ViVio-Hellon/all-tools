@@ -1139,6 +1139,88 @@ def distribute_times():
     ほかのページはここで書き(画面の外から書いた印を付ける)、いまのページは画面へ返して、
     画面がいつもどおり保存します。入っている開始・終了の時刻は書き換えます。
     """
+    return _distribute(lot=False)
+
+
+@bp.post("/api/entry/distribute-lot")
+def distribute_lot():
+    """**LOTで時間を割り振る**(v4.43.0)── いまのロットの行だけを、始まりから押した時刻まで。
+
+        1ロット目であれば直開始からLOTで時間を割り振るを押したタイミングまでの時間で割り振り
+        2ロット目以降は前ロットの続きからLOTで時間を割り振るを押したタイミングまでの時間で割り振り
+        停止が入っていた場合・休憩入力がなく休憩時間をまたいだ場合・EX VC交換 は
+        時間を割り振る と同じ処理
+
+    割り振るのは**この直の最後のロット**(ロット№が変わった行から、打った最後の行まで。ロット№が空の
+    行は上の行と同じロット。ページをまたいでも)。始まりは、直の最初のロットなら直の開始、そうでなければ
+    **前の行(前のロットの最後の行)の終了**。終わりは**いまの時刻**(ダブルクリックで入れる時刻と同じ。
+    分の1の位を 0 か 5 に寄せる ── `work_time.stamp`)。それより前の行は触らない。
+
+    停止を先に渡す・梱包数の比・EX・段取り・VC交換・休憩を飛ばす(またぐ行へ休憩「0」)は「時間を割り振る」と
+    同じ道(`_distribute`)。区切りは時計の5分刻み。いまが休憩の中なら休憩の始まりまで。過去の直を
+    開いているあいだ・いまが直の外のときは断る。
+    """
+    return _distribute(lot=True)
+
+
+def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, total: int,
+              day_work: bool) -> dict:
+    """LOTで時間を割り振る: どの行を、何時から何時までか(v4.43.0)。断るなら `refuse`。"""
+    from nippou.logic import time_split, work_time
+
+    if ctx.recall.active:
+        return {"refuse": "過去の直を開いているあいだは「LOTで時間を割り振る」は使えません"
+                          "(終わりをいまの時刻にするため)。「時間を割り振る」を使ってください"}
+    if not targets:
+        return {"refuse": "割り振る行がありません(ロット№・枚数・停止などを打った行が1つもありません)"}
+    if not kinds[-1].lot:
+        return {"refuse": "ロット№を打った行がありません。ロット№を打ってから押してください"}
+    first = max((i for i, k in enumerate(kinds) if k.change), default=0)
+    many = len({n for n, _ in targets}) > 1
+
+    def where(index: int) -> str:
+        n, row = targets[index]
+        return f"{n}ページ {row}行目" if many else f"{row}行目"
+
+    if first == 0:
+        begin, began_from = shift_start, "直の開始"
+    else:
+        prev = target_rows[first - 1]
+        hour, minute = (str(prev.get(f, "") or "").strip() for f in ("SZ", "SH"))
+        begin = time_split.parse_hhmm(f"{hour}:{minute}") if hour and minute else None
+        if begin is None:
+            return {"refuse": f"前のロットの最後の行({where(first - 1)})に終了の時刻がありません。"
+                              "先にそのロットを割り振るか、終了の時刻を打ってから押してください"}
+        began_from = f"前のロットの続き({where(first - 1)}の終了)"
+    hh, mm = work_time.stamp(_clock_now())
+    now_text = f"{hh}:{mm}"
+    at_begin = (begin - shift_start) % (24 * 60)
+    at_end = (time_split.parse_hhmm(now_text) - shift_start) % (24 * 60)
+    if at_begin >= total:
+        return {"refuse": f"前のロットの終わり({time_split.clock(begin, 0)[0]}:{time_split.clock(begin, 0)[1]})が"
+                          f"{shift}の外なので割り振れません"}
+    if at_end > total:
+        return {"refuse": f"いま({now_text})は{shift}の時間の外なので割り振れません。"
+                          "「時間を割り振る」を使うか、時刻を打ってください"}
+    note = ""
+    rest = None if day_work else time_split.break_window(shift, shift_start, total)
+    if rest is not None and rest[0] < at_end < rest[0] + rest[1]:
+        at_end = rest[0]
+        b_h, b_m = time_split.clock(shift_start, at_end)
+        note = f"いまは休憩の中なので、休憩の始まり {b_h}:{b_m} までを割り振ります"
+    if at_end <= at_begin:
+        b_h, b_m = time_split.clock(shift_start, at_begin)
+        return {"refuse": f"{began_from} {b_h}:{b_m} から、いま({now_text})までに時間がないので割り振れません"}
+    start_abs = (shift_start + at_begin) % (24 * 60)
+    s_h, s_m = time_split.clock(start_abs, 0)
+    e_h, e_m = time_split.clock(shift_start, at_end)
+    return {"first": first, "start": start_abs, "total": at_end - at_begin,
+            "info": {"lot": kinds[-1].lot, "from": began_from, "first_row": where(first),
+                     "start": f"{s_h}:{s_m}", "end": f"{e_h}:{e_m}", "note": note}}
+
+
+def _distribute(*, lot: bool):
+    """「時間を割り振る」(直の始めから終わりまで)と「LOTで時間を割り振る」(いまのロットだけ)の道。"""
     from nippou.logic import time_split
     from nippou.services import page_writer, shift_check
 
@@ -1177,19 +1259,32 @@ def distribute_times():
     pages[page] = state
     targets = [(n, row) for n in sorted(pages) for row in sorted(pages[n].rows)
                if time_split.is_filled(pages[n].rows[row])]
-    stops = [time_split.row_stop_minutes(pages[n].rows[row]) for n, row in targets]
-    # 梱包数(枚数 × 包数)の比で分ける(v4.34.0)。どの行にも無ければ均等、一部だけ無ければ
-    # その行は梱包数がある行の平均で数える(`time_split.pack_weights`)
-    weights, by_packs = time_split.pack_weights(
-        [time_split.row_packs(pages[n].rows[row]) for n, row in targets])
-    # EX のロットはすべて長め・ロットの変わり目の1梱包目は段取り・VC が変われば VC交換(v4.42.0)
+    # ロットの続き(ロット№が空の行は上の行と同じロット)。EX・段取り・VC交換に使う(v4.42.0)
     target_rows = [pages[n].rows[row] for n, row in targets]
     kinds = time_split.lot_runs(target_rows, _last_lot_before(report_date, line, shift))
+    day_work = any(p.day_shift for p in pages.values())
+    # 割り振る時間(直の始めから何分目・長さ)。LOTで時間を割り振るは、いまのロットの行だけを
+    # その始まりから、いまの時刻まで(v4.43.0)
+    span_start, span_total, span_texts, lot_info = start, total, (start_text, end_text), None
+    if lot:
+        picked = _pick_lot(ctx, targets, target_rows, kinds, shift, start, total, day_work)
+        if "refuse" in picked:
+            return jsonify(error_body("cannot_split", picked["refuse"])), 422
+        first = picked["first"]
+        targets, target_rows, kinds = targets[first:], target_rows[first:], kinds[first:]
+        span_start, span_total, lot_info = picked["start"], picked["total"], picked["info"]
+        span_texts = (lot_info["start"], lot_info["end"])
+    stops = [time_split.row_stop_minutes(values) for values in target_rows]
+    # 梱包数(枚数 × 包数)の比で分ける(v4.34.0)。どの行にも無ければ均等、一部だけ無ければ
+    # その行は梱包数がある行の平均で数える(`time_split.pack_weights`)
+    weights, by_packs = time_split.pack_weights([time_split.row_packs(values) for values in target_rows])
+    # EX のロットはすべて長め・ロットの変わり目の1梱包目は段取り・VC が変われば VC交換(v4.42.0)
     weights, adjust_notes = time_split.adjust_weights(weights, target_rows, kinds, time_split_factors(),
                                                       time_split_stop_kinds())
+    # 区切りは時計の5分刻み。直の始めから割り振るときはこれまでどおり始めから数える(v4.43.0)
+    origin = span_start if lot else 0
     # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
-    day_work = any(p.day_shift for p in pages.values())
-    rest = None if day_work else time_split.break_window(shift, start, total)
+    rest = None if day_work else time_split.break_window(shift, span_start, span_total, from_start=lot)
     # **休憩は飛ばした時間そのもの**(v4.38.1)。打ってある休憩「0」の分は割り振りに数えず、
     # 休憩をまたぐ行へ 0/60 として入れ直す(ほかの行の「0」はそこへ移す)。前は打ってある
     # 「0」も停止として数えたうえで休憩の時間も飛ばしていたので、休憩が2回数えられ、
@@ -1205,13 +1300,13 @@ def distribute_times():
         plan = time_split.split(
             [time_split.row_stop_minutes(pages[n].rows[row], minus=parts[(n, row)].lunch_minutes)
              for n, row in targets],
-            total, rest=rest, weights=weights)
+            span_total, rest=rest, weights=weights, origin=origin)
         if plan.ok and plan.break_index is not None:
-            rest_info = _gather_rest(shift, rest, plan, targets, pages, start, parts)
+            rest_info = _gather_rest(shift, rest, plan, targets, pages, span_start, parts)
             if rest_info.get("refuse"):
                 return jsonify(error_body("cannot_split", rest_info["refuse"])), 422
     else:
-        plan = time_split.split(stops, total, weights=weights)
+        plan = time_split.split(stops, span_total, weights=weights, origin=origin)
         if day_work and shift in time_split.BREAKS:
             rest_info = {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"}
     if not plan.ok:
@@ -1223,12 +1318,14 @@ def distribute_times():
         values = pages[n].rows[row]
         if any(str(values.get(f, "") or "").strip() for f in ("KZ", "KH", "SZ", "SH")):
             overwrite += 1
-        kz, kh = time_split.clock(start, a)
-        sz, sh = time_split.clock(start, b)
+        kz, kh = time_split.clock(span_start, a)
+        sz, sh = time_split.clock(span_start, b)
         rows.append({"page": n, "row": row, "start": f"{kz}:{kh}", "end": f"{sz}:{sh}",
                      "values": (kz, kh, sz, sh)})
     summary = {
-        "shift": shift, "start": start_text, "end": end_text, "minutes": total,
+        "shift": shift, "start": span_texts[0], "end": span_texts[1], "minutes": span_total,
+        # LOTで時間を割り振る: どのロットを、どこから(v4.43.0)。直の始めから割り振るときは None
+        "lot": lot_info,
         "count": len(rows), "pages": sorted({r["page"] for r in rows}), "step": plan.step,
         "overwrite": overwrite,
         "first": rows[0]["start"], "last": rows[-1]["end"],
@@ -1273,12 +1370,16 @@ def distribute_times():
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("時間の割り振りの保存に失敗しました")
         return jsonify(error_body("save_failed", f"ほかのページを保存できませんでした: {exc}")), 500
-    log_button_click("distribute_times", line=line,
-                     extra=f"{report_date}/{shift} {len(rows)}行 {start_text}〜{end_text}")
+    log_button_click("distribute_lot" if lot else "distribute_times", line=line,
+                     extra=f"{report_date}/{shift} {len(rows)}行 {span_texts[0]}〜{span_texts[1]}")
     body = _view(state, ctx, calc, problem=problem, key=screen_key)
     body["distributed"] = summary
-    body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
-                       f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
+    if lot_info:
+        body["message"] = (f"ロット {lot_info['lot']} の {len(rows)}行に {span_texts[0]}〜{span_texts[1]}"
+                           f"({span_total}分)を割り振りました")
+    else:
+        body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
+                           f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
     # 昼稼働(有)の直は `{"skipped": ...}` だけ(時刻が無い)。前はここで落ちていた(v4.34.0 で直す)
     if rest_info and rest_info.get("start"):
         body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
