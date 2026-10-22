@@ -15,6 +15,9 @@
     ・区切りは時計の5分刻み(前のロットの終わりが 9:37 でも 9:40・9:45 …)
     ・前のロットの最後の行に終了が無い・いまが直の外・過去の直を開いている → 断る
     ・いまが休憩の中なら休憩の始まりまで。休憩をまたげば休憩を飛ばし、またぐ行に休憩「0」
+    ・(v4.43.1)そのロットの最後の行に終了が入っていれば、その時刻が終わり(押し忘れてもあとで押せる)
+    ・(v4.43.1)選んでいる行のロットを割り振る(前のロットもやり直せる)。最後のロットでなく、最後の行に
+      終了が無ければ次のロットの始まりまで。それも無ければ断る
 """
 from __future__ import annotations
 
@@ -220,6 +223,53 @@ class DistributeLotWebTests(WebTestCase):
         res = self.lot({"1": {"MAI": "5", "TUT": "1"}})
         self.assertEqual(res.status_code, 422)
         self.assertIn("ロット№を打った行がありません", res.get_json()["error"]["message"])
+
+    def test_最後の行に終了が入っていればその時刻まで(self) -> None:
+        """押し忘れて 09:30 に押しても、終了を 08:30 に入れてあれば LOTA は 08:30 まで。"""
+        screen = rows_of((5, 1), (5, 1), (2, 1))
+        screen["3"].update({"SZ": "08", "SH": "30"})
+        self.at("09:32")
+        plan = self.plan(screen)
+        self.assertEqual(plan["rows"][-1]["end"], "08:30")
+        self.assertEqual(plan["lot"]["until"], "3行目の終了")
+
+    def test_選んでいる行のロットを割り振る_ほかのロットは触らない(self) -> None:
+        screen = rows_of((5, 1), (5, 1), (2, 1))
+        screen["3"].update({"SZ": "08", "SH": "10"})
+        screen.update(rows_of((3, 1), (2, 1), lot="LOTB", start=4))
+        screen["4"].update({"KZ": "08", "KH": "10", "SZ": "08", "SH": "40"})
+        screen["5"].update({"KZ": "08", "KH": "40", "SZ": "09", "SH": "00"})
+        self.at("09:30")
+        plan = self.plan(screen, focus_row=2)
+        self.assertEqual([r["row"] for r in plan["rows"]], [1, 2, 3])
+        self.assertEqual(plan["lot"]["lot"], "LOTA")
+        self.assertEqual((plan["rows"][0]["start"], plan["rows"][-1]["end"]), (self.bounds()[0], "08:10"))
+        body = self.plan(screen, focus_row=2, dry=False)
+        self.assertEqual(f'{body["rows"]["4"]["KZ"]}:{body["rows"]["4"]["KH"]}', "08:10", "LOTB は触らない")
+        self.assertEqual(f'{body["rows"]["5"]["SZ"]}:{body["rows"]["5"]["SH"]}', "09:00")
+
+    def test_前のロットで終了が無ければ次のロットの始まりまで(self) -> None:
+        screen = rows_of((5, 1), (5, 1))
+        screen.update(rows_of((3, 1), lot="LOTB", start=3))
+        screen["3"].update({"KZ": "08", "KH": "20", "SZ": "09", "SH": "00"})
+        self.at("09:30")
+        plan = self.plan(screen, focus_row=1)
+        self.assertEqual(plan["rows"][-1]["end"], "08:20")
+        self.assertEqual(plan["lot"]["until"], "次のロットの始まり(3行目の開始)")
+
+    def test_前のロットで終了も次の始まりも無ければ断る(self) -> None:
+        screen = rows_of((5, 1), (5, 1))
+        screen.update(rows_of((3, 1), lot="LOTB", start=3))
+        res = self.lot(screen, focus_row=2)
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("そのロットの最後の行(2行目)に終了の時刻がありません", res.get_json()["error"]["message"])
+
+    def test_選んでいる行が打っていない行なら最後のロット(self) -> None:
+        screen = rows_of((5, 1), KZ="07", KH="00", SZ="08", SH="00")
+        screen.update(rows_of((3, 1), lot="LOTB", start=2))
+        self.at("09:00")
+        plan = self.plan(screen, focus_row=9)
+        self.assertEqual(plan["lot"]["lot"], "LOTB")
 
     def test_設定でオンにした端末だけ(self) -> None:
         from nippou import user_settings

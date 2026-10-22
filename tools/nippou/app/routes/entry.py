@@ -1164,59 +1164,97 @@ def distribute_lot():
 
 
 def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, total: int,
-              day_work: bool) -> dict:
-    """LOTで時間を割り振る: どの行を、何時から何時までか(v4.43.0)。断るなら `refuse`。"""
+              day_work: bool, focus: Optional[tuple[int, int]] = None) -> dict:
+    """LOTで時間を割り振る: どの行を、何時から何時までか(v4.43.0)。断るなら `refuse`。
+
+    **どのロットか**: 選んでいる行(`focus` = (ページ, 行)。最後に入った表の欄の行)のロット。選んでいる行が
+    打った行でなければ、直の最後のロット(v4.43.1。前のロットもやり直せるように)。
+
+    **終わり**: そのロットの最後の行に終了の時刻が入っていればその時刻(ダブルクリックや手で入れた終わり)。
+    無ければ、次のロットがあればその始まり、最後のロットならいまの時刻(v4.43.1。押し忘れても、あとで
+    まとめて押せる)。
+    """
     from nippou.logic import time_split, work_time
 
-    if ctx.recall.active:
-        return {"refuse": "過去の直を開いているあいだは「LOTで時間を割り振る」は使えません"
-                          "(終わりをいまの時刻にするため)。「時間を割り振る」を使ってください"}
     if not targets:
         return {"refuse": "割り振る行がありません(ロット№・枚数・停止などを打った行が1つもありません)"}
-    if not kinds[-1].lot:
+    starts = [i for i, k in enumerate(kinds) if k.change]
+    pick = targets.index(focus) if focus in targets else len(targets) - 1
+    first = max((i for i in starts if i <= pick), default=0)
+    last = min((i for i in starts if i > pick), default=len(targets)) - 1
+    if not kinds[last].lot:
         return {"refuse": "ロット№を打った行がありません。ロット№を打ってから押してください"}
-    first = max((i for i, k in enumerate(kinds) if k.change), default=0)
     many = len({n for n, _ in targets}) > 1
 
     def where(index: int) -> str:
         n, row = targets[index]
         return f"{n}ページ {row}行目" if many else f"{row}行目"
 
+    def clock_of(values, hour_family: str, minute_family: str) -> Optional[int]:
+        hour, minute = (str(values.get(f, "") or "").strip() for f in (hour_family, minute_family))
+        return time_split.parse_hhmm(f"{hour}:{minute}") if hour and minute else None
+
     if first == 0:
         begin, began_from = shift_start, "直の開始"
     else:
-        prev = target_rows[first - 1]
-        hour, minute = (str(prev.get(f, "") or "").strip() for f in ("SZ", "SH"))
-        begin = time_split.parse_hhmm(f"{hour}:{minute}") if hour and minute else None
+        begin = clock_of(target_rows[first - 1], "SZ", "SH")
         if begin is None:
             return {"refuse": f"前のロットの最後の行({where(first - 1)})に終了の時刻がありません。"
                               "先にそのロットを割り振るか、終了の時刻を打ってから押してください"}
         began_from = f"前のロットの続き({where(first - 1)}の終了)"
-    hh, mm = work_time.stamp(_clock_now())
-    now_text = f"{hh}:{mm}"
-    at_begin = (begin - shift_start) % (24 * 60)
-    at_end = (time_split.parse_hhmm(now_text) - shift_start) % (24 * 60)
-    if at_begin >= total:
-        return {"refuse": f"前のロットの終わり({time_split.clock(begin, 0)[0]}:{time_split.clock(begin, 0)[1]})が"
-                          f"{shift}の外なので割り振れません"}
-    if at_end > total:
-        return {"refuse": f"いま({now_text})は{shift}の時間の外なので割り振れません。"
-                          "「時間を割り振る」を使うか、時刻を打ってください"}
+
     note = ""
     rest = None if day_work else time_split.break_window(shift, shift_start, total)
-    if rest is not None and rest[0] < at_end < rest[0] + rest[1]:
-        at_end = rest[0]
-        b_h, b_m = time_split.clock(shift_start, at_end)
-        note = f"いまは休憩の中なので、休憩の始まり {b_h}:{b_m} までを割り振ります"
+    finish = clock_of(target_rows[last], "SZ", "SH")
+    if finish is not None:
+        until = f"{where(last)}の終了"
+    elif last < len(targets) - 1 and clock_of(target_rows[last + 1], "KZ", "KH") is not None:
+        finish = clock_of(target_rows[last + 1], "KZ", "KH")
+        until = f"次のロットの始まり({where(last + 1)}の開始)"
+    elif last < len(targets) - 1:
+        return {"refuse": f"そのロットの最後の行({where(last)})に終了の時刻がありません。"
+                          "終了の時刻を打ってから押してください(最後のロットでなければ、いまの時刻にはしません)"}
+    else:
+        if ctx.recall.active:
+            return {"refuse": "過去の直を開いているあいだは、終わりをいまの時刻にはできません。"
+                              f"{where(last)}に終了の時刻を打ってから押してください"}
+        hh, mm = work_time.stamp(_clock_now())
+        finish, until = time_split.parse_hhmm(f"{hh}:{mm}"), "いまの時刻"
+        at_now = (finish - shift_start) % (24 * 60)
+        if at_now > total:
+            return {"refuse": f"いま({hh}:{mm})は{shift}の時間の外なので割り振れません。"
+                              f"{where(last)}に終了の時刻を打つか、「時間を割り振る」を使ってください"}
+        if rest is not None and rest[0] < at_now < rest[0] + rest[1]:
+            finish = (shift_start + rest[0]) % (24 * 60)
+            b_h, b_m = time_split.clock(finish, 0)
+            note = f"いまは休憩の中なので、休憩の始まり {b_h}:{b_m} までを割り振ります"
+    at_begin = (begin - shift_start) % (24 * 60)
+    at_end = (finish - shift_start) % (24 * 60)
+    if at_begin >= total:
+        b_h, b_m = time_split.clock(begin, 0)
+        return {"refuse": f"前のロットの終わり({b_h}:{b_m})が{shift}の外なので割り振れません"}
+    if at_end > total:
+        e_h, e_m = time_split.clock(finish, 0)
+        return {"refuse": f"{until}({e_h}:{e_m})が{shift}の時間の外なので割り振れません"}
     if at_end <= at_begin:
-        b_h, b_m = time_split.clock(shift_start, at_begin)
-        return {"refuse": f"{began_from} {b_h}:{b_m} から、いま({now_text})までに時間がないので割り振れません"}
-    start_abs = (shift_start + at_begin) % (24 * 60)
-    s_h, s_m = time_split.clock(start_abs, 0)
-    e_h, e_m = time_split.clock(shift_start, at_end)
-    return {"first": first, "start": start_abs, "total": at_end - at_begin,
-            "info": {"lot": kinds[-1].lot, "from": began_from, "first_row": where(first),
+        b_h, b_m = time_split.clock(begin, 0)
+        e_h, e_m = time_split.clock(finish, 0)
+        return {"refuse": f"{began_from} {b_h}:{b_m} から{until} {e_h}:{e_m} までに時間がないので割り振れません"}
+    s_h, s_m = time_split.clock(begin, 0)
+    e_h, e_m = time_split.clock(finish, 0)
+    return {"first": first, "last": last, "start": begin % (24 * 60), "total": at_end - at_begin,
+            "info": {"lot": kinds[last].lot, "from": began_from, "until": until,
+                     "first_row": where(first), "last_row": where(last),
                      "start": f"{s_h}:{s_m}", "end": f"{e_h}:{e_m}", "note": note}}
+
+
+def _focus_row(payload: dict, page: int) -> Optional[tuple[int, int]]:
+    """画面で選んでいる行(最後に入った表の欄の行。いま開いているページ)。無ければ None。"""
+    try:
+        row = int(payload.get("focus_row") or 0)
+    except (TypeError, ValueError):
+        return None
+    return (page, row) if 1 <= row <= constants.ROW_COUNT else None
 
 
 def _distribute(*, lot: bool):
@@ -1267,11 +1305,12 @@ def _distribute(*, lot: bool):
     # その始まりから、いまの時刻まで(v4.43.0)
     span_start, span_total, span_texts, lot_info = start, total, (start_text, end_text), None
     if lot:
-        picked = _pick_lot(ctx, targets, target_rows, kinds, shift, start, total, day_work)
+        focus = _focus_row(payload, page)
+        picked = _pick_lot(ctx, targets, target_rows, kinds, shift, start, total, day_work, focus)
         if "refuse" in picked:
             return jsonify(error_body("cannot_split", picked["refuse"])), 422
-        first = picked["first"]
-        targets, target_rows, kinds = targets[first:], target_rows[first:], kinds[first:]
+        chosen = slice(picked["first"], picked["last"] + 1)
+        targets, target_rows, kinds = targets[chosen], target_rows[chosen], kinds[chosen]
         span_start, span_total, lot_info = picked["start"], picked["total"], picked["info"]
         span_texts = (lot_info["start"], lot_info["end"])
     stops = [time_split.row_stop_minutes(values) for values in target_rows]

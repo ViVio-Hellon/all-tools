@@ -136,13 +136,46 @@ class TimeSplitLotBrowserTests(WebTestCase):
         page.click("#time-split-lot")
         page.wait_for_function("document.getElementById('SZ3').value !== ''", timeout=5000)
         self.assertTrue(self.dialogs, "確かめの窓が出ない")
-        self.assertIn("ロット LOTA の 3 行(1行目から)に", self.dialogs[0])
+        self.assertIn("ロット LOTA の 3 行(1行目〜3行目)に", self.dialogs[0])
         self.assertIn("始まりは直の開始、終わりはいまの時刻", self.dialogs[0])
         self.assertEqual(f'{page.input_value("#KZ1")}:{page.input_value("#KH1")}', start)
         self.assertEqual(f'{page.input_value("#SZ3")}:{page.input_value("#SH3")}', "08:10")
         self.assertEqual(f'{page.input_value("#SZ1")}:{page.input_value("#SH1")}',
                          f'{page.input_value("#KZ2")}:{page.input_value("#KH2")}', "行の時刻はつながる")
         self.assertEqual(page.input_value("#KZ4"), "", "打っていない行は触らない")
+        self.assertEqual(self.errors, [])
+
+    def test_LOTで時間を割り振るは選んでいる行のロット(self) -> None:
+        """LOTB まで打ったあとで LOTA の行を選んで押す → LOTA を、その最後の行の終了まで(v4.43.1)。"""
+        from datetime import date, datetime, time
+
+        from nippou import user_settings, work_context
+        from nippou.config import KEY_TIME_SPLIT
+        from nippou.db.models import DetailRecord, HeaderRecord
+        from app.routes.entry import build_shift_calculator
+        from tests.test_scenario_shift_flow import _Now, install_clock
+
+        user_settings.save(KEY_TIME_SPLIT, True)
+        _Now.value = datetime.combine(date(2026, 10, 21), time(9, 2))
+        install_clock(self)
+        day, line, shift = work_context.get_context().current_key(
+            build_shift_calculator(self.repo().get_shift_times()))
+        at = dict(report_date=day, line=line, shift=shift, page=1)
+        self.repo().save(HeaderRecord(**at, worker="山田"),
+                         [DetailRecord(**at, row_no=1, lot="LOTA", mai="5", tut="1"),
+                          DetailRecord(**at, row_no=2, mai="5", tut="1", sz="08", sh="10"),
+                          DetailRecord(**at, row_no=3, lot="LOTB", mai="3", tut="1",
+                                       kz="08", kh="10", sz="09", sh="00")])
+        page = self.open("/")
+        page.wait_for_selector("#grid-body")
+        page.wait_for_function("document.getElementById('LOT1').value === 'LOTA'", timeout=5000)
+        page.click("#MAI2")
+        page.click("#time-split-lot")
+        page.wait_for_function("document.getElementById('KZ2').value !== ''", timeout=5000)
+        self.assertIn("ロット LOTA の 2 行(1行目〜2行目)に", self.dialogs[0])
+        self.assertIn("終わりは2行目の終了", self.dialogs[0])
+        self.assertEqual(f'{page.input_value("#SZ2")}:{page.input_value("#SH2")}', "08:10")
+        self.assertEqual(f'{page.input_value("#SZ3")}:{page.input_value("#SH3")}', "09:00", "LOTB は触らない")
         self.assertEqual(self.errors, [])
 
     @staticmethod

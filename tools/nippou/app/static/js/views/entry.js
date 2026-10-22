@@ -3073,11 +3073,18 @@ export function start() {
     LOTで時間を割り振る(v4.43.0)も同じ道。違うのは、いまのロットの行だけを、その始まり(直の開始か
     前のロットの終わり)から押した時刻までにすること。決めるのはサーバ(`/api/entry/distribute-lot`)。
   */
+  // 選んでいる行(最後に入った表の欄の行)。LOTで時間を割り振るは、その行のロットを割り振る(v4.43.1)
+  let focusRow = 0;
+  document.getElementById("grid-body")?.addEventListener("focusin", (event) => {
+    const row = Number(event.target?.dataset?.row) || 0;
+    if (row) focusRow = row;
+  }, { signal: pageSignal() });
   const splitTimes = async (url) => {
     const mine = gen;
+    const asked = { ...collect(), focus_row: focusRow };
     let plan;
     try {
-      plan = await send(url, { ...collect(), dry_run: true });
+      plan = await send(url, { ...asked, dry_run: true });
     } catch (err) {
       toastError(err);
       return;
@@ -3086,8 +3093,8 @@ export function start() {
     const pages = (plan.pages || []).map((n) => `${n}ページ`).join("・");
     const lot = plan.lot;
     const lines = lot ? [
-      `ロット ${lot.lot} の ${plan.count} 行(${lot.first_row}から)に、${plan.start}〜${plan.end}(${plan.minutes}分)を割り振ります。`,
-      `始まりは${lot.from}、終わりはいまの時刻/${plan.step === 5 ? "5分" : "1分"}刻み`,
+      `ロット ${lot.lot} の ${plan.count} 行(${lot.first_row}〜${lot.last_row})に、${plan.start}〜${plan.end}(${plan.minutes}分)を割り振ります。`,
+      `始まりは${lot.from}、終わりは${lot.until}/${plan.step === 5 ? "5分" : "1分"}刻み`,
     ] : [
       `${plan.shift} ${plan.start}〜${plan.end}(${plan.minutes}分)を、打った ${plan.count} 行に割り振ります。`,
       `${pages}/最初の行 ${plan.first} 〜 最後の行 ${plan.last}/${plan.step === 5 ? "5分" : "1分"}刻み`,
@@ -3112,7 +3119,7 @@ export function start() {
     if (!confirm(lines.join("\n"))) return;
     try {
       const since = editSeq;
-      const body = await send(url, collect());
+      const body = await send(url, { ...collect(), focus_row: focusRow });
       if (!live(mine)) return;
       paint(body, { since });
       toast(body.message, "ok");
