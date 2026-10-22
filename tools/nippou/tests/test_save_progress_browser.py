@@ -143,25 +143,46 @@ class ProgressTests(PushCase):
                 page.close()
 
     def test_すぐ終わるものには出さない(self) -> None:
-        """0.3 秒より早く終わるものに出すと、ちらつくだけ。"""
+        """0.3 秒より早く終わるものに出すと、ちらつくだけ。
+
+        答えは試験がすぐ返すが、重い CI では取り次ぎだけで 0.3 秒を超えることがある(そのときは出すのが
+        正しい)。**画面の中で送ってから答えが来るまでを計り**、速かったなら出さない・遅かったなら出す、を
+        見る(境目の近く 0.25〜0.4 秒は、どちらでもよい)。
+        """
         self.answers["/api/settings/push/plan"] = (200, {"confirm_needed": False})
         self.answers["/api/settings/push"] = (200, {"message": "共有へ保存しました"})
         self.answers["/api/progress"] = (200, RUNNING)
         page = self.open_entry()
         page.evaluate("""() => {
             window.__shown = false;
+            window.__took = null;
             new MutationObserver(() => {
               const b = document.getElementById("job-float");
               if (b && !b.hidden) window.__shown = true;
             }).observe(document.body, { subtree: true, childList: true,
                                         attributes: true, attributeFilter: ["hidden"] });
+            // 共有へ保存の要求が、送ってから答えが来るまで何ミリ秒かかったか
+            const real = window.fetch;
+            window.fetch = async (url, ...rest) => {
+              const text = String(url);
+              if (!text.includes("/api/settings/push") || text.includes("/plan")) return real(url, ...rest);
+              const began = performance.now();
+              try { return await real(url, ...rest); }
+              finally { window.__took = performance.now() - began; }
+            };
         }""")
         mark = len(self.sent)
         self.press(page, "#push-shared")
         self.wait_sent(page, mark, "/api/settings/push")
+        page.wait_for_function("window.__took !== null", timeout=5000)
         page.wait_for_timeout(800)
-        self.assertFalse(page.evaluate("window.__shown"), "一瞬で終わったのに進み具合を出しました")
-
+        took, shown = page.evaluate("window.__took"), page.evaluate("window.__shown")
+        if took < 250:
+            self.assertFalse(shown, f"一瞬({took:.0f}ミリ秒)で終わったのに進み具合を出しました")
+        elif took > 400:
+            self.assertTrue(shown, f"{took:.0f}ミリ秒かかったのに進み具合を出しませんでした")
+        self.assertTrue(page.evaluate("document.getElementById('job-float')?.hidden ?? true"),
+                        "終わったのに進み具合が残っています")
 
 if __name__ == "__main__":
     unittest.main()
