@@ -98,6 +98,9 @@ class GwPrintData:
     pack_rows: list[Row] = field(default_factory=list)
     #: 紙の題に添える鍵(LotNo など)。無ければ題だけ
     subject: str = ""
+    #: **どの版で・どの取得元の・いつ時点の資材マスタで計算したか**(v4.44.0。紙にも残す)。
+    #: (見出し, 中身) の並び。`services/gw_record`
+    provenance: list[tuple[str, str]] = field(default_factory=list)
 
 
 # ----------------------------------------------------------------------
@@ -137,6 +140,11 @@ td .sub { display: block; font-size: 10px; color: #555; }
 .packs .note { font-size: 10px; color: #555; margin: 4px 0 0; }
 .packs td.value { width: 7em; }
 .generated-at { margin-top: 10px; font-size: 10px; color: #666; }
+/* どの版で・どの資材マスタで計算したか(v4.44.0)。**紙にも出す**(生成日時と違って隠さない) */
+.provenance { margin-top: 8px; font-size: 9.5px; color: #333; border-top: 1px solid #999;
+              padding-top: 3px; }
+.provenance span { margin-right: 1.2em; }
+.provenance b { font-weight: bold; }
 @media print {
   .generated-at { display: none; }
   /* **紙1枚に収める。** 「◯梱包ぶん」の段まで載ると、紙の端から 7mm の
@@ -209,6 +217,14 @@ def _packs_html(data: GwPrintData) -> str:
 """
 
 
+def _provenance_html(data: GwPrintData) -> str:
+    """計算の素性の1段(v4.44.0)。無ければ出さない。"""
+    if not data.provenance:
+        return ""
+    items = "".join(f"<span><b>{_esc(k)}</b> {_esc(v)}</span>" for k, v in data.provenance)
+    return f'<div class="provenance">{items}</div>'
+
+
 def build_html(data: GwPrintData, *, generated_at: str = "",
                auto_print: bool = False) -> str:
     """紙1枚ぶんのHTML。**左が入れたもの、右が出たもの。**
@@ -252,6 +268,7 @@ def build_html(data: GwPrintData, *, generated_at: str = "",
   </section>
 </div>
 {_packs_html(data)}
+{_provenance_html(data)}
 <div class="generated-at">生成日時: {_esc(generated_at)}</div>
 </div>
 {_AUTO_PRINT if auto_print else ""}

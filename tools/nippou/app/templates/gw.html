@@ -22,6 +22,9 @@
 <div class="page-head">
   <h1>梱包資材重量計算</h1>
   <span class="lead">寸法から資材の重量を出す(UFGW 相当)</span>
+  {# どの版で・どの資材マスタで計算したかの記録(v4.44.0) #}
+  <a class="btn btn--sm" id="gw-records-link" href="{{ url_for('gw.records') }}"
+     data-hint="計算・印刷のたびに、どの版で・どの取得元の・いつ時点の資材マスタで計算したかを残しています">計算の記録</a>
 </div>
 
 {# ================================================================
@@ -299,6 +302,8 @@
        押せない理由も、マウスを載せたときだけ出る吹き出しでは読まれ
        ません。**横に字で出します**(`#print-why`)。押すと紙の窓が開き、
        そのまま印刷の画面が出ます(Ctrl+P は要りません)。 #}
+    {# 計算したら、どの版で・どの取得元の・いつ時点の資材マスタで計算したかを出す(v4.44.0。記録にも残す) #}
+    <p class="lead" id="gw-provenance" hidden></p>
     <div class="gw-print" id="gw-print">
       <label class="gw-print__packs" for="print-packs">梱包数</label>
       <input id="print-packs" type="text" inputmode="numeric" size="4"

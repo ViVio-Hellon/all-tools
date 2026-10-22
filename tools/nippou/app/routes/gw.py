@@ -30,6 +30,7 @@ from nippou.logic import gw_autoselect as autoselect
 from nippou.logic import gw_calculation as gw
 from nippou.logic import packing_figure
 from nippou.reporting import gw_print
+from nippou.services import gw_record
 
 from .. import error_body, shell
 
@@ -276,6 +277,10 @@ class _Computed:
     input_weight_kg: Optional[float]
     tare_weight_kg: float
     gross_weight_kg: Optional[float]
+    #: 読んだ資材マスタの素性(取得元・場所・いつ時点か・読んだ時刻。`gw_record.master_source`)
+    material: dict
+    #: 使った単位質量・係数(資材の名前 → 値)。マスタが後で直されても、何で計算したかが分かる
+    rates_used: dict
 
 
 def _truthy(value: Any) -> bool:
@@ -323,6 +328,11 @@ def _compute(payload: dict):
         key: _truthy(raw_flags.get(key, True)) for key, _ in MATERIAL_FLAGS})
 
     band_kind = str(payload.get("band_kind", BAND_KINDS[0]))
+    # **どの取得元の、いつ時点の資材マスタで計算したか**(v4.44.0)。読む前に日時を取る
+    # (読んでいるあいだに差し替わっても、読み始めた時点のものを言う)
+    from nippou.config import SETTINGS
+
+    material = gw_record.master_source(SETTINGS.gw_material_master_path)
     rates = _rates(band_kind)
     if rates is None:
         return None, _refuse([gw.InputProblem("materials", gw.MASTER_UNREADABLE)])
@@ -357,13 +367,66 @@ def _compute(payload: dict):
     input_weight = _float(payload.get("input_weight_kg")) or None
     gross = gw.gross_weight(tare, input_weight)
 
+    rates_used = _rates_used(flags, rates, band_kind, selection, vc_a, vc_b, vc_name_a, vc_name_b)
     return _Computed(
+        material=material, rates_used=rates_used,
         payload=payload, dims=dims, flags=flags, rates=rates, weights=weights,
         selection=selection, vc_a=vc_a, vc_b=vc_b,
         vc_name_a=vc_name_a, vc_name_b=vc_name_b, band_kind=band_kind,
         use_combined_load=use_combined, combined_load_kg=combined,
         input_weight_kg=input_weight,
         tare_weight_kg=tare, gross_weight_kg=gross), None
+
+
+def _rates_used(flags, rates, band_kind, selection, vc_a, vc_b, vc_name_a, vc_name_b) -> dict:
+    """使った資材の単位質量・係数(資材の名前 → {単位質量, 係数})。使わない資材は入れない。"""
+    names = _master_names(band_kind)
+    out: dict[str, dict[str, float]] = {}
+    for key, _label in MATERIAL_FLAGS:
+        if getattr(flags, key):
+            rate = getattr(rates, key)
+            out[names[key]] = {"単位質量": rate.unit_mass, "係数": rate.coefficient}
+    if selection.use_vc:
+        for used, name, rate in ((selection.use_side_a, vc_name_a, vc_a),
+                                 (selection.use_side_b, vc_name_b, vc_b)):
+            if used and name:
+                out[f"VC {name}"] = {"単位質量": rate.unit_mass, "係数": rate.coefficient}
+    return out
+
+
+def _keep_record(computed: _Computed, kind: str, *, packs: int = 0) -> dict:
+    """計算・印刷の記録を残す(`services/gw_record`)。画面・紙に出す素性を返す。"""
+    from flask import current_app
+
+    payload = computed.payload
+    ctx = work_context.get_context()
+    subject = {key: str(payload.get(key, "") or "").strip()
+               for key in ("lot_no", "order_no", "pack_spec_no")}
+    results = {"material_total": round(computed.weights.total, 2),
+               "tare_weight": round(computed.tare_weight_kg, 2),
+               "gross_weight": (None if computed.gross_weight_kg is None
+                                else round(computed.gross_weight_kg, 2))}
+    entry = gw_record.record(
+        kind, material=computed.material, rates=computed.rates_used, subject=subject,
+        results=results, line=ctx.line, stamp=str(current_app.config.get("STATIC_STAMP", "")),
+        extra={"packs": packs} if packs else None)
+    return {"at": entry["at"], "version": entry["version"],
+            "version_label": gw_record.version_label(entry["version"]),
+            "material": entry["material"], "material_label": gw_record.label(entry["material"]),
+            "who": entry["who"]}
+
+
+def _provenance_rows(record: dict) -> list[tuple[str, str]]:
+    """紙の下に出す素性(見出し, 中身)。"""
+    who = record.get("who") or {}
+    material = record.get("material") or {}
+    return [
+        ("版", record.get("version_label", "")),
+        ("資材マスタ", f"{material.get('source', '')} {material.get('path', '')}"),
+        ("資材マスタの時点", material.get("asOf") or "日時不明"),
+        ("計算", f"{record.get('at', '')} {who.get('pc', '')}"
+                 + (f"({who['line']})" if who.get("line") else "")),
+    ]
 
 
 @bp.post("/api/gw/calculate")
@@ -431,6 +494,8 @@ def calculate():
         # 梱包図(外形)。**輸出梱包の完成確認用**なので、中身は描かない
         # (`logic/packing_figure.py`)。計算は通っても図は描けないことが
         # あるので、描けない理由も一緒に返す
+        # **どの版で・どの取得元の・いつ時点の資材マスタで計算したか**(v4.44.0。記録にも残す)
+        "record": _keep_record(computed, gw_record.KIND_CALC),
         "figure": packing_figure.build(
             thickness_mm=dims.thickness_mm, width_mm=dims.width_mm,
             length_mm=dims.length_mm, count=dims.count,
@@ -740,10 +805,48 @@ def print_gw():
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_button_click("gw_print", extra=f"{packs}梱包")
+    data = _print_data(computed, packs)
+    # 紙にも、どの版で・どの資材マスタで計算したかを載せる。印刷の画面を開いたことも記録に残す
+    data.provenance = _provenance_rows(_keep_record(computed, gw_record.KIND_PRINT, packs=packs))
     return Response(
-        gw_print.build_html(_print_data(computed, packs), generated_at=now,
-                            auto_print=auto_print),
+        gw_print.build_html(data, generated_at=now, auto_print=auto_print),
         mimetype="text/html")
+
+
+@bp.get("/gw/records")
+def records():
+    """GW計算の記録(v4.44.0)── どの版で・どの取得元の・いつ時点の資材マスタで計算し・印刷画面を開いたか。
+
+    この端末の分を新しい順に 300 件(今月と先月のファイル)。消えない控えは月ごとのファイル
+    (`services/gw_record`)。出力先を決めてあれば、そこにも PC ごとに書いている。
+    """
+    ctx = work_context.get_context()
+    from ..current import current_calculator
+    calc = current_calculator()
+    rows = []
+    for entry in gw_record.recent(300):
+        subject = entry.get("subject") or {}
+        results = entry.get("results") or {}
+        who = entry.get("who") or {}
+        material = entry.get("material") or {}
+        rows.append({
+            "at": entry.get("at", ""), "kind": entry.get("kind", ""),
+            "subject": " / ".join(x for x in (
+                f"LotNo {subject['lot_no']}" if subject.get("lot_no") else "",
+                f"オーダーNo {subject['order_no']}" if subject.get("order_no") else "",
+                f"包装仕様 {subject['pack_spec_no']}" if subject.get("pack_spec_no") else "") if x),
+            "gross": results.get("gross_weight"), "tare": results.get("tare_weight"),
+            "packs": entry.get("packs") or "",
+            "who": who.get("pc", "") + (f"({who['line']})" if who.get("line") else ""),
+            "version": gw_record.version_label(entry.get("version") or {}),
+            "stamp": (entry.get("version") or {}).get("stamp", ""),
+            "source": f"{material.get('source', '')} {material.get('path', '')}".strip(),
+            "as_of": material.get("asOf") or "日時不明",
+            "rates": "・".join(f"{name} {v.get('単位質量')}×{v.get('係数')}"
+                              for name, v in (entry.get("rates") or {}).items()),
+        })
+    return render_template("gw_records.html", rows=rows, where=gw_record.status(ctx.line),
+                           **shell.shell_context("gw", ribbon=_ribbon(ctx, calc)))
 
 
 def _ribbon(ctx, calc):

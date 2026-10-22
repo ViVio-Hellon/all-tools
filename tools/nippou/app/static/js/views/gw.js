@@ -838,6 +838,20 @@ async function showFigure() {
 */
 let calcSeq = 0;
 
+/*
+  どの版で・どの取得元の・いつ時点の資材マスタで計算したか(v4.44.0)。字はサーバが決める
+  (`services/gw_record`)。記録にも同じものが残る(「計算の記録」)。
+*/
+function showProvenance(record) {
+  const box = byId("gw-provenance");
+  if (!box) return;
+  if (!record) { box.hidden = true; box.textContent = ""; return; }
+  const m = record.material || {};
+  box.textContent = `${record.version_label}/資材マスタ ${m.source || ""} ${m.path || ""}`
+    + `(${m.asOf || "日時不明"} 時点)で計算しました(${record.at})`;
+  box.hidden = false;
+}
+
 async function calculate() {
   const mine = ++calcSeq;
   state("calc-state", "計算しています…");
@@ -850,6 +864,7 @@ async function calculate() {
     renderPerPack();
     renderBreakdown(body.breakdown, body.breakdown_text);
     paintFigure(body.figure);
+    showProvenance(body.record);
     state("calc-state", "");
     // 計算が通ったので、この数字の紙を刷れる
     refreshPrint(true);
@@ -862,6 +877,7 @@ async function calculate() {
     byId("per-pack").hidden = true;
     renderBreakdown(null);
     paintFigure(null);
+    showProvenance(null);
     // **断られた入力の紙を刷らせない。** 空欄だらけの紙を出してから
     // 気づくことになる
     refreshPrint(false);

@@ -200,6 +200,29 @@ class FigureAndPrintTests(GwBrowserCase):
         self.assertEqual(query.get("packs"), ["12"])
         self.assertEqual(self.errors, [])
 
+    def test_計算するとどの版で_どの資材マスタで計算したかを出し_記録の画面へ行ける(self) -> None:
+        """v4.44.0: どの版で・どの取得元の・いつ時点の資材マスタで計算したか。"""
+        import os
+        from datetime import datetime
+
+        from nippou import app_config
+        from nippou.config import SETTINGS
+
+        os.utime(SETTINGS.gw_material_master_path, (datetime(2026, 10, 20, 14, 3, 11).timestamp(),) * 2)
+        page = self.open_gw()
+        self.assertTrue(page.is_hidden("#gw-provenance"), "計算する前から出ています")
+        self.fill_dims(page)
+        page.click("#calc")
+        page.wait_for_selector("#gw-provenance:not([hidden])", timeout=8000)
+        text = page.inner_text("#gw-provenance")
+        self.assertIn(f"日報 {app_config.version()}", text)
+        self.assertIn("2026-10-20 14:03:11 時点", text)
+        self.assertIn("梱包資材マスタ", text)
+        page.click("#gw-records-link")
+        page.wait_for_selector("#gw-records-table")
+        self.assertIn("2026-10-20 14:03:11", page.inner_text("#gw-records-table"))
+        self.assertEqual(self.errors, [])
+
 
 class StaffModalTests(ScreenBrowserCase):
     def test_作業者を選ぶ窓は広い窓で班を横に並べる(self) -> None:
