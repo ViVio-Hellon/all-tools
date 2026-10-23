@@ -1360,7 +1360,7 @@ async function loadDir(path) {
         // あることは見せるが選ばせない(変換がまだ、と分かるように)
         const el = fsItem(f, '⚠', null);
         el.classList.add('fs-item--legacy');
-        el.title = '変換前の Access ファイルです。tools/accdb_to_sqlite.py で変換してください。';
+        el.title = '変換前の Access ファイルなので選べません(先に SQLite へ変換が要ります)';
         el.disabled = true;
         list.appendChild(el);
       } else {

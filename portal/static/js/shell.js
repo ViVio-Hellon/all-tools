@@ -418,7 +418,7 @@ async function followTabs() {
   const fresh = removed.filter((id) => !noticed.has(id));
   for (const id of removed) {
     noticed.add(id);
-    document.getElementById(`tab-${id}`)?.setAttribute("title", "タブ表示権限から外れました。次に開いたときに消えます");
+    document.getElementById(`tab-${id}`)?.setAttribute("title", "タブ表示権限から外れました。次に日報複合ツールを開いたときに消えます");
   }
   if (fresh.length) {
     toast(`${fresh.map((id) => TOOLS.get(id).title).join("、")} のタブは、この端末では出さない設定になりました。`

@@ -167,6 +167,19 @@ class BoardViewTest(StoreFixture):
         self.assertEqual(row.hold.state, presenter.STATE_HELD)
         self.assertIn("注文中", row.hold.tip)
 
+    def test_hold_tip_explains_why_only_where_hold_can_be_pressed(self):
+        """発注の無い行の「注文中」は、倉庫には押せない理由を出し、現場・倉庫参照には出さない。
+
+        現場と倉庫参照は注文中を操作しないので、「発注してから注文中にできます」は当てはまらない。
+        """
+        def unordered(view):
+            return next(r for g in view.groups for r in g.rows
+                        if r.size.state == presenter.STATE_NEUTRAL and r.hold.state == presenter.STATE_NEUTRAL)
+
+        self.assertIn("発注がありません", unordered(self._view(config.MODE_WAREHOUSE)).hold.tip)
+        for mode in (config.MODE_SITE, config.MODE_WAREHOUSE_VIEW):
+            self.assertEqual(unordered(self._view(mode)).hold.tip, "", mode)
+
     def test_ordered_and_held_locks_size_in_site_mode(self):
         """発注中 かつ 注文中 の間、現場はサイズを押せない(VBA の無言のガード)。
 

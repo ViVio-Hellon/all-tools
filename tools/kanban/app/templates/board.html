@@ -34,7 +34,7 @@
 
   <div class="toolbar">
     <button class="btn" type="button" id="refresh"
-            title="Access から最新を読み直します">↻ 更新</button>
+            title="共有DBから最新を取り込み直します">↻ 更新</button>
 
     {% if mode == 'site' %}
     <button class="btn btn--primary" type="button" id="batch-reset"
@@ -53,7 +53,7 @@
     {# 権限のあるほかのモードへ、その場で切り替える(デスクトップ版は開き直さずに) #}
     {% for m in switch_modes %}
     <button class="btn btn--sm" type="button" data-switch-mode="{{ m.key }}" data-label="{{ m.label }}"
-            title="{{ m.label }}に切り替えます(共有DBへの書き戻しを済ませてから)">⇄ {{ m.label }}へ</button>
+            title="{{ m.label }}に切り替えます(送っていない操作を送ってから開き直します。ブラウザ版は次に開いたときから)">⇄ {{ m.label }}へ</button>
     {% endfor %}
   </div>
 

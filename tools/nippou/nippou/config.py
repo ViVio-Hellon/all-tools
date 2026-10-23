@@ -164,7 +164,7 @@ KEY_TERMINAL_MARU = "terminal_maru_sub"
 KEY_ACCESS_LINE_APPLIED = "access_rights_line"
 
 # 日報入力の「時間を割り振る」(v4.30.0。`logic/time_split`)。**オンにした端末だけ**ボタンが出る。
-# 変えるには管理者パスワード(設定・管理者 →「管理者」の面)。既定はオフ
+# 変えるには管理者パスワード(設定・管理者 →「この端末と配布」の面)。既定はオフ
 KEY_TIME_SPLIT = "time_split_enabled"
 
 # 「時間を割り振る」の倍率(v4.42.0。`logic/time_split.Factors`)。EX のロット・ロットの変わり目の

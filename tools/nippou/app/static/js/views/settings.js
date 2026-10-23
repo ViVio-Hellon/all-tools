@@ -1965,6 +1965,8 @@ export function start() {
       if (code) code.textContent = kid.path;
       const badge = li.querySelector(".badge + .badge") || null;
       if (!badge) return;
+      // 吹き出しは「いま見つかりません」のときだけ(見つかって「読めます」になったら外す)
+      badge.removeAttribute("title");
       if (kid.is_write_target && !kid.exists && kid.writable) {
         badge.className = "badge";
         badge.textContent = "初回の保存で作られます";
@@ -1972,6 +1974,8 @@ export function start() {
         badge.className = "badge badge--alert";
         badge.dataset.recheck = "";
         badge.textContent = `いま見つかりません(${kid.checked_at})`;
+        badge.title = "フォルダはあるのに、ファイルだけ見えませんでした。共有で作り直している最中"
+          + "(仕掛は毎時00分など)なら一瞬こう見えます。数秒後に確かめ直します";
       } else if (!kid.exists) {
         badge.className = "badge badge--alert";
         badge.textContent = "このファイルがありません";

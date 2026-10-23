@@ -100,7 +100,7 @@ function renderDistribution(dist) {
     const text = el("span", "distchecks__text");
     text.append(el("b", null, it.label), el("small", null, it.current));
     label.append(input, text);
-    label.title = it.set ? "" : "この端末で変えていないので、既定のまま(入れなくても配った先は既定で動きます)";
+    label.title = it.set ? "" : "この端末で変えていないので選べません。配った先も既定で動きます";
     return label;
   }));
 }
@@ -147,7 +147,7 @@ async function browseTo(path) {
     const li = el("li");
     const b = el("button", null, `▸ ${d.name}`);
     b.type = "button";
-    b.title = "開く";
+    b.title = "このフォルダを開き、上の欄に入れます";
     b.addEventListener("click", () => { $("settings-folder").value = d.path; browseTo(d.path); });
     li.appendChild(b);
     list.appendChild(li);

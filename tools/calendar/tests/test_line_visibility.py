@@ -97,6 +97,24 @@ class WebTests(unittest.TestCase):
                     self.assertEqual(name in cell["body"], name in want)
                     self.assertEqual(name in cell["tip"], name in want)
 
+    def test_登録の件数も見えるものだけ(self) -> None:
+        """内容閲覧の「登録 N 件」・マスの読み上げ・履歴の月の件数は、マス目と同じ決まりで数える。"""
+        from calendar_app.presenters import history
+        repo = repository.Repository(self.conn)
+        past = _dt.date(2026, 9, 10)
+        for i, (name, kubun, line, shift) in enumerate(ROWS, 1):
+            repo.save_record(past, kubun, name, str(i), shift=shift, group="A", line=line)
+        for my_line, want in EXPECTED.items():
+            with self.subTest(my_line=my_line):
+                user_settings.save_my_line(my_line)
+                month = _web.json_of(self.client.get("/api/calendar?year=2026&month=10", headers=_web.auth()))
+                cell = next(c for c in month["cells"] if c["date"] == D)
+                self.assertEqual(cell["count"], len(want))
+                self.assertEqual(cell["count"], len(self.day(my_line)["items"]), "内容閲覧の中身と同じ数")
+                tile = next(m for y in history.choices(self.conn, _dt.date(2026, 10, 23))["years"]
+                            if y["year"] == 2026 for m in y["months"] if m["month"] == 9)
+                self.assertEqual(tile["count"], len(want))
+
     def delete(self, my_line: str, name: str):
         user_settings.save_my_line(my_line)
         return self.client.post("/api/delete", json={"date": D, "ids": [self.ids[name]]},

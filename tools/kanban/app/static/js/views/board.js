@@ -251,9 +251,10 @@ function setOpenTerminals(list) {
     const chip = document.createElement('span');
     chip.className = 'who' + (p.stale ? ' who--stale' : '');
     chip.textContent = p.label + (p.stale ? '?' : '');
+    const quietMin = Math.round((p.quiet_sec || 0) / 60);
     chip.title = p.stale
-      ? `${p.label} は開いた印が残っていますが、${Math.round(p.quiet_sec / 60)} 分ほど`
-        + `更新がありません(異常終了の可能性)。最後の更新: ${p.stamp || '不明'}`
+      ? `${p.label} は${quietMin ? ` ${quietMin} 分ほど` : ''}更新がありません(異常終了したのかもしれません)。`
+        + `最後の更新: ${p.stamp || '不明'}`
       : `${p.label} が開いています${p.host ? `(${p.host})` : ''}。最後の更新: ${p.stamp || '不明'}`;
     el.appendChild(chip);
   }
@@ -1277,8 +1278,7 @@ function setFreshness(ageSec, stale, at) {
   slot.hidden = false;
   const min = Math.floor((ageSec || 0) / 60);
   el.textContent = min >= 1 ? `${min} 分前` : 'まだ一度も';
-  el.title =
-    '共有DBから取り込めていません。共有フォルダに届いているか確認してください。'
-    + (at ? `\n最後に取り込めたのは ${at} です。` : '')
-    + '\n盤の内容はそのときのままです。';
+  el.title = at
+    ? `共有DBから取り込めていません。盤は ${at} に取り込んだときのままです。共有フォルダに届いているか確かめてください`
+    : '共有DBからまだ一度も取り込めていません。共有フォルダに届いているか確かめてください';
 }

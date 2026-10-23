@@ -26,6 +26,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .. import settings
 from ..repository import Repository
 from . import calendar as cal
 
@@ -59,7 +60,10 @@ def choices(conn: sqlite3.Connection,
             today: Optional[_dt.date] = None) -> dict[str, Any]:
     """選べる月の一覧。年ごとに12マスで返す(画面は写すだけ)。"""
     today = today or _dt.date.today()
-    counts = Repository(conn).month_counts(today.replace(day=1))
+    repo = Repository(conn)
+    # 選べる月の範囲は全部の登録で決め、出す件数はこの端末に見えるものだけ(マス目と同じ決まり)
+    counts = repo.month_counts(today.replace(day=1))
+    shown = repo.month_counts(today.replace(day=1), settings.get_my_line())
     last = _last_month(today)
     if not counts:
         return {"years": [], "latest": None, "earliest": None,
@@ -74,7 +78,7 @@ def choices(conn: sqlite3.Connection,
         for month in range(1, 13):
             index = _index(year, month)
             choice = Choice(year, month,
-                            counts.get(f"{year:04d}/{month:02d}", 0),
+                            shown.get(f"{year:04d}/{month:02d}", 0),
                             lo <= index <= hi)
             months.append({"month": month, "label": f"{month}月",
                            "count": choice.count,

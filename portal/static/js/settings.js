@@ -284,16 +284,17 @@ function paint(body, options = {}) {
   $("lock-state").textContent = body.admin ? "🔓 鍵が開いています" : "🔒 鍵が掛かっています";
   $("lock-open").hidden = Boolean(body.admin);
   $("lock-close").hidden = !body.admin;
-  for (const node of document.querySelectorAll("[data-admin]")) {
-    node.setAttribute("aria-disabled", body.admin ? "false" : "true");
-    node.title = body.admin ? "" : "管理者パスワードで鍵を開けると使えます";
-  }
   paintMe();
   paintRights();
   paintSource(Boolean(options.location));
   paintTools();
   paintDistribution();
   paintApp();
+  // 表の行の「直す」「消す」も含めるので、描いたあとで付ける
+  for (const node of document.querySelectorAll("[data-admin]")) {
+    node.setAttribute("aria-disabled", body.admin ? "false" : "true");
+    node.title = body.admin ? "" : "管理者パスワードで鍵を開けると使えます";
+  }
   $("pw-lead").textContent = body.password_custom
     ? "この端末で変えたパスワードが効いています。変えるには、いまのパスワードが要ります(4文字以上)。"
     : "まだ変えていません(ほかのツールと同じ既定のパスワード)。変えるには、いまのパスワードが要ります(4文字以上)。";
@@ -487,6 +488,7 @@ function paintRights() {
     del.type = "button";
     del.className = "btn btn--small btn--danger";
     del.textContent = "消す";
+    del.dataset.admin = "";
     del.addEventListener("click", () => removeRow(rule));
     act.append(edit, " ", del);
     tr.append(act);

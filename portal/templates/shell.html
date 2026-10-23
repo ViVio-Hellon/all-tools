@@ -10,7 +10,7 @@
 </head>
 <body>
 <header class="bar">
-  <div class="brand" title="{{ name }} VER{{ version }}({{ '窓' if edition == 'desktop' else 'ブラウザ' }}で動いています)">
+  <div class="brand" title="{{ name }} VER{{ version }}({{ 'デスクトップ版' if edition == 'desktop' else 'ブラウザ版' }})">
     <span class="brand__name">{{ name }}</span>
     <span class="brand__ver">VER{{ version }}</span>
     {% if edition == 'browser' %}<span class="brand__ed">ブラウザ版</span>{% endif %}

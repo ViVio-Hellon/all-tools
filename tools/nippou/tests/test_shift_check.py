@@ -587,8 +587,8 @@ class CheckScreenTests(WebTestCase):
         """
         body = self.get("/").get_data(as_text=True)
         self.assertIn("この直をチェック", body)
-        # 押しても保存しない・止めないことを、ボタン自身が言う
-        self.assertIn("保存も、止めもしません", body)
+        # 押しても保存しないことを、ボタン自身が言う(v4.44.2 で説明を短くした)
+        self.assertIn("直すところを並べます(保存はしません)", body)
 
     def test_次ページ発行という名前になっている(self) -> None:
         """「新しいページを出す」では、何が起きるのか分かりにくい。"""

@@ -187,7 +187,7 @@ class VersionDisplayTests(WebTestCase):
     def test_帯のtitleに印が入る(self) -> None:
         """帯に8文字の英数字を並べても読めないが、聞かれたときには要る。"""
         stamp = self.app.config["STATIC_STAMP"]
-        self.assertIn(f"build {stamp}", self.html())
+        self.assertIn(f"サーバの印 {stamp}", self.html())
 
     def test_画面に印を渡している(self) -> None:
         """`window.APP.stamp` を JS が自分の URL と突き合わせる。"""

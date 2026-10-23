@@ -607,8 +607,8 @@ export function start() {
     // 固定値は「なぜそうなのか」も言う(知らない間に固定値になっていた、を残さない)
     source.textContent = b.source === "式" ? `式・VC厚 ${b.vcatu ?? "?"}` : "固定値(打った長さ)";
     if (b.source !== "式") {
-      source.title = "VC品種と結びついていない枠です。マスに入れた長さをそのまま出します。"
-        + "VC長さ計算 → 設定 → 選んだ枠を直す で「式にする」に切り替えられます";
+      source.title = "VC品種と結びついていない枠で、マスに入れた長さをそのまま出します"
+        + "(設定の「選んだ枠を直す」で式にできます)";
     }
     name.append(vendor, title, source);
     if (b.problem) {

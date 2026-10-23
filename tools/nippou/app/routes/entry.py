@@ -1144,17 +1144,19 @@ def distribute_times():
 
 @bp.post("/api/entry/distribute-lot")
 def distribute_lot():
-    """**LOTで時間を割り振る**(v4.43.0)── いまのロットの行だけを、始まりから押した時刻まで。
+    """**LOTで時間を割り振る**(v4.43.0・v4.43.1)── 選んでいる行のロットの行だけを割り振る。
 
         1ロット目であれば直開始からLOTで時間を割り振るを押したタイミングまでの時間で割り振り
         2ロット目以降は前ロットの続きからLOTで時間を割り振るを押したタイミングまでの時間で割り振り
         停止が入っていた場合・休憩入力がなく休憩時間をまたいだ場合・EX VC交換 は
         時間を割り振る と同じ処理
 
-    割り振るのは**この直の最後のロット**(ロット№が変わった行から、打った最後の行まで。ロット№が空の
-    行は上の行と同じロット。ページをまたいでも)。始まりは、直の最初のロットなら直の開始、そうでなければ
-    **前の行(前のロットの最後の行)の終了**。終わりは**いまの時刻**(ダブルクリックで入れる時刻と同じ。
-    分の1の位を 0 か 5 に寄せる ── `work_time.stamp`)。それより前の行は触らない。
+    割り振るのは**選んでいる(フォーカスのある)行のロット**。選んでいなければ直の最後のロット(v4.43.1。
+    ロット№が変わった行から、そのロットの最後の行まで。ロット№が空の行は上の行と同じロット。ページを
+    またいでも)。始まりは、直の最初のロットなら直の開始、そうでなければ**前の行(前のロットの最後の行)
+    の終了**。終わりは、そのロットの最後の行に**終了が打ってあればそれ**、無ければ**次のロットの開始**、
+    最後のロットなら**いまの時刻**(ダブルクリックで入れる時刻と同じ。分の1の位を 0 か 5 に寄せる ──
+    `work_time.stamp`)。ほかのロットの行は触らない(`_pick_lot`)。
 
     停止を先に渡す・梱包数の比・EX・段取り・VC交換・休憩を飛ばす(またぐ行へ休憩「0」)は「時間を割り振る」と
     同じ道(`_distribute`)。区切りは時計の5分刻み。いまが休憩の中なら休憩の始まりまで。過去の直を
@@ -1216,7 +1218,7 @@ def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, to
                           "終了の時刻を打ってから押してください(最後のロットでなければ、いまの時刻にはしません)"}
     else:
         if ctx.recall.active:
-            return {"refuse": "過去の直を開いているあいだは、終わりをいまの時刻にはできません。"
+            return {"refuse": "前のページや過去の直を開いているあいだは、終わりをいまの時刻にはできません。"
                               f"{where(last)}に終了の時刻を打ってから押してください"}
         hh, mm = work_time.stamp(_clock_now())
         finish, until = time_split.parse_hhmm(f"{hh}:{mm}"), "いまの時刻"
@@ -1265,7 +1267,7 @@ def _distribute(*, lot: bool):
     if not time_split_enabled():
         return jsonify(error_body(
             "time_split_off", "「時間を割り振る」はこの端末では使わない設定です"
-                              "(設定・管理者の「管理者」の面でオンにできます。管理者パスワードが要ります)")), 403
+                              "(設定・管理者の「この端末と配布」の面でオンにできます。管理者パスワードが要ります)")), 403
     refused = line_refusal()
     if refused:
         return refused
@@ -1301,8 +1303,8 @@ def _distribute(*, lot: bool):
     target_rows = [pages[n].rows[row] for n, row in targets]
     kinds = time_split.lot_runs(target_rows, _last_lot_before(report_date, line, shift))
     day_work = any(p.day_shift for p in pages.values())
-    # 割り振る時間(直の始めから何分目・長さ)。LOTで時間を割り振るは、いまのロットの行だけを
-    # その始まりから、いまの時刻まで(v4.43.0)
+    # 割り振る時間(直の始めから何分目・長さ)。LOTで時間を割り振るは、選んでいる行のロットだけを
+    # その始まりから終わりまで(終わりの決め方は `_pick_lot`。v4.43.1)
     span_start, span_total, span_texts, lot_info = start, total, (start_text, end_text), None
     if lot:
         focus = _focus_row(payload, page)
@@ -1663,7 +1665,7 @@ def _apply_stamp(state, ctx, stamp, *, calc=None) -> dict | None:
     分の1の位は 0 か 5 に寄せます(1〜4切り捨て・5そのまま・6〜9切り上げ。
     `logic/work_time.stamp`)。**時計はサーバのもの**(画面と同じPC)。
 
-    **過去の直を開いているあいだは入れません** ── いまの時刻は、その直の
+    **前のページや過去の直を開いているあいだは入れません** ── いまの時刻は、そのページの
     時刻ではないので(後から作った前日の1直に、今日の時刻が入ります)。
     そのときは何も変えずに理由を返します。
     """
@@ -1683,7 +1685,7 @@ def _apply_stamp(state, ctx, stamp, *, calc=None) -> dict | None:
     label = "開始" if which == "start" else "終了"
     if ctx.recall.active:
         return {"ok": False, "row": row, "which": which,
-                "message": (f"過去の直を開いているあいだは、ダブルクリックでいまの"
+                "message": (f"前のページや過去の直を開いているあいだは、ダブルクリックでいまの"
                             f"時刻は入れません。{row}行目の{label}は打ってください。")}
     hour, minute = work_time.stamp(_clock_now())
     hour_family, minute_family = work_time.STAMP_FIELDS[which]

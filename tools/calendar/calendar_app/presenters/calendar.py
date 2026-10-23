@@ -67,7 +67,7 @@ class Cell:
     holiday: str = ""          # 祝日名(無ければ空)
     body: str = ""             # ライン設定で絞ったあとの本文
     tip: str = ""              # 残業繋ぎ・早出繋ぎと、連絡のどの班から・いつ(ControlTipText)
-    count: int = 0             # その日の登録件数(絞り込み前)
+    count: int = 0             # その日の登録件数(この端末に見えるものだけ。内容閲覧と同じ数)
 
 
 @dataclass
@@ -150,7 +150,7 @@ def month_view(conn: sqlite3.Connection, year: int, month: int,
             # 出すと「押せそうなのに反応しない」ことになる
             body=build_day_text(day_records, my_line) if in_month else "",
             tip=build_day_tooltip(day_records, my_line) if in_month else "",
-            count=len(day_records) if in_month else 0,
+            count=sum(record_shown(r, my_line) for r in day_records) if in_month else 0,
         ))
 
     return MonthView(

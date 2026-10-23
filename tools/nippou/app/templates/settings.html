@@ -1421,7 +1421,7 @@ LVC,119
       <div class="btn-row" style="margin-top:var(--sp-3)">
         <button class="btn" type="button" id="accdb-copy-survey"
                 {% if not editor or not state.accdb_copy.dest_sqlite %}disabled{% endif %}
-                {% if not editor %}title="上の鍵を開けると使えます"{% endif %}>下見する(まだ写さない)</button>
+                {% if not editor %}title="上の鍵を開けると使えます"{% elif not state.accdb_copy.dest_sqlite %}title="共有の日報データが Access のファイルなので写せません(写せるのは sqlite3 のときだけ)"{% endif %}>下見する(まだ写さない)</button>
         <button class="btn btn--primary" type="button" id="accdb-copy-run" disabled
                 title="先に「下見する」で数を見てください">写す</button>
         <span class="lead" id="accdb-copy-head">{% if editor %}まず「下見する」で数を見てください{% else %}管理者(または Administrator)だけが使えます{% endif %}</span>
@@ -1564,7 +1564,7 @@ LVC,119
     <div class="card" id="time-split-setting">
       <div class="card__head">
         <h2>時間を割り振る(日報入力)</h2>
-        <span class="lead">オンにすると、日報入力に「時間を割り振る」ボタンが出ます</span>
+        <span class="lead">オンにすると、日報入力に「時間を割り振る」「LOTで時間を割り振る」ボタンが出ます</span>
       </div>
       <div class="btn-row" id="time-split-choices">
         <span class="lead">いま: <b id="time-split-now">{{ "オン" if time_split else "オフ" }}</b></span>
@@ -1576,11 +1576,12 @@ LVC,119
       <p class="lead" style="margin-top:var(--sp-2)">
         開始・終了の時刻を打たずに、ロット№・梱包数・停止などを打ったあとで押すと、<b>その直の開始から
         終了まで</b>を、打った行へ順に割り振ります(この直の<b>全ページ</b>。1ページ目の1行目が直の開始、
-        最後の行が直の終了)。1行の長さは等しく、区切りは<b>5分刻み</b>(例: 1直 07:00〜15:00 を22行なら
-        07:00〜07:20・07:20〜07:45・07:45〜08:05 …)。停止の分はその行に先に渡すので、作業時間はマイナスに
-        なりません。<b>休憩(1直 12:00〜13:00・2直 18:00〜19:00・3直 02:00〜03:00)は飛ばします</b> ──
-        休憩をまたぐ行は60分のばし(例 11:40〜12:20 → 11:40〜13:20)、その行に休憩(停止の記号「0」60分)を
-        入れます(昼稼働「有」の直は飛ばしません)。入っている開始・終了の時刻は書き換えます(押す前に確かめます)。
+        最後の行が直の終了)。区切りは<b>5分刻み</b>です。停止の分はその行に先に渡し(作業時間はマイナスに
+        なりません)、残りを<b>梱包数の比</b>で分け(どの行にも梱包数が無ければ等しく)、さらに下の倍率で EX・段取り・
+        VC交換のぶん長くします。<b>休憩(1直 12:00〜13:00・2直 18:00〜19:00・3直 02:00〜03:00)にかかる行は
+        60分のばし</b>(例 11:40〜12:20 → 11:40〜13:20)、その行に休憩(停止の記号「0」60分)を入れます
+        (昼稼働「有」の直はのばしません)。入っている開始・終了の時刻は書き換えます(押す前に確かめます)。
+        「LOTで時間を割り振る」は、選んでいる行のロットだけを、直の開始か前のロットの終わりから割り振ります。
       </p>
       {# EX・段取り・VC交換の倍率(v4.42.0。`logic/time_split.Factors`) #}
       <div class="btn-row" id="time-split-factors" style="margin-top:var(--sp-2)">
@@ -1658,7 +1659,7 @@ LVC,119
           <span id="access-summary">{{ acc.summary }}</span>
           {% if acc.admin %}<span class="badge badge--done">Administrator</span>{% endif %}
           <button class="btn btn--sm" type="button" id="access-reload"
-                  data-hint="マスタの「アクセス権限」の表を読み直して、ラインが変わっていれば当てます">読み直す</button>
+                  data-hint="マスタの「アクセス権限」の表を読み直します。ラインや左のタブが変わっていれば、その場で当てます">読み直す</button>
         </p>
         <p class="lead access__detail">
           このPC: <code id="access-identity">{{ acc.identity or "(分かりません)" }}</code>

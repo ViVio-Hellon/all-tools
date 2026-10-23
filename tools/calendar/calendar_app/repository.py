@@ -176,12 +176,21 @@ class Repository:
         debug_log(f"Repository.get_month_records: 取得日数={len(result)}")
         return result
 
-    def month_counts(self, before: _dt.date) -> dict[str, int]:
+    def month_counts(self, before: _dt.date, my_line: str | None = None) -> dict[str, int]:
         """``before`` より前の登録件数を月ごとに(履歴表示の月選び)。
 
         キーは ``yyyy/mm``。日付は ``yyyy/mm/dd`` の文字で持っているので、
-        先頭7文字がそのまま年月になる。
+        先頭7文字がそのまま年月になる。``my_line`` を渡すと、その端末のマス目に出る
+        登録だけを数える(`record_shown`。VER4.2.6)。
         """
+        if my_line is not None:
+            counts: dict[str, int] = {}
+            for row in self.conn.execute(
+                    f'SELECT * FROM "{config.TABLE_DATA}" WHERE "日付" < ?', (_date_key(before),)):
+                ym = str(row["日付"] or "")[:7]
+                if ym and record_shown(DayRecord.from_row(row), my_line):
+                    counts[ym] = counts.get(ym, 0) + 1
+            return counts
         rows = self.conn.execute(
             f'SELECT substr("日付", 1, 7) AS ym, COUNT(*) AS n '
             f'FROM "{config.TABLE_DATA}" WHERE "日付" < ? GROUP BY ym',

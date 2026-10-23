@@ -347,7 +347,7 @@ def _row(item: KanbanItem, policy: BoardPolicy) -> RowView:
             # 解除する方向はいつでも押せる ── 付いた印を外す道は残す
             state=STATE_HELD if item.is_held else STATE_NEUTRAL,
             enabled=policy.hold and (item.is_ordered or item.is_held),
-            tip=_hold_tip(item),
+            tip=_hold_tip(item, policy.hold),
         ),
     )
 
@@ -359,14 +359,15 @@ def _time_tip(prefix: str, value: str, active: bool) -> str:
     return f"{prefix}: {text}" if text else ""
 
 
-def _hold_tip(item: KanbanItem) -> str:
+def _hold_tip(item: KanbanItem, can_hold: bool = True) -> str:
     """注文中の時刻。VBA ``cls_HoldButton.RefreshDisplay`` と同じ文言。
 
     押せないときは**なぜ押せないか**を出す。押しても何も起きないだけだと
-    壊れているようにしか見えない。
+    壊れているようにしか見えない。ただし、そもそも注文中を操作しないモード
+    (現場・倉庫参照)では「発注してから注文中にできます」とは言わない。
     """
     if not item.is_held:
-        if not item.is_ordered:
+        if not item.is_ordered and can_hold:
             return "発注がありません。現場が発注してから注文中にできます"
         return ""
     text = format_display_time(item.hold_at)
