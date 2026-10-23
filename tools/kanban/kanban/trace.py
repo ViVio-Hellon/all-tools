@@ -24,9 +24,18 @@ startup      起動・終了(版・モード・接続先などの前提)
 その 1 件にたどり着ける)。
 
 【置き場所】
-``<記録の置き場所>/KanbanSystem/記録/<年月>/<PC名>_<年月日>.jsonl``。置き場所は設定で
+``<記録の置き場所>/kanban/記録/<年月>/kanban_記録_<PC名>_<年月日>.jsonl``。置き場所は設定で
 決める(既定はこの端末のローカル領域の ``logs``)。共有フォルダにすると**全端末の記録を
 1 か所で見られる**(ファイルは PC ごとに分かれるので混ざらない)。
+
+共有フォルダには日報・点検表などほかのツールのログも並ぶので、**ツール名のフォルダ
+(``kanban``)の下に置き、ファイル名もツール名(``kanban_``)で始める**(取り出して手元に
+置いたときも、開かずにどのツールのものかわかるように。VER3.5.10)。
+
+VER3.5.9 までは ``<記録の置き場所>/KanbanSystem/記録/<年月>/<PC名>_<年月日>.jsonl`` に
+書いていた。**前の場所の記録も読む**(探す・記録番号で引く・端末の一覧・古い分を片付ける)。
+移しはしない(ほかの PC が書いている最中のものに触らない)。読む・消すのは看板の記録だけで、
+ほかのツールのファイル(``dbviewer_….log`` など)は名前の形が違うので拾わない。
 
 【なぜなぜ分析】
 設定の「記録」タブで、エラーを選ぶと 何が・いつ・どこで・誰が・直前の操作・原因の連鎖・
@@ -48,8 +57,16 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-APP_FOLDER = "KanbanSystem"
+#: ツールID。置き場所のフォルダ名とファイル名の頭に使う(日報複合ツールの 4 ツールで共通の決まり)
+TOOL_ID = "kanban"
+APP_FOLDER = TOOL_ID
 FOLDER = "記録"
+#: ファイル名の頭(``kanban_記録_<PC名>_<年月日>.jsonl``)
+FILE_PREFIX = f"{TOOL_ID}_{FOLDER}_"
+#: VER3.5.9 までの置き場所のフォルダ名(``<置き場所>/KanbanSystem/記録/<年月>/<PC名>_<年月日>.jsonl``)。書かない(読む・この端末の古い分を片付けるだけ)
+LEGACY_APP_FOLDER = "KanbanSystem"
+#: ほかのツールのファイル名の頭(前の場所に紛れていても看板の記録として読まない・消さない)
+_OTHER_TOOL_PREFIXES = tuple(f"{t}_" for t in ("nippou", "calendar", "inspection", "portal", "dbviewer"))
 
 LEVEL_ERROR, LEVEL_WARNING, LEVEL_INFO = "ERROR", "WARNING", "INFO"
 KIND_LABEL = {
@@ -113,6 +130,46 @@ def root_for(log_dir: str | os.PathLike[str]) -> Path:
     return Path(log_dir) / APP_FOLDER / FOLDER
 
 
+def legacy_root_for(log_dir: str | os.PathLike[str]) -> Path:
+    """VER3.5.9 までの記録の置き場所(読む・この端末の古い分を片付けるだけ。書かない)。"""
+    return Path(log_dir) / LEGACY_APP_FOLDER / FOLDER
+
+
+def _roots(root: Path) -> list[tuple[Path, str]]:
+    """読む場所と、そこでのファイル名の頭。``(場所, 頭)`` の並び(新しい場所が先)。
+
+    いまの置き場所(``<置き場所>/kanban/記録``)を渡されたら、同じ置き場所の前の場所
+    (``<置き場所>/KanbanSystem/記録``。名前は ``<PC名>_<年月日>.jsonl``)も読む。
+    """
+    out = [(root, FILE_PREFIX)]
+    if root.name == FOLDER and root.parent.name == APP_FOLDER:
+        legacy = legacy_root_for(root.parent.parent)
+        if legacy != root:
+            out.append((legacy, ""))
+    return out
+
+
+def _parse_name(name: str, prefix: str) -> tuple[str, date] | None:
+    """記録のファイル名から ``(PC名, 日付)``。看板の記録の形でなければ None(ほかのツールのファイルは拾わない)。"""
+    if not name.endswith(".jsonl"):
+        return None
+    if prefix:
+        if not name.startswith(prefix):
+            return None
+        name = name[len(prefix):]
+    elif name.startswith(FILE_PREFIX) or name.startswith(_OTHER_TOOL_PREFIXES):
+        # 前の場所に新しい名前のものがあっても、新しい場所の分と二重に数えない。
+        # ほかのツールの名前(``nippou_…`` など)のものは、置かれていても看板の記録として拾わない
+        return None
+    m = re.fullmatch(r"(.+)_(\d{8})\.jsonl", name)
+    if not m:
+        return None
+    try:
+        return m.group(1), datetime.strptime(m.group(2), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
 def _pc_tag(pc: str) -> str:
     text = re.sub(r'[\\/:*?"<>|\s]+', "_", str(pc or "").strip())
     return text or "不明なPC"
@@ -121,7 +178,7 @@ def _pc_tag(pc: str) -> str:
 def _file_for(at: datetime) -> Path | None:
     if _dir is None:
         return None
-    return _dir / at.strftime("%Y%m") / f"{_pc_tag(_context.get('pc', ''))}_{at:%Y%m%d}.jsonl"
+    return _dir / at.strftime("%Y%m") / f"{FILE_PREFIX}{_pc_tag(_context.get('pc', ''))}_{at:%Y%m%d}.jsonl"
 
 
 # ------------------------------------------------------------------
@@ -323,21 +380,26 @@ class Query:
     limit: int = 500
 
 
-def _files(root: Path, since: date, until: date, pc: str = "") -> list[Path]:
+def _named_files(root: Path, since: date, until: date) -> list[tuple[Path, str]]:
+    """``(ファイル, PC名)``。いまの場所と前の場所(:func:`_roots`)の両方から、看板の記録だけ。"""
     out = []
-    month = date(since.year, since.month, 1)
-    while month <= until:
-        folder = root / month.strftime("%Y%m")
-        if folder.is_dir():
-            for f in folder.glob("*.jsonl"):
-                m = re.match(r"(.+)_(\d{8})\.jsonl$", f.name)
-                if not m:
-                    continue
-                day = datetime.strptime(m.group(2), "%Y%m%d").date()
-                if since <= day <= until and (not pc or m.group(1) == _pc_tag(pc)):
-                    out.append(f)
-        month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
-    return sorted(out)
+    for base, prefix in _roots(root):
+        month = date(since.year, since.month, 1)
+        while month <= until:
+            folder = base / month.strftime("%Y%m")
+            if folder.is_dir():
+                for f in folder.glob("*.jsonl"):
+                    parsed = _parse_name(f.name, prefix)
+                    if parsed and since <= parsed[1] <= until:
+                        out.append((f, parsed[0]))
+            month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return out
+
+
+def _files(root: Path, since: date, until: date, pc: str = "") -> list[Path]:
+    want = _pc_tag(pc) if pc else ""
+    return sorted((f for f, name in _named_files(root, since, until) if not want or name == want),
+                  key=lambda f: (f.name.removeprefix(FILE_PREFIX), str(f)))
 
 
 def _read(path: Path) -> Iterable[dict[str, Any]]:
@@ -358,7 +420,7 @@ def _read(path: Path) -> Iterable[dict[str, Any]]:
 def search(q: Query, root: Path | None = None) -> list[dict[str, Any]]:
     """条件に合う記録(新しい順)。"""
     root = root or _dir
-    if root is None or not root.exists():
+    if root is None or not _exists(root):
         return []
     text = q.text.strip().casefold()
     found = []
@@ -386,12 +448,16 @@ def search(q: Query, root: Path | None = None) -> list[dict[str, Any]]:
 def pcs(root: Path | None = None, since: date | None = None, until: date | None = None) -> list[str]:
     """記録のある端末(ファイル名の PC名)。"""
     root = root or _dir
-    if root is None or not root.exists():
+    if root is None or not _exists(root):
         return []
     until = until or date.today()
     since = since or until - timedelta(days=31)
-    names = {re.sub(r"_\d{8}\.jsonl$", "", f.name) for f in _files(root, since, until)}
-    return sorted(names)
+    return sorted({name for _, name in _named_files(root, since, until)})
+
+
+def _exists(root: Path) -> bool:
+    """いまの場所か前の場所のどちらかがあるか(更新した直後は前の場所にしか無い)。"""
+    return any(base.exists() for base, _ in _roots(root))
 
 
 #: 同じ記録番号(同じ操作)の記録が複数あるとき、どれを主にするか(小さいほど先)
@@ -438,29 +504,38 @@ def find(ref: str, root: Path | None = None, days: int = 400) -> dict[str, Any] 
 
 
 def prune(keep_days: int = KEEP_DAYS, root: Path | None = None) -> int:
-    """**この端末の**古い記録を消す。ほかの PC の分には触らない。消した数。"""
+    """**この端末の**古い記録を消す。消した数。
+
+    消すのは**看板の記録の形の名前で、PC名がこの端末と同じもの**だけ(いまの場所の
+    ``kanban_記録_<PC名>_<年月日>.jsonl`` と、前の場所の ``<PC名>_<年月日>.jsonl``)。
+    ほかの PC の分・ほかのツールのファイルには触らない(PC名が前方一致するだけの
+    ほかの端末 ``PC-ONE_X`` の分も消さない)。空になった年月のフォルダだけ片付ける。
+    """
     root = root or _dir
-    if root is None or not root.exists():
+    if root is None:
         return 0
     limit = date.today() - timedelta(days=max(30, int(keep_days)))
     mine = _pc_tag(_context.get("pc", ""))
     removed = 0
-    for folder in root.iterdir():
-        if not folder.is_dir():
+    for base, prefix in _roots(root):
+        if not base.is_dir():
             continue
-        for f in folder.glob(f"{mine}_*.jsonl"):
-            m = re.search(r"_(\d{8})\.jsonl$", f.name)
-            if m and datetime.strptime(m.group(1), "%Y%m%d").date() < limit:
-                try:
-                    f.unlink()
-                    removed += 1
-                except OSError:
-                    pass
-        try:
-            if not any(folder.iterdir()):
-                folder.rmdir()
-        except OSError:
-            pass
+        for folder in base.iterdir():
+            if not folder.is_dir() or not re.fullmatch(r"\d{6}", folder.name):
+                continue
+            for f in folder.glob("*.jsonl"):
+                parsed = _parse_name(f.name, prefix)
+                if parsed and parsed[0] == mine and parsed[1] < limit:
+                    try:
+                        f.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+            try:
+                if not any(folder.iterdir()):
+                    folder.rmdir()
+            except OSError:
+                pass
     return removed
 
 

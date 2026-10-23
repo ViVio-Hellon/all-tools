@@ -171,6 +171,8 @@ def _dir_state(cfg: config.Config) -> dict:
     return {
         "path": path, "configured": bool(cfg.log_dir.strip()),
         "records": str(trace.root_for(path)),
+        # VER3.5.9 までの記録の場所(読むだけ。探す・記録番号で引くときはここも見る)
+        "records_old": str(trace.legacy_root_for(path)),
         "text_log": str(applog.log_path() or ""),
         "writing_to": str(trace.directory() or ""),
         "keep_days": trace.KEEP_DAYS,

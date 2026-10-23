@@ -168,7 +168,6 @@ def main(argv: list[str] | None = None) -> int:
     applog.initialize(
         cfg.resolved_log_dir(),
         line_name=cfg.line if cfg.mode == config.MODE_SITE else cfg.mode,
-        app_name=config.APP_NAME,
         echo_to_stderr=args.verbose,
     )
     applog.info("起動: mode=%s line=%s", cfg.mode, cfg.line or "(未設定)")

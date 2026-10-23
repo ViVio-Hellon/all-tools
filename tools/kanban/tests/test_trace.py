@@ -50,8 +50,8 @@ class WriteReadTest(TraceFixture):
         for key, value in (("pc", "PC-ONE"), ("login", "yamada"), ("mode", "site"), ("line", "LVC"),
                            ("version", "VER9")):
             self.assertEqual(r[key], value)
-        files = list((self.logdir / "KanbanSystem" / "記録").rglob("*.jsonl"))
-        self.assertEqual([f.name for f in files], [f"PC-ONE_{date.today():%Y%m%d}.jsonl"])
+        files = list((self.logdir / "kanban" / "記録").rglob("*.jsonl"))
+        self.assertEqual([f.name for f in files], [f"kanban_記録_PC-ONE_{date.today():%Y%m%d}.jsonl"])
 
     def test_logged_exceptions_keep_the_chain_of_causes(self):
         """``log.exception`` がそのまま、原因の連鎖つきの記録になる(なぜなぜの材料)。"""
@@ -141,8 +141,8 @@ class WriteReadTest(TraceFixture):
         old = (date.today() - timedelta(days=trace.KEEP_DAYS + 10))
         folder = root / old.strftime("%Y%m")
         folder.mkdir(parents=True)
-        mine = folder / f"PC-ONE_{old:%Y%m%d}.jsonl"
-        other = folder / f"PC-TWO_{old:%Y%m%d}.jsonl"
+        mine = folder / f"kanban_記録_PC-ONE_{old:%Y%m%d}.jsonl"
+        other = folder / f"kanban_記録_PC-TWO_{old:%Y%m%d}.jsonl"
         mine.write_text("{}\n", encoding="utf-8")
         other.write_text("{}\n", encoding="utf-8")
         self.assertEqual(trace.prune(), 1)
@@ -155,8 +155,159 @@ class WriteReadTest(TraceFixture):
         applog.reinitialize(str(new))
         self.assertTrue(str(applog.log_path()).startswith(str(new)))
         ref = trace.write("refused", "移ったあと", level=trace.LEVEL_WARNING)
-        self.assertTrue(list((new / "KanbanSystem" / "記録").rglob("*.jsonl")))
+        self.assertTrue(list((new / "kanban" / "記録").rglob("kanban_記録_*.jsonl")))
         self.assertEqual(trace.find(ref)["record"]["what"], "移ったあと")
+
+
+def _old_record(logdir: Path, pc: str, at: datetime, what: str, ref: str, kind: str = "error") -> Path:
+    """VER3.5.9 までの形(``KanbanSystem/記録/<年月>/<PC名>_<年月日>.jsonl``)で 1 件置く。"""
+    path = logdir / "KanbanSystem" / "記録" / f"{at:%Y%m}" / f"{pc}_{at:%Y%m%d}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"ref": ref, "at": f"{at:%Y/%m/%d %H:%M:%S}.000", "level": "ERROR", "kind": kind,
+           "where": "前の版", "what": what, "pc": pc, "login": "old", "mode": "site", "line": "LVC",
+           "version": "VER3.5.9", "pid": 1}
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return path
+
+
+#: ほかのツールのファイル(共有フォルダに並ぶもの)。看板は読まない・消さない
+def _other_tools_files(logdir: Path, day: date) -> list[Path]:
+    month = f"{day:%Y%m}"
+    rec = json.dumps({"ref": "E-0101-000000-zzzz", "at": f"{day:%Y/%m/%d} 00:00:00.000", "level": "ERROR",
+                      "kind": "error", "what": "ほかのツールの記録", "pc": "PC-ONE"}, ensure_ascii=False) + "\n"
+    paths = [
+        logdir / f"dbviewer_PC-ONE_{day:%Y%m%d}.log",
+        logdir / "nippou.log",
+        logdir / f"出来事_{day:%Y%m%d}_PC-ONE.jsonl",
+        logdir / f"記録_PC-ONE_{day:%Y%m%d}.jsonl",
+        logdir / "nippou" / f"nippou_記録_PC-ONE_{day:%Y%m%d}.jsonl",
+        logdir / "kanban" / "記録" / month / f"dbviewer_PC-ONE_{day:%Y%m%d}.log",
+        logdir / "kanban" / "記録" / month / f"記録_PC-ONE_{day:%Y%m%d}.jsonl",
+        logdir / "kanban" / "記録" / month / f"nippou_記録_PC-ONE_{day:%Y%m%d}.jsonl",
+        logdir / "KanbanSystem" / "記録" / month / f"nippou_記録_PC-ONE_{day:%Y%m%d}.jsonl",
+        logdir / "KanbanSystem" / "記録" / month / f"dbviewer_PC-ONE_{day:%Y%m%d}.log",
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rec, encoding="utf-8")
+    return paths
+
+
+class LayoutTest(TraceFixture):
+    """**ツール名のフォルダ(kanban)の下に、名前がツール名(kanban_)で始まるファイルで書く**(VER3.5.10)。
+
+    共有フォルダにはほかのツールのログも同じ階層に並ぶ(``dbviewer_PC_日付.log``・``nippou.log``・
+    ``記録_PC_日付.jsonl`` …)。取り出して手元に置いても、開かずにどのツールのものかわかるように。
+    前の版の場所(``KanbanSystem/…``)の記録も読み、消すのは看板自身のファイルだけ。
+    """
+
+    def written_files(self, base: Path) -> list[Path]:
+        return [p for p in base.rglob("*") if p.is_file()]
+
+    def test_logs_and_records_go_under_the_tool_folder_with_the_tool_name(self):
+        log = applog.log_path()
+        self.assertEqual(log.parent, self.logdir / "kanban" / "LVC")
+        self.assertRegex(log.name, r"^kanban_DebugLog_\d{8}_\d{6}\.txt$")
+        self.assertEqual(trace.directory(), self.logdir / "kanban" / "記録")
+        today = datetime.now()
+        trace.write("refused", "断った", level=trace.LEVEL_WARNING)
+        applog.warning("届きません")
+        self.assertTrue((self.logdir / "kanban" / "記録" / f"{today:%Y%m}"
+                         / f"kanban_記録_PC-ONE_{today:%Y%m%d}.jsonl").is_file())
+        files = self.written_files(self.logdir)
+        self.assertTrue(files)
+        for f in files:
+            with self.subTest(file=str(f.relative_to(self.logdir))):
+                self.assertEqual(f.relative_to(self.logdir).parts[0], "kanban", "ツール名のフォルダの外に書いた")
+                self.assertTrue(f.name.startswith("kanban_"), "名前がツール名で始まらない")
+        self.assertFalse((self.logdir / "KanbanSystem").exists(), "前の形の場所を作った")
+
+    def test_default_place_has_the_same_shape(self):
+        """出力先を設定していない(この端末の logs)ときも同じ形。"""
+        local = self.logdir / "ローカル領域"
+        with mock.patch.dict(os.environ, {"KANBAN_LOCAL_DIR": str(local)}):
+            cfg = config.Config()
+            self.assertEqual(cfg.log_dir, "")
+            path = applog.initialize(cfg.resolved_log_dir(), line_name="LS")
+            self.assertEqual(trace.root_for(cfg.resolved_log_dir()), local / "logs" / "kanban" / "記録")
+        self.assertEqual(path.parent, local / "logs" / "kanban" / "LS")
+        self.assertTrue(path.name.startswith("kanban_DebugLog_"))
+        self.assertEqual(trace.directory(), local / "logs" / "kanban" / "記録")
+
+    def test_fallback_when_the_place_cannot_be_written_has_the_same_shape(self):
+        """書けないときの代わりの場所(一時フォルダ)も ``<一時フォルダ>/kanban/<ライン>/kanban_…``。"""
+        blocked = self.logdir / "ファイルなのでフォルダを作れない"
+        blocked.write_text("", encoding="utf-8")
+        tmp = self.logdir / "一時"
+        tmp.mkdir()
+        with mock.patch("tempfile.gettempdir", return_value=str(tmp)):
+            path = applog.initialize(str(blocked), line_name="LVC")
+        self.assertEqual(path.parent, tmp / "kanban" / "LVC")
+        self.assertTrue(path.name.startswith("kanban_DebugLog_"))
+        self.assertEqual(trace.directory(), tmp / "kanban" / "記録")
+        self.assertEqual([p.name for p in tmp.iterdir()], ["kanban"])
+
+    def test_changing_the_place_keeps_the_shape(self):
+        new = self.logdir / "共有" / "ログ"
+        new.mkdir(parents=True)
+        path = applog.reinitialize(str(new))
+        self.assertEqual(path.parent, new / "kanban" / "LVC")
+        self.assertTrue(path.name.startswith("kanban_DebugLog_"))
+        trace.write("refused", "移ったあと", level=trace.LEVEL_WARNING)
+        for f in self.written_files(new):
+            self.assertEqual(f.relative_to(new).parts[0], "kanban")
+            self.assertTrue(f.name.startswith("kanban_"), f)
+
+    def test_records_written_by_the_previous_version_are_still_found(self):
+        """更新前に ``KanbanSystem/記録/<年月>/<PC名>_<年月日>.jsonl`` へ書いた記録も探せる・引ける・なぜなぜが出る。"""
+        now = datetime.now()
+        _old_record(self.logdir, "PC-OLD", now, "前の版で起きた", "E-0101-000000-aaaa")
+        _old_record(self.logdir, "PC-ONE", now, "この端末の前の版で", "E-0101-000000-bbbb")
+        trace.write("error", "新しい版で", level=trace.LEVEL_ERROR)
+        whats = sorted(r["what"] for r in self.records())
+        self.assertEqual(whats, ["この端末の前の版で", "前の版で起きた", "新しい版で"])
+        self.assertEqual([r["what"] for r in self.records(pc="PC-OLD")], ["前の版で起きた"])
+        self.assertEqual(sorted(r["what"] for r in self.records(pc="PC-ONE")), ["この端末の前の版で", "新しい版で"])
+        self.assertEqual(trace.pcs(), ["PC-OLD", "PC-ONE"])
+        found = trace.find("E-0101-000000-aaaa")
+        self.assertIsNotNone(found, "前の版の記録を記録番号で引けない")
+        self.assertIn("KanbanSystem", found["file"])
+        self.assertIn("なぜ1: 前の版で起きた", trace.why_sheet(found))
+        # 前の場所には書き足さない
+        self.assertEqual(len(list((self.logdir / "KanbanSystem").rglob("*.jsonl"))), 2)
+
+    def test_other_tools_files_are_neither_read_nor_removed(self):
+        today = date.today()
+        old = today - timedelta(days=trace.KEEP_DAYS + 10)
+        others = _other_tools_files(self.logdir, today) + _other_tools_files(self.logdir, old)
+        self.assertEqual(self.records(), [], "ほかのツールのファイルを看板の記録として読んだ")
+        self.assertEqual(trace.pcs(), [])
+        self.assertIsNone(trace.find("E-0101-000000-zzzz"))
+        self.assertEqual(trace.prune(), 0)
+        for path in others:
+            self.assertTrue(path.exists(), f"ほかのツールのファイルを消した: {path}")
+
+    def test_prune_removes_only_this_pcs_old_kanban_records_in_both_places(self):
+        old = datetime.now() - timedelta(days=trace.KEEP_DAYS + 10)
+        root = trace.directory()
+        new_mine = root / f"{old:%Y%m}" / f"kanban_記録_PC-ONE_{old:%Y%m%d}.jsonl"
+        new_other = root / f"{old:%Y%m}" / f"kanban_記録_PC-TWO_{old:%Y%m%d}.jsonl"
+        # 名前が前方一致するだけの、ほかの端末(PC-ONE_X)の分
+        new_similar = root / f"{old:%Y%m}" / f"kanban_記録_PC-ONE_X_{old:%Y%m%d}.jsonl"
+        for f in (new_mine, new_other, new_similar):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("{}\n", encoding="utf-8")
+        old_mine = _old_record(self.logdir, "PC-ONE", old, "古い", "E-0101-000000-cccc")
+        old_other = _old_record(self.logdir, "PC-TWO", old, "古い", "E-0101-000000-dddd")
+        old_similar = _old_record(self.logdir, "PC-ONE_X", old, "古い", "E-0101-000000-eeee")
+        recent = _old_record(self.logdir, "PC-ONE", datetime.now(), "新しい", "E-0101-000000-ffff")
+        others = _other_tools_files(self.logdir, old.date())
+        self.assertEqual(trace.prune(), 2)
+        self.assertFalse(new_mine.exists())
+        self.assertFalse(old_mine.exists(), "前の場所の古い記録を片付けていない")
+        for f in (new_other, new_similar, old_other, old_similar, recent, *others):
+            self.assertTrue(f.exists(), f"消してはいけないものを消した: {f}")
 
 
 class RouteTraceTest(RouteTestBase):
@@ -248,7 +399,25 @@ class RouteTraceTest(RouteTestBase):
         self.assertTrue(res.json["text_log"].startswith(str(new)))
         self.assertEqual(config.load_config(str(self.dir / "config.json")).log_dir, str(new))
         self.post("/api/line", {"line": "LS", "password": "ちがう"})
-        self.assertTrue(list((new / "KanbanSystem" / "記録").rglob("*.jsonl")), "新しい場所に書いていない")
+        self.assertTrue(list((new / "kanban" / "記録").rglob("kanban_記録_*.jsonl")), "新しい場所に書いていない")
+        self.assertFalse((new / "KanbanSystem").exists(), "前の形の場所に書いた")
+
+    def test_records_tab_reads_the_previous_versions_records(self):
+        """設定の「記録」タブ(``/api/trace``・``/api/trace/item``)が、更新前の場所の記録も出す。"""
+        now = datetime.now()
+        _old_record(self.logdir, "PC-ONE", now, "前の版で起きた", "E-0101-000000-aaaa")
+        _other_tools_files(self.logdir, now.date())
+        self.post("/api/line", {"line": "LS", "password": "ちがう"})
+        rows = self.search()
+        whats = [r["what"] for r in rows]
+        self.assertIn("前の版で起きた", whats)
+        self.assertNotIn("ほかのツールの記録", whats)
+        found = self.get("/api/trace/item?ref=E-0101-000000-aaaa")
+        self.assertEqual(found.status_code, 200)
+        self.assertIn("なぜ1: 前の版で起きた", found.json["sheet"])
+        state = self.get("/api/log-dir").json
+        self.assertEqual(state["records"], str(self.logdir / "kanban" / "記録"))
+        self.assertEqual(state["records_old"], str(self.logdir / "KanbanSystem" / "記録"))
 
     # 設定画面の「記録」の面(開くと探す・行を押すか記録番号を入れるとなぜなぜ分析シートの下書きが出る)は、
     # 字を探すのではなく**本物のブラウザで押して確かめます**(`test_settings_cards_browser.TraceTabTest`)。

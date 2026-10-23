@@ -4,6 +4,12 @@ VBA 版は ``<basePath>\\<ブック名>\\<ライン名>\\DebugLog_yyyymmdd_hhmms
 追記していた。ここでも同じ階層構造を維持し、ライン名が取得できない場合は
 ``Unknown`` フォルダに出す(従来仕様を踏襲)。
 
+置き場所は ``<ログの置き場所>/kanban/<ライン名>/kanban_DebugLog_yyyymmdd_hhmmss.txt``。
+共有フォルダには日報・点検表などほかのツールのログも並ぶので、**ツール名のフォルダ
+(``kanban``)の下に置き、ファイル名もツール名(``kanban_``)で始める**(取り出したときも
+開かずにわかるように。VER3.5.10)。VER3.5.9 までは ``<置き場所>/KanbanSystem/<ライン名>/
+DebugLog_….txt`` だった(そのまま残る。記録(``記録/*.jsonl``)の読み手は前の場所も読む)。
+
 VBA 版はログ 1 行ごとにファイルを開き直していたため書き込みが遅かった。
 Python 版では ``logging`` のハンドラを 1 つ保持して使い回す。
 """
@@ -23,6 +29,10 @@ LOGGER_NAME = "kanban"
 #: 各自の logging.getLogger("dbkit") へ handler を共有する側で束ねる。
 _DBKIT_LOGGER_NAME = "dbkit"
 _UNKNOWN_LINE = "Unknown"
+#: ツールID。置き場所のフォルダ名とファイル名の頭(日報複合ツールの 4 ツールで共通の決まり)
+TOOL_ID = "kanban"
+#: ログのファイル名の頭(``kanban_DebugLog_<日時>.txt``)
+FILE_PREFIX = f"{TOOL_ID}_DebugLog_"
 
 _logger: logging.Logger | None = None
 _log_path: Path | None = None
@@ -34,13 +44,17 @@ _settings: dict[str, object] = {}
 def initialize(
     log_dir: str | os.PathLike[str],
     line_name: str = "",
-    app_name: str = "KanbanSystem",
+    app_name: str = TOOL_ID,
     echo_to_stderr: bool = False,
 ) -> Path | None:
     """ログファイルを初期化する(VBA の ``InitializeDebugLog``)。
 
     戻り値は作成したログファイルのパス。ネットワーク共有に書けない場合は
     一時フォルダへフォールバックし、それも失敗した場合は None を返す。
+
+    ``app_name`` は前の版との互換のために受けるだけで、**置き場所のフォルダは常にツールID
+    (``kanban``)**(``config.APP_NAME`` = ``KanbanSystem`` を渡されても、ログの置き場所は
+    ツール名のフォルダにそろえる)。
     """
     global _logger, _log_path
     from . import trace
@@ -67,7 +81,7 @@ def initialize(
     for base in _candidate_dirs(log_dir, app_name, line):
         try:
             base.mkdir(parents=True, exist_ok=True)
-            candidate = base / f"DebugLog_{datetime.now():%Y%m%d_%H%M%S}.txt"
+            candidate = base / f"{FILE_PREFIX}{datetime.now():%Y%m%d_%H%M%S}.txt"
             handler = logging.FileHandler(candidate, encoding="utf-8")
             handler.setFormatter(formatter)
             handler.addFilter(ref_filter)
@@ -124,7 +138,7 @@ def reinitialize(log_dir: str | os.PathLike[str]) -> Path | None:
     if _logger is not None and old is not None:
         _logger.info("ログの置き場所を変えます: %s", log_dir)
     path = initialize(log_dir, line_name=str(_settings.get("line_name", "")),
-                      app_name=str(_settings.get("app_name", "KanbanSystem")),
+                      app_name=str(_settings.get("app_name", TOOL_ID)),
                       echo_to_stderr=bool(_settings.get("echo_to_stderr", False)))
     if _logger is not None and old is not None:
         _logger.info("前のログ: %s", old)
@@ -149,11 +163,16 @@ def _version_text() -> str:
 def _candidate_dirs(
     log_dir: str | os.PathLike[str], app_name: str, line: str
 ) -> list[Path]:
-    """書き込み先の候補(優先順)。"""
+    """書き込み先の候補(優先順)。``<置き場所>/kanban/<ライン>`` → 書けなければ ``<一時フォルダ>/kanban/<ライン>``。
+
+    ``app_name`` は見ない(互換のために受けるだけ)。代わりの場所も同じ形にする
+    (一時フォルダにもほかのツールのログが並ぶ)。
+    """
     import tempfile
 
-    primary = Path(log_dir) / app_name / line
-    fallback = Path(tempfile.gettempdir()) / app_name / line
+    del app_name
+    primary = Path(log_dir) / TOOL_ID / line
+    fallback = Path(tempfile.gettempdir()) / TOOL_ID / line
     return [primary, fallback]
 
 

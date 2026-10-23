@@ -207,7 +207,8 @@ def _check_history(cfg, status) -> None:
     from kanban import trace
 
     print(f"記録(ログ)    : {cfg.resolved_log_dir()}  [{'設定ファイル' if 'log_dir' in status.values else 'この端末のローカル領域'}]"
-          f"  記録は {trace.root_for(cfg.resolved_log_dir())}")
+          f"  記録は {trace.root_for(cfg.resolved_log_dir())}"
+          f"(前の版の {trace.legacy_root_for(cfg.resolved_log_dir())} も読みます)")
 
 
 def _check_access(cfg, status) -> None:
@@ -417,7 +418,6 @@ def _prepare(args):
     applog.initialize(
         cfg.resolved_log_dir(),
         line_name=cfg.line,
-        app_name=config.APP_NAME,
         echo_to_stderr=bool(args.diagnose),
     )
     _start_records(cfg)

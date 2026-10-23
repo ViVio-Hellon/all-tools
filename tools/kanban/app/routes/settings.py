@@ -1238,7 +1238,8 @@ def _file_places(cfg: config.Config, store) -> dict:
                  "アクセス権限の控え(届かないときに使う)"),
             item("CSV の書き出し先", cfg.resolved_csv_dir(), "看板集計・看板履歴の CSV", folder=True),
             item("ログ・記録", cfg.resolved_log_dir(),
-                 "DebugLog(動作のログ)と 記録(エラー・断った操作・直前の操作。設定の「記録」タブで見る)。"
+                 "この中の kanban フォルダに kanban_DebugLog_…txt(動作のログ)と kanban_記録_…jsonl"
+                 "(エラー・断った操作・直前の操作。設定の「記録」タブで見る。前の版の KanbanSystem フォルダの分も読む)。"
                  "共有フォルダを指定すれば全端末の分を 1 か所に集められる", folder=True),
             item("控え", local / "backup", "中身を入れ替える前の共有DBの控え", folder=True),
             item("共有DBの写し", local / "cache", "読むときに手元へ写したもの(消してもまた写す)", folder=True),

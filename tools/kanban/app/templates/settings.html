@@ -855,7 +855,9 @@
 <section class="card" id="log-dir-card">
   <h2>記録(ログ)の置き場所 <span class="scope scope--local">この端末の設定</span></h2>
   <p class="card__note">
-    ログ(<code>DebugLog_*.txt</code>)と記録(<code>記録\年月\PC名_年月日.jsonl</code>)を書くフォルダです。
+    ログ(<code>kanban\ライン名\kanban_DebugLog_日時.txt</code>)と記録(<code>kanban\記録\年月\kanban_記録_PC名_年月日.jsonl</code>)を書くフォルダです。
+    ほかのツールのログと混ざらないよう、<b>ツール名のフォルダ <code>kanban</code> の下に、名前が <code>kanban_</code> で始まるファイル</b>で書きます。
+    前の版の記録(<code>KanbanSystem\記録\…</code>)もそのまま「記録」タブで探せます。
     空欄なら<b>この端末のローカル領域の <code>logs</code></b>。<b>共有フォルダを指定すると、全端末の記録を
     この画面で「すべての端末」として見られます</b>(ファイルは PC ごとに分かれます。配布設定で揃えられます)。
     この端末の記録は <span id="log-keep-days">{{ 365 }}</span> 日で片付けます(ほかの PC の分には触りません)。
