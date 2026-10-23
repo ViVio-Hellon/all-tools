@@ -413,13 +413,7 @@ def build_day_text(records: Iterable[DayRecord], my_line: str) -> str:
 
     for rec in records:
         if rec.is_rest:
-            if my_line == config.LINE_SUPERVISOR:
-                show = True
-            elif my_line == config.LINE_COIL:
-                show = rec.line == config.LINE_COIL
-            else:
-                show = rec.line != config.LINE_COIL
-            if not show:
+            if not record_shown(rec, my_line):
                 continue
             head = f"{rec.line}:" if rec.line else ""
             if rec.group:
@@ -450,6 +444,25 @@ NO_TIME = "時刻の記録なし"
 def _comment_shown(rec: DayRecord, my_line: str) -> bool:
     """その連絡をこの端末のマス目に出すか。作業長は全ライン、ほかは自分のライン宛だけ。"""
     return my_line == config.LINE_SUPERVISOR or rec.line == my_line
+
+
+def record_shown(rec: DayRecord, my_line: str) -> bool:
+    """その登録をこの端末に見せるか。**マス目・マウスを乗せたとき・内容閲覧・削除・印刷の決まりは1つ**(VER4.2.6)。
+
+        作業長             : 休み・連絡とも全ライン
+        コイル             : 休みはコイルだけ、連絡はコイル宛だけ
+        コイル以外の各ライン : 休みはコイル以外全部、連絡は自分のライン宛だけ
+
+    前はマス目と印刷だけがこれで絞り、マウスを乗せたときの休み・内容閲覧・削除の選択肢は全ラインを
+    出していた(マス目に無いほかのラインの登録が見え、消せた)。
+    """
+    if rec.is_rest:
+        if my_line == config.LINE_SUPERVISOR:
+            return True
+        if my_line == config.LINE_COIL:
+            return rec.line == config.LINE_COIL
+        return rec.line != config.LINE_COIL
+    return _comment_shown(rec, my_line)
 
 
 def comment_origin(rec: DayRecord) -> str:
@@ -509,11 +522,11 @@ def build_day_tooltip(records: Sequence[DayRecord], my_line: str | None = None) 
 
     * 休み … 残業/早出繋ぎ。複数人の休みがある場合は区切り線と番号を入れて見分けやすくする
     * 連絡 … どの班からといつ「L-1 B班からの連絡　2026/10/21 14:05」(VER4.2.4)。
-      **マスに出す連絡と同じものだけ**(``my_line`` で絞る。``None`` なら絞らない)
+      **マスに出すものと同じものだけ**(休みも連絡も ``record_shown`` で絞る。VER4.2.6。``None`` なら絞らない)
     """
-    targets = [r for r in records if r.is_rest and r.shift]
-    comments = [r for r in records if r.kubun == config.KUBUN_OTHER
-                and (my_line is None or _comment_shown(r, my_line))]
+    shown = [r for r in records if my_line is None or record_shown(r, my_line)]
+    targets = [r for r in shown if r.is_rest and r.shift]
+    comments = [r for r in shown if r.kubun == config.KUBUN_OTHER]
     if not targets and not comments:
         return ""
 

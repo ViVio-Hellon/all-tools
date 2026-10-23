@@ -34,6 +34,10 @@ class _Base(unittest.TestCase):
         self.conn = _web.bind_db(self)
         self.client = _web.make_client()
         self.repo = repository.Repository(self.conn)
+        # 登録はコイルの休み。見るのもコイルの端末(ほかのラインの端末にはコイルの休みは出ない。VER4.2.6)
+        from calendar_app import settings as user_settings
+        user_settings.save_my_line("コイル")
+        self.addCleanup(user_settings.save_my_line, "")
 
     def add(self, months_ago: int, day: int = 10, name: str = "山田太郎") -> None:
         year, month = _months_ago(months_ago)

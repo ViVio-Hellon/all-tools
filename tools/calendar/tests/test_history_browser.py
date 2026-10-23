@@ -55,6 +55,9 @@ class HistoryBrowserTests(PageBrowserCase):
         self.addCleanup(user_settings.set_value, user_settings.KEY_THEME,
                         user_settings.THEME_AUTO)
         user_settings.set_theme("light")
+        # 登録はコイルの休み。見るのもコイルの端末(ほかのラインの端末にはコイルの休みは出ない。VER4.2.6)
+        user_settings.save_my_line("コイル")
+        self.addCleanup(user_settings.save_my_line, "")
         repo = repository.Repository(self.conn)
         for n, name in ((1, "山田太郎"), (2, "鈴木一郎")):
             year, month = _months_ago(n)

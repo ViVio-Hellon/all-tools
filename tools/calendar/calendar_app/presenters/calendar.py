@@ -31,6 +31,7 @@ from ..repository import (
     build_day_detail,
     build_day_text,
     build_day_tooltip,
+    record_shown,
     comment_origin,
     comment_when,
     shift_neighbours,
@@ -197,13 +198,19 @@ class DayView:
     items: list[dict[str, Any]] = field(default_factory=list)  # 削除の選択肢
 
 
-def day_view(conn: sqlite3.Connection, day: _dt.date) -> DayView:
+def day_view(conn: sqlite3.Connection, day: _dt.date, my_line: str | None = None) -> DayView:
     """その日の登録内容。閲覧と削除の両方がこれを読む。
 
     **1つのビューモデルで両方まかなう。** 閲覧と削除で別々に組むと、
     片方だけ絞り込みを直したときに食い違う。
+
+    **この端末のマス目と同じものだけ**(``record_shown``。VER4.2.6)。前は全ラインを出していたので、
+    マス目に無いほかのラインの登録が内容閲覧に見え、削除の選択肢にも並んでいた。``my_line`` を省けば
+    この端末のライン設定。
     """
-    records = Repository(conn).get_day_records(day)
+    if my_line is None:
+        my_line = settings.get_my_line()
+    records = [r for r in Repository(conn).get_day_records(day) if record_shown(r, my_line)]
     weekday = config.WEEKDAY_LABELS[(day.weekday() + 1) % 7]
     return DayView(
         date=day.strftime(config.DATE_KEY_FORMAT),
