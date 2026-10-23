@@ -1180,7 +1180,7 @@ function startPolling() {
                      s.undelivered_why, s.undelivered_events);
       if ('dropped' in s) setDropped(s.dropped);
       setOpenTerminals(s.presence);
-      setFreshness(s.import_age_sec, s.import_stale, s.last_import_at);
+      setFreshness(s.import_age_sec, s.import_stale, s.last_import_at, s.import_problem);
       if (s.token !== lastToken) {
         if (!lastToken) lastToken = s.token;
         else if (!busy && !acting && await reload()) lastToken = s.token;
@@ -1269,7 +1269,7 @@ function wireDropped() {
 // フォルダが落ちていると、画面は元気に動いているのに中身だけ古いまま
 // になる ── VBA 版の「更新できていないのに気付かない」と同じ形。
 // 取り込めていない時間が延びたら、そう言う。
-function setFreshness(ageSec, stale, at) {
+function setFreshness(ageSec, stale, at, problem) {
   const slot = document.getElementById('rb-fresh-slot');
   const el = document.getElementById('rb-fresh');
   if (!slot || !el) return;
@@ -1281,4 +1281,6 @@ function setFreshness(ageSec, stale, at) {
   el.title = at
     ? `共有DBから取り込めていません。盤は ${at} に取り込んだときのままです。共有フォルダに届いているか確かめてください`
     : '共有DBからまだ一度も取り込めていません。共有フォルダに届いているか確かめてください';
+  // 読めなかった表と理由(共有フォルダは見えていて、1 つの表だけ読めないこともある)
+  if (problem) el.title += `\n読めなかったもの: ${problem}`;
 }

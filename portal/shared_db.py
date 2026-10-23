@@ -157,10 +157,21 @@ def reachable(path: Path) -> bool:
     return bool(result and result[0])
 
 
-def stamp(path: Path) -> tuple[int, int]:
-    """変わったかどうかの目印(大きさ・更新時刻)。"""
+def stamp(path: Path) -> tuple[int, ...]:
+    """変わったかどうかの目印(本体と `-wal` の大きさ・更新時刻)。
+
+    **本体だけでは足りない。** WAL の DB(python-web-tools などほかのツールが WAL で
+    開いていることがある)は、書いても本体は変わらず `-wal` だけが伸びる。本体だけを見て
+    いると、ほかのツールが開いたまま直したタブ表示権限を「変わっていません」と読まずに、
+    前の写しで決め続けていた。`-wal` が無ければ本体だけ(前の版と同じ目印)。
+    """
     st = path.stat()
-    return st.st_size, st.st_mtime_ns
+    marks: tuple[int, ...] = (st.st_size, st.st_mtime_ns)
+    try:
+        wal = Path(str(path) + "-wal").stat()
+    except OSError:
+        return marks
+    return marks + (wal.st_size, wal.st_mtime_ns)
 
 
 def _quote(name: str) -> str:

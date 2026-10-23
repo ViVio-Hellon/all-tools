@@ -19,6 +19,7 @@ from app.services.excel_service import WORD_EXTENSIONS
 from app.services.settings_service import DEFAULT_EXTENSIONS
 
 from tests._page_browser import PageBrowserCase
+from tests.test_web import AUTH
 
 NOTICE = "山田さんが「作業手順の確認」を開いたままです(プレビューはできます)"
 
@@ -115,6 +116,48 @@ class PreviewBrowserTests(PageBrowserCase):
 
         self.assertEqual(self.downloads, [], "PDF をダウンロードさせた")
         self.assertEqual(page.locator("a[download]").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_作り直すと_作り直した画像を出す(self) -> None:
+        """**作り直す → 出す → 新しい絵。** 「作り直す」で前の絵のまま出さない。
+
+        画像の名前(キー)は点検表の更新日時・大きさで決まるので、中身を変えずに作り直すと
+        同じ名前になる。画像はブラウザに1日控えさせているので、以前は作り直しても
+        ブラウザが**前の絵**を出していた(PDF は作った時刻を付けて避けていた)。
+        """
+        original = self.biz.excel.backend.preview
+        made: list[str] = []
+
+        def numbered(path, pdf=True):
+            image = original(path, pdf=pdf)
+            made.append(path)
+            image.data = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{100 * len(made)}" '
+                          'height="50"><rect width="100%" height="100%" fill="#ccc"/></svg>').encode("utf-8")
+            return image
+
+        self.biz.excel.backend.preview = numbered
+        page = self.open_with(self.excel)
+        page.click("#sel-list li button[aria-label='プレビュー']")
+        page.wait_for_function("(() => { const i = document.getElementById('pv-image');"
+                               " return !i.hidden && i.naturalWidth === 100; })()")
+        before = page.get_attribute("#pv-image", "src")
+        page.wait_for_timeout(300)   # 作った時刻が変わるように(秒より細かいが、念のため)
+        page.click("#pv-regenerate")
+        page.wait_for_function("(() => { const i = document.getElementById('pv-image');"
+                               " return !i.hidden && i.complete; })()")
+        page.wait_for_function("document.getElementById('pv-status').innerText.startsWith('表示中')")
+        self.assertEqual(len(made), 2, "作り直していない")
+        self.assertEqual(self.previews()[-1]["force"], True)
+        page.wait_for_function("document.getElementById('pv-image').naturalWidth !== 0")
+        self.assertEqual(page.evaluate("document.getElementById('pv-image').naturalWidth"), 200,
+                         "作り直したのに前の絵を出した")
+        # この試験のブラウザは要求をすべて横取りするので、ブラウザの控えが効かない。本物の
+        # 画面では、同じ道の画像は控え(1日)から出る ── **作り直したら道を変える**ことを見る
+        after = page.get_attribute("#pv-image", "src")
+        self.assertNotEqual(after, before, "作り直しても画像の道が同じ(ブラウザの控えの前の絵が出る)")
+        res = self.client.get(after.split("#")[0], headers=AUTH)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("max-age", res.headers.get("Cache-Control", ""), "前提: 画像は控えさせている")
         self.assertEqual(self.errors, [])
 
     def test_PDFを出せない画面では作る前に断り_画像で表示するで1ページ目の絵を頼む(self) -> None:

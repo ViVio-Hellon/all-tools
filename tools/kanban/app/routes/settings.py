@@ -444,8 +444,15 @@ def table_refresh_run():
         hook = current_app.config.get("MANUAL_REFRESH")
         if hook is not None:
             try:
-                hook()
-                reimported = "この端末は取り込み直しました。ほかの端末には次の取り込み(30 秒ほど)で届きます。"
+                imported = hook()
+                # 取り込めなかった表があれば「取り込み直しました」と言わない(盤は前の中身のまま)
+                missed = [f"{name}({why})" for name, _b, _a in result.refreshed
+                          if (why := _not_imported(imported, name))]
+                reimported = (
+                    f"入れ替えは済みましたが、この端末へはまだ取り込めていません: {'、'.join(missed)}。"
+                    "看板画面は次の取り込みで変わります。"
+                    if missed else
+                    "この端末は取り込み直しました。ほかの端末には次の取り込み(30 秒ほど)で届きます。")
             except Exception as exc:  # noqa: BLE001 - 入れ替えは済んでいる
                 log.exception("入れ替えのあとの取り込みに失敗")
                 reimported = f"入れ替えは済みましたが、この端末の取り込みに失敗しました: {exc}"
@@ -1659,6 +1666,12 @@ def master_table():
     except ValueError:
         page = 0
     shared, _configured = _master_db(request.args.get("db", ""))
+    # **開くたびに写し直す。** 写しは共有DBの「大きさと更新時刻」が同じなら使い回すが、
+    # Windows の共有フォルダはそれを数秒覚えて返す ── ほかの PC がマスタを直した直後に
+    # 開くと、**直す前の中身**が出た(直したのに前の値のまま見える。直そうとすると
+    # 「開き直してください」と断られ、開き直しても同じ)。マスタ管理を開くのは人が
+    # 頼んだときだけなので、そのつど写す(:meth:`kanban.db.shared.SharedDb.forget_copy`)
+    shared.forget_copy()
     view = master.open_table(shared, request.args.get("table", ""), page,
                              sort=request.args.get("sort", ""), sort_dir=request.args.get("dir", "asc"))
     return jsonify(master.to_dict(view))
@@ -1796,12 +1809,19 @@ def _master_result(result, table: str = "", action: str = "update", *, db: str =
     hook = current_app.config.get("MANUAL_REFRESH")
     if hook is not None:
         try:
-            hook()
+            imported = hook()
         except Exception as exc:  # noqa: BLE001 - 書けたことは変わらない
             log.exception("マスタ更新後の取り込みに失敗")
             message += f" ただし手元へ取り込めませんでした: {exc}"
         else:
-            message += _BOARD_NOTE.get(action, "")
+            why = _not_imported(imported, table)
+            if why:
+                # **取り込めていないのに「すぐ反映されます」と言わない。** 盤は直す前の中身のまま
+                log.warning("マスタを書いたあと、%s を手元へ取り込めませんでした: %s", table, why)
+                message += (f" ただし、この端末へはまだ取り込めていません({why})。"
+                            "看板画面は次の取り込みで変わります。")
+            else:
+                message += _BOARD_NOTE.get(action, "")
     # **この端末の看板画面に出ないラインなら、そう言う。** 看板画面は担当
     # ラインだけを出すので、別のラインの表を直しても「出ない」ように見える
     if current_mode() == config.MODE_SITE and table:
@@ -1815,6 +1835,23 @@ def _master_result(result, table: str = "", action: str = "update", *, db: str =
                 "(その担当ラインの端末で反映されます)。"
             )
     return jsonify({"ok": True, "message": message, **_written_to()})
+
+
+def _not_imported(imported, table: str) -> str:
+    """書いたあとの取り込み(``MANUAL_REFRESH`` の戻り値)で、``table`` の看板が手元へ入らなかった理由。
+
+    入った・取り込む対象でない・結果が分からない(試験の差し替えなど)ときは空。取り込みの
+    途中で止まったとき(:meth:`kanban.db.sync.Importer.run_once` は例外を上げずに空の結果を返す)
+    は、そう言う。
+    """
+    lines = getattr(imported, "lines", None)
+    if lines is None or not table.startswith(config.KANBAN_TABLE_PREFIX):
+        return ""
+    line = table[len(config.KANBAN_TABLE_PREFIX):]
+    for r in lines:
+        if getattr(r, "line", "") == line:
+            return "" if r.ok else (r.message or "読めませんでした")
+    return "" if lines else "取り込みが途中で止まりました。記録を見てください"
 
 
 def _access_result(result):

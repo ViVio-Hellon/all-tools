@@ -159,7 +159,9 @@ async function show(item, force, settleMs = 0) {
     img.onload = () => { if (no === view.req) { message([]); img.hidden = false; } };
     img.onerror = () => { if (no === view.req) fail(item, "プレビュー画像を読み込めませんでした。", ""); };
     img.alt = `${item.name} のプレビュー`;
-    img.src = tokenUrl(data.image_url);
+    // **作り直したら道を変える**(PDF と同じ)。画像の名前(キー)は点検表の更新日時で決まり、
+    // 作り直しても同じ名前になる。ブラウザは画像を1日控えるので、同じ道だと前の絵を出していた
+    img.src = `${tokenUrl(data.image_url)}&g=${encodeURIComponent(data.generated_at || "")}`;
     const info = [];
     if (data.sheet) info.push(`シート: ${data.sheet}`);
     if (data.range) info.push(`範囲: ${data.range}`);

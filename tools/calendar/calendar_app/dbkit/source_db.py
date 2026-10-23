@@ -81,6 +81,25 @@ WAY_COPY = "手元への写し"
 _SIDECARS = ("-wal", "-shm", "-journal")
 
 
+def stamp(path: Path | str) -> tuple:
+    """中身が変わったかの目印(本体と ``-wal`` の大きさ・更新時刻)。**開かない。**
+
+    **本体だけでは足りない。** WAL の DB は、書いても本体は変わらず ``-wal`` だけが
+    伸びる(本体へ移すのは後でまとめて)。本体の大きさと更新時刻だけを見ていると、
+    外のツールが WAL のまま名簿を直したとき「変わっていない」と読み、前の名簿の
+    ままになっていた。``-wal`` が無ければ本体だけ(いつもの DELETE の DB)。
+
+    :raises OSError: 本体が見えない
+    """
+    info = Path(path).stat()
+    marks: tuple = (info.st_size, info.st_mtime_ns)
+    try:
+        wal = Path(str(path) + "-wal").stat()
+    except OSError:
+        return marks
+    return marks + (wal.st_size, wal.st_mtime_ns)
+
+
 class SourceError(RuntimeError):
     """取り込み元を読み書きできなかった。"""
 
@@ -501,7 +520,7 @@ def _prepare(conn: sqlite3.Connection, *, read_only: bool) -> sqlite3.Connection
 
 # 写しの置き場。**同じファイルを何度も写さない**
 _COPY_DIR: Optional[Path] = None
-_COPIES: dict[str, tuple[tuple[float, int], Path]] = {}
+_COPIES: dict[str, tuple[tuple, Path]] = {}
 
 
 def _copy_root() -> Path:
@@ -513,12 +532,16 @@ def _copy_root() -> Path:
 
 
 def _copy_of(resolved: Path) -> Path:
-    """手元に写した実体。中身が変わっていなければ写し直さない。"""
-    stat = resolved.stat()
-    stamp = (stat.st_mtime, stat.st_size)
+    """手元に写した実体。中身が変わっていなければ写し直さない。
+
+    「変わったか」は本体と ``-wal`` で見る(``stamp``)。写すのは WAL の DB のときで、
+    WAL の書き込みは本体を変えない ── 本体だけ見ていると、前の写し(前の名簿)を
+    読み続けていた。
+    """
+    marks = stamp(resolved)
     key = str(resolved)
     cached = _COPIES.get(key)
-    if cached is not None and cached[0] == stamp and cached[1].exists():
+    if cached is not None and cached[0] == marks and cached[1].exists():
         return cached[1]
 
     copy = _copy_root() / f"{abs(hash(key)):x}{resolved.suffix}"
@@ -527,8 +550,16 @@ def _copy_of(resolved: Path) -> Path:
         target = Path(str(copy) + extra)
         if side.exists():
             shutil.copyfile(side, target)
+        else:
+            # **前に写した付き添いを残さない。** 元の -wal が本体へ移されて消えたあとも
+            # 写しの側に前の -wal が残っていると、新しい本体に前の -wal が当たり、
+            # 前の中身で読めてしまう
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
     shutil.copyfile(resolved, copy)
-    _COPIES[key] = (stamp, copy)
+    _COPIES[key] = (marks, copy)
     log.info("共有の上で開けないので手元へ写しました: %s → %s", resolved, copy)
     return copy
 

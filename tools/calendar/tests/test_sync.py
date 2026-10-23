@@ -413,6 +413,65 @@ class AutoSyncTests(_Base):
         self.assertGreater(len(opened), first)
         self.assertEqual(self.repo.member_count(), 2)
 
+    def _member(self, conn: sqlite3.Connection, code: str, name: str) -> None:
+        conn.execute(
+            f'INSERT OR REPLACE INTO "{config.TABLE_MEMBER}" '
+            '("管理番号","苗字","班","名前","読み","担当ライン") VALUES (?,?,?,?,?,?)',
+            (code, name[:2], "B", name, "", "L-1"))
+        conn.commit()
+
+    def test_WALのまま直された名簿も入れ直す(self) -> None:
+        """**直す → 受信 → 新しい名簿。** 外のツールが WAL のまま名簿を直したとき。
+
+        WAL の DB は、書いても本体の大きさ・更新時刻が変わらない(``-wal`` だけ伸びる)。
+        以前は本体だけで「変わったか」を見ていたので、開いたままの外のツールが直した
+        名簿は、そのツールが閉じるまで届かず、**前の名簿のまま**動いていた。
+        """
+        sync = AutoSync(":memory:", str(self.data_db), master_path=str(self.master_db))
+        self.assertTrue(sync.receive(self.conn))       # 1回目(アクセス権限の表もここで作る)
+        writer = sqlite3.connect(self.master_db)        # 外のツール(開いたまま)
+        self.addCleanup(writer.close)
+        writer.execute("PRAGMA journal_mode=WAL")
+        self._member(writer, "10", "山田太郎")
+        self.assertTrue(sync.receive(self.conn))
+        self.assertEqual([w.name for w in self.repo.get_workers("L-1")], ["山田太郎"])
+
+        # ここからは -wal だけが伸びる(本体の大きさ・更新時刻は変わらない)
+        before = (self.master_db.stat().st_size, self.master_db.stat().st_mtime_ns)
+        writer.execute(f'UPDATE "{config.TABLE_MEMBER}" SET "名前"=? WHERE "管理番号"=?',
+                       ("山田次郎", "10"))
+        writer.commit()
+        self.assertEqual((self.master_db.stat().st_size, self.master_db.stat().st_mtime_ns),
+                         before, "前提: WAL の書き込みで本体は変わらない")
+        self.assertTrue(sync.receive(self.conn))
+        self.assertEqual([w.name for w in self.repo.get_workers("L-1")], ["山田次郎"],
+                         "WAL で直した名簿が届いていない(前の名前のまま)")
+
+    def test_同期サービスは差し替えられたマスタDBを探し直す(self) -> None:
+        """**名前・拡張子を変えて差し替えたマスタも拾う。**
+
+        宛先のファイルは起動・設定の保存のときに決めて持ち続ける。以前は、マスタDBを
+        ``.sqlite3`` から ``.db`` に差し替えられると、消えた前のファイルを見続け、
+        名簿を入れ直せないまま前の名簿で動いていた(開き直すまで)。
+        """
+        service = sync_service.get_service()
+        service.reload()
+        self.assertEqual(service._auto.master_path, str(self.master_db))
+        self.assertTrue(service.run_now(receive=True))
+        local = db.connect()
+        self.addCleanup(local.close)
+        self.assertEqual(Repository(local).member_count(), 0)
+
+        moved = self.master_db.with_suffix(".db")
+        self.master_db.rename(moved)
+        conn = sqlite3.connect(moved)
+        self._member(conn, "10", "山田太郎")
+        conn.close()
+
+        self.assertTrue(service.run_now(receive=True))
+        self.assertEqual(service._auto.master_path, str(moved))
+        self.assertEqual([w.name for w in Repository(local).get_workers("L-1")], ["山田太郎"])
+
     def test_マスタDBが見えなくても受信は通る(self) -> None:
         """休み・連絡が届くことのほうが大事。見えないことは設定画面が言う。"""
         sync = AutoSync(":memory:", str(self.data_db),
@@ -640,6 +699,41 @@ class WalSidecarTests(unittest.TestCase):
                     self.assertTrue(source.has_table("t"))
                 left = sorted(p.name for p in Path(tmp).iterdir() if p.name != path.name)
                 self.assertEqual(left, [], "付き添いが残った")
+
+    def test_手元への写しはWALの書き込みでも写し直す(self) -> None:
+        """**直す → 写しを読む → 新しい値。** 共有の上で開けない WAL の DB は手元へ写して読む。
+
+        以前は「写し直すか」を本体の更新時刻と大きさだけで決めていた。WAL の書き込みは
+        本体を変えないので、前に写した中身(前の名簿)を読み続けていた。また、元の -wal が
+        本体へ移されて消えたあとも、写しの側に前の -wal が残り、新しい本体に当たっていた。
+        """
+        import tempfile
+
+        from calendar_app.dbkit import source_db
+
+        def read(path: Path) -> int:
+            conn = source_db._try_copy(path)
+            try:
+                return conn.execute("SELECT x FROM t").fetchone()[0]
+            finally:
+                conn.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "m.sqlite3"
+            writer = sqlite3.connect(path)               # 外のツール(開いたまま)
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("CREATE TABLE t (x)")
+            writer.execute("INSERT INTO t VALUES (1)")
+            writer.commit()
+            self.assertEqual(read(path), 1)
+            writer.execute("UPDATE t SET x = 2")
+            writer.commit()
+            self.assertEqual(read(path), 2, "WAL の書き込みのあと、前の写しを読んだ")
+            writer.execute("UPDATE t SET x = 3")
+            writer.commit()
+            writer.close()                               # 本体へ移して -wal を消す
+            self.assertFalse(Path(str(path) + "-wal").exists())
+            self.assertEqual(read(path), 3, "写しの側に前の -wal が残って当たった")
 
 
 if __name__ == "__main__":

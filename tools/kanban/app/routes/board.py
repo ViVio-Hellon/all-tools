@@ -24,6 +24,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from kanban import config
 from kanban.applog import get_logger
 from kanban.db.store import ConflictError, LockTimeout
+from kanban.db.sync import META_IMPORT_PROBLEM, TABLE_MISSING
 from kanban.domain.models import (
     CANCELLED_WHILE_SHIPPING,
     CancelledWhileShippingError,
@@ -164,6 +165,9 @@ def status():
             "last_import_at": at,
             "import_age_sec": age,
             "import_stale": stale,
+            # 読めなかった表と理由(「取り込めていません」に添える。共有フォルダは見えているのに
+            # 1 つの表だけ読めない、を「共有フォルダに届いているか」と取り違えさせない)
+            "import_problem": store.get_meta(META_IMPORT_PROBLEM, "") if stale else "",
         }
     )
 
@@ -534,7 +538,7 @@ def refresh():
         result = hook()
         failed = list(getattr(result, "failed_lines", None) or [])
         ok = not failed
-        missing = [f.table_name for f in failed if getattr(f, "message", "") == "テーブルが存在しません"]
+        missing = [f.table_name for f in failed if getattr(f, "message", "") == TABLE_MISSING]
         if missing:
             message = (f"共有DBに {'、'.join(missing)} がありません(消されたか、名前が変わりました)。"
                        "そのラインは最後に取り込んだ内容を表示しています。")

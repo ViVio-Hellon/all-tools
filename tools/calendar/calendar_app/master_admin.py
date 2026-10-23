@@ -787,7 +787,22 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str,
                       f"{message}。ただし手元への取り込み直しに失敗しました "
                       f"({exc})。設定画面から取り込み直してください。")
     log.info("%s / 取り込み直し %s 件", message, count)
-    return Result(True, f"{message}(取り込み直し {count} 件)")
+    text = f"{message}(取り込み直し {count} 件)"
+    from . import access_control
+
+    if table == access_control.TABLE:
+        # **この端末のラインも、直した表にその場で合わせる。** 以前は取り込み直す
+        # だけで、合わせるのは次の同期(既定20秒。自動同期を切っていれば次の起動)
+        # だった ── そのあいだ、表から外したラインのまま登録できた
+        try:
+            applied = access_control.enforce(conn)
+        except Exception as exc:                  # noqa: BLE001 - 書けてはいる
+            log.warning("アクセス権限に合わせられませんでした: %s", exc)
+        else:
+            if applied.changed:
+                text += (f"。この端末のラインを {applied.before or '(未設定)'} から "
+                         f"{applied.line} に変えました")
+    return Result(True, text)
 
 
 def _stamped(table: str, values: dict[str, Any]) -> dict[str, Any]:

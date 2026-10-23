@@ -267,6 +267,27 @@ class MasterAdminTests(unittest.TestCase):
         self.assertTrue(body["access"]["managed"])
         self.assertTrue(body["access"]["fixed"])
 
+    def test_表を直したらこの端末のラインもその場で合う(self) -> None:
+        """**直す → 使う → 新しい値。** 直した端末で、次の同期を待たずにラインが合う。
+
+        以前は手元の表を取り込み直すだけで、ラインを合わせるのは次の同期(自動同期を
+        切っていれば次の起動)だった。そのあいだ、表から外した「作業長」のまま全ラインの
+        休みを登録・削除できた。
+        """
+        user_settings.save_my_line("作業長")
+        self.addCleanup(user_settings.save_my_line, "")
+        res = self.add({"ログインID": "yamada", "権限": "コイル"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(user_settings.get_my_line(), "コイル")
+        self.assertIn("コイル に変えました", res.get_json()["message"])
+        calendar = _web.json_of(self.client.get("/api/calendar", headers=_web.auth()))
+        self.assertEqual(calendar["my_line"], "コイル")
+        # 直す(コイル → HVC)。この端末も HVC になる
+        res = self.post("/api/master/save", {"key": "1", "values": {"権限": "HVC"},
+                                             "password": config.ADMIN_PASSWORD})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(user_settings.get_my_line(), "HVC")
+
     def test_直すにも消すにも管理者パスワード(self) -> None:
         self.add({"ログインID": "yamada", "権限": "コイル"})
         res = self.post("/api/master/save", {"key": "1", "values": {"権限": "HVC"}})

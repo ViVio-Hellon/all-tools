@@ -180,6 +180,30 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(again.changed)
         self.assertTrue(self.store.sync(force=True).changed, "読み直すを押したときは読む")
 
+    def test_WALのまま直された表も読み直す(self) -> None:
+        """**直す → 読み直す → 新しいタブ。** ほかのツールが WAL のまま開いて直したとき。
+
+        WAL の書き込みは本体の大きさ・更新時刻を変えない(`-wal` だけ伸びる)。以前は本体
+        だけで「変わったか」を見ていたので、「変わっていません」で前の写しのまま決めていた。
+        """
+        shared_db.create_table(self.path)
+        shared_db.insert(self.path, {"PC名": "TEST-PC", "表示タブ": "看板"})
+        writer = sqlite3.connect(self.path)            # ほかのツール(開いたまま)
+        self.addCleanup(writer.close)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("SELECT 1").fetchall()
+        self.assertTrue(self.store.sync().reached)
+        self.assertEqual(self.store.decide(self.me, CATALOG).tabs, ["kanban"])
+
+        before = (self.path.stat().st_size, self.path.stat().st_mtime_ns)
+        writer.execute('UPDATE "タブ表示権限" SET "表示タブ" = ?', ("点検表",))
+        writer.commit()
+        self.assertEqual((self.path.stat().st_size, self.path.stat().st_mtime_ns), before,
+                         "前提: WAL の書き込みで本体は変わらない")
+        result = self.store.sync()
+        self.assertTrue(result.changed, result.to_dict())
+        self.assertEqual(self.store.decide(self.me, CATALOG).tabs, ["inspection"])
+
     def test_共有に届かない日は前回の写しで決める(self) -> None:
         shared_db.create_table(self.path)
         shared_db.insert(self.path, {"PC名": "TEST-PC", "表示タブ": "看板"})

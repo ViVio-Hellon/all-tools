@@ -44,6 +44,12 @@ EXPORT_CHUNK_SIZE = 100
 #: 済ませているので、書く側も同じだけ寛容にしておく。
 META_STATE_COLUMNS = "state_table_columns"
 
+#: 共有DBにそのラインの看板の表が無いときの :attr:`LineImportResult.message`
+TABLE_MISSING = "テーブルが存在しません"
+
+#: 前の取り込みで読めなかった表と理由(空 = 読めた)。看板の画面の「取り込めていません」に添える
+META_IMPORT_PROBLEM = "last_import_problem"
+
 
 @dataclass
 class LineImportResult:
@@ -163,7 +169,7 @@ def _import_all(
                     line=code,
                     table_name=table_name,
                     ok=False,
-                    message="テーブルが存在しません",
+                    message=TABLE_MISSING,
                 )
             )
             continue
@@ -175,13 +181,22 @@ def _import_all(
     if available is not None:
         # 共有DBに看板の表が無いライン。看板の画面はそれを見て帯を出し、ボタンを止める
         # (押しても共有DBへ届かない)。**今回見たラインだけ**書き換える
-        missing = {r.line for r in result.lines if not r.ok and r.message == "テーブルが存在しません"}
+        missing = {r.line for r in result.lines if not r.ok and r.message == TABLE_MISSING}
         before = {c for c in store.get_meta("missing_line_tables", "").split(",") if c}
         store.set_meta("missing_line_tables", ",".join(sorted((before - set(codes)) | missing)))
     # 倉庫 ⇔ 現場のコメント(取り込んだラインの分)
     import_comments(store, gateway, [line.line for line in result.ok_lines])
     result.finished_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    store.set_meta("last_import_at", result.finished_at)
+    # **「最後に取り込めた時刻」は、読めたときだけ進める。** 以前は読めなくても(共有DBが
+    # 見えない・表が読めない・列が足りない)毎回書いていたので、看板の画面の「取り込めて
+    # いません」が一度も出なかった ── ほかの端末がマスタ(資材・サイズ・常設品)を直しても
+    # 盤は前の中身のまま、それを知らせる表示も出ない。表が無いラインは数えない(盤に別の帯が
+    # 出る・未実装のライン)
+    problems = [r for r in result.lines if not r.ok and r.message != TABLE_MISSING]
+    store.set_meta(META_IMPORT_PROBLEM,
+                   " / ".join(f"{r.table_name}: {r.message}" for r in problems)[:500])
+    if not problems:
+        store.set_meta("last_import_at", result.finished_at)
     store.set_meta("last_import_source", gateway.path)
     applog.info("import_all: %s", result.summary())
     return result

@@ -30,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 from . import config, db, settings, sources
@@ -46,6 +47,10 @@ BUSY_LABEL = "取り込み元との同期"
 
 #: 「いま同期」が、走っている背景の同期と続けて回す 1 回を待つ上限(秒)
 NOW_WAIT_SEC = 60.0
+
+#: 取り込み元のファイルを見失ったとき、参照パスのフォルダを探し直す間隔の下限(秒)。
+#: マスタDBがもともと無い端末で、同期のたびにフォルダを読みに行かないため
+REFIND_SEC = 60.0
 
 
 class SyncService:
@@ -65,6 +70,8 @@ class SyncService:
         self._last_error = ""
         self._path = ""
         self._folder = ""
+        #: 見失ったファイルを最後に探し直した時刻(``_follow_moved``)
+        self._refound_at = 0.0
         self.reload()
 
     # ------------------------------------------------------------------
@@ -104,6 +111,44 @@ class SyncService:
             log.info("同期の設定を読み直しました: %s",
                      path or f"(見つかりません。参照パス: {folder or '未設定'})")
         return bool(path)
+
+    def _follow_moved(self) -> None:
+        """**取り込み元のファイルが無くなっていたら、参照パスのフォルダから探し直す。**
+
+        宛先のファイルは ``_find`` のとき(起動・設定の保存)に1度決めて持ち続ける。
+        以前はそのあと、ほかのPCや管理者がマスタDBを**名前・拡張子を変えて差し替える**
+        (``.sqlite3`` → ``.db`` など。どちらも同じものとして拾う)と、消えた前のファイルを
+        見続け、名簿・アクセス権限を入れ直せないまま**前の名簿で動いていた**(失敗は
+        記録の奥に1行出るだけ)。起動したときにマスタDBが見えず、あとで置かれた場合も
+        同じで、開き直すまで名簿が入らなかった。
+
+        見るのは「いまのファイルがまだあるか」だけ(同期のたびに受信が見るのと同じ軽さ)。
+        無いときだけフォルダを探す(``REFIND_SEC`` に1回まで)。共有ごと見えないときは
+        何も変えない ── 送れない理由は同期がいつもどおり出す。
+        """
+        auto = self._auto
+        if auto is None:
+            return
+        try:
+            source_there = Path(auto.source_path).exists()
+            master_there = bool(auto.master_path) and Path(auto.master_path).exists()
+        except OSError:
+            return
+        if source_there and master_there:
+            return
+        now = time.monotonic()
+        if now - self._refound_at < REFIND_SEC:
+            return
+        self._refound_at = now
+        found = sources.find_data_db()
+        if found is None:
+            return
+        master = sources.find_master_db()
+        if str(found) == auto.source_path and str(master or "") == auto.master_path:
+            return
+        log.info("取り込み元のファイルが変わっていたので探し直しました: %s / マスタ %s",
+                 found, master or "(見つかりません)")
+        self._find()
 
     def _ensure(self) -> bool:
         """取り込み元が決まっているか。参照パスがあって見失っているなら探し直す。"""
@@ -259,6 +304,10 @@ class SyncService:
             receive = again
 
     def _run_one(self, receive: bool) -> None:
+        try:
+            self._follow_moved()
+        except Exception:                         # noqa: BLE001 - 探し直しで同期を止めない
+            log.exception("取り込み元の探し直しで想定外のエラー")
         auto = self._auto
         # 同期1回ごとに追跡番号を立てる(``s=XXXXXX``)。その1回の送信・
         # 取り込みの行が揃う。画面の「今すぐ同期」から呼ばれたときは

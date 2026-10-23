@@ -221,7 +221,7 @@ class AutoSync:
         self._access_ready = False
         # 最後に名簿・アクセス権限を入れ直したときのマスタDBの (大きさ, 更新時刻)。
         # 変わっていなければ開かない(下の ``_receive_members``)
-        self._master_seen: tuple[int, int] | None = None
+        self._master_seen: tuple | None = None
 
     # ------------------------------------------------------------------
     @property
@@ -305,10 +305,10 @@ class AutoSync:
 
         # **マスタDBが変わっていなければ開かない。** 共有フォルダのマスタは、ほかの人が
         # 新しいものに差し替える。開いているあいだ(Windows)は差し替えられないので、
-        # 受信のたび(既定20秒)に開き直さない。見るのは大きさと更新時刻だけ(開かない)
+        # 受信のたび(既定20秒)に開き直さない。見るのは大きさと更新時刻だけ(開かない)。
+        # **-wal も見る**(``source_db.stamp``)── WAL のまま直されると本体は変わらない
         try:
-            info = Path(self.master_path).stat()
-            seen = (info.st_size, info.st_mtime_ns)
+            seen = source_db.stamp(self.master_path)
         except OSError:
             seen = None
         if seen is not None and seen == self._master_seen:
@@ -344,8 +344,7 @@ class AutoSync:
                 # アクセス権限の表を作った(自分で書いた)ので、その分だけ更新時刻が
                 # 変わった。書いたあとを覚える(次の受信で開き直さない)
                 try:
-                    info = Path(self.master_path).stat()
-                    seen = (info.st_size, info.st_mtime_ns)
+                    seen = source_db.stamp(self.master_path)
                 except OSError:
                     seen = None
             self._master_seen = seen
