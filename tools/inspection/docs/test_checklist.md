@@ -74,7 +74,7 @@
 | 対象アプリだけ停止できる・PID の使い回しで別のプロセスを止めない | `ProcessIdentityTests` | 自動 |
 | 記録した子プロセスだけを片付ける | `test_記録した子プロセスだけを片付ける` | 自動 |
 | Excel プロセスが残らない | 印刷中に stop.bat --force → EXCEL.EXE が残らない | 実機 |
-| 停止理由がログに残る | `inspection_YYYYMMDD.log` の「終了しました」「誰も見ていないので終了します(…)」 | 画面(確認済み)/実機 |
+| 停止理由がログに残る | `inspection\inspection_YYYYMMDD.log` の「終了しました」「誰も見ていないので終了します(…)」 | 画面(確認済み)/実機 |
 
 ## VBA 版との比較(Phase 14)
 

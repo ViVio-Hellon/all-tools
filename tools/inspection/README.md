@@ -133,8 +133,9 @@ start.bat --demo
 ```text
 %LOCALAPPDATA%\InspectionSheetPrint
 ├─ runtime   app.lock(PID・生成時刻・ポート・トークン)・tracked_processes.json(起動した Excel / cscript)
-├─ logs      inspection_YYYYMMDD.log(流れ)・events_YYYYMMDD.jsonl(なぜなぜ用の出来事)
-│            ※ 設定の「ログ」タブで共有フォルダなどへ変えられる(docs/ログとなぜなぜ分析.md)
+├─ logs      inspection\ の下に inspection_YYYYMMDD.log(流れ)・inspection_events_YYYYMMDD.jsonl(なぜなぜ用の出来事)
+│            ※ 設定の「ログ」タブで共有フォルダなどへ変えられる。そのときも <保存先>\inspection\ の下に
+│              inspection_YYYYMMDD_<PC>_<利用者>.log・inspection_events_…_<PC>_<利用者>.jsonl(docs/ログとなぜなぜ分析.md)
 ├─ pycache   Python キャッシュ(共有フォルダに __pycache__ を作らない)
 ├─ cache     プレビュー画像(Excel の更新日時が変わると作り直し)
 ├─ work      Excel 処理の一時ファイル・模擬モードの見本フォルダ・起動エラー.html

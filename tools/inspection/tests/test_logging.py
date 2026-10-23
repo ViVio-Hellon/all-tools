@@ -54,7 +54,7 @@ class LogFolderTest(_Base):
     def test_既定はこのPCのローカルで名前に端末名を入れない(self) -> None:
         status = logging_utils.status()
         self.assertTrue(status["is_local"])
-        self.assertEqual(status["dir"], str(app_config.local_dir("logs")))
+        self.assertEqual(status["dir"], str(app_config.local_dir("logs") / "inspection"))
         self.assertEqual(os.path.basename(status["file"]), f"inspection_{date.today():%Y%m%d}.log")
 
     def test_指定したフォルダには端末名と利用者名入りで書く(self) -> None:
@@ -227,6 +227,214 @@ class EventLogTest(_Base):
         self.assertLess(len(self.events()[-1]["detail"]), 4100)
 
 
+class ToolFolderTest(_Base):
+    """出力先(共有フォルダ)にはいろいろなツールのログが同じ階層に混ざる。
+
+    現場から: 「何のツールが出したものかわからない。ファイル名にツール名を入れる、
+    ツール名のフォルダを作ってその下に作る、の両方を」(取り出したとき開かないと
+    分からなくなるため)。置き場所は `<出力先>/inspection/`、名前は `inspection_` で始める。
+    前の場所・前の名前(VER2.4.5 まで)のファイルも読む・片付ける。ほかのツールのものは
+    読まない・消さない。
+    """
+
+    # ほかのツールが出力先の直下に置くログ(依頼の文に出てきた形)と、紛らわしい名前
+    OTHERS = ("dbviewer_LINE3-PC_20200101.log", "nippou.log", "出来事_20200101_LINE3-PC.jsonl",
+              "記録_LINE3-PC_20200101.jsonl", "events_20200101_x.jsonl",
+              "events_2020010_A_b.jsonl", "events_20200101_A_b.json", "inspection_20200101_A_b.jsonl",
+              "events_20200101_A_b.log", "events_20201399_A_b.jsonl", "メモ.txt")
+    # 共有の出力先では点検表のものではない(点検表は共有に必ず端末名を付けて書いた)。
+    # ローカル(点検表だけのフォルダ)では前の点検表の名前
+    UNTAGGED = ("events_20200101.jsonl", "inspection_20200101.log")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.today = f"{date.today():%Y%m%d}"
+        self.own = logging_utils.owner_tag()
+        self._clear_local()
+        self.addCleanup(self._clear_local)
+
+    def _clear_local(self) -> None:
+        """ローカルのログのフォルダは試験のあいだ共通。前の試験のファイルを持ち込まない。"""
+        for handler in logging.getLogger(logging_utils.ROOT_LOGGER).handlers:
+            if isinstance(handler, logging_utils.DailyFileHandler):
+                handler.close()
+        shutil.rmtree(str(app_config.local_dir("logs")), ignore_errors=True)
+        logging_utils.reset_for_tests()
+
+    def put(self, folder, name, entries=None, text="x"):
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as fp:
+            if entries is None:
+                fp.write(text)
+            for e in entries or ():
+                fp.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return path
+
+    def entry(self, ref, **kw):
+        return {"ts": datetime.now().isoformat(timespec="milliseconds"), "ref": ref,
+                "pc": "LINE9-PC", "user": "u", "pid": 1, "op": "print.item", "result": "ng", **kw}
+
+    def assert_tool_form(self, path, folder):
+        self.assertEqual(os.path.dirname(path), os.path.join(folder, "inspection"))
+        self.assertTrue(os.path.basename(path).startswith("inspection_"), path)
+
+    def test_ローカルはツール名のフォルダの下に_ツール名で始まる名前で書く(self) -> None:
+        local = str(app_config.local_dir("logs"))
+        ref = event_log.record("preview", event_log.NG, code="OPEN_FAILED", message="開けません")
+        status = logging_utils.status()
+        self.assertEqual(status["dir"], os.path.join(local, "inspection"))
+        self.assertEqual(status["local_dir"], os.path.join(local, "inspection"))
+        self.assertTrue(status["visible_local_dir"].endswith(os.path.join("logs", "inspection")))
+        self.assertEqual(status["file"], os.path.join(local, "inspection", f"inspection_{self.today}.log"))
+        self.assertEqual(status["events_file"],
+                         os.path.join(local, "inspection", f"inspection_events_{self.today}.jsonl"))
+        self.assertIn(f"[ref={ref}]", self.last_line(status["file"]))
+        self.assertEqual(json.loads(self.last_line(status["events_file"]))["ref"], ref)
+        # 前の名前(出力先の直下)には書かない
+        self.assertFalse(os.path.exists(os.path.join(local, f"inspection_{self.today}.log")))
+        self.assertFalse(os.path.exists(os.path.join(local, f"events_{self.today}.jsonl")))
+
+    def test_指定のフォルダにもツール名のフォルダを作り_端末名と利用者名入りで書く(self) -> None:
+        self.assertFalse(os.path.exists(self.shared))
+        logging_utils.apply_settings(self.shared)
+        ref = event_log.record("preview", event_log.NG, code="OPEN_FAILED", message="開けません")
+        status = logging_utils.status()
+        folder = os.path.join(self.shared, "inspection")
+        self.assertEqual(status["dir"], folder)
+        self.assertEqual(status["requested"], os.path.normpath(self.shared))
+        self.assertEqual(status["file"], os.path.join(folder, f"inspection_{self.today}_{self.own}.log"))
+        self.assertEqual(status["events_file"],
+                         os.path.join(folder, f"inspection_events_{self.today}_{self.own}.jsonl"))
+        self.assertIn(f"[ref={ref}]", self.last_line(status["file"]))
+        self.assertEqual(json.loads(self.last_line(status["events_file"]))["ref"], ref)
+        # 出力先の直下には点検表のファイルを置かない(フォルダ1つだけ)
+        self.assertEqual(sorted(os.listdir(self.shared)), ["inspection"])
+
+    def test_出力先を途中で変えても_書けずに退避しても_新しい形で書く(self) -> None:
+        log = logging_utils.get_logger("logtest")
+        local = str(app_config.local_dir("logs"))
+        second = os.path.join(self._tmp.name, "別の共有")
+        for folder in (self.shared, second):
+            logging_utils.apply_settings(folder)
+            log.info("替えたあと %s", folder)
+            status = logging_utils.status()
+            self.assertIn("替えたあと", self.last_line(status["file"]))
+            event_log.record("settings.logs", event_log.INFO)
+            for key in ("file", "events_file"):
+                self.assert_tool_form(status[key], os.path.normpath(folder))
+                self.assertTrue(os.path.exists(status[key]), status[key])
+        # 書けない出力先 → ローカルへ退避。退避先も同じ形
+        blocker = os.path.join(self._tmp.name, "ファイル")
+        self.put(self._tmp.name, "ファイル")
+        logging_utils.apply_settings(os.path.join(blocker, "ログ"))
+        log.info("退避中")
+        status = logging_utils.status()
+        self.assertTrue(status["fallback_reason"])
+        self.assert_tool_form(status["file"], local)
+        self.assertIn("退避中", self.last_line(status["file"]))
+        # 書いている途中で書けなくなった(fall_back)ときも同じ形
+        logging_utils.apply_settings(self.shared)
+        self.assertFalse(logging_utils.status()["is_local"])
+        self.assertTrue(logging_utils._target.fall_back("試験"))
+        event_log.record("print.item", event_log.NG, code="PRINT_FAILED")
+        status = logging_utils.status()
+        self.assertTrue(status["is_local"])
+        for key in ("file", "events_file"):
+            self.assert_tool_form(status[key], local)
+            self.assertTrue(os.path.exists(status[key]), status[key])
+
+    def test_前の場所と名前の出来事も読める(self) -> None:
+        local = str(app_config.local_dir("logs"))
+        logging_utils.apply_settings(self.shared)
+        mine_new = event_log.record("preview", event_log.NG, code="OPEN_FAILED")
+        # VER2.4.5 までの置き場所(出力先の直下)・名前
+        self.put(self.shared, f"events_{self.today}_{self.own}.jsonl", [self.entry("1001-0000-OLD1", pc="ME")])
+        self.put(local, f"events_{self.today}.jsonl", [self.entry("1001-0000-OLD2", pc="ME")])
+        self.put(self.shared, f"events_{self.today}_LINE9-PC_u.jsonl", [self.entry("1001-0000-OLD3")])
+        refs = [e["ref"] for e in event_log.read()]
+        for ref in (mine_new, "1001-0000-OLD1", "1001-0000-OLD2"):
+            self.assertIn(ref, refs)
+        self.assertNotIn("1001-0000-OLD3", refs)                         # 一覧はこの端末だけ
+        self.assertEqual(event_log.read(ref="1001-0000-OLD3")[0]["pc"], "LINE9-PC")   # 番号なら探せる
+        self.assertEqual(event_log.read(ref="1001-0000-OLD1")[0]["pc"], "ME")
+        # 新しい置き場所のほかの端末のものも番号で探せる
+        self.put(os.path.join(self.shared, "inspection"), f"inspection_events_{self.today}_LINE9-PC_u.jsonl",
+                 [self.entry("1001-0000-NEW9")])
+        self.assertEqual(event_log.read(ref="1001-0000-NEW9")[0]["pc"], "LINE9-PC")
+        self.assertNotIn("1001-0000-NEW9", [e["ref"] for e in event_log.read()])
+
+    def test_ほかのツールのファイルは読まない(self) -> None:
+        logging_utils.apply_settings(self.shared)
+        local = str(app_config.local_dir("logs"))
+        trap = [self.entry("1001-0000-TRAP")]
+        for name in self.OTHERS:
+            self.put(self.shared, name.replace("20200101", self.today), trap)
+            self.put(local, name.replace("20200101", self.today), trap)
+            self.put(os.path.join(self.shared, "inspection"), name.replace("20200101", self.today), trap)
+        for name in self.UNTAGGED:
+            self.put(self.shared, name.replace("20200101", self.today), trap)
+            self.put(os.path.join(self.shared, "inspection"), "inspection_" + name.replace("20200101", self.today)
+                     if name.startswith("events") else name.replace("20200101", self.today), trap)
+        # ほかのツールのフォルダ(同じ決まりで作られる)にある名前
+        self.put(os.path.join(self.shared, "kanban"), f"kanban_events_{self.today}_{self.own}.jsonl", trap)
+        self.put(os.path.join(self.shared, "nippou"), f"events_{self.today}_{self.own}.jsonl", trap)
+        # 名前は点検表の形でも、中身が点検表の出来事でない行
+        self.put(self.shared, f"events_{self.today}_{self.own}.jsonl",
+                 [{"ref": "1001-0000-TRAP", "kind": "board"}, ["1001-0000-TRAP"]])
+        self.assertEqual(event_log.read(ref="1001-0000-TRAP"), [])
+        self.assertEqual(event_log.read(own_only=False, limit=5000), [])
+        self.assertEqual(event_log._files(400, own_only=False),
+                         [os.path.join(self.shared, f"events_{self.today}_{self.own}.jsonl")])
+
+    def test_古いログを消すのは点検表のこの端末のものだけ_新旧どちらの場所も(self) -> None:
+        logging_utils.apply_settings(self.shared, 7)
+        local = str(app_config.local_dir("logs"))
+        tool = os.path.join(self.shared, "inspection")
+        local_tool = os.path.join(local, "inspection")
+        old = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        own = self.own
+        expect = {
+            (tool, f"inspection_{old}_{own}.log"): True,                   # 新しい場所・自分・古い
+            (tool, f"inspection_events_{old}_{own}.jsonl"): True,
+            (tool, f"inspection_{old}_LINE9-PC_someone.log"): False,       # ほかの端末
+            (tool, f"inspection_events_{old}_LINE9-PC_someone.jsonl"): False,
+            (tool, f"inspection_{self.today}_{own}.log"): False,           # まだ新しい
+            (local_tool, f"inspection_{old}.log"): True,                   # ローカル(退避したぶん)
+            (local_tool, f"inspection_events_{old}.jsonl"): True,
+            (self.shared, f"inspection_{old}_{own}.log"): True,            # 前の場所・前の名前
+            (self.shared, f"events_{old}_{own}.jsonl"): True,
+            (self.shared, f"events_{old}_LINE9-PC_someone.jsonl"): False,
+            (local, f"inspection_{old}.log"): True,
+            (local, f"events_{old}.jsonl"): True,
+            (os.path.join(self.shared, "nippou"), f"nippou_{old}_{own}.log"): False,   # ほかのツール
+            (os.path.join(self.shared, "nippou"), f"events_{old}_{own}.jsonl"): False,
+            (os.path.join(self.shared, "kanban"), f"inspection_{old}_{own}.log"): False,
+        }
+        for name in self.OTHERS:                                           # 出力先の直下のほかのツール
+            expect[(self.shared, name.replace("20200101", old))] = False
+            expect[(tool, name.replace("20200101", old))] = False
+            expect[(local, name.replace("20200101", old))] = False
+        for name in self.UNTAGGED:                                         # 共有に端末名の無い名前
+            expect[(self.shared, name.replace("20200101", old))] = False
+        for folder, name in expect:
+            self.put(folder, name)
+        removed = logging_utils.prune()
+        for (folder, name), gone in expect.items():
+            self.assertEqual(not os.path.exists(os.path.join(folder, name)), gone, os.path.join(folder, name))
+        self.assertEqual(sorted(removed), sorted(name for (_, name), gone in expect.items() if gone))
+
+    def test_名前の読み方(self) -> None:
+        parse = logging_utils.parse_name
+        self.assertEqual(parse("inspection_20261001_PC_u.log"), {"kind": "log", "day": "20261001", "owner": "PC_u"})
+        self.assertEqual(parse("inspection_events_20261001.jsonl"), {"kind": "events", "day": "20261001", "owner": None})
+        self.assertIsNone(parse("events_20261001_PC_u.jsonl"))              # 前の名前は前の場所でだけ
+        self.assertEqual(parse("events_20261001_PC_u.jsonl", legacy=True)["kind"], "events")
+        for name in self.OTHERS + ("inspection_events_20261001_PC_u.log", "inspection_20261001_PC_u.jsonl"):
+            self.assertIsNone(parse(name, legacy=True), name)
+            self.assertIsNone(parse(name), name)
+
+
 @unittest.skipUnless(__import__("importlib").util.find_spec("flask"), "Flask が無い")
 class LogApiTest(_Base):
     def setUp(self) -> None:
@@ -321,7 +529,9 @@ class LogApiTest(_Base):
         self.assertEqual(bad.status_code, 422)
         self.assertIsNone(self.biz.settings.get(logging_utils.KEY_DIR))
         ok = self.post("/api/settings/logs", {"log_dir": self.shared, "keep_days": 30}).get_json()
-        self.assertEqual(ok["logs"]["dir"], os.path.normpath(self.shared))
+        # 指定したのは出力先。書くのはその下のツール名のフォルダ
+        self.assertEqual(ok["logs"]["dir"], os.path.join(os.path.normpath(self.shared), "inspection"))
+        self.assertEqual(ok["logs"]["requested"], os.path.normpath(self.shared))
         self.assertEqual(ok["logs"]["keep_days"], 30)
         self.assertEqual(self.biz.settings.get(logging_utils.KEY_DIR), os.path.normpath(self.shared))
         back = self.post("/api/settings/logs", {"reset_log_dir": True}).get_json()

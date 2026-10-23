@@ -77,7 +77,7 @@ def render(*, display_name: str, version_label: str, token: str, app_id: str,
             from . import logging_utils
             log_dir = str(logging_utils.log_dir())
         except Exception:  # noqa: BLE001 - 待機画面は必ず出す
-            log_dir = "%LOCALAPPDATA%\\InspectionSheetPrint\\logs"
+            log_dir = "%LOCALAPPDATA%\\InspectionSheetPrint\\logs\\inspection"
     values = {
         "{{TOKENS_CSS}}": tokens_css(),
         "{{DISPLAY_NAME}}": html.escape(display_name),

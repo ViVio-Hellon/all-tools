@@ -23,7 +23,7 @@
 
     %LOCALAPPDATA%\\InspectionSheetPrint\\
       runtime\\  … ロック(PID・ポート・トークン)・起動した Excel の記録
-      logs\\     … 日ごとのログ
+      logs\\     … 日ごとのログ(`logs\\inspection\\` の下。共有の出力先と同じ形)
       pycache\\  … PYTHONPYCACHEPREFIX の向き先
       cache\\    … プレビュー画像
       work\\     … Excel 処理の一時ファイル・起動エラー画面

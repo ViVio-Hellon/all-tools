@@ -3,13 +3,23 @@
 - 出力先: 既定はローカル領域の `logs/` 配下。**設定でフォルダを指定できる**
   (設定画面の「ログ」タブ・配布設定)。共有フォルダを指定すれば、各ラインの
   ログが1か所に集まり、管理者の席から後追いできる
-- ファイル名(**名前の作り方はここ1か所**)
+- **置き場所はいつも `<出力先>/inspection/`**(ツールID のフォルダ。無ければ作る)。
+  共有フォルダにはほかのツール(日報・看板…)のログも並ぶので、フォルダでも
+  ファイル名でも点検表のものと分かるようにする(取り出したあとも開かずに分かる)
+- ファイル名(**名前の作り方はここ1か所**)。必ず `inspection_` で始める
 
-      ローカル           inspection_YYYYMMDD.log          / events_YYYYMMDD.jsonl
-      指定したフォルダ   inspection_YYYYMMDD_<PC>_<利用者>.log / events_…_<PC>_<利用者>.jsonl
+      ローカル           inspection/inspection_YYYYMMDD.log
+                         inspection/inspection_events_YYYYMMDD.jsonl
+      指定したフォルダ   inspection/inspection_YYYYMMDD_<PC>_<利用者>.log
+                         inspection/inspection_events_YYYYMMDD_<PC>_<利用者>.jsonl
 
   指定したフォルダは複数の端末が共有しうるので、端末と利用者を名前に入れて
   **互いのファイルに書かない**(取り合い・混在を起こさない)
+- **VER2.4.5 までの置き場所・名前も読む**(`<出力先>/inspection_….log`・
+  `<出力先>/events_….jsonl`)。なぜなぜの検索・一覧と保管日数の片付けが、
+  更新前のファイルを見失わないため(移しはしない)。前の場所はほかのツールの
+  ファイルと同じ階層なので、**点検表が書いた形の名前と一致するものだけ**を扱う
+  (`LEGACY_NAME`)。ほかのツールのファイルは読まない・消さない
 - 指定したフォルダに書けないとき(共有が切れた・権限が無い)は、**ローカルへ
   退避して書き続ける**。理由はログと設定画面に出す。5分ごとに戻れるか試す
 - 古いログは `log_keep_days`(既定 90 日)で消す。**消すのは自分の端末・自分の
@@ -41,7 +51,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import app_config
 
@@ -54,6 +64,7 @@ KEY_KEEP_DAYS = "log_keep_days"
 DEFAULT_KEEP_DAYS = 90
 MIN_KEEP_DAYS, MAX_KEEP_DAYS = 7, 3650
 RETRY_SEC = 300.0                     # 退避中、指定のフォルダへ戻れるか試す間隔
+TOOL_ID = "inspection"                # ログの置き場所(`<出力先>/inspection/`)と名前の頭
 
 
 # ------------------------------------------------------------------
@@ -108,13 +119,22 @@ def keep_days(value: Any) -> int:
     return max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, days))
 
 
+def tool_dir(base: Any) -> Path:
+    """出力先の中の、点検表のログを置くフォルダ(`<出力先>/inspection/`)。"""
+    return Path(base) / TOOL_ID
+
+
 def check_dir(path: str) -> str:
-    """そのフォルダにログを書けなければ理由。書ければ空文字。"""
+    """そのフォルダにログを書けなければ理由。書ければ空文字。
+
+    実際に書くのはその下の `inspection/` なので、そこを作って書けるか試す。
+    """
     if not os.path.isabs(path):
         return "フルパス(ドライブ名や \\\\サーバ名 から)で指定してください"
     try:
-        os.makedirs(path, exist_ok=True)
-        probe = os.path.join(path, f".write-test-{owner_tag()}-{os.getpid()}")
+        folder = str(tool_dir(path))
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, f".write-test-{owner_tag()}-{os.getpid()}")
         with open(probe, "w", encoding="utf-8") as fp:
             fp.write("ok")
         os.remove(probe)
@@ -132,7 +152,8 @@ class _Target:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.requested = ""              # 設定で指定したフォルダ(空 = 既定のローカル)
-        self.dir: Optional[Path] = None  # 実際に書いているフォルダ
+        # 実際の出力先(指定のフォルダか、ローカル)。書くのはその下の `inspection/`
+        self.dir: Optional[Path] = None
         self.fallback_reason = ""        # 指定に書けず、ローカルへ退避している理由
         self.retry_at = 0.0
         self.keep_days = DEFAULT_KEEP_DAYS
@@ -152,7 +173,7 @@ class _Target:
                 self.fallback_reason = problem
                 self.retry_at = time.monotonic() + RETRY_SEC
             self.dir = self.local()
-            self.dir.mkdir(parents=True, exist_ok=True)
+            tool_dir(self.dir).mkdir(parents=True, exist_ok=True)
 
     def current(self) -> Path:
         with self.lock:
@@ -178,7 +199,7 @@ class _Target:
             self.fallback_reason = reason
             self.retry_at = time.monotonic() + RETRY_SEC
             self.dir = self.local()
-            self.dir.mkdir(parents=True, exist_ok=True)
+            tool_dir(self.dir).mkdir(parents=True, exist_ok=True)
             return True
 
     def is_local(self) -> bool:
@@ -190,24 +211,110 @@ _recovered = threading.Event()
 
 
 def log_dir() -> Path:
-    """いまログを書いているフォルダ(退避中ならローカル)。"""
-    return _target.current()
+    """いまログを書いているフォルダ(`<出力先>/inspection/`。退避中ならローカルの)。"""
+    return tool_dir(_target.current())
 
 
 def _stem(kind: str, day: date, local: bool) -> str:
-    base = f"{kind}_{day:%Y%m%d}"
+    base = f"{TOOL_ID}_{day:%Y%m%d}" if kind == "log" else f"{TOOL_ID}_{kind}_{day:%Y%m%d}"
     return base if local else f"{base}_{owner_tag()}"
 
 
 def log_path_for(day: date) -> Path:
     """その日のログファイル。**名前の作り方はここ1か所**。"""
     folder = log_dir()
-    return folder / (_stem("inspection", day, _target.is_local()) + ".log")
+    return folder / (_stem("log", day, _target.is_local()) + ".log")
 
 
 def events_path_for(day: date) -> Path:
     folder = log_dir()
     return folder / (_stem("events", day, _target.is_local()) + ".jsonl")
+
+
+# ------------------------------------------------------------------
+# 名前を読む(片付け・なぜなぜの読み出しが使う)
+# ------------------------------------------------------------------
+# いまの名前: inspection_YYYYMMDD[_<PC>_<利用者>].log / inspection_events_YYYYMMDD[_…].jsonl
+OWN_NAME = re.compile(r"^inspection_(?:(events)_)?(\d{8})(?:_([0-9A-Za-z._-]+))?\.(log|jsonl)$")
+# VER2.4.5 までの名前(出力先の直下): inspection_YYYYMMDD[_…].log / events_YYYYMMDD[_…].jsonl。
+# **出力先の直下はほかのツールのファイルと同じ階層**なので、点検表が書いた形と
+# 一字一句合うものだけ(種類と拡張子の組・8けたの日付・端末名の文字)
+LEGACY_NAME = re.compile(r"^(inspection|events)_(\d{8})(?:_([0-9A-Za-z._-]+))?\.(log|jsonl)$")
+
+
+def parse_name(name: str, legacy: bool = False) -> Optional[Dict[str, Any]]:
+    """点検表のログの名前なら {kind: "log"|"events", day: "YYYYMMDD", owner: "<PC>_<利用者>"|None}。
+
+    違えば None(ほかのツールのファイル・メモなど)。
+    """
+    m = (LEGACY_NAME if legacy else OWN_NAME).match(name)
+    if not m:
+        return None
+    if legacy:
+        kind = "log" if m.group(1) == "inspection" else "events"
+    else:
+        kind = "events" if m.group(1) else "log"
+    if m.group(4) != ("jsonl" if kind == "events" else "log"):
+        return None                                 # 種類と拡張子の組が点検表の書き方と違う
+    try:
+        datetime.strptime(m.group(2), "%Y%m%d")
+    except ValueError:
+        return None
+    owner = m.group(3)
+    if owner is not None and "_" not in owner:
+        return None                                 # 点検表は「<PC>_<利用者>」の形でしか付けない
+    return {"kind": kind, "day": m.group(2), "owner": owner}
+
+
+def log_folders() -> List[Tuple[Path, bool, bool]]:
+    """点検表のログがありうるフォルダ: (フォルダ, ローカルか, 前の置き場所か)。
+
+    いまの置き場所(`<出力先>/inspection/`)と、VER2.4.5 までの置き場所(出力先の直下)。
+    指定のフォルダに書いているときは、退避していた期間のローカルも見る。
+    """
+    current = _target.current()
+    local = _target.local()
+    bases = [(current, current == local)]
+    if current != local:
+        bases.append((local, True))
+    out: List[Tuple[Path, bool, bool]] = []
+    for base, is_local in bases:
+        out.append((tool_dir(base), is_local, False))
+    for base, is_local in bases:
+        out.append((base, is_local, True))
+    return out
+
+
+def own_files(kind: str = "", *, own_only: bool = True) -> List[Tuple[Path, Dict[str, Any]]]:
+    """点検表のログファイル(いまの名前と前の名前)と、名前から読んだもの。
+
+    `own_only` … この端末・この利用者のものだけ(ローカルの名前の無いものは自分のもの)。
+    外すと、指定のフォルダ(共有)にあるほかの端末の**点検表の**ファイルも返す。
+    """
+    out: List[Tuple[Path, Dict[str, Any]]] = []
+    seen = set()
+    me = owner_tag()
+    for folder, local, legacy in log_folders():
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            info = parse_name(name, legacy)
+            if not info or (kind and info["kind"] != kind):
+                continue
+            owner = info["owner"]
+            if local:
+                if owner not in (None, me):
+                    continue
+            elif owner is None or (own_only and owner != me):
+                continue                            # 指定のフォルダの名前には必ず端末が入る
+            path = Path(folder) / name
+            if not path.is_file() or str(path) in seen:
+                continue
+            seen.add(str(path))
+            out.append((path, info))
+    return out
 
 
 def status() -> Dict[str, Any]:
@@ -216,9 +323,9 @@ def status() -> Dict[str, Any]:
     return {
         "requested": _target.requested,
         "dir": str(current),
-        "local_dir": str(_target.local()),
-        "visible_local_dir": str(app_config.visible_local_root() / "logs"),
-        "is_local": current == _target.local(),
+        "local_dir": str(tool_dir(_target.local())),
+        "visible_local_dir": str(tool_dir(app_config.visible_local_root() / "logs")),
+        "is_local": _target.is_local(),
         "fallback_reason": _target.fallback_reason,
         "keep_days": _target.keep_days,
         "owner": owner_tag(),
@@ -367,38 +474,24 @@ def silence_console() -> None:
 # ------------------------------------------------------------------
 # 古いログの片付け
 # ------------------------------------------------------------------
-_OWN_NAME = re.compile(r"^(inspection|events)_(\d{8})(?:_(.+))?\.(log|jsonl)$")
-
-
 def prune(now: Optional[datetime] = None) -> List[str]:
     """保存日数を過ぎた**自分の**ログを消す。消したファイル名を返す。
 
     ローカルは全部自分のもの。指定したフォルダ(共有)では、名前に自分の
-    端末・利用者が入っているものだけ。
+    端末・利用者が入っているものだけ。いまの置き場所(`inspection/`)と前の置き場所
+    (出力先の直下・VER2.4.5 までの名前)の両方を見る。**点検表の名前の形と合わない
+    ファイル(ほかのツールのログ・メモ)には触れない**(`own_files`)。
     """
     limit = ((now or datetime.now()) - timedelta(days=_target.keep_days)).strftime("%Y%m%d")
     removed: List[str] = []
-    folders = {_target.local(): True}
-    current = log_dir()
-    if current != _target.local():
-        folders[current] = False
-    for folder, local in folders.items():
-        try:
-            names = os.listdir(folder)
-        except OSError:
+    for path, info in own_files(own_only=True):
+        if info["day"] >= limit:
             continue
-        for name in names:
-            m = _OWN_NAME.match(name)
-            if not m or m.group(2) >= limit:
-                continue
-            owner = m.group(3)
-            if (local and owner not in (None, owner_tag())) or (not local and owner != owner_tag()):
-                continue
-            try:
-                os.remove(os.path.join(folder, name))
-                removed.append(name)
-            except OSError:
-                pass
+        try:
+            os.remove(path)
+            removed.append(path.name)
+        except OSError:
+            pass
     return removed
 
 

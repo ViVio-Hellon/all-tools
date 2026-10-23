@@ -61,7 +61,7 @@ python start_app.py --check-excel %*
 if errorlevel 1 (
     echo.
     echo [エラー] 起動に失敗しました。上のメッセージを確認してください。
-    echo          ログ: 設定の「ログ」タブの保存先　既定は %LOCALAPPDATA%\InspectionSheetPrint\logs
+    echo          ログ: 設定の「ログ」タブの保存先　既定は %LOCALAPPDATA%\InspectionSheetPrint\logs\inspection
     echo.
     goto :failed
 )

@@ -2,7 +2,9 @@
 
 テキストのログ(`inspection_*.log`)は流れを追うためのもの。こちらは**あとから
 「なぜ」を辿るため**に、1つの出来事を1行の JSON にして残す
-(`events_YYYYMMDD[_<PC>_<利用者>].jsonl`、ログと同じフォルダ)。
+(`inspection/inspection_events_YYYYMMDD[_<PC>_<利用者>].jsonl`、ログと同じフォルダ)。
+置き場所と名前の作り方・読み方は `logging_utils`(VER2.4.5 までの
+`<出力先>/events_….jsonl` も読む。点検表が書いた形の名前と行だけ)。
 
 1行の形(使う項目だけ入る)::
 
@@ -181,32 +183,23 @@ def _mirror(entry: Dict[str, Any]) -> None:
 # 読む(設定画面の「ログ」タブ)
 # ------------------------------------------------------------------
 def _files(days: int, own_only: bool) -> List[str]:
-    folder = logging_utils.log_dir()
-    folders = [folder]
-    local = app_config.local_dir("logs")
-    if local != folder:
-        folders.append(local)                 # 退避していた期間のぶんも読む
+    """読む出来事のファイル。いまの置き場所・名前と、VER2.4.5 までのもの。
+
+    退避していた期間のローカルのぶんも読む。どれが点検表のファイルかは
+    `logging_utils.own_files` が名前の形で決める(ほかのツールのファイルは読まない)。
+    """
     since = (datetime.now().date().toordinal() - days)
     out = []
-    for f in folders:
-        try:
-            names = os.listdir(f)
-        except OSError:
+    for path, info in logging_utils.own_files("events", own_only=own_only):
+        if datetime.strptime(info["day"], "%Y%m%d").date().toordinal() < since:
             continue
-        for name in names:
-            if not (name.startswith("events_") and name.endswith(".jsonl")):
-                continue
-            stamp = name[7:15]
-            try:
-                if datetime.strptime(stamp, "%Y%m%d").date().toordinal() < since:
-                    continue
-            except ValueError:
-                continue
-            rest = name[15:-6]
-            if own_only and rest and rest != "_" + logging_utils.owner_tag():
-                continue
-            out.append(os.path.join(f, name))
+        out.append(str(path))
     return sorted(out)
+
+
+def _is_entry(entry: Any) -> bool:
+    """点検表が書いた出来事の行か(前の置き場所はほかのツールと同じ階層なので念のため)。"""
+    return isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("ts", "ref", "op"))
 
 
 def read(*, days: int = 7, own_only: bool = True, ref: str = "", result: str = "",
@@ -223,6 +216,8 @@ def read(*, days: int = 7, own_only: bool = True, ref: str = "", result: str = "
                     try:
                         entry = json.loads(line)
                     except ValueError:
+                        continue
+                    if not _is_entry(entry):
                         continue
                     if result and entry.get("result") != result:
                         continue
