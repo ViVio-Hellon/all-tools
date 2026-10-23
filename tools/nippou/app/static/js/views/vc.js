@@ -52,6 +52,9 @@ export function start() {
   let result = null;         // 最後の計算結果
   let revision = null;       // 最後に見たマスタの更新番号
   let quickView = null;      // 最後に描いた早見表
+  // 品種・内径を選んだときに**マスタが入れた** VC厚・内径(欄の文字のまま)。
+  // マスタが直されたら、欄がこのままの欄だけ新しい値に入れ直す(`followMaster`)
+  let picked = null;
 
   const input = (name) => $(`vc-${name}`);
 
@@ -109,10 +112,29 @@ export function start() {
     reloadState();
     if (current(root) === "quick") loadQuick();
   }, { signal });
+  /*
+    **更新番号だけでなく中身でも比べる**(v4.44.3)。
+
+        マスタを直しても前の中身のまま動く・表示する事がないかのチェックをしてください
+
+    更新番号を上げるのは、このツールと vc-calculator のマスタ管理だけです。ほかの道具で
+    VC計算マスタを直すと番号は変わらず、開いている画面は品種の一覧(VC厚・内径)も
+    計算の結果も前のマスタのままでした。
+  */
+  const masterKey = (s) => (s ? JSON.stringify([s.products, s.sheets, s.reverse]) : "");
   const watch = setInterval(async () => {
     try {
       const body = await background.get("/api/vc/state");
-      if (body.state.master.revision !== revision) applyState(body.state, true);
+      const moved = masterKey(body.state) !== masterKey(state);
+      if (body.state.master.revision === revision && !moved) return;
+      applyState(body.state, true);
+      if (moved && body.state.master.revision === revision) {
+        // 番号が変わらないと `vc:master-changed` が出ないので、早見表もここで引き直す
+        if (current(root) === "quick") loadQuick();
+      }
+      if (moved) {
+        setStale(true, "マスタが直されました。「計算」を押すと、いまのマスタで出し直します。");
+      }
     } catch (err) { /* 見張りの失敗は黙る(帯は health.js が出す) */ }
   }, WATCH_MS);
   onLeave(() => clearInterval(watch));
@@ -165,7 +187,7 @@ export function start() {
   function saveDraft() {
     try {
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
-        selected, fields: fields(), computed: [...computed],
+        selected, fields: fields(), computed: [...computed], picked,
       }));
     } catch (err) { /* 覚えられないだけ */ }
   }
@@ -180,9 +202,62 @@ export function start() {
     for (const name of FIELDS) {
       if (typeof draft.fields[name] === "string") input(name).value = draft.fields[name];
     }
+    picked = selected && draft.picked && typeof draft.picked === "object"
+      ? { vcatu: String(draft.picked.vcatu ?? ""), inside: String(draft.picked.inside ?? "") }
+      : null;
     writeFields(null);
     renderProducts();
     renderInsides();
+    // **控えはマスタを直す前のもの**かもしれない(マスタ管理で直して戻ってきた)。
+    // 前は控えの VC厚 のまま計算していた
+    followMaster();
+  }
+
+  /*
+    **マスタが入れた欄は、マスタに付いていく**(v4.44.3)。
+
+    品種を選ぶと VC厚・内径はマスタの値で入ります。そのあとマスタが直されても、欄は
+    前の値のまま残り、「計算」はその値で出していました ── 直したのに前の VC厚 で長さが
+    出ます(戻ってきたときの控え・開いたままの画面のどちらでも)。
+
+    欄が**選んだときのまま**(手で直していない)なら、いまのマスタの値に入れ直します。
+    手で直した欄は触らず、マスタが変わったことだけ言います(打った内容は変えない)。
+    内径を選ぶ品種で、選んだ内径が選択肢から無くなったら、欄を空けて選び直してもらいます。
+    入れ直したら true(呼び手が計算し直す)。
+  */
+  function followMaster() {
+    const p = selected && productOf(selected);
+    if (!p || !picked) return false;
+    const now = {
+      vcatu: p.vcatu,
+      inside: p.chooses_inside
+        ? (p.choices.some((c) => c.inside === picked.inside) ? picked.inside : "")
+        : (p.inside || ""),
+    };
+    const names = { vcatu: "VC厚", inside: "内径" };
+    const refilled = [];
+    const kept = [];
+    for (const name of ["vcatu", "inside"]) {
+      if (now[name] === picked[name]) continue;
+      const was = picked[name];
+      picked[name] = now[name];
+      if (input(name).value !== was) {          // 手で直した欄
+        kept.push(names[name]);
+        continue;
+      }
+      input(name).value = now[name];
+      changed(name);
+      refilled.push(`${names[name]} ${was || "空"} → ${now[name] || "空(選び直してください)"}`);
+    }
+    if (refilled.length) {
+      toast(`「${selected}」はマスタで直されていたので、入れ直しました(${refilled.join("・")})。`, "warn");
+    }
+    if (kept.length) {
+      toast(`「${selected}」の ${kept.join("・")} がマスタで変わりました。手で直した値のままです`
+            + "(品種を選び直すとマスタの値が入ります)。", "warn");
+    }
+    if (refilled.length || kept.length) saveDraft();
+    return refilled.length > 0;
   }
 
   /** ほかの端末でマスタが直された。一覧だけ描き直し、打った内容は触らない。 */
@@ -196,7 +271,6 @@ export function start() {
   }
 
   function applyState(next, fromWatch = false) {
-    const before = selected && productOf(selected);
     state = next;
     showMaster(state.master);
     // 肉厚の逆算を使うか(アプリ設定)で、VC長さの欄の説明を変える
@@ -209,13 +283,11 @@ export function start() {
     renderProducts();
     renderInsides();
     renderResult();
-    if (!fromWatch || !selected) return;
-    const now = productOf(selected);
-    if (!now) {
+    if (fromWatch && selected && !productOf(selected)) {
       toast(`選んでいた「${selected}」がマスタから無くなりました。品種を選び直してください。`, "warn");
-    } else if (before && (before.vcatu !== now.vcatu || before.inside !== now.inside)) {
-      toast(`「${selected}」の VC厚・内径がマスタで変わりました。品種を選び直すと新しい値が入ります。`, "warn");
     }
+    // どの答えにも、いまのマスタが付いてくる。**着くたびに欄を合わせる**
+    return followMaster();
   }
 
   function productOf(name) {
@@ -474,6 +546,7 @@ export function start() {
       computed = new Set();
       result = null;                             // 品種を変えたら結果も消す(D2)
       writeFields(body.fields, sent);
+      picked = { vcatu: body.fields.vcatu || "", inside: body.fields.inside || "" };
       saveDraft();
       showErrors({});
       $("vc-calc-error").hidden = true;
@@ -504,6 +577,7 @@ export function start() {
       writeFields({ inside: body.fields.inside }, sent);
       if (before !== input("inside").value) changed("inside");
       chosenInside = body.choice;
+      if (picked) picked.inside = body.fields.inside || "";
       const here = stillOn($("vc-inside-choices"));
       applyState(body.state);
       if (here) input("coatu").focus();
@@ -513,7 +587,7 @@ export function start() {
     }
   }
 
-  async function run() {
+  async function run(again = true) {
     $("vc-calc-error").hidden = true;
     const sent = fields();
     const mine = pickSeq;
@@ -526,7 +600,9 @@ export function start() {
       writeFields(body.fields, sent);
       saveDraft();
       showErrors({});
-      applyState(body.state);
+      // 押した時点の欄はマスタを直す前の VC厚 だった(答えに付いてきたマスタで分かる)。
+      // 入れ直したので、**その値でもう1度だけ**計算する ── 前の VC厚 の長さを出したままにしない
+      if (applyState(body.state) && again && !typed) { await run(false); return; }
       setStale(typed);
     } catch (err) {
       if (err instanceof ApiError && err.body && err.body.result) {

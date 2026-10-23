@@ -4,6 +4,7 @@
     POST /api/gw/calculate   計算する(**計算の内訳も返す**)
     POST /api/gw/lot         LotNo で引く
     POST /api/gw/order       オーダーNo で引く
+    GET  /api/gw/master      資材マスタの印(開いている画面が「直されたか」を見る)
 
 計算式は `logic/gw_calculation.py` がそのまま持つ。ここは入力の形を
 整えて渡し、返ってきた数値を画面の形にするだけ。
@@ -281,6 +282,8 @@ class _Computed:
     material: dict
     #: 使った単位質量・係数(資材の名前 → 値)。マスタが後で直されても、何で計算したかが分かる
     rates_used: dict
+    #: 読む前に見た資材マスタの印(`_master_stamp`)。開いている画面が「直されたか」を比べる
+    stamp: str = ""
 
 
 def _truthy(value: Any) -> bool:
@@ -333,6 +336,7 @@ def _compute(payload: dict):
     from nippou.config import SETTINGS
 
     material = gw_record.master_source(SETTINGS.gw_material_master_path)
+    stamp = _master_stamp()
     rates = _rates(band_kind)
     if rates is None:
         return None, _refuse([gw.InputProblem("materials", gw.MASTER_UNREADABLE)])
@@ -369,13 +373,40 @@ def _compute(payload: dict):
 
     rates_used = _rates_used(flags, rates, band_kind, selection, vc_a, vc_b, vc_name_a, vc_name_b)
     return _Computed(
-        material=material, rates_used=rates_used,
+        material=material, rates_used=rates_used, stamp=stamp,
         payload=payload, dims=dims, flags=flags, rates=rates, weights=weights,
         selection=selection, vc_a=vc_a, vc_b=vc_b,
         vc_name_a=vc_name_a, vc_name_b=vc_name_b, band_kind=band_kind,
         use_combined_load=use_combined, combined_load_kg=combined,
         input_weight_kg=input_weight,
         tare_weight_kg=tare, gross_weight_kg=gross), None
+
+
+def _master_stamp() -> str:
+    """資材マスタ(資材重量・VC重量の入ったファイル)の印 ── 更新時刻と大きさ(v4.44.3)。
+
+        マスタを直しても前の中身のまま動く・表示する事がないかのチェックをしてください。
+        例：資材重量 変更後 前の重量のまま計算
+
+    計算は押すたびにマスタを読み直します。ところが**画面に出ている数字**は押したときの
+    ものなので、開いたままほかのPCで資材重量が直されると、前の重量の GW が出たままでした。
+    画面は計算の答えに付いてくるこの印を覚えておき、1分ごとに `/api/gw/master` と比べて、
+    変わっていれば計算し直します。見るのはファイルの属性だけです(中身は読まない)。
+    届かなければ空(比べない)。
+    """
+    from nippou.config import SETTINGS
+
+    try:
+        st = SETTINGS.gw_material_master_path.stat()
+    except OSError:
+        return ""
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+@bp.get("/api/gw/master")
+def master_stamp():
+    """資材マスタの印だけ(`_master_stamp`)。開いている画面の見張りが使う。"""
+    return jsonify({"stamp": _master_stamp()})
 
 
 def _rates_used(flags, rates, band_kind, selection, vc_a, vc_b, vc_name_a, vc_name_b) -> dict:
@@ -496,6 +527,8 @@ def calculate():
         # あるので、描けない理由も一緒に返す
         # **どの版で・どの取得元の・いつ時点の資材マスタで計算したか**(v4.44.0。記録にも残す)
         "record": _keep_record(computed, gw_record.KIND_CALC),
+        # 読んだ資材マスタの印。**画面はこれと見比べて、直されたら計算し直す**(`_master_stamp`)
+        "master_stamp": computed.stamp,
         "figure": packing_figure.build(
             thickness_mm=dims.thickness_mm, width_mm=dims.width_mm,
             length_mm=dims.length_mm, count=dims.count,

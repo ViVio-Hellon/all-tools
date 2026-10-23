@@ -16,9 +16,9 @@
   複数なら選ばせます(VBAのフォームにも「LotNo入力後にオーダーNoを選択
   してください」と刷ってある)。
 */
-import { api, tokenUrl } from "../api.js";
+import { api, background, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
-import { pageSignal } from "../nav.js";
+import { onLeave, pageSignal } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 
 /* ---------------------------------------------------------------- */
@@ -852,12 +852,48 @@ function showProvenance(record) {
   box.hidden = false;
 }
 
-async function calculate() {
+/*
+  **開いたまま資材マスタが直されたら、計算し直す**(v4.44.3)。
+
+      マスタを直しても前の中身のまま動く・表示する事がないかのチェックをしてください。
+      例：資材重量 変更後 前の重量のまま計算
+
+  計算は押すたびにマスタを読み直しますが、画面に出ている数字は押したときのものです。
+  開いたまま(ほかのPCで・ほかの道具で)資材重量が直されると、前の重量の GW が出たまま
+  でした(紙は刷るときに計算し直すので、画面と紙で数字が食い違う)。
+
+  計算の答えに付いてくる資材マスタの印(`master_stamp`。更新時刻と大きさ)を覚えておき、
+  1分ごとに `/api/gw/master` と比べます。変わっていれば、いまの欄で計算し直します。
+  **欄で打っている最中は計算しません**(打ちかけで結果を描き替えない)── 計算の横に
+  「押し直してください」と出し、次の1分でまた見ます。
+*/
+const MASTER_WATCH_MS = 60000;
+let masterStamp = "";
+
+async function watchMaster() {
+  if (!masterStamp || byId("print-gw")?.dataset.ready !== "1") return;
+  try {
+    const body = await background.get("/api/gw/master");
+    if (!body.stamp || body.stamp === masterStamp) return;
+    const tag = document.activeElement?.tagName || "";
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) {
+      state("calc-state", "資材マスタが直されました。「計算」を押し直すと、いまのマスタで出します");
+      return;
+    }
+    await calculate({ quiet: true });
+    toast("資材マスタが直されたので、いまのマスタで計算し直しました", "warn");
+  } catch (err) { /* 見張りの失敗は黙る(帯は health.js が出す) */ }
+}
+
+async function calculate(options) {
+  // ボタンから呼ばれると `options` は押した合図(Event)。`quiet` は見張りの計算し直しだけ
+  const quiet = Boolean(options && options.quiet === true);
   const mine = ++calcSeq;
   state("calc-state", "計算しています…");
   try {
     const body = await api.post("/api/gw/calculate", payload());
     if (mine !== calcSeq) return;     // あとから押した計算がある
+    masterStamp = body.master_stamp || "";
     showProblems([]);
     showResult(body);
     perPack = body.per_pack;
@@ -869,9 +905,10 @@ async function calculate() {
     // 計算が通ったので、この数字の紙を刷れる
     refreshPrint(true);
     saveDraft();
-    toast(body.message || "計算しました", "ok");
+    if (!quiet) toast(body.message || "計算しました", "ok");
   } catch (err) {
     if (mine !== calcSeq) return;
+    masterStamp = "";
     state("calc-state", "");
     showResult(null);
     byId("per-pack").hidden = true;
@@ -1003,6 +1040,7 @@ function clearInputs() {
   renderBreakdown(null);
   paintFigure(null);
   refreshPrint(false);
+  masterStamp = "";
   note("");
   state("search-state", "");
   state("order-count", "");
@@ -1134,6 +1172,9 @@ export function start() {
   paintFigure(null);
   // 来たばかりの画面には計算結果が無い。**押せない状態から始める**
   refreshPrint(false);
+  masterStamp = "";
+  const watch = setInterval(watchMaster, MASTER_WATCH_MS);
+  onLeave(() => clearInterval(watch));
 
   // 配られた姿を控えてから、**このタブで打ちかけていた値を入れ直す**
   pristine = snapshot();

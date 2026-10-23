@@ -291,6 +291,27 @@ class FallbackTest(MasterCase):
         self.assertEqual(snap.revision, good.revision)
         self.assertEqual(len(snap.products), 6)
 
+    def test_change_without_a_new_revision_reaches_the_last_good_copy(self) -> None:
+        """番号を上げない道具で直しても、控え(JSON)は**直したあとの中身**になる(v4.44.3)。
+
+        前は更新番号が変わったときだけ控えを書き直していたので、届かない日に「最後に
+        読めた中身」と言いながら、直す前の VC厚 で計算していた。
+        """
+        masters.current()
+        conn = sqlite3.connect(str(self.path))
+        with conn:
+            conn.execute("UPDATE VC品種 SET VC厚 = 0.2 WHERE 品種名 = 'V325系'")   # 番号はそのまま
+        conn.close()
+        source_db.forget(self.path)
+        self.assertEqual(masters.current().product("V325系").vcatu, 0.2)
+        self.path.rename(self.path.with_suffix(".moved"))
+        masters.reset()                   # 起動し直した(覚えていたものは無い)→ JSON の控え
+        with mock.patch.object(db, "ensure_database",
+                               side_effect=db.DbUnavailable("共有に届きません")):
+            snap = masters.current()
+        self.assertEqual(snap.source, "cache")
+        self.assertEqual(snap.product("V325系").vcatu, 0.2, "控えが直す前の中身のままです")
+
     def test_nothing_at_all_falls_back_to_vba_values(self) -> None:
         """控えも無ければ VBA の直書きの値で計算を続ける(VBA を下回らない)。"""
         self.path.unlink()

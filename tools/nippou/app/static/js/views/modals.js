@@ -46,7 +46,12 @@ function note(id, text, kind = "warn") {
 /* ---------------------------------------------------------------- */
 /* 作業者選択                                                         */
 /* ---------------------------------------------------------------- */
-let staffLoaded = false;
+/*
+  **一覧は窓を開くたびに引き直す**(v4.44.3)。前は画面ごとに1回だけ引いて使い回して
+  いたので、日報入力を開いたまま(1直のあいだずっと)ほかのPCが班員名簿・停止理由を
+  直しても、窓は前の一覧のままでした。引くのは手元の写し(共有は大きさと更新時刻を
+  見るだけ ── `source_db.local_copy`)なので、開くたびでも重くありません。
+*/
 
 function paintTeams(teams) {
   const host = document.getElementById("staff-teams");
@@ -92,13 +97,11 @@ function paintTeams(teams) {
 }
 
 async function loadStaff() {
-  if (staffLoaded) return;
   try {
     const body = await api.get("/api/staff/members");
     paintTeams(body.teams || []);
     note("staff-note", body.message || "");
-    staffLoaded = true;
-  } catch (err) { toastError(err); }
+  } catch (err) { toastError(err); }       // 引けなければ前の一覧のまま(名前は打てる)
 }
 
 /** 窓に並んでいる名前(名簿そのもの)。 */
@@ -139,7 +142,6 @@ function toggleTeam(team) {
 /* ---------------------------------------------------------------- */
 /* 全停入力                                                           */
 /* ---------------------------------------------------------------- */
-let stopLoaded = false;
 let picked = "";        // 画面に出す名前
 let pickedCode = "";    // **欄に入るのはこちら**(内訳番号)
 
@@ -184,13 +186,25 @@ function paintCategories(categories) {
 }
 
 async function loadReasons() {
-  if (stopLoaded) return;
   try {
     const body = await api.get("/api/formstop/reasons");
     paintCategories(body.categories || []);
     note("formstop-note", body.message || "");
-    stopLoaded = true;
-  } catch (err) { toastError(err); }
+    keepPicked();
+  } catch (err) { toastError(err); }       // 引けなければ前の一覧のまま
+}
+
+/** 引き直した一覧で、前に選んでいた理由を選んだままにする。**無くなっていたら選び直し。** */
+function keepPicked() {
+  if (!picked) return;
+  const want = pickedCode || picked;
+  const radio = [...document.querySelectorAll('input[name="formstop-reason"]')]
+    .find((el) => el.value === want);
+  if (radio) { radio.checked = true; return; }
+  picked = "";
+  pickedCode = "";
+  const out = document.getElementById("formstop-selected");
+  if (out) out.textContent = "(未選択)";
 }
 
 /* ---------------------------------------------------------------- */
@@ -200,11 +214,9 @@ async function loadReasons() {
 /* 差し替えで作り直された要素には、前回付けた listener が残っていない。  */
 /* ---------------------------------------------------------------- */
 export function start() {
-  // 一覧は画面ごとに引き直す。前の画面で引いたものを使い回すと、
-  // 名簿を直しても画面を移るまで反映されない
-  staffLoaded = false;
-  stopLoaded = false;
+  // 一覧は窓を開くたびに引き直す(上の `loadStaff` / `loadReasons`)
   picked = "";
+  pickedCode = "";
 
   for (const btn of document.querySelectorAll("[data-close]")) {
     btn.addEventListener("click", () => close(btn.dataset.close));

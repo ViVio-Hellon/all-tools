@@ -80,7 +80,7 @@ class OtherScreensTests(unittest.TestCase):
 
     def test_梱包資材は古い計算の答えを捨てる(self) -> None:
         gw = read("views/gw.js")
-        calc = gw[gw.index("async function calculate()"):]
+        calc = gw[gw.index("async function calculate("):]
         self.assertIn("if (mine !== calcSeq) return;", calc[:400])
 
     def test_VC計算は2度押しで2回書かない(self) -> None:

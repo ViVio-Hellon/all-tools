@@ -315,8 +315,10 @@ def current() -> Snapshot:
         _failed_at, _failed_why = time.monotonic(), why
         return _fallback(path, why)
     with _lock:
-        changed = _current is None or _current.revision != snap.revision \
-            or _current.path != snap.path
+        # **中身で比べる**(v4.44.3)。前は更新番号だけを見ていたので、番号を上げない道具で
+        # 直されると控え(JSON)が前の中身のまま残り、マスタに届かない日に「最後に読めた
+        # 中身」と言いながら直す前の値で計算していた
+        changed = _current is None or replace(_current, read_at="") != replace(snap, read_at="")
         _current = snap
         _failed_at, _failed_why = 0.0, ""
     if changed:
