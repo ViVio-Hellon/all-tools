@@ -201,7 +201,7 @@ class ServiceTests(unittest.TestCase):
         made = self.ev.record(rule.make(rule.KIND_ERROR, at=now,
                                         terminal=self.ev.terminal_name(), message="x"))
         self.ev.flush()
-        files = list(self.dir.glob("出来事_*.jsonl"))
+        files = list((self.dir / "nippou").glob("nippou_出来事_*.jsonl"))
         self.assertEqual(len(files), 1)
         self.assertIn(now.strftime("%Y-%m-%d"), files[0].name)
         found, records = self.ev.find(made["id"])
@@ -246,7 +246,7 @@ class ServiceTests(unittest.TestCase):
             self.ev.record(rule.make(rule.KIND_ERROR, at=datetime.now(),
                                      terminal="PC-1", message="m"))
             self.ev.flush()
-            self.assertEqual(len(list(local.glob("出来事_*.jsonl"))), 1)
+            self.assertEqual(len(list((local / "nippou").glob("nippou_出来事_*.jsonl"))), 1)
             self.assertIn("書けません", self.ev.status()["fallback"])
         finally:
             self.ev.configured_dir, self.ev.default_dir = orig_conf, orig_def
@@ -281,6 +281,127 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in self.ev.load(date.today(), date.today())], ["a"])
 
 
+class ToolFolderTests(unittest.TestCase):
+    """ログをツール名のフォルダへ・名前にツール名 (v4.44.4)
+
+        ログの出力先がいろいろなツールで吐き出しているので、これでは何の
+        ツールが出したものかわからない。ファイル名にツール名を入れる、
+        ツール名フォルダを作ってその階層に作る、の両方をお願いしたい
+
+    縛るもの:
+        - 書くのは `<ログの出力パス>/nippou/nippou_…`(動いた記録・出来事・なぜなぜ)
+        - 前の形(直下の `出来事_….jsonl` `なぜなぜ_….jsonl`)も一覧・なぜなぜで読める
+        - 消すのは日報の出来事だけ。**ほかのツールのファイルは消さない・読まない**
+        - 動いた記録には端末の名前が入る(共有で何台もが同じファイルへ書かない)
+    """
+
+    def setUp(self) -> None:
+        from nippou.services import event_log
+
+        self.ev = event_log
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self._before = list(logging.getLogger().handlers)
+        event_log.install(log_dir=self.dir)
+        self.me = event_log._safe(event_log.terminal_name())
+
+    def tearDown(self) -> None:
+        self.ev.flush()
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            if handler not in self._before:
+                root.removeHandler(handler)
+                handler.close()
+        self.ev._override["dir"] = None
+        self._tmp.cleanup()
+
+    def _others(self, day: date) -> list[Path]:
+        """同じ共有のフォルダに、ほかのツールが置くもの(依頼の一覧どおり)。"""
+        line = json.dumps({"id": "X-OTHER", "kind": rule.KIND_ERROR,
+                           "at": f"{day.isoformat()}T09:00:00", "message": "ほかのツール"},
+                          ensure_ascii=False) + "\n"
+        paths = [self.dir / f"dbviewer_{self.me}_{day:%Y%m%d}.log",
+                 self.dir / f"rneconverter_{self.me}_{day:%Y%m%d}.log",
+                 self.dir / f"記録_{self.me}_{day:%Y%m%d}.jsonl",
+                 self.dir / "kanban" / f"kanban_出来事_{day.isoformat()}_{self.me}.jsonl",
+                 self.dir / "kanban" / f"kanban_なぜなぜ_{self.me}.jsonl"]
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(line, encoding="utf-8")
+        return paths
+
+    def test_出来事となぜなぜはnippouフォルダへnippou_で始まる名前で書く(self) -> None:
+        now = datetime.now()
+        self.ev.record(rule.make(rule.KIND_ERROR, at=now, terminal="PC-L1", message="x"))
+        self.ev.save_analysis("E1", {"whys": ["a"]})
+        self.ev.flush()
+        folder = self.dir / "nippou"
+        self.assertTrue((folder / f"nippou_出来事_{now:%Y-%m-%d}_PC-L1.jsonl").exists())
+        self.assertTrue((folder / f"nippou_なぜなぜ_{self.me}.jsonl").exists())
+        # 直下には何も書かない(前の形では書かない)
+        self.assertEqual([p.name for p in self.dir.iterdir()], ["nippou"])
+        status = self.ev.status()
+        self.assertEqual(status["dir"], str(folder))
+        self.assertEqual(status["writing_to"], str(folder))
+
+    def test_動いた記録はnippouフォルダに端末の名前つきで書き_前のnippou_logには書かない(self) -> None:
+        from nippou import logging_setup
+
+        old = self.dir / "nippou.log"
+        old.write_text("前の版の行\n", encoding="utf-8")
+        logging_setup.init_logging(self.dir)
+        logging.getLogger("nippou.demo").info("新しい行")
+        path = Path(logging_setup.log_status()["path"])
+        self.assertEqual(path.parent, self.dir / "nippou")
+        self.assertEqual(path.name, f"nippou_動作記録_{self.me}.log")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        self.assertIn("新しい行", path.read_text(encoding="utf-8"))
+        self.assertEqual(old.read_text(encoding="utf-8"), "前の版の行\n")
+
+    def test_前の形の出来事となぜなぜも読める(self) -> None:
+        today = date.today()
+        at = f"{today.isoformat()}T10:00:00"
+        eid = f"E{today:%m%d}-1000-AAA"
+        (self.dir / f"出来事_{today.isoformat()}_ほかの端末.jsonl").write_text(
+            json.dumps({"id": eid, "kind": rule.KIND_ERROR, "at": at,
+                        "terminal": "ほかの端末", "message": "前の版の記録"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        (self.dir / "なぜなぜ_ほかの端末.jsonl").write_text(
+            json.dumps({"id": eid, "at": at, "whys": ["前の版で書いた"], "status": "done"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        self.ev.record(rule.make(rule.KIND_ERROR, at=datetime.now(),
+                                 terminal="PC-L1", message="新しい版の記録"))
+        messages = {r["message"] for r in self.ev.load(today, today)}
+        self.assertEqual(messages, {"前の版の記録", "新しい版の記録"})
+        found, _ = self.ev.find(eid)
+        self.assertEqual(found["message"], "前の版の記録")
+        self.assertEqual(self.ev.analyses()[eid]["whys"], ["前の版で書いた"])
+
+    def test_ほかのツールのファイルは読まない(self) -> None:
+        today = date.today()
+        self._others(today)
+        self.assertEqual(self.ev.load(today, today), [])
+        self.assertNotIn("X-OTHER", self.ev.analyses())
+
+    def test_古いものを消すのは日報の出来事だけ_新旧どちらも(self) -> None:
+        old = date.today() - timedelta(days=self.ev.KEEP_DAYS + 3)
+        legacy = self.dir / f"出来事_{old.isoformat()}_{self.me}.jsonl"
+        new = self.dir / "nippou" / f"nippou_出来事_{old.isoformat()}_{self.me}.jsonl"
+        other_pc = self.dir / "nippou" / f"nippou_出来事_{old.isoformat()}_ほかの端末.jsonl"
+        recent = self.dir / "nippou" / f"nippou_出来事_{date.today().isoformat()}_{self.me}.jsonl"
+        text_log = self.dir / "nippou.log"
+        for path in (legacy, new, other_pc, recent, text_log):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n", encoding="utf-8")
+        others = self._others(old)
+        self.assertEqual(self.ev.purge(), 2)
+        self.assertFalse(legacy.exists())
+        self.assertFalse(new.exists())
+        for path in [other_pc, recent, text_log, *others]:
+            self.assertTrue(path.exists(), path.name)
+
+
 class LoggingSetupTests(unittest.TestCase):
     """`nippou.log` の書き先。**書けなくても起動を止めない。**"""
 
@@ -313,7 +434,8 @@ class LoggingSetupTests(unittest.TestCase):
             logging_setup.init_logging(blocker / "logs")
             status = logging_setup.log_status()
             self.assertIn("書けません", status["problem"])
-            self.assertEqual(Path(status["path"]).parent, self.dir / "app" / "logs")
+            self.assertEqual(Path(status["path"]).parent, self.dir / "app" / "logs" / "nippou")
+            self.assertTrue(Path(status["path"]).name.startswith("nippou_動作記録_"))
         finally:
             os.environ.pop("NIPPOU_APP_DIR", None)
 
@@ -443,6 +565,10 @@ class WebTests(WebTestCase):
         self.assertEqual(res.status_code, 200)
         path = Path(res.get_json()["path"])
         self.assertTrue(str(path).startswith(str(self.tmp)))
+        # 書き出しも `<ログの出力パス>/nippou/書き出し/nippou_エラー一覧_….csv`(v4.44.4)
+        self.assertEqual(path.parent.name, "書き出し")
+        self.assertEqual(path.parent.parent.name, "nippou")
+        self.assertTrue(path.name.startswith("nippou_エラー一覧_"))
         text = path.read_text(encoding="utf-8-sig")
         self.assertTrue(text.startswith("番号,日時,種類"))
         self.assertIn("なぜ5", text.splitlines()[0])
@@ -470,6 +596,8 @@ class WebTests(WebTestCase):
         self.assertEqual(len(self.events("errors")), logs.CLIENT_PER_MINUTE)
 
     def test_ログの置き場所を設定で変えるとそこへ書く(self) -> None:
+        from nippou import logging_setup
+
         root = logging.getLogger()
         before = list(root.handlers)
 
@@ -488,13 +616,47 @@ class WebTests(WebTestCase):
         self.post("/api/test/boom", {})
         from nippou.services import event_log
         event_log.flush()
-        self.assertTrue(list(shared.glob("出来事_*.jsonl")))
-        self.assertTrue((shared / "nippou.log").exists())
+        # **ツールの名前のフォルダの下へ、ツールの名前で始まる名前で**(v4.44.4)
+        self.assertTrue(list((shared / "nippou").glob("nippou_出来事_*.jsonl")))
+        self.assertTrue((shared / "nippou" / logging_setup.log_file_name()).exists())
+        self.assertFalse(list(shared.glob("出来事_*.jsonl")))
+        self.assertFalse((shared / "nippou.log").exists())
         status = self.get("/api/log/events").get_json()["status"]
-        self.assertEqual(status["dir"], str(shared))
+        self.assertEqual(status["dir"], str(shared / "nippou"))
+        self.assertEqual(Path(status["text_log"]).parent, shared / "nippou")
         moved = [r for r in self.events("all") if r["label"] == "ログの出力パスを変えた"]
         self.assertEqual(len(moved), 1)
         self.assertIn(str(shared), moved[0]["message"])
+
+    def test_前の形のファイルも画面で読めてなぜなぜを書ける(self) -> None:
+        """v4.44.3 までにログの出力パスの直下へ書かれた記録(v4.44.4)。"""
+        from nippou.services import event_log
+
+        base = event_log.configured_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        today = date.today()
+        eid = f"E{today:%m%d}-0900-ZZZ"
+        (base / f"出来事_{today.isoformat()}_前の端末.jsonl").write_text(
+            json.dumps({"id": eid, "kind": rule.KIND_ERROR,
+                        "at": f"{today.isoformat()}T09:00:00", "terminal": "前の端末",
+                        "message": "前の版で起きたエラー"}, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+        (base / f"記録_前の端末_{today:%Y%m%d}.jsonl").write_text(
+            json.dumps({"id": "X-OTHER", "kind": rule.KIND_ERROR,
+                        "at": f"{today.isoformat()}T09:00:00", "message": "ほかのツール"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        ids = [r["id"] for r in self.events("errors")]
+        self.assertIn(eid, ids)
+        self.assertNotIn("X-OTHER", ids)
+        res = self.get(f"/api/log/event/{eid}")
+        self.assertEqual(res.status_code, 200)
+        res = self.post(f"/api/log/event/{eid}/analysis", {"whys": ["古い版"], "status": "done"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([r["status_label"] for r in self.events("errors") if r["id"] == eid],
+                         ["対策済"])
+        # なぜなぜは新しい形で書く
+        self.assertTrue(list((base / "nippou").glob("nippou_なぜなぜ_*.jsonl")))
+        self.assertFalse(list(base.glob("なぜなぜ_*.jsonl")))
 
     def test_書けない置き場所なら手元へ書くと言う(self) -> None:
         root = logging.getLogger()

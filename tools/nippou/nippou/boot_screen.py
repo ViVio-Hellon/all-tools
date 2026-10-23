@@ -194,7 +194,13 @@ function paintStage(key) {{
 }}
 
 function showError(message) {{
-  errorText.textContent = message + (LOG_DIR ? `\\n\\nログ: ${{LOG_DIR}}` : "");
+  // 起動の記録(launcher.log / guard.log)はこのフォルダの直下、動いた記録と
+  // エラーの記録はその下の nippou フォルダ(「ログの出力パス」を決めていれば
+  // そちらの nippou フォルダ)。v4.44.4
+  errorText.textContent = message + (LOG_DIR
+    ? `\\n\\nログ: ${{LOG_DIR}}(起動の記録 launcher.log / guard.log。`
+      + `動いた記録・エラーの記録は nippou フォルダの nippou_….log / nippou_出来事_….jsonl)`
+    : "");
   errorBox.hidden = false;
   note.textContent = "";
 }}

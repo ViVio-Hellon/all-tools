@@ -8,7 +8,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dbkit.logging_utils import get_logger as dbkit_get_logger
-from nippou.logging_setup import init_logging
+from nippou.logging_setup import init_logging, log_file_name
+
+
+def _text_log(log_dir: Path) -> Path:
+    """動いた記録の置き場所(v4.44.4): `<ログの出力パス>/nippou/nippou_動作記録_<端末>.log`。"""
+    return log_dir / "nippou" / log_file_name()
 
 
 class InitLoggingTests(unittest.TestCase):
@@ -27,7 +32,8 @@ class InitLoggingTests(unittest.TestCase):
     def test_init_logging_creates_log_file(self) -> None:
         log_dir = Path(self._tmpdir.name)
         init_logging(log_dir)
-        self.assertTrue((log_dir / "nippou.log").exists())
+        self.assertTrue(_text_log(log_dir).exists())
+        self.assertFalse((log_dir / "nippou.log").exists())
 
     def test_dbkit_logs_land_in_the_same_file_as_nippou_logs(self) -> None:
         log_dir = Path(self._tmpdir.name)
@@ -36,7 +42,7 @@ class InitLoggingTests(unittest.TestCase):
         dbkit_get_logger("sqlite_toolkit").info("dbkit実行ログ")
         logging.getLogger("nippou.ui").info("nippouログ")
 
-        content = (log_dir / "nippou.log").read_text(encoding="utf-8")
+        content = _text_log(log_dir).read_text(encoding="utf-8")
         self.assertIn("dbkit.sqlite_toolkit", content)
         self.assertIn("dbkit実行ログ", content)
         self.assertIn("nippou.ui", content)
@@ -50,7 +56,7 @@ class InitLoggingTests(unittest.TestCase):
         matching = [
             h for h in logging.getLogger().handlers
             if isinstance(h, logging.handlers.RotatingFileHandler)
-            and getattr(h, "_nippou_log_path", None) == log_dir / "nippou.log"
+            and getattr(h, "_nippou_log_path", None) == _text_log(log_dir)
         ]
         self.assertEqual(len(matching), 1)
 

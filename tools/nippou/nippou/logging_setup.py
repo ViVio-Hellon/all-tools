@@ -15,7 +15,13 @@ several VBA migration projects, see ``dbkit.logging_utils.get_logger``)
 logs under its own ``dbkit.*`` namespace and relies on normal ``logging``
 propagation to reach whatever handler the host application installed --
 attaching only to ``nippou`` would silently drop every dbkit log line
-instead of landing it in ``nippou.log`` alongside everything else.
+instead of landing it in the text log alongside everything else.
+
+**置き場所と名前** (v4.44.4。`log_names`): ``<ログの出力パス>/nippou/
+nippou_動作記録_<端末>.log``。v4.44.3 までは ``<ログの出力パス>/nippou.log``
+で、名前に端末が無く、共有のフォルダを指すと何台もの端末が同じファイルへ
+書いていた ── いまは端末ごとに分かれます。前の ``nippou.log`` には
+もう書きません(消しもしない。ほかの端末が古い版のまま書いていることがある)。
 """
 from __future__ import annotations
 
@@ -23,12 +29,14 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+from . import log_names
 from .config import SETTINGS
 
 LOGGER_NAME = "nippou"
 
 
-LOG_FILE_NAME = "nippou.log"
+#: 前の名前(v4.44.3 まで)。**もう書きません**。いまの名前は `log_file_name()`
+LOG_FILE_NAME = log_names.LEGACY_TEXT_LOG
 _FORMAT = "%(asctime)s\t%(levelname)s\t%(name)s\t%(message)s"
 
 #: いま書いている先と、**設定の先に書けなかった理由**(画面に出す)
@@ -51,8 +59,9 @@ def init_logging(log_dir: Path | None = None, level: int = logging.INFO) -> logg
     (`services/event_log.install`)。
     """
     wanted = Path(log_dir) if log_dir is not None else SETTINGS.log_dir
-    folder = _usable(wanted)
-    log_path = folder / LOG_FILE_NAME
+    # `<ログの出力パス>/nippou/nippou_動作記録_<端末>.log`(逃げ先も同じ形)
+    folder = _usable(log_names.tool_dir(wanted))
+    log_path = folder / log_file_name()
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -104,14 +113,23 @@ def redirect_logging() -> dict:
     return log_status()
 
 
+def log_file_name() -> str:
+    """動いた記録の名前。**端末の名前を入れる**(共有のフォルダで混ざらないように)。"""
+    from .services import event_log
+    return log_names.text_log_name(event_log.terminal_name())
+
+
 def log_status() -> dict:
-    """いまの書き先(`nippou.log`)と、設定の先に書けなかった理由。"""
+    """いまの書き先(`nippou/nippou_動作記録_<端末>.log`)と、設定の先に書けなかった理由。"""
     path = _state.get("path")
     return {"path": str(path) if path else "", "problem": str(_state["problem"] or "")}
 
 
 def _usable(wanted: Path) -> Path:
-    """書けるフォルダ。**書けなければこの端末の `logs`**(理由を覚えておく)。"""
+    """書けるフォルダ。**書けなければこの端末の `logs/nippou`**(理由を覚えておく)。
+
+    `wanted` はもうツールのフォルダ(`<ログの出力パス>/nippou`)。無ければ作ります。
+    """
     try:
         wanted.mkdir(parents=True, exist_ok=True)
         probe = wanted / ".nippou_write_check"
@@ -120,7 +138,7 @@ def _usable(wanted: Path) -> Path:
         _state["problem"] = ""
         return wanted
     except OSError as exc:
-        fallback = SETTINGS.default_log_dir
+        fallback = log_names.tool_dir(SETTINGS.default_log_dir)
         _state["problem"] = f"{wanted} に書けません({exc})"
         if fallback == wanted:
             raise
@@ -137,7 +155,7 @@ def get_logger(component: str | None = None) -> logging.Logger:
 # 起動フェーズのログ (基盤仕様書 2.6)
 # ------------------------------------------------------------------
 # 仕様書は「起動前に失敗したのか」「Webサーバが失敗したのか」「業務処理で
-# 失敗したのか」を**区別できる**ことを求めている。業務ログ(nippou.log)と
+# 失敗したのか」を**区別できる**ことを求めている。業務ログ(nippou_動作記録_<端末>.log)と
 # 同じファイルに混ぜると、起動できなかったときに読む場所が分からない
 # ので、起動基盤は自分用のファイルへ書く。
 #
@@ -162,7 +180,7 @@ def get_launch_logger(component: str, *,
     logger = logging.getLogger(f"{_LAUNCH_LOGGER_PREFIX}.{component}")
     logger.setLevel(level)
     # 業務ログのハンドラ(rootに付く)へ流さない。起動の記録が
-    # nippou.log にも二重に出ると、どちらを読めばよいか分からなくなる
+    # 業務ログにも二重に出ると、どちらを読めばよいか分からなくなる
     logger.propagate = False
 
     log_path = _launch_log_path(filename)

@@ -1964,7 +1964,7 @@ LVC,119
         <span class="lead">画面に出たエラー番号(例: E1001-1253-7KX)で探せます</span>
       </div>
       <p class="lead log-where" id="log-where">
-        書いている先: <code id="log-dir">{{ path_map[keys.log_dir].resolved }}</code>
+        書いている先: <code id="log-dir">{{ log_write_dir }}</code>
         (<a href="/settings?tab=paths">参照設定の「ログの出力パス」</a>で変えられます)
       </p>
       <div class="msg msg--warn" id="log-fallback" hidden></div>

@@ -168,7 +168,7 @@ def register(app: Flask) -> None:
         except Exception:                         # noqa: BLE001
             pass
         g.event_done = True
-        # 文字の記録(nippou.log)にも番号つきで。**出来事にはもう残した**ので
+        # 文字の記録(nippou_動作記録_端末.log)にも番号つきで。**出来事にはもう残した**ので
         # 拾う口(EventHandler)には二重に残させない
         log.error("[%s] 予期しないエラー: %s %s", event_id, request.method,
                   request.path, exc_info=exc, extra={"event_id": event_id})

@@ -1,11 +1,15 @@
 """出来事の記録を**書く・読む** (`logic/event_log.py` の形で)
 
 【置き場所】
-設定の「ログの出力パス」(`config.KEY_LOG_DIR`)。決めていなければこの端末の
-`logs`。ファイルは**端末ごと・日ごと**に分けます:
+設定の「ログの出力パス」(`config.KEY_LOG_DIR`)の下の **`nippou` フォルダ**。
+決めていなければこの端末の `logs` の下の `nippou`。ファイルは**端末ごと・
+日ごと**に分け、名前は必ず `nippou_` で始めます(v4.44.4。`log_names`):
 
-    出来事_2026-10-01_PC-L1.jsonl     1行が1件(JSON)
-    なぜなぜ_PC-L1.jsonl              書いてもらったなぜなぜ(1行が1回の保存)
+    nippou/nippou_出来事_2026-10-01_PC-L1.jsonl   1行が1件(JSON)
+    nippou/nippou_なぜなぜ_PC-L1.jsonl            書いてもらったなぜなぜ(1行が1回の保存)
+
+v4.44.3 までの形(フォルダの直下の `出来事_….jsonl` `なぜなぜ_….jsonl`)も
+**読みます**(一覧・なぜなぜ・古いものを消す)。書くのは新しい形だけ。
 
 共有のフォルダを指しても、**ほかの端末と同じファイルに書きません**
 (名前に端末が入る)。読むときはフォルダの中を全部読むので、どの端末で
@@ -18,8 +22,8 @@
 (手元へ書いたあいだのぶんも、一覧には並びます)。
 
 【古いもの】
-`KEEP_DAYS` 日より前の**自分の端末のぶん**だけ消します(起動のとき)。
-ほかの端末のファイルには触りません。
+`KEEP_DAYS` 日より前の**自分の端末のぶん**だけ消します(起動のとき。新旧
+どちらの形も)。ほかの端末のファイル・**ほかのツールのファイル**には触りません。
 """
 from __future__ import annotations
 
@@ -35,7 +39,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-from ..file_names import UNSAFE_OR_SPACE
+from .. import log_names as names
 from ..logic import event_log as rule
 
 #: 残す日数。**半年**(同じエラーがまた起きたか、を見られる長さ)
@@ -47,9 +51,10 @@ REPEAT_SECONDS = 60
 #: 一覧を作るときに読む最大の件数(古いほうから捨てる)
 READ_LIMIT = 50_000
 
-EVENT_PREFIX = "出来事_"
-NOTE_PREFIX = "なぜなぜ_"
-EXPORT_DIR = "書き出し"
+#: 名前の頭(新しい形)。前の形は `names.LEGACY_*`
+EVENT_PREFIX = names.EVENT_PREFIX
+NOTE_PREFIX = names.NOTE_PREFIX
+EXPORT_DIR = names.EXPORT_DIR
 
 _lock = threading.Lock()
 _queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
@@ -67,7 +72,7 @@ def terminal_name() -> str:
 
 
 def _safe(name: str) -> str:
-    return UNSAFE_OR_SPACE.sub("_", name).strip("_") or "端末"
+    return names.safe(name)
 
 
 #: 呼ぶ側が書き先を名指ししたとき(`init_logging(log_dir)`。試験が一時
@@ -76,6 +81,7 @@ _override: dict[str, Optional[Path]] = {"dir": None}
 
 
 def configured_dir() -> Path:
+    """「ログの出力パス」(**ツールのフォルダの1つ上**)。書くのは `write_dir`。"""
     if _override["dir"] is not None:
         return _override["dir"]
     from ..config import SETTINGS
@@ -89,8 +95,17 @@ def default_dir() -> Path:
     return SETTINGS.default_log_dir
 
 
+def write_dir(base: Path) -> Path:
+    """書く先 = `<ログの出力パス>/nippou`(逃げ先も同じ形)。"""
+    return names.tool_dir(base)
+
+
 def read_dirs() -> list[Path]:
-    """読むフォルダ。**設定の先と、手元の逃げ先の両方**(同じなら1つ)。"""
+    """読む「ログの出力パス」。**設定の先と、手元の逃げ先の両方**(同じなら1つ)。
+
+    それぞれの下の `nippou` フォルダ(新しい形)と、その直下(前の形)を読みます
+    (`names.event_places`)。
+    """
     dirs = [configured_dir()]
     local = default_dir()
     if local != dirs[0]:
@@ -103,10 +118,10 @@ def status() -> dict[str, Any]:
     want = configured_dir()
     fallback = _fallback["reason"]
     return {
-        "dir": str(want),
-        "default_dir": str(default_dir()),
+        "dir": str(write_dir(want)),
+        "default_dir": str(write_dir(default_dir())),
         "is_default": want == default_dir(),
-        "writing_to": _fallback["dir"] or str(want),
+        "writing_to": _fallback["dir"] or str(write_dir(want)),
         "fallback": fallback,
         "keep_days": KEEP_DAYS,
         "terminal": terminal_name(),
@@ -138,14 +153,14 @@ def record(record: dict) -> dict:
     設定が変わった(試験なら一時フォルダが片付いた)ときに別の所へ書きます。
     """
     at = rule.parse_at(record.get("at", "")) or datetime.now()
-    name = f"{EVENT_PREFIX}{at:%Y-%m-%d}_{_safe(record.get('terminal') or terminal_name())}.jsonl"
+    name = names.event_name(at.date(), record.get("terminal") or terminal_name())
     _put(name, record)
     return record
 
 
 def _put(name: str, item: dict) -> None:
     _ensure_thread()
-    _queue.put((name, item, configured_dir(), default_dir()))
+    _queue.put((name, item, write_dir(configured_dir()), write_dir(default_dir())))
 
 
 def note(message: str, *, kind: str = rule.KIND_INFO, **fields: Any) -> dict:
@@ -163,7 +178,7 @@ def save_analysis(event_id: str, body: dict) -> dict:
     note_body.update({"id": event_id,
                       "at": datetime.now().isoformat(timespec="seconds"),
                       "terminal": terminal_name()})
-    _put(f"{NOTE_PREFIX}{_safe(terminal_name())}.jsonl", note_body)
+    _put(names.note_name(terminal_name()), note_body)
     flush()
     return note_body
 
@@ -337,15 +352,25 @@ def install(log_dir: Optional[Path] = None) -> None:
         pass
 
 
+def _places(kind: str) -> list[tuple[Path, str]]:
+    """読む(消す)ところ ── (フォルダ, 名前の頭)。**新しい形と前の形の両方。**"""
+    pick = names.event_places if kind == "event" else names.note_places
+    return [place for base in read_dirs() for place in pick(base)]
+
+
 def purge(today: Optional[date] = None, keep_days: int = KEEP_DAYS) -> int:
-    """`keep_days` 日より前の**自分の端末のぶん**を消す。消した数を返す。"""
+    """`keep_days` 日より前の**自分の端末のぶん**を消す。消した数を返す。
+
+    消すのは**日報の出来事の名前**のものだけ(新しい形 `nippou/nippou_出来事_…` と
+    前の形 `出来事_…`)。同じフォルダのほかのツールのファイルは見もしません。
+    """
     today = today or date.today()
     limit = today - timedelta(days=keep_days)
     mine = _safe(terminal_name())
     removed = 0
-    for folder in read_dirs():
+    for folder, prefix in _places("event"):
         try:
-            files = list(folder.glob(f"{EVENT_PREFIX}*_{mine}.jsonl"))
+            files = list(folder.glob(f"{prefix}*_{mine}.jsonl"))
         except OSError:
             continue
         for path in files:
@@ -363,21 +388,15 @@ def purge(today: Optional[date] = None, keep_days: int = KEEP_DAYS) -> int:
 # 読む
 # ------------------------------------------------------------------
 def _file_date(path: Path) -> Optional[date]:
-    m = re.match(rf"{EVENT_PREFIX}(\d{{4}}-\d{{2}}-\d{{2}})_", path.name)
-    if not m:
-        return None
-    try:
-        return date.fromisoformat(m.group(1))
-    except ValueError:
-        return None
+    return names.event_date(path.name)
 
 
 def files_between(start: date, end: date) -> list[Path]:
     out: list[Path] = []
     seen: set[str] = set()
-    for folder in read_dirs():
+    for folder, prefix in _places("event"):
         try:
-            found = sorted(folder.glob(f"{EVENT_PREFIX}*.jsonl"))
+            found = sorted(folder.glob(f"{prefix}*.jsonl"))
         except OSError:
             continue
         for path in found:
@@ -455,9 +474,9 @@ def analyses() -> dict[str, dict]:
     """書いてもらったなぜなぜ。**番号ごとに新しいもの**(全端末)。"""
     flush(1.0)
     paths: list[Path] = []
-    for folder in read_dirs():
+    for folder, prefix in _places("note"):
         try:
-            paths.extend(sorted(folder.glob(f"{NOTE_PREFIX}*.jsonl")))
+            paths.extend(sorted(folder.glob(f"{prefix}*.jsonl")))
         except OSError:
             continue
     latest: dict[str, dict] = {}
@@ -499,8 +518,8 @@ def export_csv(records: list[dict], notes: dict[str, dict],
     writer.writerow(rule.CSV_HEADER)
     for rec in records:
         writer.writerow(rule.csv_row(rec, notes.get(str(rec.get("id", "")))))
-    name = f"エラー一覧_{now:%Y%m%d_%H%M%S}.csv"
-    for folder in (configured_dir(), default_dir()):
+    name = names.export_name(now)
+    for folder in (write_dir(configured_dir()), write_dir(default_dir())):
         path = folder / EXPORT_DIR / name
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

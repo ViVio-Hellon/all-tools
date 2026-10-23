@@ -26,7 +26,9 @@
 
     %LOCALAPPDATA%\\NippouTool\\
       runtime\\ … PID・ポート・状態(停止後は消してよい)
-      logs\\    … launcher.log / guard.log / nippou.log
+      logs\\    … launcher.log / guard.log(起動の記録)
+        nippou\\ … nippou_動作記録_端末.log / nippou_出来事_日付_端末.jsonl
+                   (「ログの出力パス」を決めていないとき。v4.44.4)
       pycache\\ … PYTHONPYCACHEPREFIX の向き先
       cache\\   … 再取得できる高速化用データ
       work\\    … 印刷用HTMLなどの一時ファイル

@@ -109,6 +109,8 @@ def index():
         # GW計算の記録の形式(v4.44.1)
         gw_record_format=_gw_record_format(),
         gw_record_formats=_gw_record_formats(),
+        # 「ログ」の面の書いている先 = ログの出力パスの下の nippou(v4.44.4)
+        log_write_dir=_log_write_dir(),
         paths=state["paths"],
         # 面ごとに欄を置くので、鍵で引ける形も渡す(出どころは `paths` と同じ)
         path_map=state["path_map"],
@@ -580,6 +582,15 @@ def _gw_record_format() -> str:
 def _gw_record_formats() -> dict:
     from nippou.services import gw_record
     return dict(gw_record.FORMATS)
+
+
+def _log_write_dir() -> str:
+    """出来事・動いた記録を書く先(`<ログの出力パス>/nippou`。v4.44.4)。"""
+    from nippou.services import event_log
+    try:
+        return str(event_log.write_dir(event_log.configured_dir()))
+    except Exception:                                 # noqa: BLE001 - 画面は出す
+        return ""
 
 
 @bp.post("/api/settings/gw-record-format")
