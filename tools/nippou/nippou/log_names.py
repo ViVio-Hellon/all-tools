@@ -12,6 +12,8 @@
       nippou_動作記録_PC-L1.log               動いた記録(5MBで回す。.log.1〜.log.5)
       nippou_出来事_2026-10-15_PC-L1.jsonl    エラー・操作の記録(端末ごと・日ごと)
       nippou_なぜなぜ_PC-L1.jsonl             書いてもらったなぜなぜ
+      nippou_起動_PC-L1.log                   起動の記録(v4.44.5。前は手元の launcher.log)
+      nippou_起動監視_PC-L1.log               多重起動の判定・サーバの見張り(前は手元の guard.log)
       書き出し/nippou_エラー一覧_20261015_120000.csv
 
 **動いた記録にも端末の名前を入れます。** 前の `nippou.log` は名前に端末が
@@ -74,6 +76,18 @@ def tool_dir(base: Path) -> Path:
 
 def text_log_name(terminal: str) -> str:
     return f"{PREFIX}{TEXT_KIND}_{safe(terminal)}.log"
+
+
+#: 起動の記録(v4.44.5。前は この端末の logs 直下の launcher.log / guard.log)。
+#: 呼ぶ側は前からの役の名前(`get_launch_logger(filename="guard.log")`)で頼む
+LAUNCH_KINDS = {"launcher.log": "起動", "guard.log": "起動監視"}
+
+
+def launch_log_name(role: str, terminal: str) -> str:
+    """起動の記録の名前。`launcher.log` → `nippou_起動_<端末>.log`、`guard.log` →
+    `nippou_起動監視_<端末>.log`(共有のフォルダで端末ごとに分かれるように)。"""
+    kind = LAUNCH_KINDS.get(role) or (Path(role).stem or "起動")
+    return f"{PREFIX}{kind}_{safe(terminal)}.log"
 
 
 def event_name(day: date, terminal: str) -> str:

@@ -208,8 +208,9 @@ KEY_STANDARD_TIME_OUT_DIR = "standard_time_output_dir"
 # 名前が入るので混ざりません)。届かないときは手元の `logs` へ書きます
 # (`services/event_log`)── 記録が書けないことで止めない。
 #
-# 起動の記録(launcher.log / guard.log)は**ここに従いません。** 起動できない
-# ときに読むものなので、いつも手元に置きます(起動待ちの画面もそこを指す)
+# 起動の記録(nippou_起動_端末.log / nippou_起動監視_端末.log)も**ここに従います**
+# (v4.44.5。前は手元の launcher.log / guard.log)。届かないときは手元の logs\nippou へ
+# (`logging_setup.launch_log_dir`。起動待ちの画面もそこを指す)
 KEY_LOG_DIR = "log_dir"
 
 # 日報入力データの**控え**の置き場所(v4.12.0)。この下の `LocalBackup\ライン名\`
@@ -805,8 +806,8 @@ class Settings:
 
     @property
     def default_log_dir(self) -> Path:
-        """**この端末の中の**ログの置き場所。設定した先に書けないときの逃げ先で、
-        起動の記録(launcher.log / guard.log)はいつもここ。"""
+        """**この端末の中の**ログの置き場所。設定した先に書けないときの逃げ先
+        (起動の記録も、出力パスに届かないときはここの nippou フォルダ)。"""
         override = _app_dir_override()
         return override / "logs" if override else app_config.local_dir("logs")
 

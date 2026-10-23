@@ -267,7 +267,7 @@ nippou/                 業務ロジック(画面に依存しない)
   awake_clock.py         スリープのあいだを数えない時計(自動終了・打つ権利が使う)
   running.py             いま止めてはいけない処理(停止判断の唯一の出どころ)
   boot_screen.py         起動待機画面のHTML(標準ライブラリだけで組む)
-  logging_setup.py       launcher.log / guard.log / nippou\nippou_動作記録_端末.log の初期化(書けなければ手元へ)
+  logging_setup.py       nippou\nippou_起動_端末.log / nippou_起動監視_端末.log / nippou_動作記録_端末.log の初期化(書けなければ手元へ)
   log_names.py           ログの置き場所と名前(nippou フォルダ・nippou_ で始まる名前。v4.44.4)
   constants.py           排他制御マップ・フォーカス連動チェーンなど VBA 定数の転記
   work_context.py        画面をまたぐ作業状態(ライン・呼出中・管理者モード)
@@ -367,9 +367,10 @@ tests/                  unittest ベースのテスト(pytest 不要、標準ラ
 ```
 %LOCALAPPDATA%\NippouTool\
   runtime\  PID・ポート・起動トークン(停止後は消してよい)
-  logs\     launcher.log / guard.log(起動の記録。いつもここ)
-    nippou\ nippou_動作記録_端末.log / nippou_出来事_日付_端末.jsonl / nippou_なぜなぜ_端末.jsonl
-            (参照設定の「ログの出力パス」を決めればそちらの nippou\ へ。v4.1.0 / v4.44.4)
+  logs\     (前の版の launcher.log / guard.log。v4.44.5 からは書かない)
+    nippou\ nippou_動作記録_端末.log / nippou_出来事_日付_端末.jsonl / nippou_なぜなぜ_端末.jsonl /
+            nippou_起動_端末.log / nippou_起動監視_端末.log
+            (参照設定の「ログの出力パス」を決めればそちらの nippou\ へ。v4.1.0 / v4.44.4 / v4.44.5)
   cache\    再取得できる高速化用データ(source\ に共有sqlite3の写し)
   work\     印刷用HTML・集計CSVなどの出力
   backup\   DBのバックアップ
@@ -6707,8 +6708,8 @@ R… 断り(4xx) / W… 警告 / O… 操作 / I… 起動・設定の変更
   書くのは裏の1本のスレッドなので、共有が遅くても画面は待たされません。5分たつと
   もう一度設定の先を試し、そのあいだのぶんも一覧には並びます。ログの面の頭に
   「…に書けません ── いまはこの端末の logs へ書いています」と出ます
-- **起動の記録(launcher.log / guard.log)は従いません。** 起動できないときに読むもの
-  なので、いつもこの端末の logs です
+- **起動の記録も従います**(v4.44.5。`nippou\nippou_起動_端末.log` / `nippou_起動監視_端末.log`)。
+  前はいつもこの端末の logs の `launcher.log` / `guard.log` でした。届かないときは手元の logs\nippou
 - 残すのは**半年(180日)**。起動のたびに、それより古い**自分の端末のぶん**だけ消します
   (ほかの端末のファイル・ほかのツールのファイルには触りません)
 
@@ -8484,7 +8485,7 @@ v3.71.0 は「この端末の設定を書き出す」ボタン1つでした。**
                                     管理者パスワード(撹拌済み)・この端末のライン)
       cache\source\               … 参照マスタの手元の写し(消してよい。次に読むとき写し直す)
       work\                       … 集計CSV・印刷用HTMLの既定の出力先
-      logs\                       … launcher.log / guard.log と nippou\(動いた記録・出来事)
+      logs\                       … nippou\(動いた記録・出来事・起動の記録)
       runtime\ / pycache\         … 動いているあいだのもの(消してよい)
 
 共有へ保存を押すと、`共有の日報管理のパス` の `日報データ.sqlite3` へ
@@ -12664,3 +12665,18 @@ XX:XX〜ZZ:ZZ を先に入れて60分なのに、欄に50と入れても素通�
 ほかのツールのファイルを読まない・消すのは日報の出来事だけ)と `WebTests`(前の形の記録を画面で開いてなぜなぜを
 書ける・パスを変えたら nippou フォルダへ・CSV の名前)、`test_logging_setup.py`。直す前に戻すと落ちること、前の形を
 読む所・消す所を壊すと落ちることを確かめた。
+
+## 起動の記録もログの出力パスへ (v4.44.5)
+
+現場の声:「日報の起動の記録: 出力パスへ出す」(v4.44.4 では起動の記録だけ、この端末の logs 直下に残していた)。
+
+- 起動の記録を「ログの出力パス」の nippou フォルダへ、ツール名と端末の名前の入った名前で書く
+  - `launcher.log`(start_app。環境の確認・ブラウザを開く)→ `nippou\nippou_起動_<端末>.log`
+  - `guard.log`(launch_guard の多重起動の判定・server・process_manager・bridge)→ `nippou\nippou_起動監視_<端末>.log`
+  - 名前は `log_names.launch_log_name`、置き場所は `logging_setup.launch_log_dir` の1か所
+- **出力パスに届かない・書けないとき**(共有フォルダが落ちている朝など)は、この端末の logs の nippou フォルダへ書く。
+  起動の記録が書けないことで起動を止めない。起動待ちの画面のエラーの「ログ:」も、実際に書いているフォルダを指す
+- 出力パスを変えたら、起動の記録は**次の起動から**新しい先へ(動いた記録・出来事はその場で移る)
+- 前の `launcher.log` / `guard.log`(この端末の logs 直下)はそのまま残し、もう書かない
+- 試験: `tests/test_launch_log_place.py`(出力パスの nippou へ書く・書けなければ手元の nippou・起動待ちの画面の
+  ログの場所)。前の書き方に戻すと落ちることを確かめた

@@ -26,7 +26,7 @@ import threading
 from typing import Any, Callable, Optional
 
 from nippou import app_config, boot_screen
-from nippou.logging_setup import get_launch_logger
+from nippou.logging_setup import get_launch_logger, launch_log_dir
 
 log = get_launch_logger("boot_server", filename="guard.log")
 
@@ -75,7 +75,8 @@ class BootApp:
                 # 本体がまだ無いので、待たずに入る道は「開き直す」だけ。
                 # 押しても待機画面に戻るが、押せる道が消えるよりはよい
                 home_url="/",
-                log_dir=str(app_config.local_dir("logs")),
+                # 起動の記録を書いているフォルダ(「ログの出力パス」の nippou。v4.44.5)
+                log_dir=str(launch_log_dir() or app_config.local_dir("logs")),
             ).encode("utf-8")
         return self._page
 

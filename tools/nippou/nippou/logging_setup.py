@@ -159,8 +159,13 @@ def get_logger(component: str | None = None) -> logging.Logger:
 # 同じファイルに混ぜると、起動できなかったときに読む場所が分からない
 # ので、起動基盤は自分用のファイルへ書く。
 #
-#   launcher.log … start_app(環境確認・ブラウザ起動)
-#   guard.log    … launch_guard(多重起動判定)/ server / process_manager
+#   launcher.log … start_app(環境確認・ブラウザ起動)          → nippou_起動_<端末>.log
+#   guard.log    … launch_guard(多重起動判定)/ server / process_manager → nippou_起動監視_<端末>.log
+#
+# **書き先は「ログの出力パス」の nippou フォルダ**(v4.44.5。「日報の起動の記録: 出力パスへ出す」)。
+# 前はいつもこの端末の logs 直下でした。出力パスに届かない・書けないとき(共有フォルダが落ちて
+# いる朝など)は、この端末の logs の nippou フォルダへ書きます ── 起動の記録が書けないことで
+# 起動を止めないため、そして起動できない理由を手元に残すため。
 _LAUNCH_LOGGER_PREFIX = "nippou.launch"
 
 
@@ -186,13 +191,19 @@ def get_launch_logger(component: str, *,
     log_path = _launch_log_path(filename)
     already = any(getattr(h, "_nippou_log_path", None) == log_path
                   for h in logger.handlers)
+    handler = None
     if not already and log_path is not None:
-        try:
-            handler = logging.handlers.RotatingFileHandler(
-                log_path, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")
-        except OSError:
-            # ログを書けないことを理由に起動を止めない
-            handler = None
+        for path in (log_path, _local_launch_log_path(filename)):
+            if path is None:
+                continue
+            try:
+                handler = logging.handlers.RotatingFileHandler(
+                    path, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")
+            except OSError:
+                # 出力パスで開けなければ手元へ。どちらもだめでも起動は止めない
+                continue
+            log_path = path
+            break
         if handler is not None:
             handler._nippou_log_path = log_path
             handler.setFormatter(logging.Formatter(
@@ -207,14 +218,58 @@ def get_launch_logger(component: str, *,
     return logger
 
 
-def _launch_log_path(filename: str) -> Path | None:
+def launch_log_dir() -> Path | None:
+    """起動の記録を書くフォルダ(v4.44.5)。「ログの出力パス」の nippou フォルダ。
+
+    届かない・書けないときは、この端末の logs の nippou フォルダ。どちらもだめなら None。
+    起動待ちの画面が「ログ:」として出すのもここ。
+    """
+    bases: list[Path] = []
+    for read in (lambda: SETTINGS.log_dir, lambda: SETTINGS.default_log_dir):
+        try:
+            base = read()
+        except Exception:                 # 設定が読めなくても起動は止めない
+            continue
+        if base not in bases:
+            bases.append(base)
+    for base in bases:
+        folder = log_names.tool_dir(base)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / f".nippou_launch_check_{log_names.safe(_terminal())}"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return folder
+        except OSError:
+            continue
+    return None
+
+
+def _terminal() -> str:
     try:
-        # **設定したログの置き場所には従いません**(`config.KEY_LOG_DIR`)。
-        # 起動できないときに読むものなので、いつもこの端末の中に置きます
-        log_dir = SETTINGS.default_log_dir
-        log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir / filename
-    except OSError:
+        from .services import event_log
+        return event_log.terminal_name()
+    except Exception:                     # pragma: no cover - 名前が引けなくても書く
+        return "この端末"
+
+
+def _launch_log_path(filename: str) -> Path | None:
+    folder = launch_log_dir()
+    return None if folder is None else folder / log_names.launch_log_name(filename, _terminal())
+
+
+#: 本物の書き先の決め方。試験の `tests/_launch_logs.keep_in_temp` が `_launch_log_path` を
+#: 一時フォルダへ差し替えるので、置き場所そのものを確かめる試験はこちらを使って戻す
+LAUNCH_LOG_PATH = _launch_log_path
+
+
+def _local_launch_log_path(filename: str) -> Path | None:
+    """出力パスで開けなかったときの逃げ先(この端末の logs の nippou フォルダ)。"""
+    try:
+        folder = log_names.tool_dir(SETTINGS.default_log_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / log_names.launch_log_name(filename, _terminal())
+    except Exception:
         return None
 
 

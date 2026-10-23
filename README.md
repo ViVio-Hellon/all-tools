@@ -5,7 +5,7 @@
 
 | 大きなタブ | ツール | 版 | 元のリポジトリ |
 |---|---|---|---|
-| 日報 | 日報管理ツール | 4.44.4 | vba-daily-report-python-migration |
+| 日報 | 日報管理ツール | 4.44.5 | vba-daily-report-python-migration |
 | 看板 | 資材発注看板システム | 3.5.10 | vba-production-board-python-migration |
 | カレンダー | ライン管理カレンダー | 4.2.8 | vba-calendar-python-migration |
 | 点検表 | 点検表 選択・印刷 | 2.4.6 | vba-inspection-sheet-python-migration |
@@ -85,6 +85,7 @@
 > 1.5.56: 点検表 2.4.6 で、**ログをツール名のフォルダへ・名前にツール名**。ログの出力先にいろいろなツールのログが混ざり、どれが何のツールのものか分からなかった → `<出力先>\inspection\inspection_YYYYMMDD_<PC>_<利用者>.log`・`inspection_events_….jsonl`(ローカルも `logs\inspection\`)。前の場所・前の名前のログも読み、消すのは点検表のこの端末のものだけ。日報・看板も同じ決まりで続けて直す。
 > 1.5.57: 看板 3.5.10 で、ログをツール名のフォルダへ・名前にツール名(`<出力先>\kanban\<ライン>\kanban_DebugLog_….txt`・`kanban\記録\<年月>\kanban_記録_<PC>_<日付>.jsonl`。前は `KanbanSystem\…`)。前の場所の記録も「記録」タブ・なぜなぜで読み、消すのは看板のこの端末の記録だけ(PC名が前方一致するだけのほかの端末の記録を消すおそれも直した)。
 > 1.5.58: 日報 4.44.4 で、ログをツール名のフォルダへ・名前にツール名(`<出力先>\nippou\nippou_動作記録_<PC>.log`・`nippou_出来事_<日付>_<PC>.jsonl`・`nippou_なぜなぜ_<PC>.jsonl`)。前は PC 名の無い `nippou.log` 1本で、共有フォルダでは何台もが同じファイルへ書いていた。前の形の出来事・なぜなぜも読み、消すのは日報の出来事だけ。
+> 1.5.59: 日報 4.44.5 で、**起動の記録もログの出力パスへ**(`nippou\\nippou_起動_<PC>.log`・`nippou_起動監視_<PC>.log`。前はこの端末の logs 直下の launcher.log / guard.log)。出力パスに届かないときは手元の logs\\nippou へ書き、起動は止めない。
 
 どのタブを出すかは、**ログインID と PC名** で決めます(python-web-tools のアクセス権限と同じ考え方の、
 別の表 `タブ表示権限`)。どのラインでも全タブを出すわけではありません。
