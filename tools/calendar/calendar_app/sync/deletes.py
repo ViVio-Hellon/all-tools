@@ -194,7 +194,23 @@ def forward_pending_deletes(
         natural_key = json.loads(row["natural_key"] or "{}")
         op_id = natural_key.get(OP_ID_KEY)
         if source_id:
-            where: dict[str, object] = {"ID": source_id}
+            # **その番号の行が、消したつもりの行と同じ中身のときだけ消す。**
+            # 共有の ID は使い回される(``INTEGER PRIMARY KEY``)。ほかの端末が先に
+            # 同じ行を消して、そのあと別の登録に同じ番号が振られていると、
+            # 番号だけで消せば**別の人の登録が消えた**(見えないほかのラインの
+            # 休みまで。消した人は気づけない)
+            try:
+                same = _same_row_where(source, table_name, source_id, natural_key)
+            except source_db.SourceError as exc:
+                errors.append(f"{table_name}(seq={row['seq']}): {exc}")
+                continue
+            if same is None:
+                debug_log(
+                    f"sync.deletes.forward_pending_deletes: seq={row['seq']} ID={source_id} は "
+                    "もう無いか、別の登録に使い回されていたので消しません")
+                sent_seqs.append(int(row["seq"]))
+                continue
+            where: dict[str, object] = same
         elif op_id and _has_op_id_column(source, table_name):
             # 送っている最中に消した行。送信IDで**その1行だけ**に当てる
             # (届いていなかったなら何にも当たらない ── それで正しい)
@@ -237,3 +253,42 @@ def _has_op_id_column(source: "source_db.SourceConnection", table_name: str) -> 
         return OP_ID_KEY in source.columns(table_name)
     except source_db.SourceError:
         return False
+
+
+#: ID で消す前に照らし合わせる列。削除の予約に残した自然キーと同じ6つ ──
+#: 同じ人の**別の日**の休み・**別のライン**の同じ文面の連絡に番号が使い回されても当たらない
+SAME_ROW_COLUMNS = ("日付", "区分", "登録内容", "識別コード", "班", "ライン")
+
+
+def _same_row_where(source: "source_db.SourceConnection", table_name: str,
+                    source_id: object, natural_key: dict[str, str]) -> dict[str, object] | None:
+    """共有のその番号の行が、消したつもりの行と同じ中身なら、それだけに当たる条件を返す。
+
+    無い(もう消えている)・中身が違う(番号が使い回された)なら ``None`` ── 消さない。
+    比べるときは取り込みと同じく整えて比べる(手元の値は整えて取り込んだもの。日付は
+    ``yyyy/mm/dd`` にそろえる)。条件には**共有にある値そのもの**を入れ、比べてから
+    消すまでに入れ替わっても当たらない。
+    """
+    from ..importer import _to_date_key
+
+    # 列は名指ししない(前の形の表に無い列があっても、ある列だけで比べる。名指しして
+    # 失敗し続けると、削除が送れないまま残って取り込みまで止まる)
+    rows = source.query(
+        f"SELECT * FROM {source_db.quote_identifier(table_name)} WHERE \"ID\" = ?",
+        [source_id])
+    if not rows:
+        return None
+    current = rows[0]
+    for name in SAME_ROW_COLUMNS:
+        if name not in natural_key or name not in current:
+            continue
+        if name == "日付":
+            same = _to_date_key(current.get(name)) == _to_date_key(natural_key[name])
+        else:
+            same = db.sanitize(current.get(name)) == db.sanitize(natural_key[name])
+        if not same:
+            return None
+    where: dict[str, object] = {"ID": source_id}
+    where.update({name: current[name] for name in SAME_ROW_COLUMNS
+                  if name in current and current[name] is not None})
+    return where

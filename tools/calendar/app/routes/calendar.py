@@ -294,6 +294,18 @@ def delete():
         # 直しが走ると、同じIDが別の行になっていることがある(番号は再利用
         # されうる)。ここを飛ばすと、最悪「別の人の休みを消して、履歴にも
         # その人が残る」── 押した人には気づく手立てが無い
+        # **中身の照らし合わせを、見えるかどうかより先に。** 共有の番号は使い回されるので、
+        # 開いたままの窓の行が、取り込み直しで「見えないほかのラインの登録」に入れ替わって
+        # いることがある。先に見えるかを見ると「ほかのラインの登録は削除できません」と断り、
+        # 自分のラインの人を消そうとした人には訳が分からなかった(「先に変わっていた」が本当)
+        changed = [record_id for record_id in ids
+                   if record_id in marks
+                   and str(marks[record_id]) != presenter.record_mark(records[record_id])]
+        if changed:
+            conn.rollback()
+            return _refuse("gone", "選んだ項目の内容が変わっています。"
+                                   "画面を更新してからやり直してください。", status=409)
+
         # **この端末に見えない登録は消させない**(VER4.2.6)。マス目・内容閲覧と同じ決まり
         # (``record_shown``)── 画面はもう出さないが、古い画面や手で組んだ要求でも通さない
         my_line = user_settings.get_my_line()
@@ -304,14 +316,6 @@ def delete():
                            f"この端末({my_line or 'ライン未設定'})からは、ほかのラインの登録は削除できません。"
                            "ほかのラインの登録を消すのは、作業長の端末か、そのラインの端末です。",
                            status=403)
-
-        changed = [record_id for record_id in ids
-                   if record_id in marks
-                   and str(marks[record_id]) != presenter.record_mark(records[record_id])]
-        if changed:
-            conn.rollback()
-            return _refuse("gone", "選んだ項目の内容が変わっています。"
-                                   "画面を更新してからやり直してください。", status=409)
 
         # ``delete_records_by_ids`` は ``with conn`` で確定させる(この錠ごと)
         count = Repository(conn).delete_records_by_ids(ids)

@@ -567,7 +567,11 @@ async function writeComment(draft, firstNote = "") {
         { label: "登録する", kind: "primary",
           value: () => {
             const area = document.getElementById("cm-text");
-            return area && area.value.trim() ? area.value.trim() : undefined;
+            if (area && area.value.trim()) return area.value.trim();
+            // 空のまま押した。**黙って何もしないと壊れて見える**ので、何をすればよいかを言う
+            nudge("cm-empty", "連絡の内容を入力してから「登録する」を押してください。");
+            if (area) area.focus();
+            return undefined;
           } },
       ],
     });
@@ -608,6 +612,25 @@ function explain(err) {
   }
   return `送れませんでした(${err && err.message ? err.message : String(err)})。`
     + "入力はそのまま残してあります。つながりを確かめて、もう一度「登録する」を押してください。";
+}
+
+/**
+ * 窓を閉じずに、足りないことを窓の中で言う(いちばん上の窓の中身の頭に1つだけ)。
+ * 「次へ」「登録する」が入力不足で閉じないとき、**押しても何も起きない**に見せない。
+ */
+function nudge(id, text) {
+  let note = document.getElementById(id);
+  if (!note) {
+    const bodies = document.querySelectorAll(".modal .modal__body");
+    const body = bodies[bodies.length - 1];
+    if (!body) return;
+    note = document.createElement("div");
+    note.id = id;
+    note.className = "note note--warn";
+    note.setAttribute("role", "alert");
+    body.prepend(note);
+  }
+  note.textContent = text;
 }
 
 function field(label, id) {
@@ -696,7 +719,10 @@ async function deleteDay(date, label) {
       { label: "選んだものを削除", kind: "danger",
         value: () => {
           const checked = [...document.querySelectorAll("#del-list input:checked")];
-          return checked.length ? checked.map((box) => Number(box.value)) : undefined;
+          if (checked.length) return checked.map((box) => Number(box.value));
+          // 何も選ばずに押した。前は黙って何も起きず、押した人には壊れて見えた
+          nudge("del-empty", "削除するものにチェックを入れてから「選んだものを削除」を押してください。");
+          return undefined;
         } },
     ],
   });

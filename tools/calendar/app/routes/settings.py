@@ -407,7 +407,11 @@ def sync_now():
     # 走っている同期があれば、それが終わったあとにもう 1 回回るのを待つ。以前は
     # 「同期中か」を見てから同期を頼むまでの間に背景の同期が始まると、頼みが黙って
     # 捨てられ、同期していないのに「同期しました」と答えた
-    if not service.run_now(receive=True):
+    # **共有にいま取り込み元が見えないときは「同期中」と言わない。** 起動したときに
+    # 共有が落ちていた端末は、見えるまで同期を始められない(``run_now`` が偽)。以前は
+    # それを「いま同期しています」と断り、押した人は待てば済むと思った。見えないことと
+    # 送信待ちの件数を、ふだんの「送れませんでした」と同じ形で返す
+    if not service.run_now(receive=True) and (service.reachable or service.is_busy()):
         return _refuse("busy", "いま同期しています。少し待ってからお試しください。",
                        status=409)
     status = presenter.sync_dict()

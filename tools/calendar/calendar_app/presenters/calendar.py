@@ -95,7 +95,13 @@ def clamp(year: int, month: int) -> tuple[int, int]:
         year, month = year - 1, 12
     elif month > 12:
         year, month = year + 1, 1
-    year = max(MIN_YEAR, min(MAX_YEAR, year))
+    # **端を越えたら端の月で止める。** 前は年だけを収めて月はそのままにしていたので、
+    # 2100年12月で「翌月」(PageDown)を押すと 2101年1月 → 2100年1月 に飛び戻り、
+    # 2000年1月で「前月」を押すと 2000年12月へ飛んでいた
+    if year > MAX_YEAR:
+        return MAX_YEAR, 12
+    if year < MIN_YEAR:
+        return MIN_YEAR, 1
     return year, month
 
 
@@ -232,8 +238,12 @@ def record_mark(record: DayRecord) -> str:
     ID だけで消すと、最悪「別の人の休みを消して、履歴にもその人が残る」。
     そこで画面が見ていた中身をここで印にし、押した時点で合わなければ
     「先に変わっていた」として断る(``app/routes/calendar.py``)。
+
+    **班とラインも入れる。** 連絡は識別コードが「-」で同じなので、文面だけでは、
+    ほかのラインが出した同じ文面(「残業なし」など)に番号が入れ替わっても見分けられない。
+    作業長の端末はどのラインの登録も消せるので、以前はその連絡が黙って消えた。
     """
-    return "\x1f".join([record.kubun, record.naiyou, record.code])
+    return "\x1f".join([record.kubun, record.naiyou, record.code, record.group, record.line])
 
 
 def _delete_item(record: DayRecord) -> dict[str, Any]:
