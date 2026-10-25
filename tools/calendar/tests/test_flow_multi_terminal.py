@@ -751,6 +751,11 @@ class OfflineTests(_Flow):
     def test_落ちているあいだにほかの端末が同じ人を登録していたら_戻ったときに知らせる(self) -> None:
         self.down()
         self.assertEqual(self.b.rest(self.day, "101", shift="2")[0], 200)
+        # 登録のあと裏で走る送信(見えないので失敗する)が**終わってから**共有を戻す。
+        # 待たないと、遅い端末(Windows の CI)ではその送信がまだ走っていて、A だけに
+        # 見せたつもりの一瞬に B の分が先に届いてしまう(知らせが出ない形になる)
+        self.wait_idle(self.b)
+        self.assertEqual(self.b.status()["pending"], 1)
         self.up_for_a_only()
         self.up()
         body = self.b.sync()
