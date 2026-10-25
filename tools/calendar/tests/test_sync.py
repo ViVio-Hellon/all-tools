@@ -349,10 +349,13 @@ class AutoSyncTests(_Base):
         self.assertIs(status.state, SyncState.OFFLINE)
         self.assertIn("見つかりません", status.message)
 
-    def test_未設定なら自動同期オフ(self) -> None:
+    def test_未設定なら参照パスが未設定と出す(self) -> None:
+        """「自動同期オフ」だと自分で切ったように読める(VER4.2.10)。"""
         sync = AutoSync(":memory:", "")
         self.assertFalse(sync.enabled)
-        self.assertIs(sync.sync_once().state, SyncState.DISABLED)
+        status = sync.sync_once()
+        self.assertIs(status.state, SyncState.DISABLED)
+        self.assertEqual(status.describe(), "参照パスが未設定")
 
     def _put_master_member(self) -> None:
         conn = sqlite3.connect(self.master_db)

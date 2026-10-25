@@ -170,7 +170,8 @@ class SyncState(Enum):
     SYNCED = "同期済み"
     PENDING = "送信待ち"
     OFFLINE = "取り込み元へ送れません"
-    DISABLED = "自動同期オフ"
+    #: 参照パス(取り込み元の場所)が決まっていない(VER4.2.9 まで「自動同期オフ」と出していた)
+    DISABLED = "参照パスが未設定"
 
 
 @dataclass
@@ -195,7 +196,8 @@ class SyncStatus:
             base = (f"未送信 {self.pending} 件" if self.pending
                     else "取り込み元へ接続できません")
             return f"{base} / {self.message}" if self.message else base
-        return "自動同期オフ"
+        # 「自動同期オフ」だと、自分で切ったように読める。本当の理由は参照パスが無いこと
+        return "参照パスが未設定"
 
 
 class AutoSync:

@@ -177,6 +177,15 @@ class SyncStatusTests(unittest.TestCase):
         for key in ("state", "text", "pending", "busy", "configured", "offline"):
             self.assertIn(key, body)
 
+    def test_参照パスが未設定なら帯にそう出す(self) -> None:
+        """「自動同期オフ」だと自分で切ったように読める。本当の理由を出す(VER4.2.10)。"""
+        user_settings.set_value(user_settings.KEY_DATA_DB_DIR, "")
+        user_settings.set_value(user_settings.KEY_ACCESS_DATA_PATH, "")
+        _web.reset_sync()
+        body = _web.json_of(self.client.get("/api/sync", headers=_web.auth()))
+        self.assertEqual(body["text"], "参照パスが未設定")
+        self.assertFalse(body["configured"])
+
     def test_未設定なら今すぐ同期を断る(self) -> None:
         user_settings.set_value(user_settings.KEY_DATA_DB_DIR, "")
         user_settings.set_value(user_settings.KEY_ACCESS_DATA_PATH, "")

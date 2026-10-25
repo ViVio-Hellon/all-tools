@@ -18,13 +18,26 @@ __all__ = ["total_pending_count", "reconcile_after_reimport"]
 
 
 def total_pending_count(conn: sqlite3.Connection) -> int:
-    """Access へ未反映の件数 (未送信の追加 + 未転送の削除)。
+    """取り込み元へ未反映の件数を、**操作の数で**数える (VER4.2.10)。
+
+        未送信の件数: 削除1回が「未送信 2件」と数えられます → 操作の数で数える
+
+    削除1件は、取り込み元で「その行を消す」(``_pending_deletes``)と「削除履歴を足す」
+    (削除履歴の送信待ち)の2つを送る。前は両方を足していたので、休み・連絡・削除の
+    3操作で「未送信 4 件」と出ていた。いまは削除をまとめて1件と数える:
+
+        休み・連絡の未送信 + max(消す予約, 削除履歴の未送信)
+
+    (片方だけ送れた削除も1件。まだ送っていない登録を消した場合は、消す予約は無く
+    削除履歴だけが残るので、やはり1件)
 
     ``repository.Repository.pending_sync_count`` / ``autosync`` /
     ``importer`` の 3 箇所から同じ定義を使うための共通実装。
     """
     unsent = outbox_sync.unsent_tables(conn, _specs.WRITE_BACK_SPECS)
-    return sum(unsent.values()) + pending_delete_count(conn)
+    adds = unsent.get(_specs.DATA_SPEC.sqlite_table, 0)
+    history = unsent.get(_specs.DEL_HISTORY_SPEC.sqlite_table, 0)
+    return adds + max(pending_delete_count(conn), history)
 
 
 def reconcile_after_reimport(conn: sqlite3.Connection,

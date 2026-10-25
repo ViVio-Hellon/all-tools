@@ -708,9 +708,9 @@ class OfflineTests(_Flow):
         self.assertIn("送れません", result["message"])
         sync = self.b.status()
         self.assertTrue(sync["offline"])
-        # 休み・連絡・削除の3つ。**削除は「共有から消す」と「削除履歴を足す」の2件に数える**
-        self.assertEqual(sync["pending"], 4, sync)
-        self.assertIn("未送信 4 件", sync["text"])
+        # 休み・連絡・削除の3つ。**操作の数で数える**(削除1回=1件。VER4.2.10)
+        self.assertEqual(sync["pending"], 3, sync)
+        self.assertIn("未送信 3 件", sync["text"])
         # 打った端末では、送れていなくても出ている
         self.assertEqual(sorted(self.b.captions(self.day)),
                          ["[休み] 山田太郎 (1直)", "[連絡] 落ちているあいだの連絡"])

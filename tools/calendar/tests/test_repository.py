@@ -151,8 +151,22 @@ class RepositoryTest(unittest.TestCase):
         )
         self.conn.commit()
         self.repo.delete_records_by_ids([77])
-        # 削除履歴 INSERT (1) + 休み管理からの削除転送予約 (1)
+        # 削除履歴 INSERT と 休み管理からの削除転送予約 は、**削除1回=1件**と数える(VER4.2.10)
+        self.assertEqual(self.repo.pending_sync_count(), 1)
+
+    def test_pending_count_counts_operations(self) -> None:
+        """**操作の数で数える**(VER4.2.10)。送った2行を消し、1件登録したら 3 件(前は 5 件と出た)。"""
+        for rid in (81, 82):
+            self.conn.execute(
+                f'INSERT INTO "{config.TABLE_DATA}" '
+                '("ID","access_id","日付","区分","登録内容","識別コード") VALUES (?,?,?,?,?,?)',
+                (rid, rid, "2026/07/25", config.KUBUN_REST, f"既存の人{rid}", str(rid)),
+            )
+        self.conn.commit()
+        self.repo.delete_records_by_ids([81, 82])
         self.assertEqual(self.repo.pending_sync_count(), 2)
+        self.repo.save_record(D, config.KUBUN_REST, "山田太郎", "10")
+        self.assertEqual(self.repo.pending_sync_count(), 3)
 
     # -- 班員名簿 ------------------------------------------------------
     def test_get_workers_filters_by_line(self) -> None:

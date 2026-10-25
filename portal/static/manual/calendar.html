@@ -14,7 +14,7 @@
   </nav></div></header>
 <main class="page">
   <div class="head">
-    <div class="head__row"><span class="head__mark">暦</span><h1>ライン管理カレンダー</h1><span class="ver">VER4.2.9</span></div>
+    <div class="head__row"><span class="head__mark">暦</span><h1>ライン管理カレンダー</h1><span class="ver">VER4.2.10</span></div>
     <p class="lead">月のカレンダーに、ラインの休み・コメント・連絡を登録して見るツールです。登録したものは共有フォルダを通して、ほかのラインのパソコンにも届きます。</p>
   </div>
 
@@ -65,7 +65,7 @@
       <figcaption>カレンダーの画面(コイルのパソコン。名前はすべて例です)</figcaption>
     </figure>
     <ol class="pins">
-      <li><b>ツールの名前と版</b>(VER4.2.9)。問い合わせのときに読み上げます。</li>
+      <li><b>ツールの名前と版</b>(VER4.2.10)。問い合わせのときに読み上げます。</li>
       <li><b>ライン</b> … このパソコンのライン。カレンダーに出るものはこれで決まります。</li>
       <li><b>同期</b> … ほかのラインとのやりとりの状態。ふだんは緑の「同期済み(日時)」です(<a href="#sync">5. 同期</a>)。</li>
       <li><span class="btnname">暗くする</span> … 画面を暗い色にします(押すと <span class="btnname">明るくする</span> に変わります)。夜勤でまぶしいときに。</li>
@@ -223,7 +223,7 @@
         <tr><td>同期済み (日時)</td><td>送り終わっていて、その時刻の内容を見ています。</td><td>何もしなくてよい。</td></tr>
         <tr><td>送信待ち ○ 件</td><td>送っている途中です。</td><td>少し待つ。</td></tr>
         <tr><td>未送信 ○ 件 / (理由)</td><td>共有フォルダに届かず、送れていません。入力はこのパソコンに残っています。</td><td>そのまま使ってよい。届くようになれば自動で送られます。長く続くときは班長・管理者へ(<a href="#trouble">困ったとき</a>)。</td></tr>
-        <tr><td>自動同期オフ</td><td>取り込み元の場所(参照パス)が決まっていません。<b>登録もできません。</b></td><td>管理者に設定を頼む。</td></tr>
+        <tr><td>参照パスが未設定</td><td>取り込み元の場所(参照パス)が決まっていません。<b>登録もできません。</b></td><td>管理者に設定を頼む。</td></tr>
       </tbody>
     </table></div>
     <h3>今すぐ同期</h3>
@@ -292,12 +292,12 @@
     <h2>8. 困ったとき</h2>
     <div class="two">
       <figure class="shot">
-        <div class="shot__img"><img src="img/calendar-empty.jpg" loading="lazy" width="700" height="150" alt="何も取り込まれていない画面。帯に ライン 未設定・同期 自動同期オフ、カレンダーの上に 班員名簿が取り込まれていません。設定画面から取り込んでください。と出ている">
+        <div class="shot__img"><img src="img/calendar-empty.jpg" loading="lazy" width="700" height="150" alt="何も取り込まれていない画面。帯に ライン 未設定・同期 参照パスが未設定(前の版は 自動同期オフ)、カレンダーの上に 班員名簿が取り込まれていません。設定画面から取り込んでください。と出ている">
           <span class="box" style="left:38%;top:6%;width:14.4%;height:21%"></span>
           <span class="box" style="left:53%;top:6%;width:18.4%;height:21%"></span>
           <span class="box" style="left:29.4%;top:70%;width:70%;height:25.5%"></span>
         </div>
-        <figcaption>まだ何も入っていないとき(赤い枠: ライン 未設定・自動同期オフ・班員名簿の知らせ)</figcaption>
+        <figcaption>まだ何も入っていないとき(赤い枠: ライン 未設定・参照パスが未設定・班員名簿の知らせ。写真は前の版なので「自動同期オフ」と出ています)</figcaption>
       </figure>
       <figure class="shot">
         <div class="shot__img"><img src="img/calendar-offline.jpg" loading="lazy" width="700" height="260" alt="共有フォルダに届かないときの画面。帯の同期に 未送信 1 件 / ファイルが見つかりません… と出て、左の 設定 に ! の印が付いている">
@@ -312,7 +312,7 @@
     <div class="tablewrap"><table>
       <thead><tr><th>こうなった</th><th>こうする</th></tr></thead>
       <tbody>
-        <tr><td>「<b>班員名簿が取り込まれていません。設定画面から取り込んでください。</b>」と出る</td><td>設定の「3. 取り込む」で <span class="btnname">参照パスから取り込む</span> を押します。「自動同期オフ」と出ているときは参照パスが決まっていないので、管理者に頼みます。</td></tr>
+        <tr><td>「<b>班員名簿が取り込まれていません。設定画面から取り込んでください。</b>」と出る</td><td>設定の「3. 取り込む」で <span class="btnname">参照パスから取り込む</span> を押します。「参照パスが未設定」と出ているときは、管理者に頼みます。</td></tr>
         <tr><td>休みを押すと「<b>作業者が居ません</b>」と出る</td><td>班員名簿が入っていないか、このパソコンのラインが合っていません。班長・管理者に、設定の「取り込む」と「この端末のライン」を見てもらいます。</td></tr>
         <tr><td>「<b>登録できません</b> … 取り込み元(連絡帳)が見つからないため、登録できません。」</td><td>参照パスが決まっていません。管理者に設定を頼みます。</td></tr>
         <tr><td>「<b>登録できません</b> … ○○ さんは既に登録済みです。」</td><td>その日にその人はもう登録されています。<span class="btnname">内容閲覧</span> で確かめます。直したいときは削除してから登録し直します。</td></tr>
@@ -337,7 +337,7 @@
     <div class="tip"><b>こつ</b>まだ送れていない登録があれば、送ってから閉じます。送れないまま閉じても登録は消えず、次に開いたときに送られます。</div>
   </section>
 
-  <p class="foot">ライン管理カレンダー VER4.2.9 の操作説明書です。日報複合ツールの「説明書」ボタンから、いつでも開けます。画面写真の名前(作業者01 など)はすべて例です。</p>
+  <p class="foot">ライン管理カレンダー VER4.2.10 の操作説明書です。日報複合ツールの「説明書」ボタンから、いつでも開けます。画面写真の名前(作業者01 など)はすべて例です。</p>
 </main>
 </body>
 </html>
