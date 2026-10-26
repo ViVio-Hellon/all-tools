@@ -129,6 +129,12 @@ def scan_folder(root: str, extensions: List[str], require_prefix: bool = True,
                 category.subcategories.append(sub)
         if category.subcategories:
             inventory.categories.append(category)
+    if errors and not os.path.isdir(root):
+        # **調べている途中で見えなくなった**(共有が落ちた)。以前は途中まで(空のことも)の
+        # 一覧を「見えている一覧」として出し、前回の一覧の控えまでそれで上書きしていた
+        # (次の起動で「前回の一覧」が空になる)。初めから見えなかったときと同じに扱う
+        inventory = Inventory(root=root, root_exists=False, scanned_at=inventory.scanned_at,
+                              errors=errors)
     inventory.scan_ms = int((time.perf_counter() - started) * 1000)
     return inventory
 
@@ -227,6 +233,9 @@ class InspectionService:
 
     def _save_cache(self, inv: Inventory) -> None:
         if not self.cache_path or not inv.root_exists:
+            return
+        if any(os.path.normcase(str(e.get("path", ""))) == os.path.normcase(inv.root) for e in inv.errors):
+            # 点検表フォルダそのものを読めなかった(権限・共有の瞬断)。空の一覧で前回の控えを潰さない
             return
         try:
             os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)

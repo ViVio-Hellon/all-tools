@@ -80,6 +80,8 @@ function titleOf(job) {
   if (job.state === "running") return "印刷中...";
   if (job.state === "cancelled") return "印刷を中止しました";
   if (job.state === "failed") return "印刷できませんでした";
+  // 1件も刷れていないのに「印刷完了」と言わない(Excel が起動できない等。VER2.4.7)
+  if (job.failed && !job.succeeded) return "印刷できませんでした";
   return job.failed ? "印刷完了(エラーあり)" : "印刷完了";
 }
 
@@ -109,7 +111,9 @@ function render(job) {
   delete summary.dataset.state;
   if (!active) {
     // VBA版の結果表示と同じ形
-    let text = `印刷完了: ${job.succeeded} ファイル(${job.copies} 部ずつ)`;
+    let text = job.failed && !job.succeeded
+      ? "印刷できた点検表はありません"
+      : `印刷完了: ${job.succeeded} ファイル(${job.copies} 部ずつ)`;
     if (job.failed) { text += `\nエラー: ${job.failed} ファイル`; summary.dataset.state = "ng"; }
     if (job.state === "cancelled") text += "\n中止したため印刷していない点検表があります";
     // 失敗があれば問い合わせ番号を添える(設定 →「ログ」で1件ずつの原因を辿れる)

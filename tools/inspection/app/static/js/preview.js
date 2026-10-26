@@ -65,6 +65,8 @@ function idle() {
   $("pv-image").removeAttribute("src");
   clearPdf();
   setFitShown(false);
+  // まだ何も出していないので「作り直す」ものが無い。押しても何も起きないボタンにしない
+  $("pv-regenerate").disabled = true;
   $("pv-status").textContent = "点検表を選んでください";
   message([el("b", null, "左の一覧から、プレビューする点検表を選んでください。"),
            el("span", null, "選んだ点検表だけを Excel・Word で作ります。")]);
@@ -73,6 +75,7 @@ function idle() {
 function select(index, force = false, settleMs = 0) {
   if (index < 0 || index >= view.items.length) return;
   view.index = index;
+  $("pv-regenerate").disabled = false;
   [...$("pv-list").children].forEach((node, i) => {
     node.setAttribute("aria-selected", String(i === index));
     if (i === index) node.scrollIntoView({ block: "nearest" });

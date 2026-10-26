@@ -47,7 +47,19 @@ class PreviewCache:
                 meta = json.load(fp)
         except (OSError, ValueError):
             return None
-        if not os.path.isfile(os.path.join(self.dir, meta.get("file", ""))):
+        if not isinstance(meta, dict):
+            return None
+        # **中身が欠けた控えは使わない**(作り直させる)。電源断・掃除ソフトなどで絵・PDF が
+        # 0バイトや途中までになっていても、以前は「控えの画像」として出し続けた(PDF の枠は
+        # 壊れたまま何も言わない)。書いたときの大きさ(bytes)と違えば、無いものとみなす
+        data_path = os.path.join(self.dir, str(meta.get("file", "")))
+        if not os.path.isfile(data_path):
+            return None
+        try:
+            size = os.path.getsize(data_path)
+        except OSError:
+            return None
+        if "bytes" in meta and size != meta["bytes"]:
             return None
         return meta
 

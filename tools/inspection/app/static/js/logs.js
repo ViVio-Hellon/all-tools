@@ -41,6 +41,13 @@ const OPS = {
   "settings.admin_password": "管理者パスワード", "settings.distribution": "配布設定",
   "client.js_error": "画面のエラー", "client.unhandled": "画面のエラー", "client.offline": "接続が切れていた",
   "client.api_error": "画面の通信エラー",
+  // 断りは要求の宛先から名前を作る(app/__init__.py の op_name)。ここに無いと
+  // 「最近のエラー・断り」に `settings.admin-password` のような宛先がそのまま出ていた
+  "settings.admin-password": "管理者パスワード", "settings.distribution.export": "配布設定の書き出し",
+  "settings.distribution.reapply": "配布設定の読み込み直し", "settings.distribution.remove": "配布設定の削除",
+  "logs": "ログ", "logs.find": "問い合わせ番号で探す", "logs.open-folder": "ログのフォルダを開く",
+  "client-log": "画面の記録", "fs.list": "フォルダの参照", "printer": "プリンター",
+  "inventory.status": "一覧の確認", "diagnostics": "診断情報", "health": "生存確認", "alive": "心拍",
 };
 const RESULTS = { ok: "OK", ng: "NG", refused: "断り", info: "記録" };
 

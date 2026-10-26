@@ -154,9 +154,9 @@ async function browseTo(path) {
   }
   for (const f of data.excel_files) list.appendChild(el("li", "fs__file", f));
   if (data.excel_count > data.excel_files.length) {
-    list.appendChild(el("li", "fs__file", `ほか Excel ${data.excel_count - data.excel_files.length} 件`));
+    list.appendChild(el("li", "fs__file", `ほか Excel・Word ${data.excel_count - data.excel_files.length} 件`));
   }
-  $("fs-note").textContent = data.message || `フォルダ ${data.dirs.length} 件 ・ Excel ${data.excel_count} 件`;
+  $("fs-note").textContent = data.message || `フォルダ ${data.dirs.length} 件 ・ Excel・Word ${data.excel_count} 件`;
 }
 
 async function saveFolder(body) {

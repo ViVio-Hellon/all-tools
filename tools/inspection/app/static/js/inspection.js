@@ -231,7 +231,12 @@ function applyInventory(inv, note) {
   }
   renderAll();
   if (note && reachable) toast(note, "ok");
-  else if (note) toast("点検表フォルダが見えません。選んだものはそのまま残しています", "warn");
+  // 選んでいないのに「選んだものは残しています」と言わない(初めての起動で迷わせた)
+  else if (note) {
+    toast(state.selection.length
+      ? "点検表フォルダが見えません。選んだものはそのまま残しています"
+      : "点検表フォルダが見えません。右上の「設定」→「点検表フォルダ」で確かめてください", "warn");
+  }
 }
 
 async function pollScan(overlay = true) {

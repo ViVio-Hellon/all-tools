@@ -92,7 +92,8 @@ def current_business() -> Any:
 def op_name(path: str) -> str:
     """出来事の記録に使う操作の名前。`/api/print/cancel` → `print.cancel`。"""
     name = path[len("/api/"):] if path.startswith("/api/") else path.strip("/")
-    name = name.split("/image/")[0]               # 画像のキーは名前に入れない
+    # 画像・PDF のキーは名前に入れない(PDF は `preview.pdf.<キー>` と出ていた)
+    name = name.split("/image/")[0].split("/pdf/")[0]
     return name.replace("/", ".") or "page"
 
 
