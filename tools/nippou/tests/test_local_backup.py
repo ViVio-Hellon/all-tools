@@ -189,6 +189,37 @@ class BackupServiceTests(unittest.TestCase):
         self.assertEqual(mai_of(self.a, key), "15")
         self.assertEqual(lb.pull(self.a, "L-1").pulled, 0)       # 揃ったら何もしない
 
+    def test_起動のとき_ほかのPCが同じ中身を送っていれば_送った印だけ揃える(self) -> None:
+        """A が落ちて、次の直の B が控えから受け取った A のページを共有へ送った。翌朝 A を起動すると、
+        A の手元ではまだ未送信のままで、送り済みの直が赤い帯で次の直を止めていた
+        (通しの試験 `test_flow_multi_terminal.B_PreviousShiftTests`)。"""
+        key = save(self.a)
+        lb.flush(self.a)
+        self.assertEqual(lb.pull(self.b, "L-1").pulled, 1)      # B の起動: A のページを受け取る
+        self.b.mark_synced(key)                                  # B が共有へ送った
+        lb.flush(self.b)
+        result = lb.pull(self.a, "L-1")
+        self.assertEqual((result.pulled, result.adopted), (0, 1))
+        self.assertEqual(self.a.pending_sync_headers(), [], "B が送ったページが A では未送信のまま")
+        self.assertEqual(mai_of(self.a, key), "10")
+        self.assertEqual(lb.pull(self.a, "L-1").adopted, 0)     # 揃ったら何もしない
+
+    def test_起動のとき_送り済みでも中身が違えば_送った印を付けない(self) -> None:
+        """控えの「共有へ済」が手元と違う中身なら、手元の未送信はそのまま(送ったのは別の中身)。"""
+        key = save(self.b, mai="10")
+        self.b.mark_synced(key)
+        lb.flush(self.b)
+        save(self.a, mai="11")
+        self.a.clear_backup_pending([key])
+        self.a.conn.execute("UPDATE daily_header SET saved_at='2000-01-01T00:00:00'")  # 古いことにする
+        self.a.conn.commit()
+        result = lb.pull(self.a, "L-1")
+        self.assertEqual((result.pulled, result.adopted), (1, 0))  # 新しい控えが入る(今までどおり)
+        a2 = self.pc("a2")
+        save(a2, mai="12")                                        # 控えより新しい・違う中身
+        self.assertEqual(lb.pull(a2, "L-1").adopted, 0)
+        self.assertEqual(len(a2.pending_sync_headers()), 1)
+
     def test_控えの直を手元へ入れる_手元のほうが新しいページは触らない(self) -> None:
         p1 = save(self.a, page=1, mai="10")
         p2 = save(self.a, page=2, mai="20")

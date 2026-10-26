@@ -64,6 +64,29 @@ class DecideTests(unittest.TestCase):
         saved = {("3直", date(2026, 10, 20)): rows((5, 1))}
         self.assertEqual(lot_carry.walk_back("2直", TODAY, lambda s, d: saved.get((s, d), []), LOT), [])
 
+    def test_ロット番号が空の続きの行も数える(self) -> None:
+        """紙の書き方そのまま: 1行目だけ LOTA、2・3行目は空(続きの行)。15枚と数える。
+
+        同じロット№は1ページに2度打てない(保存で LOT の重複と断る)ので、続きの行は必ず空です。
+        前は1行目の5枚しか数えず「1直で5枚作業しています(20枚 → 15枚)」と訊いていた。
+        ほかのロットの行(とその続き)・休憩の行は数えない。ページをまたいでも続く。
+        """
+        def detail(page, n, lot, mai="", tut=""):
+            return DetailRecord(report_date="", line="", shift="", page=page, row_no=n, lot=lot,
+                                mai=mai, tut=tut, con=str(int(mai) * int(tut)) if mai else "")
+
+        first = [detail(1, 1, LOT, "5", "1"), detail(1, 2, "", "5", "1"), detail(1, 3, "", "5", "1")]
+        self.assertEqual(lot_carry.sheets_of(first, LOT), 15)
+        mixed = [detail(1, 3, "", "4", "1"), detail(1, 1, "H9999S0", "7", "1"),   # 並びは行番号で決める
+                 detail(1, 2, "", "7", "1"), detail(1, 4, LOT, "5", "1"), detail(1, 5, ""),   # 休憩の行
+                 detail(1, 6, "", "5", "1"), detail(2, 1, "", "2", "1")]          # 次のページの1行目も続き
+        self.assertEqual(lot_carry.sheets_of(mixed, LOT), 12)
+        saved = {("1直", TODAY): first}
+        worked = lot_carry.walk_back("2直", TODAY, lambda s, d: saved.get((s, d), []), LOT)
+        got = lot_carry.decide(row=1, lot_no=LOT, ken="20", worked=worked, today=TODAY)
+        self.assertIn("1直で15枚作業しています", got["message"])
+        self.assertEqual(got["next"], "5")
+
     def test_枚数が空の行は個装単位と包数で数える(self) -> None:
         d = DetailRecord(report_date="", line="", shift="", page=1, row_no=1, lot=LOT, mai="5", tut="2")
         self.assertEqual(lot_carry.sheets_of([d], LOT), 10)

@@ -646,7 +646,7 @@ def _restore_from_backup(srv) -> None:
             line = work_context.get_context().terminal_line
             if work_context.terminal_line_decided():
                 result = local_backup.pull(repo, line)
-                if result.pulled:
+                if result.pulled or result.adopted:
                     log().info("%s", result.message)
             local_backup.flush(repo)
         finally:

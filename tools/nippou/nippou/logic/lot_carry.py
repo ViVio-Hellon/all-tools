@@ -56,11 +56,24 @@ def _num(value: object) -> float:
 
 
 def sheets_of(details: Iterable, lot_no: str) -> int:
-    """その直の行のうち、同じロット番号の行の枚数の合計(CON、空なら MAI × TUT)。"""
+    """その直の行のうち、同じロット番号の行の枚数の合計(CON、空なら MAI × TUT)。
+
+    **ロット№が空の行は、上の行のロットの続き**です(紙の書き方。上の例の2・3行目)。
+    1ページに同じロット№は2度打てない(保存で「LOTが重複しています」と断る)ので、
+    続きの行を数えないと、分けて打ったロットは最初の1行ぶんしか数えられません
+    (15枚のところを「5枚作業しています」と訊いていました)。数え方は梱包数の確かめ
+    (`save_checks.check_pack_count`、VBA の `Kara`)と同じで、ページをまたいでも続きます。
+    """
     lot_no = (lot_no or "").strip()
     total = 0.0
-    for d in details:
-        if (getattr(d, "lot", "") or "").strip() != lot_no:
+    current = ""
+    ordered = sorted(details, key=lambda d: (int(getattr(d, "page", 0) or 0),
+                                             int(getattr(d, "row_no", 0) or 0)))
+    for d in ordered:
+        mine = (getattr(d, "lot", "") or "").strip()
+        if mine:
+            current = mine
+        if not lot_no or current != lot_no:
             continue
         con = _num(getattr(d, "con", ""))
         total += con if con else _num(getattr(d, "mai", "")) * _num(getattr(d, "tut", ""))

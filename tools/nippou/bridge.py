@@ -315,6 +315,35 @@ def make_server_class():
 # ==================================================================
 # 入口
 # ==================================================================
+def _launch_log_folder() -> str:
+    """起動の記録を**実際に書いた**フォルダ(外枠の失敗の画面の「ログの場所」に出る)。
+
+    v4.44.5 から起動の記録は「ログの出力パス」の nippou フォルダ(届かなければこの端末の
+    logs\\nippou)へ書く。前はここだけ手元の logs を案内していて、失敗の画面の「ログの場所」を
+    開いても起動の失敗が見つからなかった。
+    """
+    try:
+        import start_app
+        for handler in start_app.log().handlers:
+            path = getattr(handler, "_nippou_log_path", None)
+            if path:
+                return str(Path(path).parent)
+    except Exception:                             # noqa: BLE001 - 失敗の報告で失敗しない
+        pass
+    try:
+        from nippou import logging_setup
+        folder = logging_setup.launch_log_dir()
+        if folder is not None:
+            return str(folder)
+    except Exception:                             # noqa: BLE001
+        pass
+    try:
+        from nippou import app_config
+        return str(app_config.local_dir("logs"))
+    except Exception:                             # noqa: BLE001
+        return ""
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     proto = _protect_stdout()
     writer = FrameWriter(proto)
@@ -324,15 +353,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     def fatal(error: "start_app.StartupError") -> int:
         try:
-            from nippou import app_config
-            log_dir = str(app_config.local_dir("logs"))
-        except Exception:                         # noqa: BLE001 - 失敗の報告で失敗しない
-            log_dir = ""
-        try:
             start_app.log().error("起動に失敗: %s / %s", error, error.hint)
         except Exception:                         # noqa: BLE001
             pass
-        writer.event("fatal", message=str(error), hint=error.hint, log_dir=log_dir)
+        writer.event("fatal", message=str(error), hint=error.hint, log_dir=_launch_log_folder())
         return 1
 
     try:

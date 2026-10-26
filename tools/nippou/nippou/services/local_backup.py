@@ -190,6 +190,11 @@ def _newer(theirs: Optional[tuple[str, str]], mine: Optional[tuple[str, str]]) -
     return theirs[0] > mine[0] and theirs[1] != mine[1]
 
 
+def _sent_same(sent: Optional[tuple[str, str]], mine: Optional[tuple[str, str]]) -> bool:
+    """控えで共有へ済のページ(`sent` = 送った時刻と指紋)が、手元のいまの中身と同じか。"""
+    return bool(sent and mine and mine[1] and sent[1] == mine[1])
+
+
 def _copy_page(src: sqlite3.Connection, dst: sqlite3.Connection, key: PageKey) -> bool:
     """`src` のそのページで `dst` を置き換える(取引は呼ぶ側)。`src` に無ければ消す。
 
@@ -218,6 +223,8 @@ class Result:
     removed: int = 0                # 控えから消したページ
     pulled: int = 0                 # 控えから手元へ戻したページ
     pending: int = 0                # まだ写せていないページ
+    #: ほかのPCが同じ中身を共有へ送っていたので、送った印だけ揃えたページ(起動のとき)
+    adopted: int = 0
     error: str = ""
     shifts: list[ShiftKey] = field(default_factory=list)   # 戻した直(集計を作り直す)
 
@@ -232,6 +239,8 @@ class Result:
             parts.append(f"{self.removed}ページを消しました")
         if self.pulled:
             parts.append(f"{self.pulled}ページを手元へ戻しました")
+        if self.adopted:
+            parts.append(f"ほかのPCが共有へ送っていた{self.adopted}ページを送り済みにしました")
         return "控え(LocalBackup): " + ("・".join(parts) if parts else "変わりありません")
 
     def as_dict(self) -> dict[str, Any]:
@@ -372,21 +381,40 @@ def pull(repo: NippouRepository, line: str) -> Result:
     to_send: list[PageKey] = []
     with reader(line) as backup:
         theirs: dict[PageKey, tuple[str, str]] = {}
+        #: 控えで「共有へ済」のページ → (送った時刻, 送ったときの指紋)
+        sent_there: dict[PageKey, tuple[str, str]] = {}
         if backup is not None:
             for r in backup.conn.execute(
-                    f"SELECT report_date, line, shift, page, saved_at, content_hash"
-                    f" FROM {HEADER} WHERE line=?", (line,)):
-                theirs[(r[0], r[1], r[2], int(r[3]))] = (str(r[4] or ""), str(r[5] or ""))
+                    f"SELECT report_date, line, shift, page, saved_at, content_hash,"
+                    f" dirty, synced_at, synced_hash FROM {HEADER} WHERE line=?", (line,)):
+                key = (r[0], r[1], r[2], int(r[3]))
+                theirs[key] = (str(r[4] or ""), str(r[5] or ""))
+                if not r[6] and r[8]:
+                    sent_there[key] = (str(r[7] or ""), str(r[8]))
         mine = {(r[0], r[1], r[2], int(r[3])): (str(r[4] or ""), str(r[5] or ""))
                 for r in repo.conn.execute(
                     f"SELECT report_date, line, shift, page, saved_at, content_hash"
                     f" FROM {HEADER} WHERE line=?", (line,))}
+        unsent_here = {(r[0], r[1], r[2], int(r[3])) for r in repo.conn.execute(
+            f"SELECT report_date, line, shift, page FROM {HEADER} WHERE line=? AND dirty=1",
+            (line,))}
         for key, stamp in theirs.items():
             if _newer(stamp, mine.get(key)):
                 with repo.conn:
                     _copy_page(backup.conn, repo.conn, key)
                 result.pulled += 1
                 pulled.add(key[:3])
+            elif key in unsent_here and _sent_same(sent_there.get(key), mine.get(key)):
+                # **同じ中身を、ほかのPCが共有へ送ってくれていた**(この端末が止まって
+                # いるあいだに、次の直の端末が控えから受け取って送った)。送った印だけ
+                # 揃えます ── 揃えないと、送り済みの直がこの端末では「共有へ出ていません」
+                # の赤い帯になり、次の直の入力まで止めます
+                with repo.conn:
+                    repo.conn.execute(
+                        f"UPDATE {HEADER} SET dirty=0, synced_at=?, synced_hash=?"
+                        f" WHERE {_WHERE} AND dirty=1 AND content_hash=?",
+                        (*sent_there[key], *key, sent_there[key][1]))
+                result.adopted += 1
         for key, stamp in mine.items():
             if key not in theirs or _newer(stamp, theirs[key]):
                 to_send.append(key)

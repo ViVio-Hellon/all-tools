@@ -65,6 +65,27 @@ function requested() {
   }
 }
 
+/**
+ * 名指し(`?tab=`)で開いた画面で別の面を選んだら、**名指しもその面に書き換える。**
+ *
+ * 名指しは覚えた面より強いので、残したままだと、描き直し(`nav.refresh` は
+ * いまのアドレスを取り直す)のたびに名指しの面へ引き戻されます。日報入力の
+ * 「ラインを決める」(`?tab=terminal`)から来て参照設定の面で鍵を開けると、
+ * 開けた途端に「この端末と配布」へ戻されていました。名指しがこの組の面を
+ * 指しているときだけ書き換えます(面の中の面は触らない)。
+ */
+function followAddress(tabs, key) {
+  try {
+    const url = new URL(location.href);
+    const named = url.searchParams.get("tab");
+    if (!named || named === key || !tabs.some((t) => t.dataset.key === named)) return;
+    url.searchParams.set("tab", key);
+    history.replaceState(history.state, "", url);
+  } catch (e) {
+    // アドレスを書き換えられないだけ。面は選べている
+  }
+}
+
 function barTabs(root) {
   return [...root.querySelectorAll(":scope > .tabs__bar > .tab")];
 }
@@ -86,6 +107,7 @@ export function select(root, key) {
     if (panel) panel.hidden = !on;
   }
   remember(root.dataset.tabs, key);
+  followAddress(tabs, key);
   root.dispatchEvent(new CustomEvent("tab:select", { detail: { key },
                                                      bubbles: true }));
   return true;

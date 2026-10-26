@@ -556,9 +556,14 @@ async function addColumn() {
 
 export function start() {
   if (!byId("m-list")) return;      // この画面ではない
+  // **見ていた表を持ち越す。** 鍵を開けると設定画面ごと描き直す(`settings.js` の
+  // `refreshKeeping`)ので、ここで先頭の表へ戻すと、班員名簿を選んで鍵を開けた人が
+  // 別の表(ライン毎目標など)の「1行足す」を押すことになっていました。
+  // 表が無くなっていればサーバが先頭の表を返します
+  const kept = { file: state?.file || "", table: state?.table || "" };
   state = null;
   editing = null;
-  load({ file: "", table: "", q: "", sort: "", sort_dir: "asc" });
+  load({ ...kept, q: "", sort: "", sort_dir: "asc" });
 
   // 「ファイルの状態」の面から「表を見る」で飛んでくる
   for (const btn of document.querySelectorAll("[data-master]")) {

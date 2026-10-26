@@ -153,12 +153,12 @@ function paintPlanInto(box, plan, result) {
     const about = document.createElement("p");
     about.className = "lead";
     about.innerHTML =
-      "このCSVの中身を、<b>どの日報として入れるか</b>の一覧です"
+      "このファイル(Excel・CSV)の中身を、<b>どの日報として入れるか</b>の一覧です"
       + "(1行が紙1ページぶん)。<br>"
       + "<b>新しく入る</b> … その日報は手元にまだありません。そのまま足します<br>"
       + "<b>置き換え</b> … 同じ 日付・ライン・直・ページ が既にあります。"
       + "<b>中身をまるごと入れ替えます</b>"
-      + "(いまある行は消えて、CSVのほうだけが残ります)";
+      + "(いまある行は消えて、ファイルのほうだけが残ります)";
     box.append(about);
 
     const table = document.createElement("table");
@@ -243,6 +243,30 @@ function importPath() {
   return (document.getElementById("import-path")?.value || "").trim();
 }
 
+/** 下見を出した道とライン(`pathKey`)。**下見を出していない道は「取り込む」で入れない。** */
+let previewedPath = "";
+
+function pathKey() {
+  return `${importPath()}\n${importLine()}`;
+}
+
+/** 道を打って渡したときの下見。通れば、その道とラインを覚える。 */
+async function previewPath() {
+  importNote("");
+  previewedPath = "";
+  try {
+    const body = await api.post("/api/settings/import/preview",
+                                { path: importPath(), line: importLine() });
+    paintPlan(body);              // シートのラインが選ぶ欄に入ることがある
+    if (body.ok) previewedPath = pathKey();
+    else importNote(body.message, "warn");
+  } catch (err) {
+    paintPlan(null);
+    importNote(err.message, "error");
+  }
+  showPicked();
+}
+
 function importLine() {
   return document.getElementById("import-line")?.value || "";
 }
@@ -319,6 +343,7 @@ function watchProgress(on) {
 }
 
 async function applyImport() {
+  previewedPath = "";                   // 入れたら(断られても)下見からやり直す
   watchProgress(true);
   try {
     const body = await api.post("/api/settings/import/apply", {
@@ -372,9 +397,11 @@ function showPicked() {
       ? `${picked.length}本を取り込む` : "取り込む";
   }
   if (why) {
-    why.textContent = ready
-      ? "押すと入ります(入る前に下見の結果が出ます)"
-      : "上でファイルを渡すと押せます";
+    // 道を打っただけで下見がまだなら、押すとまず下見(`import-go` の説明)
+    const first = !picked.length && path !== "" && previewedPath !== pathKey();
+    why.textContent = !ready ? "上でファイルを渡すと押せます"
+      : first ? "押すと、まず中身(下見)を出します。もう一度押すと入ります"
+      : "押すと入ります(下見は上に出ています)";
   }
 }
 
@@ -489,10 +516,13 @@ function paintTargets(view) {
   const body = document.querySelector("#line-targets table.list tbody");
   if (body) {
     body.replaceChildren();
+    // **画面を描いたとき(`settings.html`)と同じ3列で描く。** 前は「出どころ」の列を
+    // 落としていたので、読み直すと「CSVがマスタに勝っている」が消え、ラインも
+    // 正規の呼び名でなくコードで出ていました
     for (const r of view.rows || []) {
       const tr = document.createElement("tr");
       const name = document.createElement("td");
-      name.textContent = r.line;
+      name.textContent = lineLabel(r.line);
       const value = document.createElement("td");
       if (r.text) {
         value.innerHTML = `<b></b> 枚`;
@@ -503,7 +533,22 @@ function paintTargets(view) {
         lead.textContent = "未設定(このラインには目標線を引きません)";
         value.appendChild(lead);
       }
-      tr.append(name, value);
+      const origin = document.createElement("td");
+      if (r.origin) {
+        origin.textContent = r.origin;
+        if (r.origin === "CSV" && r.master_text) {
+          const won = document.createElement("span");
+          won.className = "lead";
+          won.textContent = `(マスタの ${r.master_text} 枚に勝っています)`;
+          origin.append(" ", won);
+        }
+      } else {
+        const none = document.createElement("span");
+        none.className = "lead";
+        none.textContent = "―";
+        origin.appendChild(none);
+      }
+      tr.append(name, value, origin);
       body.appendChild(tr);
     }
     // **知らないライン名も残す。** 打ち間違いはここでしか気づけない
@@ -515,7 +560,9 @@ function paintTargets(view) {
       const value = document.createElement("td");
       value.className = "lead";
       value.textContent = `${r.text} 枚 ── どのラインにも当たりません`;
-      tr.append(name, value);
+      const origin = document.createElement("td");
+      origin.textContent = r.origin || "";
+      tr.append(name, value, origin);
       body.appendChild(tr);
     }
   }
@@ -952,6 +999,7 @@ function wireReshift() {
 }
 
 function wireImport() {
+  previewedPath = "";                   // 描き直した画面には下見が出ていない
   const drop = document.getElementById("import-drop");
   const input = document.getElementById("import-files");
 
@@ -983,30 +1031,29 @@ function wireImport() {
   }
 
   // 決定。渡し方がどちらでも、押すものは1つ
+  //
+  // **道を打って渡したときは、下見を挟んでから入れる。** その道の下見をまだ
+  // 出していなければ、1回目は下見を出して止まります(入れるのは2回目か、
+  // 下見の「入れる」)。前はそのまま入れていて、置き換わるページの一覧を
+  // 見ないまま、いまある日報が丸ごと入れ替わっていました(ファイルを渡した
+  // ときは、渡した時点で下見が出ます)
   document.getElementById("import-go")?.addEventListener("click", () => {
     if (picked.length) { sendFiles(false); return; }
-    // 道を打って渡したときは、下見を挟んでから入れる
-    if (importPath()) applyImport();
+    if (!importPath()) return;
+    if (previewedPath && previewedPath === pathKey()) applyImport();
+    else previewPath();
   });
   // 道を打ったときも押せるようにする(渡し方は2通りある)
   document.getElementById("import-path")?.addEventListener("input", showPicked);
+  document.getElementById("import-line")?.addEventListener("change", showPicked);
   showPicked();
 
   document.getElementById("import-preview")?.addEventListener(
-    "click", async () => {
-      importNote("");
+    "click", () => {
       // 選んだ・落としたファイルがあれば、それを見る(道を打った欄は空のまま)。
       // 以前は道だけを送って「指定してください」と断られ、出ていた下見まで消えた
-      if (picked.length) { sendFiles(true); return; }
-      try {
-        const body = await api.post("/api/settings/import/preview",
-                                    { path: importPath(), line: importLine() });
-        paintPlan(body);
-        if (!body.ok) importNote(body.message, "warn");
-      } catch (err) {
-        paintPlan(null);
-        importNote(err.message, "error");
-      }
+      if (picked.length) { importNote(""); sendFiles(true); return; }
+      previewPath();
     });
 
   document.getElementById("import-template")?.addEventListener(
@@ -1238,6 +1285,16 @@ export function start() {
         toast(body.message, "ok");
         refreshKeeping();
       } catch (err) { toastError(err); }
+    });
+  }
+
+  // **Enter でも開ける。** 合言葉を打って Enter を押す人がほとんどで、何も
+  // 起きないと「効いていない」に見えます(VC長さ計算の鍵は前から Enter で開く)
+  for (const pw of document.querySelectorAll(".lockbar [data-lock-pw]")) {
+    pw.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      pw.closest(".lockbar")?.querySelector("[data-lock-on]")?.click();
     });
   }
 

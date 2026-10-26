@@ -919,10 +919,14 @@ function paintNeedsWorker(view) {
   // 作業者のカードは**ラインが決まっていないときだけ**伏せる(作業者を
   // 選ばせる帯では、そこを触ってほしいので開けておく)
   const card = document.querySelector('[data-step-for="worker"]');
+  // **`data-need-worker` のボタンは作業者のカードの中にあります**(全停入力・次ページ発行・
+  // 時間を割り振る)。カードの側でも数えると、上で止めたものを `noLine`(false)で外して
+  // しまい、**作業者を選ぶ前でも押せていました**。カードの側からは除きます
   const locked = [
     ...[...(grid ? grid.querySelectorAll("input, select, textarea, button") : []),
         ...document.querySelectorAll("[data-need-worker]")].map((el) => [el, need]),
     ...[...(card ? card.querySelectorAll("input, select, textarea, button") : [])]
+      .filter((el) => el.dataset.needWorker === undefined)
       .map((el) => [el, noLine]),
   ];
   const why = noLine
@@ -2232,8 +2236,13 @@ async function maybeAutosave() {
   } catch (err) {
     // 自動保存の失敗はトーストにしない(操作していない場面で驚かせる)。
     // 明示的な保存のときに同じ理由が出る
+    //
+    // **理由は添えます。** 「自動保存できませんでした」だけでは、何を直せば書けるように
+    // なるのか分かりません(LOT の重複は自動保存も断ります ── 直すまで打ちかけは手元に
+    // 残りません)。理由はサーバの断りの一行目(通信が切れたときは api.js の文言)
     if (note) {
-      note.textContent = "自動保存できませんでした";
+      const why = String(err?.message || "").split("\n")[0];
+      note.textContent = why ? `自動保存できませんでした: ${why}` : "自動保存できませんでした";
       note.dataset.state = "failed";
     }
   }
@@ -2322,7 +2331,7 @@ async function openFinding(at) {
  * 「共有へ保存」に断られた)が、**見た目は1つ**にします ── 同じ7項目
  * なので、場所や形が変わると別のものに見えます。
  */
-function showFindings(message, ok, findings) {
+function showFindings(message, ok, findings, source = "") {
   const panel = document.getElementById("check-panel");
   const head = document.getElementById("check-head");
   const list = document.getElementById("check-list");
@@ -2330,7 +2339,29 @@ function showFindings(message, ok, findings) {
   head.textContent = message;
   head.className = `msg msg--${ok ? "ok" : "error"}`;
   list.replaceChildren(...(findings || []).map(findingItem));
+  // どこから出したか(`save` … 保存(確定)・次ページ発行に断られた)。下の `dropSaveRefusal`
+  panel.dataset.source = source;
   panel.hidden = false;
+}
+
+/**
+ * 「保存(確定)」に断られたときの欄を下げる(**次の保存が通った・別の理由で断られた**とき)。
+ *
+ * 前は残したままでした。直して「保存しました」と出ても、すぐ上に赤い「保存できません ──
+ * 梱包数が…」が出たままで、**直したのにまだ駄目なのか**と読めます。別の理由(開始と終了が
+ * 同じ)で断られたときも、直したあとの古い断りが並んだままでした。
+ *
+ * 下げるのは保存の断りだけです。「この直をチェック」・共有へ保存の断りは、押した人が
+ * 読み終えるまで残します(保存しただけでは直っていないことがあるので)。
+ */
+function dropSaveRefusal() {
+  const panel = document.getElementById("check-panel");
+  if (panel && panel.dataset.source === "save") panel.hidden = true;
+}
+
+/** 断りの一文の頭(1行目)。中身は下の一覧に1件ずつ出るので、見出しでは繰り返さない */
+function firstLine(message) {
+  return String(message || "").split("\n")[0];
 }
 
 /**
@@ -2459,8 +2490,11 @@ async function saveNow(shiftChoice = "") {
     // 画面ぜんぶを塗り直していて、押してから打った1文字が消えていました
     paint(body, { since });
     if (body.saved) noteSaved(sent, typed);
-    // 書けたのだから、帯の知らせはもう役目を終えている
-    if (body.saved) showShiftMoved("");
+    // 書けたのだから、帯の知らせも前に断られた欄も、もう役目を終えている
+    if (body.saved) {
+      showShiftMoved("");
+      dropSaveRefusal();
+    }
     showExport(body.export);
     return Boolean(body.saved);
   } catch (err) {
@@ -2485,11 +2519,14 @@ async function saveNow(shiftChoice = "") {
     // トーストは数秒で消えるので、7項目の断りをそこだけに載せると、
     // 目を離した隙に「なぜ保存できないのか」が画面から消えます
     if (err.body?.check_findings?.length) {
-      showFindings(err.body.message, false,
-                    withAt(err.body.check_findings, err.body));
+      showFindings(firstLine(err.body.message), false,
+                    withAt(err.body.check_findings, err.body), "save");
       if (err.body.sound) {
         playKey(err.body.sound).catch(() => { /* 文言は出ている */ });
       }
+    } else {
+      // 別の理由(行の時刻・LOT の重複など)で断られた。前の保存の断りはもう古い
+      dropSaveRefusal();
     }
     toastError(err);
     return false;
@@ -3141,8 +3178,8 @@ export function start() {
       const since = editSeq;
       const body = await send(url, { ...collect(), focus_row: focusRow });
       if (!live(mine)) return;
+      // 知らせ(`body.message`)は `paint` が出す。ここでも出すと同じ文が2つ並ぶ
       paint(body, { since });
-      toast(body.message, "ok");
       maybeAutosave();
     } catch (err) {
       toastError(err);
@@ -3219,8 +3256,8 @@ export function start() {
       // 発行も**確定の入口**なので、断りは「この直をチェック」と
       // 同じ場所へ。トーストだけだと、消えたあとに理由が残りません
       if (err.body?.check_findings?.length) {
-        showFindings(err.body.message, false,
-                    withAt(err.body.check_findings, err.body));
+        showFindings(firstLine(err.body.message), false,
+                    withAt(err.body.check_findings, err.body), "save");
         if (err.body.sound) {
           playKey(err.body.sound).catch(() => { /* 文言は出ている */ });
         }

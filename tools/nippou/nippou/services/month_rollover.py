@@ -55,6 +55,9 @@ class RolloverResult:
     #: **書き出さずに見送った**(その月にまだ共有へ送っていない直がある)。
     #: 共有へ保存の直後だけ(`catch_up(hold_pending=True)`。v4.35.0)
     held: bool = False
+    #: **この端末では書き出さなかったライン** → 共有にあって手元に無いページの数
+    #: (この端末のラインではなく、手元にはその月の一部しか無い ── `_partial_lines`)
+    skipped: dict[str, int] = field(default_factory=dict)
 
     @property
     def ran(self) -> bool:
@@ -69,11 +72,15 @@ class RolloverResult:
                     "まだ共有へ送っていないものがあります"
                     "(送り終えたあとの共有へ保存で書き出します)")
         if not self.exports:
+            if self.skipped:
+                return f"{self.decision.label}: {self._skipped_text()}"
             return f"{self.decision.label}: 書き出すデータがありませんでした"
         where = self.exports[0].folder.parent
         head = (f"{self.decision.label} を書き出しました"
                 f"（{len(self.exports)}ライン / {sum(e.rows for e in self.exports)}行）"
                 f"\n{where}")
+        if self.skipped:
+            head += f"\n{self._skipped_text()}"
         if self.failed:
             return (f"{head}\n**書き出しが途中で終わりました。**"
                     "書き出し先に届いているか確かめてください")
@@ -84,11 +91,21 @@ class RolloverResult:
             tail += "。共有へ送っていないページが残っています"
         return f"{head}\n{tail}"
 
+    def _skipped_text(self) -> str:
+        from ..logic import line_names
+
+        names = "・".join(line_names.label(ln) for ln in self.skipped)
+        missing = sum(self.skipped.values())
+        return (f"{names} はこの端末では書き出しません ── この端末にはその月の一部しか無く"
+                f"(共有にある{missing}ページが手元にありません)、書き出すと共有の月の書き出しから"
+                "そのぶんが消えるためです。書き出しはそのラインの端末が行います")
+
     def as_dict(self) -> dict:
         return {"decision": self.decision.as_dict(), "ran": self.ran,
                 "exports": [e.as_dict() for e in self.exports],
                 "failed": self.failed, "pending": self.pending,
-                "held": self.held, "message": self.message}
+                "held": self.held, "skipped": dict(self.skipped),
+                "message": self.message}
 
 
 def check(repo: NippouRepository, today: Optional[date] = None) -> RollDecision:
@@ -204,6 +221,10 @@ def run(repo: NippouRepository, base_dir: Path, *,
     # **どのラインが動いたか**は日報のほうで数えます ── 集計はライン
     # ごとに読み直すので、先にラインの一覧が要ります
     lines = sorted({header.line for header, _ in records})
+    skipped = _partial_lines(records, found.year, found.month, lines)
+    lines = [ln for ln in lines if ln not in skipped]
+    if not lines:
+        return RolloverResult(found, skipped=skipped)
     exports: list[MonthExport] = []
     for line in lines:
         exports.append(month_export.write_month(
@@ -215,9 +236,88 @@ def run(repo: NippouRepository, base_dir: Path, *,
     written = [p for e in exports for p in e.files]
     if not all(p.exists() and p.stat().st_size > 0 for p in written):
         log.error("月替わりの書き出しが途中で終わりました: %s", found.label)
-        return RolloverResult(found, exports, failed=True)
+        return RolloverResult(found, exports, failed=True, skipped=skipped)
 
     pending = repo.month_has_pending(found.year, found.month)
     log.info("月替わり: %s を書き出しました(%dライン)。手元はそのまま",
              found.label, len(exports))
-    return RolloverResult(found, exports, pending=pending)
+    return RolloverResult(found, exports, pending=pending, skipped=skipped)
+
+
+def _partial_lines(records, year: int, month: int, lines: list[str]) -> dict[str, int]:
+    """**この端末で書き出してはいけないライン** → 共有にあって手元に無いページの数。
+
+        管理者のPCで、ほかのライン(HVC)の9月30日 2直を控えから呼び出して直し、共有へ保存
+          → 管理者のPCの手元にある9月の HVC は、その1直だけ
+          → 月替わりの書き出しが、共有の 自動集計\\HVC\\2026.09 を**その1直だけの中身で**
+            上書きしていた(HVC の端末が書き出した9月のほかの直が、黙って消える)
+
+    月の書き出しは手元の日報から作るので、**その月のそのラインを全部持っている端末**が
+    書くものです。そこで、**この端末のラインではない**ラインのうち、共有の日報データに
+    あるのに手元に無いページがあるものは書き出しません(知らせで言います)。
+
+    この端末のラインは今までどおり書き出します(1ライン=1端末)。共有を確かめられない
+    とき(Access・届かない)も今までどおりです ── 手元に全部ある(過去の日報を取り込んだ)
+    ほかのラインも、今までどおり書き出します。
+    """
+    from .. import work_context
+
+    own = (work_context.stored_terminal_line()
+           if work_context.terminal_line_decided() else "")
+    mine: dict[str, set[tuple[str, str, int]]] = {}
+    for header, _ in records:
+        mine.setdefault(header.line, set()).add(
+            (header.report_date, header.shift, int(header.page)))
+    out: dict[str, int] = {}
+    for line in lines:
+        if line == own:
+            continue
+        shared = _shared_month_pages(line, year, month)
+        if shared is None:
+            continue
+        missing = len(shared - mine.get(line, set()))
+        if missing:
+            log.warning("月替わり: %s の %d年%d月 はこの端末に一部しか無いので書き出しません"
+                        "(共有にあって手元に無いページ %d)", line, year, month, missing)
+            out[line] = missing
+    return out
+
+
+def _shared_month_pages(line: str, year: int, month: int
+                        ) -> Optional[set[tuple[str, str, int]]]:
+    """共有の日報データにある、そのライン・その月の (報告日, 直, ページ)。**確かめられなければ None。**"""
+    import sqlite3
+
+    from ..access_bridge import pusher, sqlite_backend
+    from ..config import SETTINGS
+    from ..logic.shift import parse_business_date
+
+    path = SETTINGS.access_db_path
+    try:
+        if not pusher.is_sqlite_target(path) or not path.is_file():
+            return None
+        table = pusher.header_table_name(line)
+        conn = sqlite_backend.connect(path)
+        try:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (table,)).fetchone():
+                return set()
+            page = sqlite_backend.page_column(conn, table)
+            rows = conn.execute(
+                f'SELECT "報告日", "直", {page.sql()} FROM {sqlite_backend.quote(table)}'
+                ' WHERE "報告日" LIKE ?', (f"{year}年{month}月%",)).fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        log.warning("月替わり: 共有の日報データを確かめられませんでした: %s", exc)
+        return None
+    found: set[tuple[str, str, int]] = set()
+    for report_date, shift, page_no in rows:
+        day = parse_business_date(str(report_date or ""))
+        if day is None or (day.year, day.month) != (year, month):
+            continue                              # 「2026年1月%」に 10〜12月も当たる
+        try:
+            found.add((str(report_date), str(shift), int(page_no)))
+        except (TypeError, ValueError):
+            continue
+    return found

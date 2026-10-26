@@ -63,8 +63,13 @@ class ImportProgressTests(ScreenBrowserCase):
             # (入れられたときは画面ごと描き直すので、棒はそれでも消える。断られたときは
             # 描き直さないので、下ろし忘れると出たまま残る)
             page = self.open_screen("/settings?tab=data")      # 渡したファイルを持たない画面で
+            past = self.tmp / "過去.csv"
+            past.write_text("日付,ライン,直,ロット№\n2026年8月3日,L-1,1直,B\n", encoding="utf-8-sig")
+            page.fill("#import-path", str(past))
+            # 道を打ったときは、1回目は下見を出すだけ(入れない)。下見が出てから入れる
+            page.click("#import-go")
+            page.wait_for_selector("#import-plan table", timeout=8000)
             self.hold = ("/api/settings/import/apply",)
-            page.fill("#import-path", str(self.tmp / "過去.csv"))
             page.click("#import-go")
             self.watch_running(page)
             self.hold = ()

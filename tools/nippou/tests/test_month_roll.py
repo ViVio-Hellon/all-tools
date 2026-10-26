@@ -226,5 +226,89 @@ class CatchUpTests(RepoCase):
         self.assertEqual(self.months(self.roll(date(2026, 9, 2))), [AUG])
 
 
+
+class PartialLineTests(RepoCase):
+    """**手元にその月の一部しか無いほかのラインは書き出さない**(`month_rollover._partial_lines`)。
+
+    管理者のPCがほかのライン(HVC)の1直を控えから呼び出して直し、共有へ保存すると、月替わりの
+    書き出しが 自動集計\\HVC\\<月> をその1直だけで上書きし、HVC の端末が書き出したほかの直が
+    消えていた(通しの試験 `test_flow_multi_terminal.E_RecordsAndMonthTests`)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from unittest.mock import PropertyMock, patch
+
+        from nippou import config, work_context
+
+        self.shared = self.tmp / "日報データ.sqlite3"
+        for patcher in (
+                patch.object(type(config.SETTINGS), "access_db_path", new_callable=PropertyMock,
+                             return_value=self.shared),
+                patch.object(work_context, "terminal_line_decided", return_value=True),
+                patch.object(work_context, "stored_terminal_line", return_value="L-1")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def put(self, line: str, day: str, shift: str) -> None:
+        key = dict(report_date=day, line=line, shift=shift, page=1)
+        self.repo.save(HeaderRecord(**key, worker="山田"), [DetailRecord(
+            **key, row_no=1, lot="N7131T0", ken="30", mai="10", tut="1",
+            kz="07", kh="00", sz="15", sh="00", tim="420", wei="360", con="30")])
+
+    def share(self, line: str, *keys: tuple[str, str]) -> None:
+        """共有の日報データに、そのラインのページを置く(ほかの端末が送ったもの)。"""
+        import sqlite3
+
+        from nippou.access_bridge import sqlite_backend
+
+        conn = sqlite3.connect(self.shared)
+        try:
+            sqlite_backend.ensure_tables(conn, f"T_日報ヘッダー_{line}", f"T_日報明細_{line}")
+            conn.executemany(f'INSERT INTO "T_日報ヘッダー_{line}" ("報告日", "ライン", "直", "頁")'
+                             " VALUES (?, ?, ?, 1)", [(day, line, shift) for day, shift in keys])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def lines(self, result) -> list[str]:
+        return [e.line for e in result.exports]
+
+    def test_ほかのラインで共有にあるページが手元に無ければ書き出さない(self) -> None:
+        self.put("HVC", "2026年9月30日", "2直")
+        self.share("HVC", ("2026年9月30日", "1直"), ("2026年9月30日", "2直"))
+        result = month_rollover.run(self.repo, self.tmp / "月別", month=SEP)
+        self.assertEqual(self.lines(result), [])
+        self.assertEqual(result.skipped, {"HVC": 1})
+        self.assertFalse(result.ran)
+        self.assertIn("HVC はこの端末では書き出しません", result.message)
+        self.assertFalse((self.tmp / "月別" / "HVC").exists())
+        self.assertFalse(month_rollover.settle(self.repo, result))
+
+    def test_この端末のラインはいままでどおり書き出す(self) -> None:
+        self.put("L-1", "2026年9月30日", "2直")
+        self.put("HVC", "2026年9月30日", "2直")
+        self.share("L-1", ("2026年9月30日", "1直"), ("2026年9月30日", "2直"))
+        self.share("HVC", ("2026年9月30日", "1直"), ("2026年9月30日", "2直"))
+        result = month_rollover.run(self.repo, self.tmp / "月別", month=SEP)
+        self.assertEqual(self.lines(result), ["L-1"])
+        self.assertEqual(result.skipped, {"HVC": 1})
+        self.assertIn("HVC はこの端末では書き出しません", result.message)
+
+    def test_ほかのラインでも手元に全部あれば書き出す_共有を確かめられなくても書き出す(self) -> None:
+        """過去の日報を取り込んだときなど。共有に無い(読めない)ときも今までどおり。"""
+        self.put("HVC", "2026年9月30日", "1直")
+        self.put("HVC", "2026年9月30日", "2直")
+        self.put("LVC", "2026年9月30日", "1直")
+        self.share("HVC", ("2026年9月30日", "1直"), ("2026年9月30日", "2直"),
+                   ("2026年10月1日", "1直"), ("2026年1月30日", "1直"))   # ほかの月は数えない
+        result = month_rollover.run(self.repo, self.tmp / "月別", month=SEP)
+        self.assertEqual(self.lines(result), ["HVC", "LVC"])
+        self.assertEqual(result.skipped, {})
+        self.shared.unlink()
+        self.assertEqual(self.lines(month_rollover.run(self.repo, self.tmp / "月別", month=SEP)),
+                         ["HVC", "LVC"])
+
+
 if __name__ == "__main__":
     unittest.main()

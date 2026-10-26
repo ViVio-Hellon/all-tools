@@ -753,8 +753,13 @@ def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False,
     findings: list = []
     counted = True
     try:
+        # **共有へ保存が通って出した画面では、「設備移動のため保存」で通せるもの
+        # (最終時間・休憩60分の不足)は数えません**(`skip`)。送れたのにそれが残って
+        # いれば、押した人が一文を打って通したものです ── 数えると、送れた画面が
+        # 「直すところがあります ── このままでは共有へ保存できません」「直しに戻る」と
+        # 言い、送れたのか送れなかったのか分からなくなっていました
         report = shift_check.run(repo, report_date, ctx.line, shift,
-                                 admin=ctx.editor)
+                                 admin=ctx.editor, skip=after_push)
         findings = [f.as_dict() for f in report.findings]
     except Exception:                             # noqa: BLE001
         log.exception("締めくくりのチェックでエラー %s/%s", report_date, shift)
