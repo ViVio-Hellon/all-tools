@@ -211,9 +211,28 @@ def make_server_class():
             self.url = f"http://{DEFAULT_HOST}/"
 
         def build(self) -> None:
-            super().build()
             # 画面は外枠の窓から来る。Host の確認(DNS リバインディング対策)は
-            # TCP の待ち受けのためのものなので、外枠の宛先名を足すだけにする
+            # TCP の待ち受けのためのものなので、外枠の宛先名を足すだけにする。
+            # **待ち受けを本体へ引き継ぐ前に**入れる。前は引き継いでから入れていたので、その一瞬に
+            # 届いた画面の要求が Host の確認で「このアドレスからは利用できません」(403)と断られ、
+            # タブにそのまま出た(日報は前に直してあった)。`server.py` の build は引き継ぐところ
+            # まで一息にするので、引き継ぐ口(`wsgi.install`)をここで包む
+            handover = self.wsgi
+            install = handover.install
+            had_own = "install" in vars(handover)
+
+            def install_as_bridge(app) -> None:
+                app.config["BRIDGE"] = True
+                install(app)
+
+            handover.install = install_as_bridge
+            try:
+                super().build()
+            finally:
+                if had_own:
+                    handover.install = install
+                else:
+                    del handover.install
             self.app.config["BRIDGE"] = True
 
         def serve_forever(self) -> None:

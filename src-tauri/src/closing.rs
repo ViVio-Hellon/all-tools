@@ -24,7 +24,7 @@ use serde_json::json;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-use crate::bridge::Phase;
+use crate::bridge::{Bridge, Phase};
 use crate::shell::{js_string, Shell};
 
 /// 訊くだけの問い合わせの応答を待つ上限
@@ -119,6 +119,42 @@ fn busy_reason(body: &serde_json::Value) -> String {
         .unwrap_or_else(|| "実行中の処理があります".to_string())
 }
 
+/// 終わり方をやめたとき、**止まったツールの Python を終えてから**、そのタブを読み直す
+/// (「終了しました / もう一度開く」が出る)。
+///
+/// 「終了してよい」を言ったツールの Python は、標準入力が閉じるまで要求に答える(看板は
+/// 閉じるまで待ち、日報・点検表は 6 秒で自分で終わる)。以前は終えずに読み直していた ──
+/// ツールの画面がふつうに出て、すぐ裏の Python が居なくなり、どの操作も「処理が動いて
+/// いません」になった(終えたと言ったツールなので「止まりました / もう一度開く」も出ない)。
+/// 標準入力を閉じれば、最後の書き戻しを済ませて自分で終わる(待つ上限はツールごと)。
+fn end_then_reload(shell: &Arc<Shell>, ids: Vec<String>) {
+    let bridges = ids
+        .iter()
+        .filter_map(|id| Some((shell.catalog.by_id(id)?.quit_wait, shell.bridge(id)?.clone())))
+        .collect();
+    end_stopped(bridges);
+    for id in &ids {
+        shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
+    }
+}
+
+/// 止まった(「終了してよい」を言った・終わってもらった)ツールの Python を終える。並べて待つ。
+/// 「終了してよい」が届くのを少し待ってから(上限 `quit_wait`)、標準入力を閉じる
+fn end_stopped(bridges: Vec<(Duration, Arc<Bridge>)>) {
+    let handles: Vec<_> = bridges
+        .into_iter()
+        .map(|(quit_wait, bridge)| {
+            thread::spawn(move || {
+                bridge.wait_quit(quit_wait);
+                bridge.shutdown(bridge.exit_grace());
+            })
+        })
+        .collect();
+    for handle in handles {
+        let _ = handle.join();
+    }
+}
+
 /// 画面に打ちかけを置いてもらうのを待つ上限(共有へではなく手元の SQLite へ置くだけなので短い)
 const PREPARE_LIMIT: Duration = Duration::from_secs(15);
 
@@ -127,9 +163,7 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
     //    置けずに「閉じない」を選ばれたら、ここでやめる
     if !shell.prepare_screens(PREPARE_LIMIT) {
         crate::places::shell_log(&shell.root, "終了をやめました(画面の打ちかけを置けなかった)");
-        if let Some(id) = quitting {
-            shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
-        }
+        end_then_reload(shell, quitting.into_iter().map(str::to_string).collect());
         return false;
     }
     let busy = ask_all(shell, quitting);
@@ -140,19 +174,15 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
             .map(|tool| format!("{}は終了しました。\n\n", tool.title))
             .unwrap_or_default();
         if !confirm_busy(shell, app, &head, &busy) {
-            if let Some(id) = quitting {
-                // そのタブには「終了しました / もう一度開く」を出す
-                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
-            }
+            // そのタブには「終了しました / もう一度開く」を出す
+            end_then_reload(shell, quitting.into_iter().map(str::to_string).collect());
             return false;
         }
         // 確認を読んでいるあいだに打った分がある(確認は窓の外に出ることがある)。
         // **止める直前に、もう一度画面の打ちかけを置いてもらう**
         if !shell.prepare_screens(PREPARE_LIMIT) {
             crate::places::shell_log(&shell.root, "終了をやめました(確認のあとの打ちかけを置けなかった)");
-            if let Some(id) = quitting {
-                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
-            }
+            end_then_reload(shell, quitting.into_iter().map(str::to_string).collect());
             return false;
         }
     }
@@ -186,12 +216,7 @@ fn run(shell: &Arc<Shell>, app: &AppHandle, quitting: Option<&str>) -> bool {
             // 読み直すのは**止まったと確かめられたツールだけ**(答えが無かったツールは動いて
             // いるかもしれない。読み直すと打ちかけが消える)
             let stopped = stopped_ids(targets.iter().zip(&replies).map(|((tool, _), reply)| (tool.id.as_str(), reply)));
-            for id in &stopped {
-                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
-            }
-            if let Some(id) = quitting {
-                shell.tell_shell(&format!("window.__shell && window.__shell.reloadTool({})", js_string(id)));
-            }
+            end_then_reload(shell, stopped.into_iter().chain(quitting.map(str::to_string)).collect());
             crate::places::shell_log(&shell.root, "終了をやめました(終える途中で処理を始めたツールがあった)");
             return false;
         }
@@ -246,6 +271,22 @@ mod tests {
         let broken = Ok((500, json!({})));
         let ids = stopped_ids(vec![("kanban", &ok), ("nippou", &busy), ("calendar", &timeout), ("inspection", &broken)]);
         assert_eq!(ids, vec!["kanban".to_string()]);
+    }
+
+    #[test]
+    fn やめたときは止まったツールのpythonを終えてから読み直す() {
+        // 「終了してよい」を言ったあとも、標準入力が閉じるまで答え続ける Python(看板と同じ)
+        let (bridge, dir) = crate::bridge::testing::fake("closing_end", "endtool");
+        assert!(bridge.ensure_started());
+        assert!(bridge.wait_started(Duration::from_secs(30)), "{:?}", bridge.stderr_tail());
+        assert_eq!(bridge.call("POST", "/api/shutdown", "", vec![], b"{}").unwrap().status, 200);
+        assert!(bridge.wait_quit(Duration::from_secs(10)));
+        assert!(bridge.call("GET", "/", "", vec![], b"").is_ok(), "終えなければ、画面はまだ届いてしまう");
+
+        end_stopped(vec![(Duration::from_secs(5), bridge.clone())]);
+        assert!(bridge.ended_by_quit(), "読み直すと「終了しました / もう一度開く」が出る");
+        assert!(bridge.call("GET", "/", "", vec![], b"").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

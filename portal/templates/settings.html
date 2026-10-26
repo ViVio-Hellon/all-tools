@@ -133,7 +133,9 @@
     <!-- 共有の DB の置き場所 -->
     <article class="card">
       <h2>共有の DB の置き場所</h2>
-      <p class="lead">python-web-tools(梱包資材総合ツール)と同じ DB に置くのが既定です。アクセス権限の表には混ぜず、別の表にします。</p>
+      <p class="lead">python-web-tools(梱包資材総合ツール)と同じ DB に置くのが既定です。アクセス権限の表には混ぜず、別の表にします。
+        ここで決めるのは<b>タブ表示権限の表</b>の置き場所だけです。各ツールが使う共有の DB(日報の参照用マスタ・看板の接続先など)は、
+        それぞれのタブの設定画面で決めます(ここを変えても各ツールには効きません)。</p>
       <form class="pathform" id="loc-form">
         <label>フォルダ<input type="text" id="loc-folder" spellcheck="false"></label>
         <label>ファイル名<input type="text" id="loc-name" spellcheck="false"></label>

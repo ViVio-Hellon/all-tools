@@ -125,6 +125,8 @@ button,input,select{font:inherit;color:inherit}
         text-underline-offset:5px;text-decoration-thickness:2px}
 .bigtab[aria-selected="true"] .bigtab__sub{color:var(--muted)}
 .bigtab--settings{margin-left:10px}
+/* タブ表示権限から外れたタブ(次に開いたときに消える)。薄くして、指を置くと理由が出る */
+.bigtab.is-removed{opacity:.55}
 .bigtab__dot{position:absolute;top:8px;right:8px;width:9px;height:9px;border-radius:50%;
              background:transparent}
 .bigtab__dot[data-phase="starting"]{background:#f0b429;animation:blink 1.2s ease-in-out infinite}

@@ -464,9 +464,18 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             return _error("bad_value", "ファイル名にフォルダを入れないでください", 400)
         user_settings.update({user_settings.KEY_SHARED_DIR: folder or None,
                               user_settings.KEY_SHARED_NAME: name or None})
-        log.info("共有の DB の置き場所を変えました: %s", shared_db.location().path)
+        where = shared_db.location()
+        log.info("共有の DB の置き場所を変えました: %s", where.path)
         result = store.sync(force=True)
-        return jsonify({"ok": True, "sync": result.to_dict(), **_settings_view(catalog)})
+        # **届かない場所でも「反映しました」とだけ出していた**(打ち間違いに気づけない)。
+        # 届かない・読めないときは、そう言う(画面は `warn` で目立たせる)
+        head = "共有の DB の置き場所を既定に戻しました" if not folder and not name else "共有の DB の置き場所を変えました"
+        if result.error:
+            message = f"{head}。ただし、{result.error}。場所が正しいか確かめてください"
+        else:
+            message = f"{head}: {where.path}"
+        return jsonify({"ok": True, "message": message, "warn": bool(result.error),
+                        "sync": result.to_dict(), **_settings_view(catalog)})
 
     # ------------------------------------------------------------------
     # 配布設定(置き場所・管理者パスワードを、配った先の端末で使う)

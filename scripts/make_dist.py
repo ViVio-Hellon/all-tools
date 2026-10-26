@@ -74,6 +74,9 @@ EXCLUDE_NAMES: tuple[str, ...] = (
     "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".coverage", ".coverage.*",
     "htmlcov", "*.tmp", "*.bak-*", ".DS_Store", "Thumbs.db",
     "*.sqlite3", "*.sqlite3-*", "*.accdb", "*.laccdb",
+    # その端末で書いたログと、Excel・Word で開いているあいだにできる一時ファイル
+    # (点検表の data\ に点検表を置いて開いたまま作ると、~$点検表.xlsx が紛れる)
+    "*.log", "~$*",
 )
 
 #: できたフォルダに**入っていてはいけない**もの(最後に確かめる)

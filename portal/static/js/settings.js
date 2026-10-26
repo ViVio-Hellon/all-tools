@@ -124,11 +124,13 @@ export function install(options) {
     exportAll();
   });
   $("dist-reapply").addEventListener("click", () => {
+    if (lockedNow()) return;
     if (confirm("配布設定を読み込み直します。この端末の置き場所・管理者パスワードは、配布設定の値で上書きされます。よろしいですか?")) {
       write("/api/distribution/reapply", {});
     }
   });
   $("dist-remove").addEventListener("click", () => {
+    if (lockedNow()) return;
     if (confirm("配布設定(一式のフォルダの直下の「配布設定」)を消します。まとめて入れた4ツールの分も消えます"
       + "(各ツールのフォルダの配布設定と、この端末の設定はそのままです)。よろしいですか?")) {
       write("/api/distribution/remove", {});
@@ -245,7 +247,8 @@ async function write(path, payload, options = {}) {
     const seq = ++asked;
     const body = await api.post(path, payload);
     paintIfFresh(seq, body, options);
-    toast(body.message || "反映しました");
+    // 通ったが気をつけること(置き場所の共有の DB に届かない など)は目立たせる
+    toast(body.message || "反映しました", body.warn ? "ng" : "ok", body.warn ? 9000 : 4200);
     ctx.reloadTabs();
     return true;
   } catch (err) {
@@ -445,7 +448,9 @@ function paintRights() {
     tr.className = "empty";
     const td = document.createElement("td");
     td.colSpan = 8;
-    td.textContent = view.source?.state === "ok" ? "まだ1行もありません" : "表を読めていません";
+    // 表が無いのに「読めていません」と出していた(共有に届かないのと見分けがつかない)
+    td.textContent = { ok: "まだ1行もありません", missing: "表がまだありません(上の「表を作る」で作れます)" }[
+      view.source?.state] || "表を読めていません";
     tr.append(td);
     body.append(tr);
   }
@@ -627,6 +632,7 @@ function paintToolDistributions(tools) {
  * (あり/なし)は、答えに入っている大設定のいまで描き直す。
  */
 async function exportAll() {
+  if (lockedNow()) return;
   const d = view?.distribution || {};
   // 各ツールの配布設定は**既定の選び方で書き直す**。設定画面でラインなどを入れて書き出していたら外れる
   if ((d.tools || []).some((t) => t.exists)
@@ -696,12 +702,20 @@ function paintApp() {
 // ------------------------------------------------------------------
 // 行を足す・直す・消す
 // ------------------------------------------------------------------
+/**
+ * 鍵が掛かっているか(掛かっていれば知らせて鍵の欄へ)。**確かめの窓を出す前に**見る
+ * ── 以前は「読み込み直す」「消す」「まとめて書き出す」で「よろしいですか?」に「はい」と
+ * 答えさせてから「鍵を開けてください」と断っていた。
+ */
+function lockedNow() {
+  if (view?.admin) return false;
+  toast("管理者パスワードで鍵を開けてください", "ng");
+  $("lock-pass").focus();
+  return true;
+}
+
 function openRow(rule) {
-  if (!view?.admin) {
-    toast("管理者パスワードで鍵を開けてください", "ng");
-    $("lock-pass").focus();
-    return;
-  }
+  if (lockedNow()) return;
   editing = rule;
   $("row-title").textContent = rule ? `管理番号 ${rule.key} を直す` : "タブ表示権限に行を足す";
   $("row-login").value = rule ? rule.login_id : "";
@@ -870,10 +884,7 @@ function wasOf(rule) {
 }
 
 async function removeRow(rule) {
-  if (!view?.admin) {
-    toast("管理者パスワードで鍵を開けてください", "ng");
-    return;
-  }
+  if (lockedNow()) return;
   if (!confirm(`管理番号 ${rule.key}(${rule.condition})を消します。よろしいですか?`)) return;
   await write("/api/rights/delete", { key: rule.key, was: wasOf(rule) });
 }

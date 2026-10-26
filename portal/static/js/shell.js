@@ -121,6 +121,7 @@ function tabButton(id, title, sub, version = "") {
     head.append(ver);
     button.title = `${sub} VER${version}`;
   }
+  button.dataset.title = button.title;     // 権限から外れた印を外すときに戻す
   const small = document.createElement("span");
   small.className = "bigtab__sub";
   small.textContent = sub;
@@ -152,7 +153,8 @@ tabsBar.addEventListener("keydown", (event) => {
   else if (event.key === "End") next = order[order.length - 1];
   if (!next) return;
   event.preventDefault();
-  select(next);
+  // 帯に置いたまま(以前はツールの画面へ入ってしまい、2回目の矢印キーがツールへ行っていた)
+  select(next, { stay: true });
   document.getElementById(`tab-${next}`)?.focus();
 });
 
@@ -315,7 +317,7 @@ function showPanel(id) {
   }
 }
 
-function select(id) {
+function select(id, { stay = false } = {}) {
   if (!order.includes(id)) return;
   current = id;
   if (manualBox && !manualBox.hidden) openManual(id);
@@ -334,7 +336,7 @@ function select(id) {
       showPanel(id);
       // 打てるように、選んだツールの画面へ入る。説明書を開いているあいだは説明書に
       // 置いたまま(ツールの画面へ入ると Esc・F1 が外枠に届かず、説明書を閉じられない)
-      if (!manualBox.hidden) return;
+      if (!manualBox.hidden || stay) return;
       try { frames.get(id)?.iframe?.contentWindow?.focus(); } catch (err) { /* 別の宛先 */ }
     });
     showPanel(id);
@@ -414,15 +416,26 @@ async function followTabs() {
     select(current);
     toast(`タブが増えました: ${added.map((id) => TOOLS.get(id).title).join("、")}`);
   }
-  // 減ったタブは、打ちかけ・途中の処理があるかもしれないので、その場では消さない
+  // 減ったタブは、打ちかけ・途中の処理があるかもしれないので、その場では消さない。
+  // **権限に戻ったタブは印を外す**(以前は戻しても「次に開いたときに消えます」のままで、
+  // もう一度外れても知らせなかった)。印はタブを描き直すたびに付け直す
   const fresh = removed.filter((id) => !noticed.has(id));
-  for (const id of removed) {
-    noticed.add(id);
-    document.getElementById(`tab-${id}`)?.setAttribute("title", "タブ表示権限から外れました。次に日報複合ツールを開いたときに消えます");
+  const back = shown.filter((id) => noticed.has(id) && ids.includes(id));
+  for (const id of shown) {
+    const button = document.getElementById(`tab-${id}`);
+    const out = removed.includes(id);
+    if (out) noticed.add(id); else noticed.delete(id);
+    if (!button) continue;
+    button.classList.toggle("is-removed", out);
+    button.title = out ? "タブ表示権限から外れました。次に日報複合ツールを開いたときに消えます"
+      : (button.dataset.title || "");
   }
   if (fresh.length) {
     toast(`${fresh.map((id) => TOOLS.get(id).title).join("、")} のタブは、この端末では出さない設定になりました。`
       + "次に日報複合ツールを開いたときに消えます。", "ok", 9000);
+  }
+  if (back.length) {
+    toast(`${back.map((id) => TOOLS.get(id).title).join("、")} のタブは、また出す設定になりました(消えません)。`);
   }
   settingsView.decisionChanged(body.decision);
 }

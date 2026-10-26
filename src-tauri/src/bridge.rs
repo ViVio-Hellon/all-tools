@@ -678,6 +678,21 @@ pub fn new_token() -> String {
     text
 }
 
+/// ほかの組み立て(`closing.rs` など)の試験から使う、外枠から見た Python の代わり
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    /// `bridge.py` と同じやりとりをする小さな台本で動く `Bridge`(起こすのは呼んだ側)。
+    /// 一時フォルダは呼んだ側が消す
+    pub fn fake(name: &str, id: &str) -> (Arc<Bridge>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("alltools_{name}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bridge.py"), tests::FAKE_BRIDGE).unwrap();
+        (Bridge::new(tests::spec(&dir, id), "x".into()), dir)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,7 +707,7 @@ mod tests {
     }
 
     /// 外枠から見た Python の代わり(`bridge.py` と同じやりとりをする小さな台本)
-    const FAKE_BRIDGE: &str = r#"
+    pub(super) const FAKE_BRIDGE: &str = r#"
 import json, os, sys
 out = sys.stdout.buffer
 if os.environ.get("FAKE_FATAL"):
@@ -719,7 +734,7 @@ while True:
     out.flush()
 "#;
 
-    fn spec(dir: &Path, id: &str) -> Spec {
+    pub(super) fn spec(dir: &Path, id: &str) -> Spec {
         let python = if cfg!(windows) { "python.exe" } else { "python3" };
         std::env::set_var(format!("{}_PYTHON", id.to_uppercase()), python);
         Spec {
