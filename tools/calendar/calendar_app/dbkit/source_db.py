@@ -272,6 +272,44 @@ class SourceConnection:
         sql, params = build_insert(table, values)
         return self.execute(sql, params)
 
+    def insert_unless(self, table: str, values: dict[str, Any], exists_sql: str,
+                      exists_params: Iterable[Any] = (), *,
+                      max_retry: Optional[int] = None) -> bool:
+        """**まだ無ければ** 1行足す。足したら ``True``、もうあれば書かずに ``False``。
+
+        「もうあるか」の確かめ(``exists_sql`` = 件数を1つ返す SELECT)と INSERT を、
+        **共有の書き込みの錠1つ(``BEGIN IMMEDIATE``)の中で**行う。別々に行うと、
+        2台がほぼ同時に送ったとき、両方が「まだ無い」と見てから両方が書き、同じ人・
+        同じ日の休みが2行できた(遅い共有フォルダほど隙間が広い)。
+
+        錠を持つのは確かめと1行の INSERT のあいだだけ。ほかの端末はそのあいだ待つ
+        (``busy_timeout``)。待ちきれなければ ``execute`` と同じくやり直し、それでも
+        取れなければ ``SourceError`` ── 呼ぶ側は送信待ちに残して次の周期に回す。
+        ジャーナルは DELETE のまま(錠はファイルの錠なので、共有フォルダの上でも効く)。
+        """
+        if self.read_only:
+            raise SourceError("読み取り専用で開いた接続では更新できません")
+        sql, params = build_insert(table, values)
+
+        def run() -> bool:
+            conn = self._conn
+            if conn.in_transaction:
+                conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(exists_sql, tuple(exists_params)).fetchone()
+                if row is not None and int(row[0] or 0) > 0:
+                    conn.rollback()
+                    return False
+                conn.execute(sql, params)
+                conn.commit()
+                return True
+            except BaseException:
+                conn.rollback()
+                raise
+
+        return self._retry(run, sql, max_retry)
+
     def update(self, table: str, values: dict[str, Any],
                where: dict[str, Any]) -> int:
         sql, params = build_update(table, values, where)

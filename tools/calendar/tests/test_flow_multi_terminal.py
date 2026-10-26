@@ -1191,3 +1191,97 @@ class OpenScreenBrowserTests(_Flow):
         deadline = time.monotonic() + 30
         while self.b.status()["pending"] and time.monotonic() < deadline:
             time.sleep(0.25)
+
+
+# ---------------------------------------------------------------------------
+# 3'. 二重登録の防ぎ: 2台の「確かめ」と「書き込み」の間に必ず割り込ませる
+# ---------------------------------------------------------------------------
+class GuardInterleaveTests(unittest.TestCase):
+    """**時間に頼らない。** 端末Aの送信を「休みを共有へ書く直前」で止めて、そのあいだに
+    端末Bに同じ人・同じ日の休みを送らせる。
+
+    以前は、確かめ(もう共有にあるか)と書き込みが別々だったので、A が確かめた
+    あとに止まっているあいだに B が確かめて書き、A も書いて**2行**になった
+    (Windows の CI で実際に起きた)。いまは A が確かめから書き込みまで共有の書き込みの
+    錠を持つので、B は錠が空くのを待ち、A の行が見えてから確かめて取りやめる。
+    """
+
+    DAY = _dt.date(2026, 8, 3)
+
+    def setUp(self) -> None:
+        from calendar_app import db
+        from calendar_app.dbkit import outbox_sync
+        from calendar_app.repository import Repository
+
+        outbox_sync.reset_op_id_cache()
+        self.addCleanup(outbox_sync.reset_op_id_cache)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.folder = Path(tmp.name)
+        self.path = _web.make_source(self.folder, config.SOURCE_FILE_DATA, _web.SOURCE_SCHEMA)
+        # 端末ごとの手元のDB(ファイル。送信は別の糸から開き直す)
+        self.locals = {}
+        for name, shift in (("A", "1"), ("B", "2")):
+            local = self.folder / f"local_{name}.db"
+            conn = db.connect(str(local))
+            try:
+                Repository(conn).save_record(self.DAY, config.KUBUN_REST, "山田太郎", "101",
+                                             shift=shift, group="B", line="L-1")
+            finally:
+                conn.close()
+            self.locals[name] = local
+
+    def send_from(self, name: str, results: dict) -> None:
+        from calendar_app import db
+        from calendar_app.sync.autosync import SqliteTransport
+
+        conn = db.connect(str(self.locals[name]))
+        try:
+            results[name] = SqliteTransport().send(conn, str(self.path))
+        except Exception as exc:                  # noqa: BLE001 - 試験で見る
+            results[name] = exc
+        finally:
+            conn.close()
+
+    def test_片方が書く直前で止まっていても_もう片方は2行目を書かない(self) -> None:
+        from unittest import mock
+
+        from calendar_app.dbkit import source_db
+
+        a_at_insert = threading.Event()
+        let_a_go = threading.Event()
+        self.addCleanup(let_a_go.set)
+        real_connect = source_db.connect
+
+        def connect(path, *, read_only=True):
+            source = real_connect(path, read_only=read_only)
+            if threading.current_thread().name == "端末A" and not read_only:
+                def trace(sql: str) -> None:
+                    # 休みを共有へ書く INSERT の直前で止まる(確かめはもう済んでいる)
+                    if sql.lstrip().upper().startswith(f'INSERT INTO "{config.TABLE_DATA}"'.upper()) \
+                            and not a_at_insert.is_set():
+                        a_at_insert.set()
+                        let_a_go.wait(60)
+                source._conn.set_trace_callback(trace)
+            return source
+
+        results: dict = {}
+        with mock.patch.object(source_db, "connect", connect):
+            a = threading.Thread(target=self.send_from, args=("A", results), name="端末A")
+            a.start()
+            self.assertTrue(a_at_insert.wait(30), "A が書く直前まで来ない")
+            b = threading.Thread(target=self.send_from, args=("B", results), name="端末B")
+            b.start()
+            # 直す前は B がここで(A を待たずに)書き終える。直したあとは A の錠を待つ
+            b.join(timeout=3)
+            let_a_go.set()
+            a.join(60)
+            b.join(60)
+        self.assertFalse(a.is_alive() or b.is_alive())
+        for name in ("A", "B"):
+            self.assertNotIsInstance(results[name], Exception, f"{name}: {results[name]!r}")
+        rows = _web.read_source(self.path, config.TABLE_DATA)
+        self.assertEqual([(r["日付"], r["識別コード"], r["直"]) for r in rows],
+                         [("2026/08/03", "101", "1")], "同じ人・同じ日は1行だけ(先に書いた A のもの)")
+        self.assertEqual((results["A"].applied, results["B"].skipped), (1, 1),
+                         "B は取りやめ(その端末に知らせる道)")

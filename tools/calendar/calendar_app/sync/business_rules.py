@@ -11,11 +11,17 @@
 別の送信ID として正当に生成されるため、outbox_sync からは単に
 「2 件の別々の新規行」にしか見えない。
 
-そのため休みの登録 (区分='休み') だけ、送信の直前に Access へ
+そのため休みの登録 (区分='休み') だけ、送信の直前に取り込み元へ
 ``日付 + 識別コード`` の重複確認を挟む (VBA の ``ExistsRecord`` と
-同じ考え方)。確認と実際の INSERT の間にはごく短い競合の余地が残るが
-(同時に 2 ラインが送信した場合など)、元の設計からの既知の限界であり、
-実運用では確認〜挿入までの時間が短いため実害は小さい。
+同じ考え方)。
+
+**確かめと INSERT は、共有の書き込みの錠1つの中で行う**
+(``SourceConnection.insert_unless``。``BEGIN IMMEDIATE``)。以前は確かめと
+INSERT が別々で、2台がほぼ同時に送ると両方が「まだ無い」と見てから両方が
+書き、同じ人・同じ日の休みが2行できた(「既知の限界」としていたが、
+Windows の遅い環境で実際に起きた)。いまは後から来た端末は錠が空くのを待ち、
+先の行が見えてから確かめるので、取りやめ+知らせの道へ入る。待ちきれなければ
+送信待ちに残し、次の周期で送り直す。
 
 後から足した列 (VER4.2.4)
 -------------------------
@@ -76,25 +82,6 @@ def duplicate_guard(source_table: str,
         'WHERE "日付" = ? AND "識別コード" = ? AND "区分" = ?'
     )
     return sql, [date_value, code, config.KUBUN_REST]
-
-
-def _already_registered(source: "source_db.SourceConnection",
-                        guard: tuple[str, list[object]]) -> bool:
-    sql, params = guard
-    try:
-        rows = source.query(sql, params)
-    except source_db.SourceError as exc:
-        # 確認できなかった場合は、確認不能を理由に入力を止めたくないため
-        # 安全側 (=重複防止を優先せず送信する) に倒す
-        debug_log(f"business_rules._already_registered: 確認に失敗したため送信を継続 {exc}")
-        return False
-    if not rows:
-        return False
-    value = next(iter(rows[0].values()), 0)
-    try:
-        return int(value) > 0
-    except (TypeError, ValueError):
-        return False
 
 
 def _waiting_for_delete(conn: sqlite3.Connection, source_table: str,
@@ -204,20 +191,24 @@ def send_data_with_duplicate_guard(
                     "同じ人・同じ日の削除がまだ届いていないため次回に回す")
                 failed.append(row_id)
                 continue
-            if guard and _already_registered(source, guard):
-                outbox_sync.mark_synced(conn, spec, [row_id])
-                result.duplicates += 1
-                result.skipped_rows.append(values)
-                debug_log(
-                    f"business_rules: {spec.source_table} 行{row_id} は "
-                    "他ラインが既に登録済みのため送信を省略"
-                )
-                continue
 
+            sending = dict(values)
             if op_id_ready:
-                values[spec.op_id_column] = op_ids[row_id]
+                sending[spec.op_id_column] = op_ids[row_id]
             try:
-                source.insert(spec.source_table, values)
+                if guard is None:
+                    source.insert(spec.source_table, sending)
+                elif not source.insert_unless(spec.source_table, sending, *guard):
+                    # **確かめから書き込みまで共有の錠の中**(``insert_unless``)。
+                    # 2台がほぼ同時に送っても、後のほうはここへ来る
+                    outbox_sync.mark_synced(conn, spec, [row_id])
+                    result.duplicates += 1
+                    result.skipped_rows.append(values)
+                    debug_log(
+                        f"business_rules: {spec.source_table} 行{row_id} は "
+                        "他ラインが既に登録済みのため送信を省略"
+                    )
+                    continue
             except source_db.SourceError as exc:
                 if op_id_ready and source_db.is_duplicate_error(exc):
                     pass  # 前回の送信が既に届いていた (送信ID重複 = 成功扱い)
