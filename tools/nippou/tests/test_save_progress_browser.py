@@ -161,14 +161,19 @@ class ProgressTests(PushCase):
               if (b && !b.hidden) window.__shown = true;
             }).observe(document.body, { subtree: true, childList: true,
                                         attributes: true, attributeFilter: ["hidden"] });
-            // 共有へ保存の要求が、送ってから答えが来るまで何ミリ秒かかったか
+            // **押してから**共有へ保存の答えが来るまで何ミリ秒かかったか。進み具合の見張り(watch)は
+            // 押したあとに始まり、保存の要求の前に下見(/plan)なども挟むので、保存の要求だけを計ると
+            // 短く出て、見張りの 0.3 秒を超えていても「一瞬」と数えてしまう(Windows の CI で揺れた)
+            window.__pressed = null;
+            document.addEventListener("click", (ev) => {
+              if (ev.target.closest && ev.target.closest("#push-shared")) window.__pressed = performance.now();
+            }, true);
             const real = window.fetch;
             window.fetch = async (url, ...rest) => {
               const text = String(url);
               if (!text.includes("/api/settings/push") || text.includes("/plan")) return real(url, ...rest);
-              const began = performance.now();
               try { return await real(url, ...rest); }
-              finally { window.__took = performance.now() - began; }
+              finally { window.__took = performance.now() - (window.__pressed ?? performance.now()); }
             };
         }""")
         mark = len(self.sent)
