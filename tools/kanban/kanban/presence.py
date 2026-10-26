@@ -219,18 +219,24 @@ class Heartbeat:
         self._warned = False
 
     # -- 1 回ぶん -------------------------------------------------------
-    def beat(self, status: str = config.STATE_OPEN) -> bool:
-        """1 回打つ。打てたら ``True``。"""
+    def beat(self, status: str = config.STATE_OPEN, *, only_mine: bool = False) -> bool:
+        """1 回打つ。打てたら ``True``。``only_mine`` は :meth:`_write`。"""
         gateway = self.gateway
         if gateway is None or not self.line:
             return False
         try:
-            return self._write(gateway, status)
+            return self._write(gateway, status, only_mine=only_mine)
         except Exception as exc:  # noqa: BLE001 - 付加情報のために落とさない
             self._warn("状態を書けませんでした: %s", exc)
             return False
 
-    def _write(self, gateway: SharedDb, status: str) -> bool:
+    def _write(self, gateway: SharedDb, status: str, *, only_mine: bool = False) -> bool:
+        """``only_mine`` なら、**最後に名乗ったのがこの端末のときだけ**書く(閉じるとき)。
+
+        ``Form状態管理`` はライン 1 行なので、同じラインの端末が 2 台あると印を取り合う。前は閉じた
+        端末が誰の印かを見ずに「閉」を書いたので、**もう 1 台が開いているのに倉庫から消えた**
+        (その端末の次の心拍 = 最大 2 分まで)。ほかの端末が名乗り直した印は消さない。
+        """
         columns = self._state_columns()
         now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
@@ -245,13 +251,22 @@ class Heartbeat:
             f"UPDATE {_ident(config.TABLE_STATE)} SET {assigns} "
             f"WHERE {_ident(config.COL_STATE_LINE)} = ?"
         )
-        results = gateway.execute([(sql, list(sets.values()) + [self.line])])
+        params = list(sets.values()) + [self.line]
+        mine_only = only_mine and config.COL_STATE_HOST in columns
+        if mine_only:
+            sql += f" AND COALESCE(TRIM(CAST({_ident(config.COL_STATE_HOST)} AS TEXT)), '') IN ('', ?)"
+            params.append(self.host)
+        results = gateway.execute([(sql, params)])
         result = results[0]
         if not result.ok:
             self._warn("状態を書けませんでした: %s", result.error_message)
             return False
         if result.affected:
             self._warned = False
+            return True
+        if mine_only:
+            # ほかの端末が名乗り直した(同じラインの 2 台目)。その印はそのまま、行も足さない
+            applog.info("状態管理の %s はほかの端末が名乗っているので「%s」にしません", self.line, status)
             return True
 
         # まだこのラインの行が無い。**足す番号は手元の写しから決める**
@@ -339,7 +354,7 @@ class Heartbeat:
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=1.0)
-        self.beat(config.STATE_CLOSED)
+        self.beat(config.STATE_CLOSED, only_mine=True)
 
 
 # ------------------------------------------------------------------

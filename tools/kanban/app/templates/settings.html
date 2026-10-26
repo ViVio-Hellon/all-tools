@@ -119,6 +119,13 @@
   <div class="field">
     <label for="line">担当ライン</label>
     <select id="line">
+      {#
+        未設定のときは「未設定」を選んでおく。無いと先頭の LVC が選ばれて見え、LVC の現場は
+        同じ項目を選ぶことになって変わらない(選んだ印が付かないので change が起きない)
+      #}
+      {% if not state.line %}
+      <option value="" selected disabled>(未設定 ── 選んでください)</option>
+      {% endif %}
       {% for l in state.lines %}
       <option value="{{ l.code }}" {% if l.current %}selected{% endif %}>{{ l.label }}</option>
       {% endfor %}

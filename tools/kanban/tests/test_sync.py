@@ -115,10 +115,15 @@ class MutableFakeGateway(FakeGateway):
         if snapshot is None:
             return StatementResult(ok=True, affected=0)
 
-        key_col = sql.split(" WHERE ", 1)[1].split("=")[0].strip().strip("[]")
+        # WHERE は「押したときの資材の行だけ」の条件(TRIM(...) = ?)が先、管理番号が最後
+        conditions = sql.split(" WHERE ", 1)[1].split(" AND ")
+        key_col = conditions[-1].split("=")[0].strip().strip("[]")
         key_val = params[-1]
+        guards = [(c.split("CAST(", 1)[1].split(" AS ", 1)[0].strip("[]"), v)
+                  for c, v in zip(conditions[:-1], params[len(params) - len(conditions):-1])]
         target = next(
-            (r for r in snapshot.rows if str(r.get(key_col)) == str(key_val)), None
+            (r for r in snapshot.rows if str(r.get(key_col)) == str(key_val)
+             and all(str(r.get(col) or "").strip() == want for col, want in guards)), None
         )
         if target is None:
             return StatementResult(ok=True, affected=0)
@@ -250,13 +255,14 @@ class ExportTest(SyncTestBase):
         self.assertEqual(len(self.gateway.executed), 1)
         sql, params = self.gateway.executed[0]
         self.assertIn("UPDATE [看板_LVC] SET", sql)
-        self.assertIn("WHERE [管理番号] = ?", sql)
+        # 押したときの資材の看板にだけ書く(管理番号の使い回し)。管理番号はいつも最後
+        self.assertIn(" WHERE TRIM(COALESCE(CAST([資材] AS TEXT), '')) = ? AND [管理番号] = ?", sql)
         # **値は文へ埋め込まず、プレースホルダで渡す**
         self.assertNotIn("'〇'", sql)
         self.assertEqual(self.gateway.assignments_for("1")["欲"], "〇")
         self.assertEqual(params[-1], "1")
         # マスタ列は書き換えない
-        self.assertNotIn("[資材]", sql)
+        self.assertNotIn("[資材]", sql.split(" WHERE ", 1)[0])
         self.assertEqual(self.store.pending_count(), 0)
 
     def test_a_change_with_nowhere_to_go_is_reported_not_dropped(self):

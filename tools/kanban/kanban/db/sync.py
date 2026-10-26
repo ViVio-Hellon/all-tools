@@ -31,7 +31,7 @@ from .. import applog, config
 from ..accdb.types import CATEGORY_NUMBER, CATEGORY_TEXT
 from .shared import SharedDb, TableSnapshot, _looks_like_lock, build_update
 from ..domain.models import MUTABLE_FIELDS
-from .store import DEFAULT_COLUMN_MAP, Store
+from .store import DEFAULT_COLUMN_MAP, IDENTITY_FIELDS, Store
 
 EXPORT_LOCK_NAME = "accdb_export"
 #: 1 回の書き戻しで送る SQL の最大数(長すぎる IN 句や巨大トランザクションを避ける)
@@ -443,6 +443,38 @@ def _missing_row_reason(gateway: SharedDb, table: str, key_column: str, mgmt_no:
             "(マスタで消された・Access から差し替えた・接続先が変わった など)")
 
 
+def _identity_guards(column_map: dict[str, str], row: dict[str, Any]) -> list[tuple[str, Any]]:
+    """``[(共有DBの列名, 押したときの値)]``(資材。:data:`kanban.db.store.IDENTITY_FIELDS`)。
+
+    書き戻しは、押したときの資材の看板にだけ書く。送る前に看板が消されて同じ番号で別の資材が
+    足されていたら(管理番号の使い回し)、書かずに「入れ替わった」と記録する(取り込みが手元の
+    操作を下ろして帯で知らせる)。
+    """
+    return [(column_map[name], row.get(name, "") or "") for name in IDENTITY_FIELDS if column_map.get(name)]
+
+
+def _identity_text(value: Any) -> str:
+    return "" if value is None else _as_text(value).strip()
+
+
+def _shared_identity(gateway: SharedDb, table: str, key_column: str, mgmt_no: str,
+                     columns: Sequence[str]) -> tuple[str, ...] | None:
+    """共有DBで同じ管理番号(:func:`kanban.keys.same`)の行が**ちょうど 1 つ**なら、その資材。"""
+    from .. import keys
+
+    if not columns:
+        return None
+    try:
+        found = gateway.select(
+            f"SELECT {_quote(key_column)} AS k, {', '.join(_quote(c) for c in columns)} FROM {_quote(table)}")
+    except Exception:  # noqa: BLE001 - 読めなければ決めない(失敗の記録は呼び出し側)
+        return None
+    near = [r for r in found if keys.same(r["k"], mgmt_no)]
+    if len(near) != 1:
+        return None
+    return tuple(_identity_text(near[0].get(c)) for c in columns)
+
+
 def _retry_with_stored_key(gateway: SharedDb, table: str, key_column: str,
                            key: tuple[str, str, int], statement: tuple[str, list[Any]],
                            first: Any) -> Any:
@@ -499,6 +531,8 @@ def _export_items(
 
         for chunk in _chunks(rows, EXPORT_CHUNK_SIZE):
             statements: list[tuple[str, list[Any]]] = []
+            unguarded: list[tuple[str, list[Any]]] = []
+            identities: list[list[tuple[str, Any]]] = []
             keys: list[tuple[str, str, int]] = []
             for row in chunk:
                 # dirty_columns にはこの端末が実際に変更を意図した列だけが
@@ -540,6 +574,7 @@ def _export_items(
                     result.failed += 1
                     store.mark_items_failed([(line, row["mgmt_no"])], message)
                     continue
+                guards = _identity_guards(column_map, row)
                 try:
                     statements.append(
                         build_update(
@@ -547,8 +582,13 @@ def _export_items(
                             {c: v for c, (v, _cat) in assignments.items()},
                             key_column,
                             _key_value(row["mgmt_no"], key_category),
+                            guards,
                         )
                     )
+                    unguarded.append(build_update(
+                        table_name, {c: v for c, (v, _cat) in assignments.items()},
+                        key_column, _key_value(row["mgmt_no"], key_category)))
+                    identities.append(guards)
                 except ValueError as exc:
                     message = f"{line}/{row['mgmt_no']}: {exc}"
                     applog.error("export_pending: %s", message)
@@ -576,17 +616,32 @@ def _export_items(
                 continue
 
             synced: list[tuple[str, str, int]] = []
-            for key, statement, statement_result in zip(keys, statements, statement_results):
+            for key, statement, plain, guards, statement_result in zip(
+                    keys, statements, unguarded, identities, statement_results):
                 if statement_result.ok and statement_result.affected == 0:
                     # 番号の書き方(型)だけが違う行なら、共有DBに書いてある値で書き直す
                     statement_result = _retry_with_stored_key(
                         gateway, table_name, key_column, key, statement, statement_result)
+                why = ""
+                if statement_result.ok and statement_result.affected == 0 and guards:
+                    # **押したときと同じ看板か**(資材)。違えば送らない(使い回された番号)
+                    mine = tuple(_identity_text(v) for _c, v in guards)
+                    now = _shared_identity(gateway, table_name, key_column, key[1], [c for c, _v in guards])
+                    if now is not None and now != mine:
+                        why = (f"対象行なし: 共有DBの {table_name} の{key_column} {key[1]} は、いまは"
+                               f"「{' '.join(v for v in now if v)}」です(この端末で押したときは"
+                               f"「{' '.join(v for v in mine if v)}」)。マスタ管理・Access の入れ替えで看板が"
+                               "入れ替わった・資材が直されたので、別の看板に書かないよう送りません")
+                    elif now is not None:
+                        # 同じ看板(数の書き方だけが SQL の文字と違う)。資材を見ずに送る
+                        statement_result = _retry_with_stored_key(
+                            gateway, table_name, key_column, key, plain, statement_result)
                 if statement_result.ok and statement_result.affected > 0:
                     synced.append(key)
                 elif statement_result.ok:
                     # 条件に一致する行が共有DBに無い。**なぜ無いのか**まで書く
                     # (画面の「要確認」にそのまま出る。「対象行なし」だけでは直しようがない)
-                    why = _missing_row_reason(gateway, table_name, key_column, key[1])
+                    why = why or _missing_row_reason(gateway, table_name, key_column, key[1])
                     message = f"{key[0]}/{key[1]}: {why}"
                     applog.warning("export_pending: %s", message)
                     result.errors.append(message)

@@ -17,7 +17,7 @@
 {% if not lines %}
   <div class="empty">
     <p><b>表示できるラインがありません。</b></p>
-    <p>Access からの取り込みがまだ終わっていないか、担当ラインが設定されていません。</p>
+    <p>{{ empty_reason }}</p>
     <p><a href="/settings">設定を開く</a></p>
   </div>
 {% else %}

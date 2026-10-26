@@ -881,12 +881,14 @@ async function onLineChange(ev) {
     const r = await api.post('/api/line', { line: next, ...creds });
     state.line = r.line;
     ok(`担当ラインを ${r.label} にしました${r.imported ? `(${r.label} の看板を取り込みました)` : ''}。`);
-    if (r.note) {
-      // 表でラインが決まっている端末: 次に起動すると戻る。読み直したあとも見えるように残す
-      warn(r.note);
-      try { sessionStorage.setItem('kanban.settings.lineNote', r.note); } catch (e) { /* 残せなくてよい */ }
+    // 取り込めなかったわけ(共有DBにそのラインの表が無い など)と、表でラインが決まっている
+    // 端末の「次に起動すると戻る」。読み直したあとも見えるように残す
+    const note = [r.import_note, r.note].filter(Boolean).join('\n');
+    if (note) {
+      warn(note);
+      try { sessionStorage.setItem('kanban.settings.lineNote', note); } catch (e) { /* 残せなくてよい */ }
     }
-    reloadSoon(r.note ? 2500 : 900, document.getElementById('line'));
+    reloadSoon(note ? 2500 : 900, document.getElementById('line'));
   } catch (e) {
     ev.target.value = state.line;
     bad(e.message);

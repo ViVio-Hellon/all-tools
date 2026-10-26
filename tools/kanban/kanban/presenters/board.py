@@ -335,8 +335,12 @@ def _row(item: KanbanItem, policy: BoardPolicy) -> RowView:
             kind="ship",
             label="発送",
             state=STATE_SHIPPED if item.is_shipped else STATE_NEUTRAL,
-            enabled=policy.ship,
-            tip=_time_tip("発送", item.confirmed_at, item.is_shipped),
+            # **発注の無い行は発送できない**(注文中と同じ)。以前は押せて、押すと「先に
+            # サイズボタンで発注してください」と断っていた ── 倉庫はサイズボタンを押せないので、
+            # 言われたとおりにできない。押せないことと理由を先に見せる。発送を外す方向
+            # (緑が付いている)はいつでも押せる
+            enabled=policy.ship and (item.is_ordered or item.is_shipped),
+            tip=_ship_tip(item, policy.ship),
         ),
         hold=ButtonView(
             kind="hold",
@@ -357,6 +361,13 @@ def _time_tip(prefix: str, value: str, active: bool) -> str:
         return ""
     text = format_display_time(value)
     return f"{prefix}: {text}" if text else ""
+
+
+def _ship_tip(item: KanbanItem, can_ship: bool) -> str:
+    """発送の時刻。発注が無くて押せないときは、なぜ押せないか(発送を操作しないモードでは言わない)。"""
+    if not item.is_shipped and not item.is_ordered and can_ship:
+        return "発注がありません。現場が発注してから発送できます"
+    return _time_tip("発送", item.confirmed_at, item.is_shipped)
 
 
 def _hold_tip(item: KanbanItem, can_hold: bool = True) -> str:

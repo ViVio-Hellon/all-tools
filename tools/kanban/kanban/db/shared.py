@@ -677,15 +677,21 @@ def build_update(
     assignments: dict[str, Any],
     key_column: str,
     key_value: Any,
+    guards: Sequence[tuple[str, Any]] = (),
 ) -> Statement:
     """状態列だけを更新する 1 文を組み立てる。
 
     **値は埋め込まずプレースホルダで渡します。** Access 方言のリテラル生成
     (``#yyyy-mm-dd hh:nn:ss#`` やクォートの二重化)が不要になったので、
     エスケープ漏れという種類の不具合が構造的に起こりません。
+
+    ``guards`` は ``(列, 値)`` の並び。その列が(前後の空白を除いて)その値の行にだけ書く
+    (書き戻しは、押したときの資材の看板にだけ書く。:func:`kanban.db.sync._export_items`)。
+    **キーの値はいつも最後の引数**(番号の書き方だけ違う行へ送り直すときに差し替える)。
     """
     if not assignments:
         raise ValueError("更新する列がありません")
     sets = ", ".join(f"{_ident(c)} = ?" for c in assignments)
-    sql = f"UPDATE {_ident(table)} SET {sets} WHERE {_ident(key_column)} = ?"
-    return sql, [*assignments.values(), key_value]
+    where = "".join(f"TRIM(COALESCE(CAST({_ident(c)} AS TEXT), '')) = ? AND " for c, _v in guards)
+    sql = f"UPDATE {_ident(table)} SET {sets} WHERE {where}{_ident(key_column)} = ?"
+    return sql, [*assignments.values(), *(("" if v is None else str(v)).strip() for _c, v in guards), key_value]

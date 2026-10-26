@@ -138,6 +138,19 @@ _META_DEVICE_MODE = "device_mode"
 #: 書き戻し対象になりうる状態列(論理名)。dirty_columns にはこの部分集合が入る
 STATE_COLUMNS = MUTABLE_FIELDS
 
+#: 書き戻しで「押した看板と同じ看板か」を見る列(論理名)。**押したときの資材の看板にだけ書く。**
+#:
+#: 書き戻しは ``WHERE 管理番号 = ?`` で行を決める。送る前に、ほかの端末のマスタ管理でその看板が
+#: 消され、**同じ番号で別の看板が足されると**(マスタ管理は「いちばん大きい番号 + 1」を勧めるので、
+#: 最後の看板を消して足すと同じ番号になる)、前の看板への発注が新しい看板に乗っていた
+#: ── 倉庫は押した人が頼んでいない資材を出す。押したときの資材の行にだけ書き、違っていれば
+#: 送らない(取り込みが手元の操作を下ろして帯で知らせる。:meth:`Store.import_line`・
+#: :func:`kanban.db.sync._export_items`)。
+#:
+#: **サイズは見ない。** サイズ(1 回の量 ``…:3本`` を含む)を直しても、送っていない発注は残して
+#: 新しいサイズで出す決まり(``test_master_freshness``)。
+IDENTITY_FIELDS = ("material",)
+
 
 def _merge_dirty_columns(existing: str, new_keys: Iterable[str]) -> str:
     """既存の未反映列とこの操作で変わる列を、重複なく合わせる。
@@ -555,6 +568,7 @@ class Store:
         def _apply() -> tuple[int, int, int]:
             inserted = updated = protected = 0
             dropped: list[str] = []
+            replaced: list[dict[str, Any]] = []
             with self.write_transaction() as conn:
                 conn.execute(
                     "INSERT INTO line_source(line, table_name, key_column, key_category,"
@@ -649,6 +663,14 @@ class Store:
                             ),
                         )
                         inserted += 1
+                    elif keep_local_changes and current["dirty"] and _replaced(current, row):
+                        # **送る前に看板が入れ替わった**(消して同じ番号で別の資材を足し直した・
+                        # 資材が直された)。前の看板への操作を新しい看板に乗せない ── 書き戻しも
+                        # 押したときの資材の行にしか書かない(:mod:`kanban.db.sync`)ので、
+                        # 残しても永久に届かない。共有DBのいまの看板にして、帯で知らせる
+                        replaced.append(dict(current))
+                        if self._refresh_clean_row(conn, line, mgmt_no, order, row, current, now):
+                            updated += 1
                     elif keep_local_changes and current["dirty"]:
                         if self._refresh_protected_row(
                             conn, line, mgmt_no, order, row, current, now
@@ -698,7 +720,12 @@ class Store:
                     )
             if dropped:
                 _log_dropped(line, dropped)
-                self._remember_dropped(line, dropped_rows)
+            if replaced:
+                applog.warning("送る前に看板が入れ替わっていたので、前の看板への操作を下ろしました(新しい看板には"
+                               "乗せません): %s / %s", line, "、".join(
+                                   f"{r['mgmt_no']}({r.get('material', '')} {r.get('size', '')})" for r in replaced))
+            if dropped or replaced:
+                self._remember_dropped(line, dropped_rows + replaced)
             return inserted, updated, protected
 
         return self.retry(_apply, "import_line")
@@ -1180,7 +1207,7 @@ class Store:
         return [
             dict(row)
             for row in self.connection.execute(
-                "SELECT line, mgmt_no, rev, want, unwant, ordered_at, shipped,"
+                "SELECT line, mgmt_no, rev, material, size, want, unwant, ordered_at, shipped,"
                 " confirmed_at, hold, hold_at, sync_attempts, dirty_columns"
                 " FROM kanban_item"
                 " WHERE dirty = 1 AND sync_attempts < ?"
@@ -1839,6 +1866,16 @@ class Store:
                 return cursor.rowcount
 
         return int(self.retry(_apply, "prune_operation_log"))
+
+
+def _replaced(current: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    """手元の看板と、共有DBから届いた同じ番号の看板の**資材**が違うか(入れ替わった・資材が直された)。
+
+    サイズは見ない(サイズ・1 回の量を直しても、送っていない発注は新しいサイズで残す決まり)。
+    書き戻しも同じ列で照らす(:data:`IDENTITY_FIELDS`)。
+    """
+    text = lambda v: "" if v is None else str(v).strip()  # noqa: E731
+    return any(text(current.get(name)) != text(incoming.get(name)) for name in IDENTITY_FIELDS)
 
 
 def _dropped_what(row: dict[str, Any]) -> str:

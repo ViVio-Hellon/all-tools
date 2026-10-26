@@ -107,10 +107,32 @@ def page():
         lines=[{"code": c, "label": config.display_name(c), "current": c == line} for c in lines],
         shown_line=line,
         state=board_dict(view, stamp) if view else None,
+        empty_reason="" if lines else _empty_reason(store, mode),
         pending=store.pending_count(),
         switch_modes=_switch_modes(mode),
         **shell_context("board"),
     )
+
+
+def _empty_reason(store, mode: str) -> str:
+    """盤に出せるラインが無いわけ。**当てはまるものだけを言う。**
+
+    以前は「Access からの取り込みがまだ終わっていないか、担当ラインが設定されていません」と
+    どちらとも取れる文だけで、担当ラインを決めてあっても「設定されていません」と言っていた
+    (共有DBにそのラインの表が無いときなど)。
+    """
+    missing = {c for c in store.get_meta("missing_line_tables", "").split(",") if c}
+    if mode == config.MODE_SITE:
+        line = current_line()
+        if not line:
+            return "担当ラインが設定されていません。「設定を開く」→「この端末」で担当ラインを選んでください。"
+        label = config.display_name(line)
+        if line in missing:
+            return (f"共有DBに {config.table_name_for(line)} がありません(担当ライン「{label}」の看板の表)。"
+                    "担当ラインが合っているか、接続先(共有DB)が正しいかを確かめてください。")
+        return (f"担当ライン「{label}」の看板をまだ取り込めていません。"
+                "接続先(共有DB)に届いているかを確かめてください。")
+    return "倉庫の対象ラインの看板をまだ取り込めていません。接続先(共有DB)に届いているかを確かめてください。"
 
 
 def _switch_modes(mode: str) -> list[dict[str, str]]:

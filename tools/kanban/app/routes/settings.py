@@ -1281,7 +1281,7 @@ def set_line():
     if not ok:
         return problem
 
-    imported = _switch_line(line, "管理者パスワードで")
+    imported, import_note = _switch_line(line, "管理者パスワードで")
     # **表でラインが決まっている端末は、次に起動すると表のラインに戻る。** そう言っておく
     note = ""
     grant = current_app.config.get("ACCESS_GRANT")
@@ -1290,13 +1290,17 @@ def set_line():
         note = (f"次に起動すると、アクセス権限の表のライン「{config.display_name(table_line)}」に戻ります。"
                 "変えたままにするには、マスタ管理でアクセス権限を書き換えてください。")
     return jsonify({"ok": True, "line": line, "label": config.display_name(line),
-                    "imported": imported, "note": note})
+                    "imported": imported, "import_note": import_note, "note": note})
 
 
-def _switch_line(line: str, how: str) -> bool:
-    """担当ラインを切り替える(設定に保存・名乗り・その場で取り込み)。取り込めたら True。
+def _switch_line(line: str, how: str) -> tuple[bool, str]:
+    """担当ラインを切り替える(設定に保存・名乗り・その場で取り込み)。``(取り込めたか, 取り込めないわけ)``。
 
     画面で選んだとき(管理者パスワード)と、アクセス権限の表から当てたときの両方が通る。
+
+    **取り込めたかは、そのラインの結果で決める。** 以前は取り込みが例外を出さなければ
+    「取り込みました」と言っていた ── 共有DBにそのラインの表が無くても「AIM の看板を
+    取り込みました」と出て、看板の画面は空のままだった。
     """
     cfg = _cfg()
     cfg.line = line
@@ -1320,14 +1324,27 @@ def _switch_line(line: str, how: str) -> bool:
     # **変えた先のラインをその場で取り込む。** 取り込まないと、看板画面は
     # 次の定期取り込みまで(0 秒設定なら開き直すまで)空のままになる
     imported = False
+    note = ""
     hook = current_app.config.get("MANUAL_REFRESH")
     if hook is not None:
+        from kanban.db.sync import TABLE_MISSING
+
         try:
-            hook()
-            imported = True
+            result = hook()
         except Exception:  # noqa: BLE001 - ラインを変えたことは変わらない
             log.exception("担当ラインを変えたあとの取り込みに失敗")
-    return imported
+            note = "共有DBから取り込めませんでした。接続先(共有DB)に届いているかを確かめてください。"
+        else:
+            failed = [r for r in (getattr(result, "failed_lines", None) or [])
+                      if getattr(r, "line", "") == line]
+            imported = not failed
+            if failed and getattr(failed[0], "message", "") == TABLE_MISSING:
+                note = (f"共有DBに {config.table_name_for(line)} がありません。"
+                        f"担当ライン「{config.display_name(line)}」が合っているかを確かめてください。")
+            elif failed:
+                note = (f"担当ライン「{config.display_name(line)}」の看板を取り込めませんでした: "
+                        f"{getattr(failed[0], 'message', '')}")
+    return imported, note
 
 
 def _apply_line_from_access(grant) -> str:
