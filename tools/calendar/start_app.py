@@ -568,7 +568,11 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
     try:
         from calendar_app import distribution
 
+        log().info("%s", distribution.describe())
         loaded = distribution.apply_on_start()
+        if loaded.kept:
+            log().info("配布設定: この端末で決めた値なので読まなかったもの: %s"
+                       "(揃えるときは設定画面の「配布設定を読み込み直す」)", "、".join(loaded.kept))
         if loaded.applied:
             # 読む前に同期が出来ていたら、古い参照パスのまま動いている
             sync_service.get_service().reload()

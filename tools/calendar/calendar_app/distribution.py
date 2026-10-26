@@ -29,6 +29,13 @@
 端末で直した値が戻されることはありません。狙って揃えたいときは、
 設定画面の「配布設定を読み込み直す」(管理者パスワード)で上書きします。
 
+【配り直したとき】配布設定から読み込んだ値は、**この端末で決めた値ではありません。**
+読み込んだ値は ``distribution_values`` に覚えておき、端末の値がそのままなら、配り直した
+配布設定の新しい値で置き換えます(読み込んだあとに端末で直した値は残す)。前は読み込んだ
+値も「すでにある」と数えたので、参照パスを変えて配り直しても、一度読み込んだ端末は前の
+値のまま動いていました。覚える前の版で読み込んだ端末は見分けが付かないので、1度だけ
+「配布設定を読み込み直す」で揃えてください。
+
 【パスワード】書き出す・消す・読み込み直すには管理者パスワードが要ります。
 起動時の読み込みには要りません ── ``配布設定\\`` を置いたのは、フォルダを
 配った管理者本人だからです。
@@ -77,6 +84,9 @@ FORMAT = 1
 
 # この端末が最後に読み込んだとき(設定画面に出すだけ)
 KEY_APPLIED = "distribution_applied"
+#: 配布設定から読み込んで**この端末に書いた値**({鍵: 値})。この端末で決めた値と見分ける
+#: ── 値がこれと同じままなら、配り直した配布設定の新しい値で置き換える(``_decided_here``)
+KEY_FROM_DIST = "distribution_values"
 
 # 入れられるもの: (鍵, 画面の名前, 既定で入れるか)
 #
@@ -350,21 +360,58 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     return result
 
 
+def _decided_here(key: str, value: Any, came: dict[str, Any]) -> bool:
+    """この端末の値は**この端末で決めた**ものか。
+
+    配布設定から読み込んだ値のまま(``came`` と同じ)なら、この端末で決めたのではない
+    ── 配り直した配布設定の新しい値で置き換えてよい。読み込んだあとにこの端末で直した
+    値・配布設定と関わりなく決めた値は、決めた値として残す(いまの決まり)。
+    """
+    return _present(value) and not (key in came and came[key] == value)
+
+
 def _apply_locked(bundle: Bundle, overwrite: bool, result: Result) -> None:
     current = user_settings.load()
+    found = current.get(KEY_FROM_DIST)
+    came = dict(found) if isinstance(found, dict) else {}
+    written: dict[str, Any] = {}
     for key, value in bundle.settings.items():
-        if _present(current.get(key)) and not overwrite:
-            result.kept.append(ITEM_LABELS[key])        # すでにある
-            continue
+        if not overwrite and _present(current.get(key)):
+            if current.get(key) == value or (
+                    key == admin_password.KEY and admin_password._matches(str(value), str(current.get(key)))):
+                continue                                # もう同じ(手で書いた平文は撹拌して持っている)
+            if _decided_here(key, current.get(key), came):
+                result.kept.append(ITEM_LABELS[key])    # すでにある(この端末で決めた違う値)
+                continue
         if key == admin_password.KEY and not str(value).startswith(
                 admin_password.SCHEME + "$"):
             # 手で平文を書かれていても、**端末には撹拌して持つ**
             value = admin_password.hash_for_distribution(str(value))
         current[key] = value
+        written[key] = value
         result.applied.append(ITEM_LABELS[key])
+    # **配布設定から書いた値を覚えておく**(この端末で直した値は外す)。次に配り直したとき、
+    # この端末で決めた値と見分ける
+    remembered = {k: v for k, v in came.items() if current.get(k) == v}
+    remembered.update(written)
     if result.applied:
         current[KEY_APPLIED] = {"at": _now()}
+    if result.applied or remembered != came:
+        current[KEY_FROM_DIST] = remembered
         user_settings.save(current)
+
+
+def describe() -> str:
+    """起動の記録の1行。**起動のたびに、何を読んでいるかを残す**(配った先で「効いていない」と
+    言われたとき、まず見るところ)。"""
+    if not DIR.is_dir():
+        return f"配布設定はありません({DIR})"
+    bundle = read()
+    if bundle is None:
+        return (f"配布設定を読めません({settings_path()}): 無い・JSON の形が違う・format が違う・"
+                "知っている項目が1つも無い、のどれか(無いものとして続けます)")
+    return (f"配布設定を読みます: {DIR}(設定 {len(bundle.settings)}件: "
+            f"{'、'.join(ITEM_LABELS[k] for k in bundle.settings)})")
 
 
 def apply_on_start() -> Result:

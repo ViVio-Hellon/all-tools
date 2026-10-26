@@ -262,6 +262,49 @@ class ApplyTests(DistributionTestCase):
         self.assertEqual(distribution.apply_on_start().applied, [])
         self.assertEqual(user_settings.get(config.KEY_REPORT_OUT_DIR), r"\\この端末\出力")
 
+    def test_配り直すと配布設定から読み込んだ値は新しい値になる(self) -> None:
+        """違うPCでやってみたが参照設定が初期値になっていた(前に読み込んだ値のまま)。
+
+        前は配布設定から読み込んだ値も「その端末にすでにある」と数えたので、参照先を
+        変えて配り直しても、一度読み込んだ端末は前の値のまま動いていた。
+        読み込んだあとにこの端末で直した値は残す(いまの決まり)。
+        """
+        from nippou import config, distribution, user_settings
+        self.distributed()
+        self.assertIn("参照用マスタの参照パス", distribution.apply_on_start().applied)
+        user_settings.save(config.KEY_REPORT_OUT_DIR, r"\\この端末\出力")   # この端末で直した
+        # 配る元で参照先を変えて、書き出し直す
+        self.source.use()
+        user_settings.save(config.KEY_REFERENCE_DIR, r"\\srv\参照2")
+        user_settings.save(config.KEY_ACCESS_DIR, r"\\srv\日報2")
+        user_settings.save(config.KEY_REPORT_OUT_DIR, r"\\srv\出力2")
+        self.assertTrue(self.export().ok)
+        self.dest.use()
+        result = distribution.apply_on_start()
+        self.assertIn("参照用マスタの参照パス", result.applied)
+        self.assertIn("共有の日報管理のパス", result.applied)
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照2")
+        self.assertEqual(user_settings.get(config.KEY_ACCESS_DIR), r"\\srv\日報2")
+        self.assertEqual(user_settings.get(config.KEY_REPORT_OUT_DIR), r"\\この端末\出力")
+        self.assertIn("集計CSV・印刷用HTMLの出力パス", result.kept)
+        self.assertIn(r"\\この端末\出力", result.as_text(), "読まなかった値を起動の記録に残す")
+        # もう一度起動しても同じ(直した値は戻さない・配り直した値のまま)
+        self.assertEqual(distribution.apply_on_start().applied, [])
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照2")
+
+    def test_読み込み直したあとも配り直せば新しい値になる(self) -> None:
+        from nippou import config, distribution, user_settings
+        self.distributed()
+        user_settings.save(config.KEY_REFERENCE_DIR, r"\\この端末\参照")
+        self.assertTrue(distribution.reapply(NEW_PW).ok)
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照")
+        self.source.use()
+        user_settings.save(config.KEY_REFERENCE_DIR, r"\\srv\参照2")
+        self.assertTrue(self.export().ok)
+        self.dest.use()
+        distribution.apply_on_start()
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照2")
+
     def test_読み込み直しはパスワードで上書き(self) -> None:
         from nippou import config, distribution, user_settings
         self.distributed()

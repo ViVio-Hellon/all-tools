@@ -170,35 +170,63 @@ class _Delivered(unittest.TestCase):
 
     # --- 端末 -------------------------------------------------------
     @classmethod
-    def terminal(cls, name: str, root: Optional[Path] = None) -> dict[str, str]:
-        """何も設定していない端末(利用者ごとの領域を一時フォルダへ)。``root`` は一式の場所(既定は配った一式)。"""
+    def terminal(cls, name: str, root: Optional[Path] = None, *, shell_like: bool = False) -> dict[str, str]:
+        """何も設定していない端末(利用者ごとの領域を一時フォルダへ)。``root`` は一式の場所(既定は配った一式)。
+
+        ``shell_like`` なら、外枠(日報複合ツール.exe)が渡すのと同じく ``LOCALAPPDATA`` / ``APPDATA``
+        だけを差し替え、各ツールの手元の領域の指定(``<頭>_LOCAL_DIR`` など)は渡さない。
+        """
         base = cls.tmp / "端末" / name
         env = {k: v for k, v in os.environ.items() if not k.startswith(_TOOL_ENV_PREFIXES)}
         env.update({
             "LOCALAPPDATA": str(base / "Local"), "APPDATA": str(base / "Roaming"),
             "XDG_DATA_HOME": str(base / "Local"),
-            "ALLTOOLS_LOCAL_DIR": str(base / "AllTools"),
-            "NIPPOU_LOCAL_DIR": str(base / "NippouTool"),
-            "KANBAN_LOCAL_DIR": str(base / "KanbanSystem"),
-            "KANBAN_CONFIG": str(base / "Roaming" / "KanbanSystem" / "config.json"),
-            "CALENDAR_LOCAL_DIR": str(base / "LineCalendar"),
-            "INSPECTION_LOCAL_DIR": str(base / "InspectionSheetPrint"),
             "ALLTOOLS_LOG_QUIET": "1", "ALLTOOLS_LOGIN_ID": "tester", "ALLTOOLS_PC_NAME": "DELIVERED-PC",
             "ALLTOOLS_SHELL": "1", "ALLTOOLS_ROOT": str(root or cls.dist),
             "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
         })
+        if not shell_like:
+            env.update({
+                "ALLTOOLS_LOCAL_DIR": str(base / "AllTools"),
+                "NIPPOU_LOCAL_DIR": str(base / "NippouTool"),
+                "KANBAN_LOCAL_DIR": str(base / "KanbanSystem"),
+                "KANBAN_CONFIG": str(base / "Roaming" / "KanbanSystem" / "config.json"),
+                "CALENDAR_LOCAL_DIR": str(base / "LineCalendar"),
+                "INSPECTION_LOCAL_DIR": str(base / "InspectionSheetPrint"),
+            })
         return env
 
     @staticmethod
     def settings_file(env: dict[str, str], tool: str) -> tuple[Path, str]:
-        """その端末の設定ファイルと、配布設定の項目(試験で見る1つ)の鍵。"""
+        """その端末の設定ファイルと、配布設定の項目(試験で見る1つ)の鍵。
+
+        手元の領域の指定が無ければ(``shell_like``)、各ツールが決めるのと同じ
+        ``%LOCALAPPDATA%\\<名前>`` / ``%APPDATA%\\KanbanSystem``。
+        """
+        local = Path(env["LOCALAPPDATA"])
+
+        def root(var: str, name: str) -> Path:
+            return Path(env[var]) if env.get(var) else local / name
+
         return {
-            "portal": (Path(env["ALLTOOLS_LOCAL_DIR"]) / "data" / "user_settings.json", "shared_db_dir"),
-            "nippou": (Path(env["NIPPOU_LOCAL_DIR"]) / "runtime" / "user_config.json", "access_dir"),
-            "kanban": (Path(env["KANBAN_CONFIG"]), "shared_db_path"),
-            "calendar": (Path(env["CALENDAR_LOCAL_DIR"]) / "data" / "settings.json", "保存用DBフォルダ"),
-            "inspection": (Path(env["INSPECTION_LOCAL_DIR"]) / "data" / "user_settings.json", "root_folder"),
+            "portal": (root("ALLTOOLS_LOCAL_DIR", "AllTools") / "data" / "user_settings.json", "shared_db_dir"),
+            "nippou": (root("NIPPOU_LOCAL_DIR", "NippouTool") / "runtime" / "user_config.json", "access_dir"),
+            "kanban": (Path(env["KANBAN_CONFIG"]) if env.get("KANBAN_CONFIG")
+                       else Path(env["APPDATA"]) / "KanbanSystem" / "config.json", "shared_db_path"),
+            "calendar": (root("CALENDAR_LOCAL_DIR", "LineCalendar") / "data" / "settings.json", "保存用DBフォルダ"),
+            "inspection": (root("INSPECTION_LOCAL_DIR", "InspectionSheetPrint") / "data" / "user_settings.json",
+                           "root_folder"),
         }[tool]
+
+    @classmethod
+    def stored_values(cls, env: dict[str, str], tool: str) -> dict:
+        """その端末の設定ファイルの中身(無い・読めなければ空)。"""
+        path, _key = cls.settings_file(env, tool)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     @classmethod
     def stored(cls, env: dict[str, str], tool: str) -> Optional[str]:
@@ -386,6 +414,122 @@ class ExportAllDeliveredTests(_Delivered):
         env = self.terminal("配った先")
         tails = self.start_all(env, lambda tool: self.stored(env, tool) == self.expected[tool])
         self.assert_read(env, tails)
+
+
+class RedistributedTerminalTests(_Delivered):
+    """**配り直し**を通しで: 配る元で参照設定を変える → 書き出す → make_dist → 配った先(外枠と同じ道)。
+
+        日報複合ツール VER1.5.64。日報、看板、カレンダーの配布設定の参照設定が生きていないのでは?
+        違うPCでやってみたが参照設定が初期値になっていた。大設定のタブ表示権限は読めていた
+
+    配った先の端末が**前に一度配布設定を読み込んでいる**と、前は読み込んだ値も「その端末にすでに
+    ある」と数えていたので、参照先を変えて配り直しても前の値のまま動いていた(まっさらな端末は
+    読む)。配布設定から読み込んだ値のままの項目は新しい値にし、**その端末で直した値は残す**。
+
+    端末は外枠(日報複合ツール.exe)が渡すのと同じ環境(``LOCALAPPDATA`` / ``APPDATA`` だけ。
+    各ツールの手元の領域の指定は渡さない)で、各ツールの ``bridge.py`` を子として起こす。
+    書き出しは現場と同じ大設定の「4ツールの分もまとめて書き出す」(``export_all``)。
+    """
+
+    #: 見る参照設定(ツールごとに複数)。値は {"1回目" / "2回目"} で配る元を変える
+    KEYS = {
+        "portal": ("shared_db_dir",),
+        "nippou": ("gw_reference_dir", "access_dir", "report_output_dir"),
+        "kanban": ("shared_db_path", "history_db_path"),
+        "calendar": ("保存用DBフォルダ", "マスタDBフォルダ"),
+        "inspection": ("root_folder",),
+    }
+    #: 配った先の端末で、1回目を読み込んだあとに利用者が直す項目(配り直しても戻さない)
+    CHANGED_HERE = {"nippou": "report_output_dir", "calendar": "マスタDBフォルダ"}
+
+    @classmethod
+    def values(cls, round_name: str) -> dict[str, dict[str, str]]:
+        share = cls.tmp / "共有" / round_name
+        out: dict[str, dict[str, str]] = {}
+        for tool, keys in cls.KEYS.items():
+            out[tool] = {}
+            for key in keys:
+                name = "看板マスタ.sqlite3" if key == "shared_db_path" else (
+                    "看板履歴.sqlite3" if key == "history_db_path" else "")
+                folder = share / tool / key
+                out[tool][key] = str(folder / name) if name else str(folder)
+        return out
+
+    @classmethod
+    def configure_source(cls, round_name: str) -> None:
+        """配る元の端末の設定を変える(各ツールの設定画面で決めたのと同じ、端末の設定ファイル)。"""
+        for tool, values in cls.values(round_name).items():
+            path, _key = cls.settings_file(cls.pc1, tool)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                data = {}
+            data.update(values)
+            if tool == "kanban":
+                data.setdefault("admin_password_hash", cls.kanban_hash)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    @classmethod
+    def export_all(cls) -> dict:
+        done = subprocess.run(
+            [sys.executable, "-c", "import json, sys; from portal import distribution; "
+                                   "sys.stdout.write(json.dumps(distribution.export_all(), ensure_ascii=False))"],
+            cwd=cls.source, env=cls.pc1, capture_output=True, timeout=300)
+        if done.returncode != 0:
+            return {"ok": False, "results": [], "error": done.stderr.decode("utf-8", errors="replace")[-1500:]}
+        return json.loads(done.stdout.decode("utf-8") or "{}")
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        cls.source = source
+        cls.pc1 = cls.terminal("配る元", root=source, shell_like=True)
+        cls.kanban_hash = subprocess.run(
+            [sys.executable, "-c", "from kanban import config; print(config.hash_password('line2026'))"],
+            cwd=source / "tools" / "kanban", env=cls.pc1, capture_output=True, text=True,
+            encoding="utf-8", check=True).stdout.strip()
+        cls.configure_source("1回目")
+        cls.first_export = cls.export_all()
+
+    def wait_for(self, env: dict[str, str], expected: dict[str, dict[str, str]]) -> Callable[[str], bool]:
+        return lambda tool: all(self.stored_values(env, tool).get(k) == v for k, v in expected[tool].items())
+
+    def assert_values(self, env: dict[str, str], expected: dict[str, dict[str, str]],
+                      tails: dict[str, str], when: str) -> None:
+        for tool, values in expected.items():
+            stored = self.stored_values(env, tool)
+            for key, value in values.items():
+                with self.subTest(when=when, tool=tool, key=key):
+                    self.assertEqual(stored.get(key), value,
+                                     f"{when}: {tool} の {key} が配布設定の値になっていない。\n"
+                                     f"--- 標準エラーの終わり ---\n{tails[tool]}")
+
+    def test_配り直すと前に読み込んだ端末も新しい参照設定になる_直した値は残す(self) -> None:
+        self.assertTrue(self.first_export.get("ok"), self.first_export)
+        first = self.values("1回目")
+        env = self.terminal("配った先", shell_like=True)
+        tails = self.start_all(env, self.wait_for(env, first))
+        self.assert_values(env, first, tails, "1回目")
+
+        # 配った先の利用者が、この端末で直す(配布設定と関わりなく決めた値)
+        mine: dict[str, str] = {}
+        for tool, key in self.CHANGED_HERE.items():
+            path, _key = self.settings_file(env, tool)
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            mine[tool] = data[key] = str(self.tmp / "この端末" / tool)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # 配る元で参照設定を変えて、まとめて書き出し直し、配布用フォルダを作り直して配る(上書き)
+        self.configure_source("2回目")
+        again = self.export_all()
+        self.assertTrue(again.get("ok"), again)
+        make_dist.build(self.dist, force=True, exe=self.tmp / "無い.exe", root=self.source)
+
+        second = self.values("2回目")
+        expected = {tool: {k: (mine[tool] if self.CHANGED_HERE.get(tool) == k else v) for k, v in values.items()}
+                    for tool, values in second.items()}
+        tails = self.start_all(env, self.wait_for(env, expected))
+        self.assert_values(env, expected, tails, "配り直したあと")
 
 
 if __name__ == "__main__":

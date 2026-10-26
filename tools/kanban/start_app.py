@@ -436,7 +436,11 @@ def _prepare(args):
     if not args.config:
         from kanban import distribution
 
+        log.info("%s", distribution.describe())
         loaded = distribution.apply_on_start()
+        if loaded.kept and not loaded.applied:
+            log.info("配布設定: この端末で決めた値なので読まなかったもの: %s"
+                     "(揃えるときは設定画面の「配布設定を読み込み直す」)", "、".join(loaded.kept))
         if loaded.applied:
             cfg = _load_config(args)
             text = f"配布設定を読み込みました: {'、'.join(loaded.applied)}"

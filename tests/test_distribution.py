@@ -29,7 +29,8 @@ def clear_terminal() -> None:
     """この端末の設定を、配られたばかりの端末と同じにする。"""
     user_settings.update({k: None for k in (user_settings.KEY_SHARED_DIR, user_settings.KEY_SHARED_NAME,
                                             user_settings.KEY_ADMIN_PASSWORD,
-                                            user_settings.KEY_DISTRIBUTION_APPLIED)})
+                                            user_settings.KEY_DISTRIBUTION_APPLIED,
+                                            distribution.KEY_FROM_DIST)})
 
 
 class DistributionTests(unittest.TestCase):
@@ -38,6 +39,25 @@ class DistributionTests(unittest.TestCase):
         shutil.rmtree(DIST, ignore_errors=True)
         self.addCleanup(clear_terminal)
         self.addCleanup(shutil.rmtree, DIST, True)
+
+    def test_配り直すと配布設定から読み込んだ値は新しい値になる(self) -> None:
+        """前は読み込んだ値も「すでにある」と数えたので、置き場所を変えて配り直しても前の値のままだった。"""
+        user_settings.update({user_settings.KEY_SHARED_DIR: r"\\srv\共有\AIM"})
+        self.assertTrue(distribution.export().ok)
+        clear_terminal()
+        self.assertIn("共有の DB のフォルダ", distribution.apply_on_start().applied)
+        # 配る元で置き場所を変えて書き出し直す(ここでは配布設定のファイルを書き換えて代わりにする)
+        data = json.loads(distribution.file_path().read_text(encoding="utf-8"))
+        data["settings"][user_settings.KEY_SHARED_DIR] = r"\\srv\試験\AIM"
+        distribution.file_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("共有の DB のフォルダ", distribution.apply_on_start().applied)
+        self.assertEqual(shared_db.location().folder, r"\\srv\試験\AIM")
+        # この端末で直したら、配り直しても戻さない
+        user_settings.update({user_settings.KEY_SHARED_DIR: r"\\srv\別"})
+        data["settings"][user_settings.KEY_SHARED_DIR] = r"\\srv\本番\AIM"
+        distribution.file_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("共有の DB のフォルダ", distribution.apply_on_start().kept)
+        self.assertEqual(shared_db.location().folder, r"\\srv\別")
 
     def test_既定のままなら書き出すものが無い(self) -> None:
         result = distribution.export()

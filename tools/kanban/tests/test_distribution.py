@@ -160,6 +160,48 @@ class ApplyTest(DistributionTestBase):
         self.assertEqual(distribution.apply_on_start().applied, [])
         self.assertEqual(config.load_config().import_interval_sec, 10)
 
+    def test_a_redistributed_value_replaces_what_was_read_before(self):
+        """違うPCでやってみたが参照設定が初期値になっていた(前に読み込んだ値のまま)。
+
+        前は配布設定から読み込んだ値も「その端末にすでにある」と数えたので、接続先を
+        変えて配り直しても、一度読み込んだ端末は前の値のまま動いていた。
+        読み込んだあとにこの端末で直した値は残す(いまの決まり)。
+        """
+        self.distribute()
+        self.use_terminal("配った先")
+        distribution.apply_on_start()
+        self.configure(export_interval_sec=7)               # この端末で直した
+        self.use_terminal("配る元")
+        self.configure(shared_db_path=r"\\server\試験\看板マスタ.sqlite3",
+                       history_db_path=r"\\server\試験\看板履歴.sqlite3", export_interval_sec=99)
+        self.assertTrue(self.export_default().ok)
+        self.use_terminal("配った先")
+        self.configure(export_interval_sec=7)
+        result = distribution.apply_on_start()
+        cfg = config.load_config()
+        self.assertEqual(cfg.shared_db_path, r"\\server\試験\看板マスタ.sqlite3")
+        self.assertEqual(cfg.history_db_path, r"\\server\試験\看板履歴.sqlite3")
+        self.assertEqual(cfg.export_interval_sec, 7, "この端末で直した値を戻した")
+        self.assertIn("書き戻し間隔", result.kept)
+        self.assertEqual(distribution.apply_on_start().applied, [], "次の起動では何も変えない")
+
+    def test_the_builtin_place_does_not_hide_the_bundle(self):
+        """既定の置き場所(本番の共有DB・この端末のローカル領域)を書いた端末も、配った値を読む。
+
+        前の版の設定ファイルや、前に配った既定の場所が残っていても、どちらにしても
+        同じ所を見ているだけで、この端末で決めた値ではない。
+        """
+        from kanban import app_config
+
+        self.distribute()
+        self.use_terminal("配った先")
+        builtin = config.Config()
+        self.configure(shared_db_path=builtin.resolved_shared_db_path(),
+                       log_dir=str(app_config.local_dir("logs")))
+        result = distribution.apply_on_start()
+        self.assertIn("接続先(共有DB)", result.applied)
+        self.assertEqual(config.load_config().shared_db_path, r"\\server\看板マスタ.sqlite3")
+
     def test_reapply_overwrites(self):
         """「読み込み直す」は、すでにある設定も上書きして揃える。"""
         self.distribute()

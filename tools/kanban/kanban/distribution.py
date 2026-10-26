@@ -34,6 +34,19 @@ python-web-tools(梱包資材総合ツール)の ``packaging_tool/distribution.p
 直した値が戻されることはありません。狙って揃えたいときは、設定画面の
 「配布設定を読み込み直す」(管理者パスワード)で上書きします。
 
+【配り直したとき・既定の置き場所】次の値は**この端末で決めた値に数えません**(配布設定の値に
+置き換えます)。
+
+* 配布設定から読み込んだ値のまま(``_配布設定から読み込んだ値`` に覚えておく)。前は読み込んだ
+  値も「すでにある」と数えたので、接続先を変えて配り直しても、一度読み込んだ端末は前の値の
+  まま動いていました(現場:「違うPCでやってみたが参照設定が初期値になっていた」)
+* 決めていなくても使う置き場所と同じ値(既定の共有DB・看板履歴・梱包資材マスタ、この端末の
+  ローカル領域の logs / export)。前の版の設定ファイルや前の配布設定が既定の場所を書いていても、
+  配った置き場所を覆い隠さない
+
+覚える前の版で読み込んだ端末(既定ではない前の値)は見分けが付かないので、1度だけ
+「配布設定を読み込み直す」で揃えてください。
+
 【パスワード】書き出す・消す・読み込み直すには管理者パスワードが要ります
 (設定画面の経路が確かめる)。起動時の読み込みには要りません ──
 ``配布設定\\`` を置いたのは、フォルダを配った管理者本人だからです。
@@ -90,6 +103,10 @@ REFUSE_NOTHING = "nothing"
 
 #: この端末が最後に配布設定を読み込んだ日時(この端末の設定ファイルの付記)
 META_APPLIED = "_配布設定を読み込んだ日時"
+#: 配布設定から読み込んで**この端末に書いた値**({項目: 値}。この端末の設定ファイルの付記)。
+#: この端末で決めた値と見分ける ── 値がこれと同じままなら、配り直した配布設定の新しい値で
+#: 置き換える(:func:`_decided_here`)
+META_FROM_DIST = "_配布設定から読み込んだ値"
 
 
 def integrated_where(folder) -> str:
@@ -432,20 +449,93 @@ def remove() -> Result:
 # ------------------------------------------------------------------
 # 読み込む(配られた側)
 # ------------------------------------------------------------------
+def _from_distribution() -> dict[str, Any]:
+    """前に配布設定から読み込んで、この端末に書いた値(:data:`META_FROM_DIST`)。"""
+    try:
+        found = config.read_meta(META_FROM_DIST)
+    except OSError:
+        return {}
+    return dict(found) if isinstance(found, dict) else {}
+
+
+def _builtin_places() -> dict[str, str]:
+    """決めていないときに使う置き場所(組み込みの既定。この端末のローカル領域を含む)。"""
+    from . import app_config
+
+    builtin = config.Config()
+    return {
+        "shared_db_path": builtin.resolved_shared_db_path(),
+        "access_db_path": builtin.resolved_access_db_path(),
+        "history_db_path": builtin.resolved_history_db_path(),
+        "csv_dir": str(app_config.local_dir("export")),
+        "log_dir": str(app_config.local_dir("logs")),
+    }
+
+
+def _same_place(a: Any, b: Any) -> bool:
+    def norm(p: Any) -> str:
+        return str(p).strip().replace("/", "\\").rstrip("\\").casefold()
+    return norm(a) == norm(b)
+
+
+def _decided_here(key: str, value: Any, came: dict[str, Any], builtin: dict[str, str]) -> bool:
+    """この端末の値は**この端末で決めた**ものか。
+
+    次のものは決めた値に数えない(配布設定の値で置き換えてよい):
+
+    * 配布設定から読み込んだ値のまま(``came`` と同じ) ── 配り直したら新しい値にする
+    * 決めていなくても使う置き場所と同じ(既定の共有DB・この端末のローカル領域) ──
+      どちらにしても同じ所を見ている。前の版や配布設定が既定の場所を書いていても、
+      それが配った置き場所を覆い隠さない
+    """
+    if key in came and came[key] == value:
+        return False
+    if key in builtin and _same_place(value, builtin[key]):
+        return False
+    return True
+
+
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
     here = terminal_values()
+    came = _from_distribution()
+    builtin = _builtin_places()
     cfg = config.load_config()
+    written: dict[str, Any] = {}
     for key, value in bundle.settings.items():
         if key in here and not overwrite:
-            result.kept.append(ITEM_LABELS[key])       # すでにある
-            continue
+            if here[key] == value:
+                continue                                  # もう同じ
+            if _decided_here(key, here[key], came, builtin):
+                result.kept.append(ITEM_LABELS[key])     # すでにある(この端末で決めた違う値)
+                continue
         setattr(cfg, key, value)
+        written[key] = value
         result.applied.append(ITEM_LABELS[key])
     if result.applied:
         config.save_config(cfg)
         config.write_meta(META_APPLIED, datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
+    # **配布設定から書いた値を覚えておく**(この端末で直した値は外す)
+    now = terminal_values()
+    remembered = {k: v for k, v in came.items() if now.get(k) == v}
+    remembered.update(written)
+    if remembered != came:
+        config.write_meta(META_FROM_DIST, remembered)
     return result
+
+
+def describe() -> str:
+    """起動の記録の1行。**起動のたびに、何を読んでいるかを残す**(配った先で「効いていない」と
+    言われたとき、まず見るところ)。"""
+    folder = directory()
+    if not folder.is_dir():
+        return f"配布設定はありません({folder})"
+    bundle = read()
+    if bundle is None:
+        return (f"配布設定を読めません({settings_path(folder)}): 無い・JSON の形が違う・"
+                "format が違う・知っている項目が1つも無い、のどれか(無いものとして続けます)")
+    return (f"配布設定を読みます: {folder}(設定 {len(bundle.settings)}件: "
+            f"{'、'.join(ITEM_LABELS[k] for k in bundle.settings)})")
 
 
 def apply_on_start() -> Result:

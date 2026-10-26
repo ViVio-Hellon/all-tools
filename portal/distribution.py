@@ -8,7 +8,9 @@
        `配布設定\\` ができる(`日報複合ツール.json`・`はじめに読む.txt`)
     3. `scripts\\make_dist.bat` で配布用フォルダを作る(この `配布設定\\` も入る)
     4. 配った先は**起動のたびに** `配布設定\\` を見て、**その端末に無い項目だけ**埋める
-       (端末で直した値が戻されることはない。揃えたいときは「読み込み直す」)
+       (端末で直した値が戻されることはない。揃えたいときは「読み込み直す」)。
+       配布設定から読み込んだ値のまま(`distribution_values` に覚えておく)の項目は、
+       この端末で決めた値ではないので、配り直した配布設定の新しい値に置き換える
 
 タブ表示権限の表そのものは共有の DB にあるので、配る必要はない。
 各ツールの配布設定(各ツールの設定画面で書き出す `tools\\<ツール>\\配布設定\\`)とは別。
@@ -346,21 +348,40 @@ def remove() -> Result:
 # ------------------------------------------------------------------
 # 読み込む(配られた側)
 # ------------------------------------------------------------------
+#: 配布設定から読み込んで**この端末に書いた値**({鍵: 値})。この端末で決めた値と見分ける
+#: ── 値がこれと同じままなら、配り直した配布設定の新しい値で置き換える(各ツールと同じ決まり)
+KEY_FROM_DIST = "distribution_values"
+
+
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
     current = user_settings.load()
+    found = current.get(KEY_FROM_DIST)
+    came = dict(found) if isinstance(found, dict) else {}
     values: dict[str, Any] = {}
     for key, value in bundle.settings.items():
-        if _present(current.get(key)) and not overwrite:
-            result.kept.append(LABELS[key])
-            continue
+        mine = current.get(key)
+        if _present(mine) and not overwrite:
+            if mine == value:
+                continue                                  # もう同じ
+            if not (key in came and came[key] == mine):
+                result.kept.append(LABELS[key])           # この端末で決めた違う値
+                continue
+            # 配布設定から読み込んだ値のまま ── 配り直した新しい値にする
         if key == user_settings.KEY_ADMIN_PASSWORD and not str(value).startswith(admin_password.SCHEME + "$"):
             # 手で平文を書かれていても、**端末には撹拌して持つ**
+            if _present(mine) and not overwrite and admin_password._matches(str(value), str(mine)):
+                continue
             value = admin_password.hash_text(str(value))
         values[key] = value
         result.applied.append(LABELS[key])
+    remembered = {k: v for k, v in came.items() if {**current, **values}.get(k) == v}
+    remembered.update(values)
     if values:
         values[user_settings.KEY_DISTRIBUTION_APPLIED] = {"at": _now()}
+    if remembered != came:
+        values[KEY_FROM_DIST] = remembered
+    if values:
         user_settings.update(values)
     return result
 

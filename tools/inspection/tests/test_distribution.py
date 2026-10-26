@@ -201,6 +201,26 @@ class ApplyTests(DistributionTestCase):
         line2.dist.apply_on_start()
         self.assertEqual(line2.settings.to_dict()["root_folder"], os.path.normpath(r"\\srv\直した"))
 
+    def test_配り直すと配布設定から読み込んだ値は新しい値になる(self):
+        """前は配布設定から読み込んだ値も「その端末にすでにある」と数えたので、点検表フォルダを
+        変えて配り直しても、一度読み込んだ端末は前の値のまま動いていた。直した値は残す。"""
+        self.exported()
+        line2 = self.terminal("line2")
+        line3 = self.terminal("line3")
+        self.assertIn("点検表フォルダ", line2.dist.apply_on_start().applied)
+        self.assertIn("点検表フォルダ", line3.dist.apply_on_start().applied)
+        line3.settings.update(root_folder=r"\\srv\ライン3専用")          # line3 は端末で直した
+        source = self.terminal("line1")
+        source.settings.update(root_folder=r"\\srv\各課共有\点検表2")
+        self.assertTrue(source.dist.export(NEW_PW, ["root_folder", admin_password.KEY]).ok)
+        line2 = self.terminal("line2")
+        line3 = self.terminal("line3")
+        self.assertIn("点検表フォルダ", line2.dist.apply_on_start().applied)
+        self.assertEqual(line2.settings.to_dict()["root_folder"], os.path.normpath(r"\\srv\各課共有\点検表2"))
+        self.assertEqual(line3.dist.apply_on_start().kept, ["点検表フォルダ"])
+        self.assertEqual(line3.settings.to_dict()["root_folder"], os.path.normpath(r"\\srv\ライン3専用"))
+        self.assertEqual(self.terminal("line2").dist.apply_on_start().applied, [], "次の起動では何も変えない")
+
     def test_読み込み直しはパスワードで上書き(self):
         self.exported()
         line3 = self.terminal("line3")
@@ -232,7 +252,10 @@ class ApplyTests(DistributionTestCase):
                          admin_password.KEY: "平文のパスワード"}}, ensure_ascii=False), encoding="utf-8")
         line2 = self.terminal("line2")
         self.assertEqual(line2.dist.apply_on_start().applied, ["点検表フォルダ"])
-        self.assertEqual(set(line2.settings.values()), {"root_folder", distribution.KEY_APPLIED})
+        # 配布設定から読み込んだ値の覚え(配り直したときに、この端末で決めた値と見分ける)も入る
+        self.assertEqual(set(line2.settings.values()),
+                         {"root_folder", distribution.KEY_APPLIED, distribution.KEY_FROM_DIST})
+        self.assertEqual(line2.settings.get(distribution.KEY_FROM_DIST), {"root_folder": r"\\srv\点検表"})
 
 
 class StartupTests(unittest.TestCase):

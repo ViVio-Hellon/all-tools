@@ -63,6 +63,9 @@ def default_dir() -> Path:
 
 # この端末が最後に読み込んだとき(設定画面に出すだけ)
 KEY_APPLIED = "distribution_applied"
+# 配布設定から読み込んで**この端末に書いた値**({鍵: 値})。この端末で決めた値と見分ける
+# ── 値がこれと同じままなら、配り直した配布設定の新しい値で置き換える(`_apply`)
+KEY_FROM_DIST = "distribution_values"
 
 
 def _is_folder(value: Any) -> bool:
@@ -325,21 +328,36 @@ class Distribution:
     def _apply(self, bundle: Bundle, *, overwrite: bool) -> Result:
         result = Result()
         current = self.settings.values()
+        found = current.get(KEY_FROM_DIST)
+        came = dict(found) if isinstance(found, dict) else {}
         updates: Dict[str, Any] = {}
         for key, value in bundle.settings.items():
             if key in current and not overwrite:
-                result.kept.append(ITEM_LABELS[key])          # すでにある
-                continue
+                if current[key] == value:
+                    continue                                  # もう同じ
+                if not (key in came and came[key] == current[key]):
+                    # すでにある(この端末で決めた違う値)。配布設定から読み込んだ値のまま
+                    # なら決めた値ではないので、配り直した新しい値で置き換える
+                    result.kept.append(ITEM_LABELS[key])
+                    continue
             if current.get(key) != value:
                 updates[key] = value
             result.applied.append(ITEM_LABELS[key])
+        # **配布設定から書いた値を覚えておく**(この端末で直した値は外す)
+        final = {**current, **updates}
+        remembered = {k: v for k, v in came.items() if final.get(k) == v}
+        remembered.update(updates)
+        if remembered != came:
+            updates[KEY_FROM_DIST] = remembered
         if updates:
             self.settings.put_many(updates)
+        if any(k in ITEM_LABELS for k in updates):
             result.root_changed = "root_folder" in updates
             result.logs_changed = bool({"log_dir", "log_keep_days"} & set(updates))
             from core import event_log
             event_log.record("settings.distribution", event_log.INFO, action="読み込み",
-                             overwrite=overwrite, changed=[ITEM_LABELS[k] for k in updates],
+                             overwrite=overwrite,
+                             changed=[ITEM_LABELS[k] for k in updates if k in ITEM_LABELS],
                              kept=result.kept or None, created_at=bundle.created_at)
         if result.applied:
             self._mark_applied(bundle.created_at)

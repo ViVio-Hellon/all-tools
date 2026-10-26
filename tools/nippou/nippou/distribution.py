@@ -45,6 +45,14 @@
 端末で直した値が戻されることはありません。狙って揃えたいときは、
 設定画面の「配布設定を読み込み直す」(管理者パスワード)で上書きします。
 
+【配り直したとき】配布設定から読み込んだ値は、**この端末で決めた値ではありません。**
+読み込んだ値は `distribution_values` に覚えておき、端末の値がそのままなら、
+配り直した配布設定の新しい値で置き換えます(読み込んだあとに端末で直した値は残す)。
+前は読み込んだ値も「すでにある」と数えたので、参照先を変えて配り直しても、
+一度読み込んだ端末は前の値のまま動いていました(現場:「違うPCでやってみたが
+参照設定が初期値(前の値)になっていた」)。覚える前の版で読み込んだ端末は
+見分けが付かないので、1度だけ「配布設定を読み込み直す」で揃えてください。
+
 【空の値】python-web-tools は「鍵があれば既存」と数えますが、こちらは
 **空の値も「無い」と数えます。** この端末の設定ファイルには「既定に戻す」で
 空の値が入ることがあり、それを既存と数えると、共有の日報データの置き場所が
@@ -86,6 +94,9 @@ FORMAT = 1
 
 #: この端末が最後に読み込んだとき(設定画面に出すだけ)
 KEY_APPLIED = "distribution_applied"
+#: 配布設定から読み込んで**この端末に書いた値**({鍵: 値})。この端末で決めた値と見分ける。
+#: 値がこれと同じままなら、配り直した配布設定の新しい値で置き換える(`_decided_here`)
+KEY_FROM_DIST = "distribution_values"
 
 #: 前の版の置き場所(`配布設定\\` が無いときだけ読む)
 LEGACY_DIR_NAME = "配布先"          # v3.73
@@ -456,15 +467,17 @@ def reading(bundle: Bundle) -> dict[str, list[str]]:
     from . import user_settings
 
     stored = user_settings.load_all()
+    came = _from_distribution(stored)
     applied: list[str] = []
     kept: list[str] = []
     for item in ITEMS:
         keys = [k for k in item.setting_keys if k in bundle.settings]
         if not keys:
             continue
-        mine = [stored.get(k) for k in keys]
-        if all(not _is_set(v) or v == bundle.settings[k] for k, v in zip(keys, mine)):
-            applied.append(item.label)
+        mine = {k: stored.get(k) for k in keys}
+        if all(not _is_set(v) or v == bundle.settings[k] for k, v in mine.items()) \
+                or not _decided_here(mine, came):
+            applied.append(item.label)      # 配布設定の値(読み込んでいない分は次の起動で読む)
         else:
             kept.append(item.label)
     if bundle.sounds:
@@ -489,6 +502,8 @@ class Result:
     reason: str = ""
     applied: list[str] = field(default_factory=list)
     kept: list[str] = field(default_factory=list)   # すでにあったので読まなかったもの
+    #: 読まなかったものの、この端末の値(ログに出す。パスワードは伏せる)
+    kept_values: dict[str, str] = field(default_factory=dict)
     error: str = ""
 
     def as_text(self) -> str:
@@ -501,7 +516,11 @@ class Result:
         if self.applied:
             parts.append(f"読み込み {len(self.applied)}件({'・'.join(self.applied)})")
         if self.kept:
-            parts.append(f"既存を優先 {len(self.kept)}件({'・'.join(self.kept)})")
+            parts.append(f"既存を優先 {len(self.kept)}件("
+                         + "・".join(f"{k}={self.kept_values[k]}" if k in self.kept_values else k
+                                     for k in self.kept)
+                         + " ── この端末で決めた値なので読みません。揃えるときは設定画面の"
+                           "「配布設定を読み込み直す」)")
         return "配布設定: " + " / ".join(parts)
 
 
@@ -689,20 +708,40 @@ def _mark_applied() -> None:
     user_settings.save(KEY_APPLIED, {"at": _now()})
 
 
+def _from_distribution(current: dict[str, Any]) -> dict[str, Any]:
+    """前に配布設定から読み込んで、この端末に書いた値(`KEY_FROM_DIST`)。"""
+    found = current.get(KEY_FROM_DIST)
+    return dict(found) if isinstance(found, dict) else {}
+
+
+def _decided_here(mine: dict[str, Any], came: dict[str, Any]) -> bool:
+    """この端末の値は**この端末で決めた**ものか。
+
+    配布設定から読み込んだ値のまま(`came` と同じ)なら、この端末で決めたのではない
+    ── 配り直した配布設定の新しい値で置き換えてよい。読み込んだあとにこの端末で
+    直した値・配布設定と関わりなく決めた値は、決めた値として残す(いまの決まり)。
+    """
+    return any(_is_set(v) and not (k in came and came[k] == v) for k, v in mine.items())
+
+
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     from . import user_settings
 
     result = Result()
     current = user_settings.load_all()
+    came = _from_distribution(current)
     to_write: dict[str, Any] = {}
     for item in ITEMS:
         keys = [k for k in item.setting_keys if k in bundle.settings]
         if not keys:
             continue
         mine = {k: current.get(k) for k in keys}
-        if not overwrite and any(_is_set(v) for v in mine.values()):
+        if not overwrite and _decided_here(mine, came):
             if any(_is_set(v) and v != bundle.settings[k] for k, v in mine.items()):
-                result.kept.append(item.label)      # すでにある(違う値)
+                result.kept.append(item.label)      # すでにある(この端末で決めた違う値)
+                result.kept_values[item.label] = (
+                    "(伏せます)" if item.key == config.KEY_ADMIN_PASSWORD
+                    else " ".join(str(v) for v in mine.values() if _is_set(v)))
             continue
         if all(mine[k] == bundle.settings[k] for k in keys):
             continue                                # もう同じ
@@ -723,6 +762,13 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
         elif str(mine) != own:
             result.kept.append("音声ファイル")      # 音の置き場所を決めてある
 
+    # **配布設定から書いた値を覚えておく。** 次に配り直した配布設定が来たとき、
+    # 「この端末で決めた値」と見分けるため(`_decided_here`)。この端末で直した値は外す
+    final = {**current, **to_write}
+    remembered = {k: v for k, v in came.items() if final.get(k) == v}
+    remembered.update({k: v for k, v in to_write.items() if k in SETTING_KEYS})
+    if remembered != came:
+        to_write[KEY_FROM_DIST] = remembered
     if to_write and not user_settings.save_many(to_write):
         result.error = "配布設定を、この端末の設定ファイルに書けませんでした"
         result.applied = []

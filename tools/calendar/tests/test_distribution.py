@@ -220,6 +220,29 @@ class ApplyTests(DistributionTestCase):
         self.assertEqual(distribution.apply_on_start().applied, [])
         self.assertIs(user_settings.auto_sync_enabled(), True)
 
+    def test_配り直すと配布設定から読み込んだ値は新しい値になる(self) -> None:
+        """違うPCでやってみたが参照設定が初期値になっていた(前に読み込んだ値のまま)。
+
+        前は配布設定から読み込んだ値も「その端末にすでにある」と数えたので、参照パスを
+        変えて配り直しても、一度読み込んだ端末は前の値のまま動いていた。
+        読み込んだあとにこの端末で直した値は残す(いまの決まり)。
+        """
+        self.distributed()
+        self.assertIn("保存用DBの置き場所", distribution.apply_on_start().applied)
+        user_settings.set_value(user_settings.KEY_SYNC_INTERVAL, 60)      # この端末で直した
+        self.source.use()
+        user_settings.set_value(user_settings.KEY_DATA_DB_DIR, r"\\srv\試験\カレンダー")
+        user_settings.set_value(user_settings.KEY_MASTER_DB_DIR, r"\\srv\試験\マスタ")
+        user_settings.set_value(user_settings.KEY_SYNC_INTERVAL, 45)
+        self.assertTrue(self.export().ok)
+        self.dest.use()
+        result = distribution.apply_on_start()
+        self.assertEqual(user_settings.data_db_dir_setting(), r"\\srv\試験\カレンダー")
+        self.assertEqual(user_settings.master_db_dir_setting(), r"\\srv\試験\マスタ")
+        self.assertEqual(user_settings.sync_interval(), 60, "この端末で直した値を戻した")
+        self.assertIn("取り込み間隔(秒)", result.kept)
+        self.assertEqual(distribution.apply_on_start().applied, [], "次の起動では何も変えない")
+
     def test_読み込み直しはパスワードで上書き(self) -> None:
         self.distributed()
         user_settings.set_value(user_settings.KEY_DATA_DB_DIR, r"\\この端末\共有")
