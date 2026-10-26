@@ -63,6 +63,7 @@ _MIGRATION_COLUMNS = {
         "hold": "TEXT NOT NULL DEFAULT ''",
         "hold_at": "TEXT NOT NULL DEFAULT ''",
         "synced_gen": "INTEGER NOT NULL DEFAULT 0",
+        "dirty_base": "TEXT NOT NULL DEFAULT ''",
     },
     "line_status": {
         "remote_status": "TEXT NOT NULL DEFAULT ''",
@@ -137,6 +138,12 @@ _META_DEVICE_MODE = "device_mode"
 
 #: 書き戻し対象になりうる状態列(論理名)。dirty_columns にはこの部分集合が入る
 STATE_COLUMNS = MUTABLE_FIELDS
+
+#: 届かなかった操作の知らせ(:meth:`Store.dropped_notices`)の ``reason``。画面の帯の言い方を分ける
+NOTICE_REMOVED = "removed"
+"""マスタ管理で消された・入れ替わった看板への操作だった。"""
+NOTICE_CONFLICT = "conflict"
+"""ほかの端末が先に同じ看板を操作していた(書き戻しが共有DBと照らして弾いた)。"""
 
 #: 書き戻しで「押した看板と同じ看板か」を見る列(論理名)。**押したときの資材の看板にだけ書く。**
 #:
@@ -597,7 +604,7 @@ class Store:
                 existing = {
                     row["mgmt_no"]: dict(row)
                     for row in conn.execute(
-                        "SELECT mgmt_no, dirty, dirty_columns, material, size, want,"
+                        "SELECT mgmt_no, dirty, dirty_columns, dirty_base, material, size, want,"
                         " unwant, ordered_at, shipped, confirmed_at, permanent,"
                         " hold, hold_at, row_order, synced_gen"
                         " FROM kanban_item WHERE line = ?",
@@ -713,6 +720,9 @@ class Store:
                                       and keys.normalize(mgmt_no) in ambiguous)]
                 dropped = [m for m in removable if existing[m]["dirty"]]
                 dropped_rows = [existing[m] for m in dropped]
+                # 届かなかった操作の出来事(看板履歴へまだ送っていない「出した」など)も下ろす
+                for r in dropped_rows + replaced:
+                    self._drop_unsent_events(conn, line, r)
                 for mgmt_no in removable:
                     conn.execute(
                         "DELETE FROM kanban_item WHERE line = ? AND mgmt_no = ?",
@@ -735,7 +745,7 @@ class Store:
     DROPPED_KEEP = 20
     META_DROPPED = "dropped_notices"
 
-    def _remember_dropped(self, line: str, rows: list[dict[str, Any]]) -> None:
+    def _remember_dropped(self, line: str, rows: list[dict[str, Any]], *, reason: str = "") -> None:
         """共有DBから消された看板に残っていた未送信の操作を、**画面に出す知らせ**として覚える。
 
         マスタ管理で看板を消せるのは、共有DBで発注・発送・注文中でない看板だけ。それでも、
@@ -751,9 +761,10 @@ class Store:
             notes = []
         at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for row in rows:
-            notes.append({"at": at, "line": line, "mgmt_no": row.get("mgmt_no", ""),
+            notes.append({"at": at, "line": line, "label": config.display_name(line),
+                          "mgmt_no": row.get("mgmt_no", ""),
                           "material": row.get("material", "") or "", "size": row.get("size", "") or "",
-                          "what": _dropped_what(row)})
+                          "what": _dropped_what(row), "reason": reason or NOTICE_REMOVED})
         self.set_meta(self.META_DROPPED, json.dumps(notes[-self.DROPPED_KEEP:], ensure_ascii=False))
 
     def dropped_notices(self) -> list[dict[str, Any]]:
@@ -809,7 +820,7 @@ class Store:
             "UPDATE kanban_item SET material = ?, size = ?, want = ?,"
             " unwant = ?, ordered_at = ?, shipped = ?, confirmed_at = ?,"
             " permanent = ?, hold = ?, hold_at = ?, row_order = ?, rev = ?,"
-            " updated_at = ?, updated_by = ?, dirty = 0, dirty_columns = '',"
+            " updated_at = ?, updated_by = ?, dirty = 0, dirty_columns = '', dirty_base = '',"
             " sync_attempts = 0, sync_error = ''"
             " WHERE line = ? AND mgmt_no = ?",
             (
@@ -977,7 +988,7 @@ class Store:
         def _apply() -> KanbanItem:
             with self.write_transaction() as conn:
                 row = conn.execute(
-                    f"SELECT {', '.join(_ITEM_COLUMNS)}, dirty_columns FROM kanban_item"
+                    f"SELECT {', '.join(_ITEM_COLUMNS)}, dirty_columns, dirty_base FROM kanban_item"
                     " WHERE line = ? AND mgmt_no = ?",
                     (line, mgmt_no),
                 ).fetchone()
@@ -988,6 +999,7 @@ class Store:
                     )
                 row_dict = dict(row)
                 existing_dirty_columns = row_dict.pop("dirty_columns")
+                existing_base = row_dict.pop("dirty_base")
                 item = KanbanItem(**row_dict)
                 if expected_rev is not None and item.rev != expected_rev:
                     raise ConflictError(
@@ -1007,15 +1019,16 @@ class Store:
                 merged_dirty_columns = _merge_dirty_columns(
                     existing_dirty_columns, changes.keys()
                 )
+                merged_base = _merge_base(conn, existing_base, existing_dirty_columns, item, changes)
                 assignments = ", ".join(f"{col} = ?" for col in changes)
                 params: list[Any] = list(changes.values())
                 params.extend(
-                    [self._next_rev(conn), now, self.host_name, merged_dirty_columns,
+                    [self._next_rev(conn), now, self.host_name, merged_dirty_columns, merged_base,
                      line, mgmt_no, item.rev]
                 )
                 cursor = conn.execute(
                     f"UPDATE kanban_item SET {assignments}, rev = ?,"
-                    " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?,"
+                    " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?, dirty_base = ?,"
                     " sync_attempts = 0, sync_error = ''"
                     " WHERE line = ? AND mgmt_no = ? AND rev = ?",
                     params,
@@ -1059,17 +1072,19 @@ class Store:
         def _apply() -> list[KanbanItem]:
             with self.write_transaction() as conn:
                 rows = conn.execute(
-                    f"SELECT {', '.join(_ITEM_COLUMNS)}, dirty_columns FROM kanban_item"
+                    f"SELECT {', '.join(_ITEM_COLUMNS)}, dirty_columns, dirty_base FROM kanban_item"
                     " WHERE line = ? ORDER BY row_order, mgmt_no",
                     (line,),
                 ).fetchall()
                 dirty_columns_by_key: dict[str, str] = {}
+                base_by_key: dict[str, str] = {}
                 targets: list[KanbanItem] = []
                 for r in rows:
                     row_dict = dict(r)
                     dirty_columns_by_key[row_dict["mgmt_no"]] = row_dict.pop(
                         "dirty_columns"
                     )
+                    base_by_key[row_dict["mgmt_no"]] = row_dict.pop("dirty_base")
                     targets.append(KanbanItem(**row_dict))
                 targets = [item for item in targets if select(item)]
                 if expected_revs is not None:
@@ -1089,15 +1104,17 @@ class Store:
                     merged_dirty_columns = _merge_dirty_columns(
                         dirty_columns_by_key.get(item.mgmt_no, ""), changes.keys()
                     )
+                    merged_base = _merge_base(conn, base_by_key.get(item.mgmt_no, ""),
+                                              dirty_columns_by_key.get(item.mgmt_no, ""), item, changes)
                     assignments = ", ".join(f"{col} = ?" for col in changes)
                     params: list[Any] = list(changes.values())
                     params.extend(
-                        [self._next_rev(conn), now, self.host_name, merged_dirty_columns,
+                        [self._next_rev(conn), now, self.host_name, merged_dirty_columns, merged_base,
                          line, item.mgmt_no, item.rev]
                     )
                     cursor = conn.execute(
                         f"UPDATE kanban_item SET {assignments}, rev = ?,"
-                        " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?,"
+                        " updated_at = ?, updated_by = ?, dirty = 1, dirty_columns = ?, dirty_base = ?,"
                         " sync_attempts = 0, sync_error = ''"
                         " WHERE line = ? AND mgmt_no = ? AND rev = ?",
                         params,
@@ -1208,7 +1225,7 @@ class Store:
             dict(row)
             for row in self.connection.execute(
                 "SELECT line, mgmt_no, rev, material, size, want, unwant, ordered_at, shipped,"
-                " confirmed_at, hold, hold_at, sync_attempts, dirty_columns"
+                " confirmed_at, hold, hold_at, sync_attempts, dirty_columns, dirty_base"
                 " FROM kanban_item"
                 " WHERE dirty = 1 AND sync_attempts < ?"
                 " ORDER BY line, row_order LIMIT ?",
@@ -1216,11 +1233,16 @@ class Store:
             )
         ]
 
-    def mark_items_synced(self, keys: Sequence[tuple[str, str, int]]) -> int:
+    def mark_items_synced(self, keys: Sequence[tuple[str, str, int]],
+                          sent: dict[tuple[str, str], dict[str, str]] | None = None) -> int:
         """書き戻しに成功した行の ``dirty`` を下ろす。
 
         ``rev`` が一致する行だけを対象にするため、書き戻し中に現場が操作した
         行は未反映のまま残り、次回の書き戻しで再送される。
+
+        ``sent`` は ``{(ライン, 管理番号): {列: 送った値}}``。残った行の「押したときの元の値」
+        (``dirty_base``)を、いま送った値に進める ── 共有DBはもうその値なので、次の書き戻しが
+        自分の送ったばかりの値を「ほかの端末の操作」と取り違えて弾かないように。
         """
         if not keys:
             return 0
@@ -1233,12 +1255,23 @@ class Store:
                 gen = self._next_counter(conn, _META_SYNC_GEN)
                 for line, mgmt_no, rev in keys:
                     cursor = conn.execute(
-                        "UPDATE kanban_item SET dirty = 0, dirty_columns = '',"
+                        "UPDATE kanban_item SET dirty = 0, dirty_columns = '', dirty_base = '',"
                         " sync_attempts = 0, sync_error = '', synced_gen = ?"
                         " WHERE line = ? AND mgmt_no = ? AND rev = ?",
                         (gen, line, mgmt_no, rev),
                     )
                     cleared += cursor.rowcount
+                    values = (sent or {}).get((line, mgmt_no))
+                    if cursor.rowcount == 0 and values:
+                        row = conn.execute(
+                            "SELECT dirty_base FROM kanban_item WHERE line = ? AND mgmt_no = ? AND dirty = 1",
+                            (line, mgmt_no)).fetchone()
+                        base = load_base(row[0]) if row else {}
+                        if base:
+                            base.update({k: str(v or "") for k, v in values.items() if k in base})
+                            conn.execute(
+                                "UPDATE kanban_item SET dirty_base = ? WHERE line = ? AND mgmt_no = ?",
+                                (json.dumps(base, ensure_ascii=False), line, mgmt_no))
             return cleared
 
         return self.retry(_apply, "mark_items_synced")
@@ -1260,6 +1293,63 @@ class Store:
                     )
 
         self.retry(_apply, "mark_items_failed")
+
+    def drop_conflicted(self, line: str, mgmt_no: str, rev: int, shared: dict[str, str],
+                        *, notify: bool) -> bool:
+        """**ほかの端末が先に操作していた**送信待ちを下ろす(書き戻しが共有DBと照らして弾いたもの)。
+
+        手元の状態の列は共有DBのいまの値(``shared`` = 論理名 → 値)にする(次の取り込みを待たずに
+        盤がそろう)。この送信待ちの出来事(看板履歴へまだ送っていない「出した」など)も下ろす。
+        ``notify`` なら看板の画面の帯で知らせる(結果が同じになっていた ── 2 台が同じ看板を
+        出した、など ── ときは黙って下ろす)。押し直されて版が変わっていれば何もしない(次の書き戻しで
+        もう一度照らす)。下ろせたら ``True``。
+        """
+        cols = [c for c in shared if c in STATE_COLUMNS]
+
+        def _apply() -> dict[str, Any] | None:
+            with self.write_transaction() as conn:
+                row = conn.execute(
+                    "SELECT * FROM kanban_item WHERE line = ? AND mgmt_no = ? AND rev = ? AND dirty = 1",
+                    (line, mgmt_no, rev)).fetchone()
+                if row is None:
+                    return None
+                before = dict(row)
+                sets = "".join(f"{c} = ?, " for c in cols)
+                conn.execute(
+                    f"UPDATE kanban_item SET {sets}rev = ?, updated_at = ?, updated_by = 'import',"
+                    " dirty = 0, dirty_columns = '', dirty_base = '', sync_attempts = 0, sync_error = ''"
+                    " WHERE line = ? AND mgmt_no = ?",
+                    [shared[c] for c in cols] + [self._next_rev(conn),
+                                                 datetime.now().strftime("%Y/%m/%d %H:%M:%S"), line, mgmt_no])
+                self._drop_unsent_events(conn, line, before)
+                self._log(conn, line, mgmt_no, "drop_conflicted",
+                          json.dumps({"手元": {c: before.get(c) for c in cols}, "共有DB": shared},
+                                     ensure_ascii=False))
+                return before
+
+        before = self.retry(_apply, "drop_conflicted")
+        if before is None:
+            return False
+        if notify:
+            self._remember_dropped(line, [before], reason=NOTICE_CONFLICT)
+        return True
+
+    @staticmethod
+    def _drop_unsent_events(conn: sqlite3.Connection, line: str, row: dict[str, Any]) -> None:
+        """下ろした送信待ちの出来事(押したときに積んだ「出した」など)を、まだ送っていなければ消す。
+
+        消さないと、届かなかった発注が看板履歴の集計に数えられる。送信待ちが始まる前の番号
+        (``dirty_base`` の ``_ev``)より後の、その看板の出来事だけ。倉庫に初めて出た記録(取り込みが
+        積む)は残す。元の値を持たない古い送信待ちは消さない(どこからか分からない)。
+        """
+        from ..domain import events as _events
+
+        base = load_base(str(row.get("dirty_base") or ""))
+        if "_ev" not in base:
+            return
+        conn.execute(
+            "DELETE FROM kanban_event WHERE sent = 0 AND line = ? AND mgmt_no = ? AND id > ? AND kind != ?",
+            (line, row.get("mgmt_no", ""), int(base["_ev"]), _events.SEEN))
 
     def revive_failed(self, error_contains: str) -> int:
         """諦めた行(要確認)のうち、エラーに ``error_contains`` を含むものを送り直しに戻す。
@@ -1330,7 +1420,7 @@ class Store:
         def _apply() -> None:
             with self.write_transaction() as conn:
                 conn.executemany(
-                    "UPDATE kanban_item SET dirty = 0, dirty_columns = '', sync_attempts = 0,"
+                    "UPDATE kanban_item SET dirty = 0, dirty_columns = '', dirty_base = '', sync_attempts = 0,"
                     " sync_error = '' WHERE line = ? AND mgmt_no = ?",
                     [(r["line"], r["mgmt_no"]) for r in rows],
                 )
@@ -1866,6 +1956,42 @@ class Store:
                 return cursor.rowcount
 
         return int(self.retry(_apply, "prune_operation_log"))
+
+
+def _merge_base(conn: sqlite3.Connection, existing: str, existing_dirty_columns: str,
+                item: KanbanItem, changes: dict[str, str]) -> str:
+    """送信待ちの「押したときに見えていた元の値」(``dirty_base``)に、この操作で変わる列を足す。
+
+    書き戻しは、共有DBのいまの値がこの元の値と同じときだけ書く(:func:`kanban.db.sync._export_items`)。
+    **すでに送信待ちの列は前の元の値のまま**(同じ端末が続けて押した 提出 → 取り消し などで、
+    自分の前の操作のせいで弾かれないように)。新しく変わる列は、いま手元に見えている値
+    (= 最後に取り込んだ共有DBの値。送信待ちでない列は取り込みが追いつかせている)。
+
+    ``_ev`` は、この送信待ちが始まる前の出来事の番号の最大(下ろすとき、この送信待ちの
+    出来事 = 看板履歴へまだ送っていない「出した」などを一緒に下ろすため)。
+    元の値を持たない古い送信待ち(この版より前に押したもの)には足さない(従来どおり後勝ちで送る)。
+    """
+    if existing_dirty_columns and not existing:
+        return ""
+    try:
+        base = json.loads(existing) if existing else {}
+    except ValueError:
+        return ""
+    if not base:
+        base["_ev"] = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM kanban_event").fetchone()[0])
+    for col in changes:
+        if col not in base and col in STATE_COLUMNS:
+            base[col] = str(getattr(item, col, "") or "")
+    return json.dumps(base, ensure_ascii=False)
+
+
+def load_base(raw: str) -> dict[str, Any]:
+    """``dirty_base`` を読む。無い・壊れていれば空(従来どおり後勝ちで送る)。"""
+    try:
+        base = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return base if isinstance(base, dict) else {}
 
 
 def _replaced(current: dict[str, Any], incoming: dict[str, Any]) -> bool:

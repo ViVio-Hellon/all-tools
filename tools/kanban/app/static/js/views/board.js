@@ -1234,23 +1234,35 @@ function setUndelivered(count, since, why, events) {
   el.hidden = true;
 }
 
-// マスタ管理で消された看板に残っていて届かなかった操作(発注・発送など)。
-// 消せるのは共有DBで発注・発送・注文中でない看板だけだが、ほかの端末が押してまだ送って
-// いない操作は消す端末から見えない(行き違い)。送り先が無いので届かない ── 黙っていると、
-// 押した人は届いたと思ったままになる。「わかった」で閉じる(この端末に覚えている)
+// 届かなかった操作(発注・発送など)。理由は 2 つ(`reason`):
+// ・removed … マスタ管理で消された(入れ替わった)看板への操作。消せるのは共有DBで発注・発送・
+//   注文中でない看板だけだが、ほかの端末が押してまだ送っていない操作は消す端末から見えない
+// ・conflict … ほかの端末が先に同じ看板を操作していた(古い盤のまま押した)。書き戻しは押した
+//   ときに見えていた値の行にだけ書くので、送らずに下ろした(相手の発送・発注を消さない)
+// 黙っていると、押した人は届いたと思ったままになる。「わかった」で閉じる(この端末に覚えている)
 function setDropped(list) {
   const el = document.getElementById('dropped');
   const text = document.getElementById('dropped-text');
   if (!el || !text) return;
   const notes = Array.isArray(list) ? list : [];
   if (!notes.length) { el.hidden = true; return; }
-  const items = notes.map((n) => {
+  const describe = (n, withTime) => {
     const what = [n.material, n.size].filter(Boolean).join(' ');
-    return `${n.line} ${n.mgmt_no}番${what ? `(${what})` : ''}の${n.what}`
-      + (n.at ? `(${String(n.at).slice(5, 16)})` : '');
-  });
-  text.textContent = `⚠ マスタ管理で消された看板への操作は届きませんでした: ${items.join('、')}。`
-    + '倉庫・現場には出ていません。必要なら看板を足し直してから押し直してください。';
+    return `${n.label || n.line} ${n.mgmt_no}番${what ? `(${what})` : ''}の${n.what}`
+      + (withTime && n.at ? `(${String(n.at).slice(5, 16)})` : '');
+  };
+  const removed = notes.filter((n) => n.reason !== 'conflict').map((n) => describe(n, true));
+  const conflict = notes.filter((n) => n.reason === 'conflict').map((n) => describe(n, false));
+  const parts = [];
+  if (conflict.length) {
+    parts.push(`⚠ ほかの端末が先に操作していたので、${conflict.join('、')}は送りませんでした。`
+      + '盤を見直して、要ればもう一度押してください。');
+  }
+  if (removed.length) {
+    parts.push(`⚠ マスタ管理で消された看板への操作は届きませんでした: ${removed.join('、')}。`
+      + '倉庫・現場には出ていません。必要なら看板を足し直してから押し直してください。');
+  }
+  text.textContent = parts.join(' ');
   el.hidden = false;
 }
 

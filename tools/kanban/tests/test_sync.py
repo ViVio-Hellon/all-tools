@@ -255,8 +255,11 @@ class ExportTest(SyncTestBase):
         self.assertEqual(len(self.gateway.executed), 1)
         sql, params = self.gateway.executed[0]
         self.assertIn("UPDATE [看板_LVC] SET", sql)
-        # 押したときの資材の看板にだけ書く(管理番号の使い回し)。管理番号はいつも最後
-        self.assertIn(" WHERE TRIM(COALESCE(CAST([資材] AS TEXT), '')) = ? AND [管理番号] = ?", sql)
+        # 押したときの資材の看板・押したときに見えていた値の行にだけ書く(管理番号の使い回し・
+        # ほかの端末が先に操作していた)。管理番号はいつも最後
+        self.assertIn(" WHERE TRIM(COALESCE(CAST([資材] AS TEXT), '')) = ? AND ", sql)
+        self.assertIn(" AND TRIM(COALESCE(CAST([欲] AS TEXT), '')) = ? AND ", sql)
+        self.assertTrue(sql.endswith(" AND [管理番号] = ?"), sql)
         # **値は文へ埋め込まず、プレースホルダで渡す**
         self.assertNotIn("'〇'", sql)
         self.assertEqual(self.gateway.assignments_for("1")["欲"], "〇")

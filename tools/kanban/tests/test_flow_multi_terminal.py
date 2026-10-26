@@ -750,6 +750,66 @@ class SameKanbanTest(_Flow):
         self.no_failures()
 
 
+    def conflict_notice(self, t: Terminal) -> list[tuple[str, str, str]]:
+        notes = t.wait_for(lambda: t.status()["dropped"], what="帯に「ほかの端末が先に操作していた」が出る")
+        return [(n["mgmt_no"], n["what"], n["reason"]) for n in notes]
+
+    def test_古い盤の2台目の提出が_倉庫の発送を消さない(self) -> None:
+        """A が提出 → W が発送 → A2(どちらもまだ取り込んでいない)が同じ看板を押す。
+
+        A2 の盤では未発注なので「提出」になる。前は列ごとの後勝ちで発送の列を空にして送り、
+        **倉庫の発送が黙って消えていた**(倉庫は二重に出しかねない)。押したときに見えていた値
+        (発送なし)と共有DBのいま(発送あり)が違うので、送らずに下ろして A2 に知らせる。
+        """
+        self.a2.go_offline()                      # A2 はこのあいだの操作を取り込めない
+        self.a.ok("order", L1, "3")
+        self.a.wait_sent()
+        self.w.refresh(L1)
+        self.w.ok("ship", L1, "3")
+        self.w.wait_sent()
+        self.assertEqual(self.shared_marks(L1, "3"), (ON, ON, ""))
+        self.assertEqual(self.a2.marks(L1, "3"), ("", "", ""), "試験の前提: A2 の盤は古い")
+        self.a2.ok("order", L1, "3")               # 古い盤のまま「提出」
+        self.a2.go_online()
+        self.assertEqual(self.conflict_notice(self.a2), [("3", "発注", "conflict")])
+        self.a2.wait_sent()
+        self.settle(*self.all)
+        self.assert_everywhere(L1, "3", (ON, ON, ""), *self.all)
+        for t in (self.a, self.w):
+            self.assertEqual(t.status()["dropped"], [], f"{t.name} に知らせが出た")
+        # 知らせを閉じたら、あとはふつうに使える(届いた確認 → 倉庫に届く)
+        self.assertEqual(self.a2.post("/api/dropped/clear")[0], 200)
+        self.a2.ok("order", L1, "3", delivered=True)
+        self.settle(*self.all)
+        self.assert_everywhere(L1, "3", ("", "", ""), *self.all)
+        self.no_failures()
+
+    def test_古い盤の2台目の届いた確認が_出し直した発注を消さない(self) -> None:
+        """発送済みの看板を A が届いた確認して出し直す → A2(古い盤では 赤+緑)が「届いた」を押す。
+
+        前は A2 の届いた確認が後勝ちで、A の新しい発注を黙って消していた。
+        """
+        self.a.ok("order", L1, "4")
+        self.settle(*self.all)
+        self.w.ok("ship", L1, "4")
+        self.settle(*self.all)
+        self.a2.go_offline()
+        self.a.ok("order", L1, "4", delivered=True)
+        self.a.ok("order", L1, "4")               # 出し直す
+        self.a.wait_sent()
+        self.assertEqual(self.shared_marks(L1, "4"), (ON, "", ""))
+        self.assertEqual(self.a2.marks(L1, "4"), (ON, ON, ""), "試験の前提: A2 の盤は古い")
+        self.a2.ok("order", L1, "4", delivered=True)
+        self.a2.go_online()
+        self.assertEqual(self.conflict_notice(self.a2), [("4", "発注の取り消し・届いた確認", "conflict")])
+        self.a2.wait_sent()
+        self.settle(*self.all)
+        self.assert_everywhere(L1, "4", (ON, "", ""), *self.all)
+        self.assertTrue(self.shared_row(L1, "4")[config.COL_ORDERED_AT], "出し直した発注の時刻が消えた")
+        self.w.ok("ship", L1, "4")                 # 倉庫は出し直した発注をふつうに発送できる
+        self.settle(*self.all)
+        self.assert_everywhere(L1, "4", (ON, ON, ""), *self.all)
+
 # ---------------------------------------------------------------------------
 # 3. 共有フォルダが見えないあいだ
 # ---------------------------------------------------------------------------
@@ -1243,6 +1303,213 @@ class NumberReuseLayersTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(got["2"], ON)
+
+
+# ---------------------------------------------------------------------------
+# 2. 古い盤からの操作(1 プロセスの中で、書き戻しを 1 段ずつ)
+# ---------------------------------------------------------------------------
+class StaleBoardWriteBackTest(unittest.TestCase):
+    """書き戻しは、押したときに見えていた値の行にだけ書く(コンペア・アンド・スワップ)。
+
+    現場PC1・現場PC2(同じライン)・倉庫PC。共有DBは本番の形(型なし・管理番号は数)。
+    """
+
+    def setUp(self) -> None:
+        try:
+            import test_shared_shapes as shapes
+        except ImportError:                          # python -m unittest tests.test_flow_multi_terminal
+            from tests import test_shared_shapes as shapes
+        from kanban.db import sync
+
+        self.shapes, self.sync = shapes, sync
+        self.root = Path(tempfile.mkdtemp(prefix="kanban_cas_"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.shared = shapes.SharedShapesTest.make_shared(self, self.root, "", lambda n: n, "", None,
+                                                          "2026-10-16 08:32:00")
+        self.t = {n: shapes.Terminal(self.root, n, self.shared) for n in ("PC1", "PC2", "倉庫")}
+        for t in self.t.values():
+            self.addCleanup(t.close)
+            t.take()
+
+    def press(self, name: str, action: str, no: str, **kw) -> None:
+        t = self.t[name]
+        getattr(t.svc, action)(self.shapes.LINE, no, expected_rev=t.item(no).rev, **kw)
+
+    def send(self, name: str):
+        t = self.t[name]
+        result = self.sync.export_pending(t.store, t.gateway)
+        self.assertEqual(result.errors, [], name)
+        return result
+
+    def shared_marks(self, no: str) -> tuple:
+        conn = sqlite3.connect(str(self.shared))
+        try:
+            for k, w, sh, at in conn.execute(f"SELECT 管理番号, 欲, 発送, 更新日 FROM [{self.shapes.TABLE}]"):
+                if keys.same(k, no):
+                    return (w or "", sh or "", at or "")
+        finally:
+            conn.close()
+        raise AssertionError(no)
+
+    def marks(self, name: str, no: str) -> tuple:
+        item = self.t[name].item(no)
+        return (item.want, item.shipped)
+
+    def events(self, name: str, no: str) -> list[str]:
+        return [e["kind"] for e in self.t[name].store.unsent_events() if e["mgmt_no"] == no]
+
+    def test_古い盤の提出は_発送を消さずに下ろして知らせる(self) -> None:
+        self.press("PC1", "toggle_order", "1")
+        self.send("PC1")
+        self.t["倉庫"].take()
+        self.press("倉庫", "toggle_ship", "1")
+        self.send("倉庫")
+        self.press("PC2", "toggle_order", "1")     # PC2 の盤は古い(未発注に見えている)
+        self.assertEqual(self.events("PC2", "1"), ["出した"])
+        result = self.send("PC2")
+        self.assertEqual((result.succeeded, result.failed, result.conflicts), (0, 0, 1))
+        self.assertEqual(self.shared_marks("1")[:2], (ON, ON), "倉庫の発送が消えた")
+        self.assertEqual(self.marks("PC2", "1"), (ON, ON), "PC2 の盤が共有DBにそろわない")
+        store = self.t["PC2"].store
+        self.assertEqual(store.pending_count(), 0)
+        self.assertEqual([(n["mgmt_no"], n["what"], n["reason"]) for n in store.dropped_notices()],
+                         [("1", "発注", "conflict")])
+        self.assertEqual(self.events("PC2", "1"), [], "届かなかった提出が看板履歴に数えられる")
+
+    def test_古い盤の届いた確認は_出し直した発注を消さない(self) -> None:
+        self.press("PC1", "toggle_order", "2")
+        self.send("PC1")
+        self.t["倉庫"].take()
+        self.press("倉庫", "toggle_ship", "2")
+        self.send("倉庫")
+        for n in ("PC1", "PC2"):
+            self.t[n].take()
+        self.press("PC1", "toggle_order", "2", treat_as_delivered=True)
+        self.press("PC1", "toggle_order", "2")      # 出し直す(続けて押した 2 つ。まとめて送る)
+        self.assertEqual(self.send("PC1").succeeded, 1, "自分の前の操作のせいで弾かれた")
+        reordered = self.shared_marks("2")
+        self.assertEqual(reordered[:2], (ON, ""))
+        self.press("PC2", "toggle_order", "2", treat_as_delivered=True)   # PC2 の盤では 赤+緑
+        self.assertEqual(self.send("PC2").conflicts, 1)
+        self.assertEqual(self.shared_marks("2"), reordered, "出し直した発注が消えた")
+        self.assertEqual(self.marks("PC2", "2"), (ON, ""))
+        self.assertEqual([n["reason"] for n in self.t["PC2"].store.dropped_notices()], ["conflict"])
+
+    def test_結果が同じなら黙って下ろす(self) -> None:
+        """2 台がほぼ同時に同じ看板を出した。後のほうは送らない(先の時刻が残る)が、知らせない。"""
+        self.press("PC1", "toggle_order", "3")
+        self.press("PC2", "toggle_order", "3")
+        self.send("PC1")
+        first = self.shared_marks("3")
+        result = self.send("PC2")
+        self.assertEqual(result.conflicts, 1)
+        self.assertEqual(self.shared_marks("3"), first)
+        self.assertEqual(self.t["PC2"].store.dropped_notices(), [])
+        self.assertEqual(self.t["PC2"].store.pending_count(), 0)
+
+    def test_送っている最中に押し直しても_自分の送った値で弾かれない(self) -> None:
+        """送る(1 回目)と手元の印を下ろすあいだに押し直すと、行は送信待ちのまま残る。
+        次の書き戻しは、いま送ったばかりの値を「ほかの端末の操作」と取り違えない。"""
+        store = self.t["PC1"].store
+        original = store.mark_items_synced
+
+        def press_in_between(keys_, sent=None):
+            store.mark_items_synced = original
+            self.press("PC1", "toggle_order", "1")  # 送っている最中に取り消す
+            return original(keys_, sent)
+
+        self.press("PC1", "toggle_order", "1")
+        store.mark_items_synced = press_in_between
+        self.send("PC1")
+        self.assertEqual(self.shared_marks("1")[:2], (ON, ""))
+        self.assertEqual(store.pending_count(), 1)
+        result = self.send("PC1")
+        self.assertEqual((result.succeeded, result.conflicts), (1, 0), "自分の送った値で弾いた")
+        self.assertEqual(self.shared_marks("1")[:2], ("", ""))
+        self.assertEqual(store.dropped_notices(), [])
+
+    def test_押す前に取り込んでいれば_今までどおり送れる(self) -> None:
+        """正しく取り込んでから押したとき・列が重ならない行き違い(発送と取り消し)は弾かない。"""
+        self.press("PC1", "toggle_order", "4")
+        self.send("PC1")
+        for n in ("PC2", "倉庫"):
+            self.t[n].take()
+        self.press("倉庫", "toggle_ship", "4")
+        self.press("PC2", "toggle_order", "4")      # 取り消し(倉庫の発送はまだ見えない)
+        self.assertEqual(self.send("倉庫").succeeded, 1)
+        self.assertEqual(self.send("PC2").succeeded, 1, "列の重ならない行き違いを弾いた")
+        self.assertEqual(self.shared_marks("4")[:2], ("", ON))   # 取り消された発送(現場が確かめる)
+        for t in self.t.values():
+            self.assertEqual(t.store.dropped_notices(), [])
+
+    def test_元の値を持たない古い送信待ちは_今までどおり後勝ちで送る(self) -> None:
+        self.press("PC1", "toggle_order", "1")
+        self.send("PC1")
+        self.t["倉庫"].take()
+        self.press("倉庫", "toggle_ship", "1")
+        self.send("倉庫")
+        self.press("PC2", "toggle_order", "1")
+        conn = sqlite3.connect(self.t["PC2"].store.path)
+        conn.execute("UPDATE kanban_item SET dirty_base = '' WHERE mgmt_no = '1'")   # 前の版で押した
+        conn.commit()
+        conn.close()
+        result = self.send("PC2")
+        self.assertEqual((result.succeeded, result.conflicts), (1, 0))
+
+    def test_画面_帯に現場の言葉で出て_わかったで消える(self) -> None:
+        """本物のブラウザで、PC2 の看板画面に「ほかの端末が先に操作していた」の帯。"""
+        try:
+            from _browser import chromium_or_skip
+        except ImportError:
+            from tests._browser import chromium_or_skip
+        from app import create_app
+        from kanban import admin_lock
+
+        self.press("PC1", "toggle_order", "1")
+        self.send("PC1")
+        self.t["倉庫"].take()
+        self.press("倉庫", "toggle_ship", "1")
+        self.send("倉庫")
+        self.press("PC2", "toggle_order", "1")
+        self.assertEqual(self.send("PC2").conflicts, 1)
+
+        pw, browser = chromium_or_skip()
+        self.addCleanup(pw.stop)
+        self.addCleanup(browser.close)
+        admin_lock.reset()
+        self.addCleanup(admin_lock.reset)
+        app = create_app(config.MODE_SITE, token=TOKEN, port=8741, store=self.t["PC2"].store,
+                         line=self.shapes.LINE)
+        app.config["CONFIG_PATH"] = str(self.root / "config_PC2.json")
+        client = app.test_client()
+
+        def forward(route) -> None:
+            req = route.request
+            path = req.url.split("http://kanban.test", 1)[1]
+            res = client.open(path, method=req.method, data=req.post_data_buffer,
+                              headers={"X-Tool-Token": TOKEN,
+                                       "Content-Type": req.headers.get("content-type", "")})
+            route.fulfill(status=res.status_code, body=res.get_data(),
+                          headers={"content-type": res.headers.get("Content-Type", "text/plain")})
+
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.route("http://kanban.test/**", forward)
+        page.goto("http://kanban.test/board", wait_until="load")
+        page.wait_for_selector("#dropped:not([hidden])", timeout=8000)
+        text = page.text_content("#dropped-text")
+        self.assertIn("ほかの端末が先に操作していたので", text)
+        self.assertIn(f"{config.display_name(self.shapes.LINE)} 1番", text)
+        self.assertIn("の発注は送りませんでした", text)
+        self.assertIn("盤を見直して、要ればもう一度押してください", text)
+        self.assertNotIn("マスタ管理で消された", text)
+        page.wait_for_selector('#board .row[data-no="1"] .cell[data-kind="ship"][data-state="shipped"]',
+                               timeout=8000)
+        page.click("#dropped-ok")
+        page.wait_for_selector("#dropped", state="hidden", timeout=5000)
+        self.assertEqual(self.t["PC2"].store.dropped_notices(), [])
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

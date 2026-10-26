@@ -106,6 +106,8 @@ class ExportResult:
     failed: int = 0
     skipped_reason: str = ""
     errors: list[str] = field(default_factory=list)
+    conflicts: int = 0
+    """ほかの端末が先に同じ列を変えていたので、送らずに下ろした数(:func:`_base_guards`)。"""
 
     @property
     def ok(self) -> bool:
@@ -457,22 +459,51 @@ def _identity_text(value: Any) -> str:
     return "" if value is None else _as_text(value).strip()
 
 
-def _shared_identity(gateway: SharedDb, table: str, key_column: str, mgmt_no: str,
-                     columns: Sequence[str]) -> tuple[str, ...] | None:
-    """共有DBで同じ管理番号(:func:`kanban.keys.same`)の行が**ちょうど 1 つ**なら、その資材。"""
+def _shared_row(gateway: SharedDb, table: str, key_column: str, mgmt_no: str,
+                columns: Sequence[str]) -> dict[str, Any] | None:
+    """共有DBで同じ管理番号(:func:`kanban.keys.same`)の行が**ちょうど 1 つ**なら、その ``columns`` の値。"""
     from .. import keys
 
     if not columns:
         return None
+    wanted = list(dict.fromkeys(columns))
     try:
         found = gateway.select(
-            f"SELECT {_quote(key_column)} AS k, {', '.join(_quote(c) for c in columns)} FROM {_quote(table)}")
+            f"SELECT {_quote(key_column)} AS __k, {', '.join(_quote(c) for c in wanted)} FROM {_quote(table)}")
     except Exception:  # noqa: BLE001 - 読めなければ決めない(失敗の記録は呼び出し側)
         return None
-    near = [r for r in found if keys.same(r["k"], mgmt_no)]
+    near = [r for r in found if keys.same(r["__k"], mgmt_no)]
     if len(near) != 1:
         return None
-    return tuple(_identity_text(near[0].get(c)) for c in columns)
+    return {c: near[0].get(c) for c in wanted}
+
+
+#: 「結果が同じか」を見る印の列(論理名)。日時の列(更新日・倉庫確認日時・注文中日時)は見ない
+#: ── 2 台が同じ看板を出したとき、先に出したほうの時刻が残るのは正しい
+MARK_FIELDS = ("want", "unwant", "shipped", "hold")
+
+
+def _base_guards(column_map: dict[str, str], row: dict[str, Any],
+                 dirty_columns: Sequence[str]) -> list[tuple[str, str, str]]:
+    """``[(共有DBの列名, 論理名, 押したときに見えていた値)]``(:func:`kanban.db.store._merge_base`)。
+
+    **書き戻しは、共有DBのいまの値が押したときの値と同じ行にだけ書く。** 列ごとの後勝ちで
+    送っていたころは、ほかの端末の操作を取り込む前の古い盤で押すと、その操作を黙って消していた:
+
+        現場Aが提出 → 倉庫が発送 → 現場A2(Aの提出をまだ取り込んでいない)が同じ看板を押す
+        → A2 の盤では未発注なので「提出」になり、発送の列を空にして送る → 倉庫の発送が消える
+
+    元の値を持たない送信待ち(この版より前に押したもの)は照らさない(従来どおり)。
+    """
+    from .store import load_base
+
+    base = load_base(str(row.get("dirty_base") or ""))
+    out = []
+    for logical in dirty_columns:
+        actual = column_map.get(logical)
+        if actual and logical in base:
+            out.append((actual, logical, str(base[logical] or "")))
+    return out
 
 
 def _retry_with_stored_key(gateway: SharedDb, table: str, key_column: str,
@@ -533,6 +564,8 @@ def _export_items(
             statements: list[tuple[str, list[Any]]] = []
             unguarded: list[tuple[str, list[Any]]] = []
             identities: list[list[tuple[str, Any]]] = []
+            base_lists: list[list[tuple[str, str, str]]] = []
+            intended: list[dict[str, Any]] = []
             keys: list[tuple[str, str, int]] = []
             for row in chunk:
                 # dirty_columns にはこの端末が実際に変更を意図した列だけが
@@ -575,6 +608,9 @@ def _export_items(
                     store.mark_items_failed([(line, row["mgmt_no"])], message)
                     continue
                 guards = _identity_guards(column_map, row)
+                # **押したときに見えていた元の値の行にだけ書く**(コンペア・アンド・スワップ)
+                bases = _base_guards(column_map, row, dirty_columns)
+                guards = guards + [(actual, value) for actual, _logical, value in bases]
                 try:
                     statements.append(
                         build_update(
@@ -588,7 +624,9 @@ def _export_items(
                     unguarded.append(build_update(
                         table_name, {c: v for c, (v, _cat) in assignments.items()},
                         key_column, _key_value(row["mgmt_no"], key_category)))
-                    identities.append(guards)
+                    identities.append(guards[:len(guards) - len(bases)])
+                    base_lists.append(bases)
+                    intended.append({name: row.get(name, "") for name in dirty_columns})
                 except ValueError as exc:
                     message = f"{line}/{row['mgmt_no']}: {exc}"
                     applog.error("export_pending: %s", message)
@@ -616,28 +654,49 @@ def _export_items(
                 continue
 
             synced: list[tuple[str, str, int]] = []
-            for key, statement, plain, guards, statement_result in zip(
-                    keys, statements, unguarded, identities, statement_results):
+            sent: dict[tuple[str, str], dict[str, Any]] = {}
+            for key, statement, plain, guards, bases, values, statement_result in zip(
+                    keys, statements, unguarded, identities, base_lists, intended, statement_results):
                 if statement_result.ok and statement_result.affected == 0:
                     # 番号の書き方(型)だけが違う行なら、共有DBに書いてある値で書き直す
                     statement_result = _retry_with_stored_key(
                         gateway, table_name, key_column, key, statement, statement_result)
                 why = ""
-                if statement_result.ok and statement_result.affected == 0 and guards:
-                    # **押したときと同じ看板か**(資材)。違えば送らない(使い回された番号)
+                if statement_result.ok and statement_result.affected == 0 and (guards or bases):
+                    columns = [c for c, _v in guards] + [actual for actual, _l, _v in bases]
+                    now = _shared_row(gateway, table_name, key_column, key[1], columns)
                     mine = tuple(_identity_text(v) for _c, v in guards)
-                    now = _shared_identity(gateway, table_name, key_column, key[1], [c for c, _v in guards])
-                    if now is not None and now != mine:
+                    theirs = tuple(_identity_text(now.get(c)) for c, _v in guards) if now is not None else ()
+                    changed = [logical for actual, logical, value in bases
+                               if now is not None and _identity_text(now.get(actual)) != value.strip()]
+                    if now is not None and theirs != mine:
+                        # **押したときと同じ看板か**(資材)。違えば送らない(使い回された番号)
                         why = (f"対象行なし: 共有DBの {table_name} の{key_column} {key[1]} は、いまは"
-                               f"「{' '.join(v for v in now if v)}」です(この端末で押したときは"
+                               f"「{' '.join(v for v in theirs if v)}」です(この端末で押したときは"
                                f"「{' '.join(v for v in mine if v)}」)。マスタ管理・Access の入れ替えで看板が"
                                "入れ替わった・資材が直されたので、別の看板に書かないよう送りません")
+                    elif now is not None and changed:
+                        # **ほかの端末が先に同じ列を変えていた。** 書かずに下ろす(後勝ちで消さない)
+                        shared_now = {logical: _as_text(now.get(actual)) for actual, logical, _v in bases}
+                        same = all(_identity_text(shared_now.get(name, values.get(name))) ==
+                                   _identity_text(values.get(name))
+                                   for name in MARK_FIELDS if name in values)
+                        if store.drop_conflicted(key[0], key[1], key[2], shared_now, notify=not same):
+                            result.conflicts += 1
+                            applog.warning(
+                                "export_pending: %s/%s: ほかの端末が先に %s を変えていたので送りませんでした"
+                                "(押したとき %s → 共有DB %s)%s", key[0], key[1], "・".join(changed),
+                                {l: v for _a, l, v in bases if l in changed},
+                                {l: shared_now[l] for l in changed},
+                                "" if not same else "。結果は同じなので知らせません")
+                        continue
                     elif now is not None:
-                        # 同じ看板(数の書き方だけが SQL の文字と違う)。資材を見ずに送る
+                        # 同じ看板・同じ元の値(数の書き方だけが SQL の文字と違う)。照らさずに送る
                         statement_result = _retry_with_stored_key(
                             gateway, table_name, key_column, key, plain, statement_result)
                 if statement_result.ok and statement_result.affected > 0:
                     synced.append(key)
+                    sent[(key[0], key[1])] = values
                 elif statement_result.ok:
                     # 条件に一致する行が共有DBに無い。**なぜ無いのか**まで書く
                     # (画面の「要確認」にそのまま出る。「対象行なし」だけでは直しようがない)
@@ -658,7 +717,7 @@ def _export_items(
                         [(key[0], key[1])], statement_result.error_message
                     )
 
-            cleared = store.mark_items_synced(synced)
+            cleared = store.mark_items_synced(synced, sent)
             result.succeeded += cleared
             if cleared != len(synced):
                 applog.info(

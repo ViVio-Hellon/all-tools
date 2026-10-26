@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS kanban_item (
     sync_attempts INTEGER NOT NULL DEFAULT 0,
     sync_error    TEXT    NOT NULL DEFAULT '',
     synced_gen    INTEGER NOT NULL DEFAULT 0,  -- 書き戻しに成功した回の通し番号(取り込みが古い値で戻さないため)
+    dirty_base    TEXT    NOT NULL DEFAULT '', -- 押したときに見えていた元の値(JSON。論理名 -> 値。書き戻しはこの値の行にだけ書く)
     PRIMARY KEY (line, mgmt_no)
 );
 
