@@ -1467,8 +1467,9 @@ class OtherSettingsFlowTest(FlowCase):
             self.assertTrue(folder.is_dir())
             text = (folder / "設定.json").read_text(encoding="utf-8-sig")
             body = json.loads(text)
-            self.assertNotIn('"line"', text, body)
-            self.assertIn(str(self.shared), text, "接続先が入っていない")
+            self.assertNotIn("line", body["settings"], body)
+            # JSON の中では Windows のパスの \ が \\ になるので、文字で探さず読んだ値で比べる
+            self.assertEqual(body["settings"].get("shared_db_path"), str(self.shared), "接続先が入っていない")
             self.assertFalse(page.locator("#dist-checks li.is-ng").count(), self.text(page, "#dist-checks"))
             self.assertFalse(page.locator("#dist-reapply").is_disabled())
 
