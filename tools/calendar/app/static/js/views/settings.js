@@ -286,6 +286,8 @@ function renderDistribution(dist) {
   pill.className = `sub pill pill--${dist.exists ? "ok" : "warn"}`;
   document.getElementById("st-dist-meta").textContent = dist.exists
     ? `${dist.created_at} に ${dist.created_on} で作成(VER${dist.version})`
+      + (dist.integrated ? `。日報複合ツールの大設定がまとめたファイル(${dist.source})を読んでいます`
+        + "(カレンダーのフォルダの配布設定より新しいため。両方あるときは作った時刻が新しいほう)" : "")
     : "まだありません。下で書き出すと、ツールのフォルダの直下に「配布設定」フォルダができます。";
   document.getElementById("st-dist-rows").replaceChildren(
     ...dist.contents.flatMap((c) => {

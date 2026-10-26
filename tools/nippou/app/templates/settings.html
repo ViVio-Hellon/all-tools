@@ -1807,6 +1807,9 @@ LVC,119
       <p class="lead" id="dist-meta">
         {% if dist.exists and dist.legacy %}前の版の置き場所(<code>{{ dist.source }}</code>)を読んでいます。
           下で書き出すと「配布設定」フォルダが勝ちます。
+        {% elif dist.exists and dist.integrated %}{{ dist.created_at }} に {{ dist.created_on }} で作成。
+          日報複合ツールの大設定がまとめたファイル(<code>{{ dist.source }}</code>)を読んでいます
+          (日報のフォルダの配布設定より新しいため。両方あるときは、作った時刻が新しいほうを使います)。
         {% elif dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成
         {% elif dist.where %}まだありません。下で書き出すと、日報複合ツールの一式の中の「tools\nippou\配布設定」にできます。
         {% else %}まだありません。下で書き出すと、起動用の Start.vbs と同じフォルダに「配布設定」フォルダができます。{% endif %}

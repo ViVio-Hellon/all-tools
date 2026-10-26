@@ -129,7 +129,8 @@ export function install(options) {
     }
   });
   $("dist-remove").addEventListener("click", () => {
-    if (confirm("配布設定(一式のフォルダの直下の「配布設定」)を消します。この端末の設定はそのままです。よろしいですか?")) {
+    if (confirm("配布設定(一式のフォルダの直下の「配布設定」)を消します。まとめて入れた4ツールの分も消えます"
+      + "(各ツールのフォルダの配布設定と、この端末の設定はそのままです)。よろしいですか?")) {
       write("/api/distribution/remove", {});
     }
   });
@@ -549,6 +550,9 @@ function paintDistribution() {
     state.textContent = `置いてあります: ${d.path}(作成 ${d.created_at || "?"} / ${d.created_on || "?"}`
       + `${d.version ? ` / VER${d.version}` : ""})`
       + (d.applied_at ? `。この端末が最後に読み込んだ・書き出したのは ${d.applied_at}` : "");
+  } else if (d.file_exists) {
+    state.textContent = `置いてあります: ${d.path}(作成 ${d.file_created_at || "?"})。`
+      + "大設定の分(共有の DB の置き場所・管理者パスワード)は既定のままなので入っていません。4ツールの分だけ入っています";
   } else {
     state.textContent = `置いてありません(書き出すと ${d.path || "配布設定"} にできます)`;
   }
@@ -560,27 +564,60 @@ function paintDistribution() {
     list.append(li);
   }
   $("dist-reapply").hidden = !d.exists;
-  $("dist-remove").hidden = !d.exists;
-  // 各ツールの配布設定(そのツールのフォルダの中)。make_dist.bat はこれをまとめて入れる
+  $("dist-remove").hidden = !(d.exists || d.file_exists);
+  paintToolDistributions(d.tools || []);
+}
+
+/**
+ * 4ツールの配布設定の中身(読むだけ)。配った先が使うほう(ツールのフォルダ / まとめたファイルの
+ * 作った時刻が新しいほう)と、その項目・値。パスワードの値は来ない(「(設定済み)」)。
+ */
+function paintToolDistributions(tools) {
   const body = $("dist-tools")?.tBodies[0];
-  if (body) {
-    body.replaceChildren();
-    for (const t of d.tools || []) {
-      const tr = document.createElement("tr");
-      const cells = [
-        t.title,
-        t.exists ? `あり(作成 ${t.created_at || "?"}${t.created_on ? ` / ${t.created_on}` : ""})` : "なし(書き出していません)",
-        t.path,
-      ];
-      cells.forEach((text, i) => {
-        const td = document.createElement("td");
-        td.textContent = text;
-        if (i === 1 && t.exists) td.className = "is-ok";
-        if (i === 2) td.className = "mono";
-        tr.append(td);
-      });
-      body.append(tr);
+  if (!body) return;
+  body.replaceChildren();
+  for (const t of tools) {
+    const tr = document.createElement("tr");
+    tr.dataset.tool = t.id || "";
+    const name = document.createElement("td");
+    name.textContent = t.title;
+    const where = document.createElement("td");
+    if (t.exists) {
+      where.className = "is-ok";
+      const made = [t.created_at ? `作成 ${t.created_at}` : "", t.created_on, t.version ? `VER${t.version}` : ""]
+        .filter(Boolean).join(" / ");
+      where.textContent = `あり${made ? `(${made})` : ""}`;
+      if (t.use_label) {
+        const from = document.createElement("div");
+        from.className = "dist-from";
+        from.textContent = `使うもの: ${t.use_label}`;
+        where.append(from);
+      }
+    } else {
+      where.textContent = "なし(書き出していません)";
     }
+    for (const note of t.notes || []) {
+      const p = document.createElement("div");
+      p.className = "dist-note";
+      p.textContent = `※ ${note}`;
+      where.append(p);
+    }
+    const what = document.createElement("td");
+    if ((t.contents || []).length) {
+      const ul = document.createElement("ul");
+      ul.className = "dist-items";
+      for (const c of t.contents) {
+        const li = document.createElement("li");
+        li.textContent = `${c.label}: ${c.value}`;
+        ul.append(li);
+      }
+      what.append(ul);
+    } else {
+      what.className = "mono";
+      what.textContent = t.path || "";
+    }
+    tr.append(name, where, what);
+    body.append(tr);
   }
 }
 

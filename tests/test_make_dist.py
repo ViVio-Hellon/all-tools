@@ -416,19 +416,11 @@ class ExportAllDeliveredTests(_Delivered):
         self.assert_read(env, tails)
 
 
-class RedistributedTerminalTests(_Delivered):
-    """**配り直し**を通しで: 配る元で参照設定を変える → 書き出す → make_dist → 配った先(外枠と同じ道)。
+class _FromSource(_Delivered):
+    """配る元の端末で各ツールの参照設定を決め、大設定の「4ツールの分もまとめて書き出す」で書き出す道具。
 
-        日報複合ツール VER1.5.64。日報、看板、カレンダーの配布設定の参照設定が生きていないのでは?
-        違うPCでやってみたが参照設定が初期値になっていた。大設定のタブ表示権限は読めていた
-
-    配った先の端末が**前に一度配布設定を読み込んでいる**と、前は読み込んだ値も「その端末にすでに
-    ある」と数えていたので、参照先を変えて配り直しても前の値のまま動いていた(まっさらな端末は
-    読む)。配布設定から読み込んだ値のままの項目は新しい値にし、**その端末で直した値は残す**。
-
-    端末は外枠(日報複合ツール.exe)が渡すのと同じ環境(``LOCALAPPDATA`` / ``APPDATA`` だけ。
-    各ツールの手元の領域の指定は渡さない)で、各ツールの ``bridge.py`` を子として起こす。
-    書き出しは現場と同じ大設定の「4ツールの分もまとめて書き出す」(``export_all``)。
+    端末は外枠(日報複合ツール.exe)が渡すのと同じ環境(``LOCALAPPDATA`` / ``APPDATA`` だけ)。
+    試験は持たない(下の2つが使う)。
     """
 
     #: 見る参照設定(ツールごとに複数)。値は {"1回目" / "2回目"} で配る元を変える
@@ -439,8 +431,6 @@ class RedistributedTerminalTests(_Delivered):
         "calendar": ("保存用DBフォルダ", "マスタDBフォルダ"),
         "inspection": ("root_folder",),
     }
-    #: 配った先の端末で、1回目を読み込んだあとに利用者が直す項目(配り直しても戻さない)
-    CHANGED_HERE = {"nippou": "report_output_dir", "calendar": "マスタDBフォルダ"}
 
     @classmethod
     def values(cls, round_name: str) -> dict[str, dict[str, str]]:
@@ -481,15 +471,13 @@ class RedistributedTerminalTests(_Delivered):
         return json.loads(done.stdout.decode("utf-8") or "{}")
 
     @classmethod
-    def prepare(cls, source: Path) -> None:
+    def start_source(cls, source: Path) -> None:
         cls.source = source
         cls.pc1 = cls.terminal("配る元", root=source, shell_like=True)
         cls.kanban_hash = subprocess.run(
             [sys.executable, "-c", "from kanban import config; print(config.hash_password('line2026'))"],
             cwd=source / "tools" / "kanban", env=cls.pc1, capture_output=True, text=True,
             encoding="utf-8", check=True).stdout.strip()
-        cls.configure_source("1回目")
-        cls.first_export = cls.export_all()
 
     def wait_for(self, env: dict[str, str], expected: dict[str, dict[str, str]]) -> Callable[[str], bool]:
         return lambda tool: all(self.stored_values(env, tool).get(k) == v for k, v in expected[tool].items())
@@ -503,6 +491,94 @@ class RedistributedTerminalTests(_Delivered):
                     self.assertEqual(stored.get(key), value,
                                      f"{when}: {tool} の {key} が配布設定の値になっていない。\n"
                                      f"--- 標準エラーの終わり ---\n{tails[tool]}")
+
+
+class CombinedFileDeliveredTests(_FromSource):
+    """**大設定の1つのファイルだけ**で4ツールに届くか(各ツールのフォルダの 設定.json を消して配る)。
+
+        日報・看板・カレンダーの参照設定は大設定のファイルに入らず、各ツールのフォルダの別ファイルに入る
+        ──「そりゃぁ反映しないわな」「両方やってください」
+
+    配る元で「4ツールの分もまとめて書き出す」→ 各ツールのフォルダの 設定.json を消す → make_dist →
+    配った先(外枠と同じ道: 各ツールの bridge.py)で4ツールの参照設定が配布設定の値になる。
+    両方あるときは、作った時刻が新しいほうを使う(新しいフォルダのもの・古いフォルダのもの)。
+    ツールのフォルダだけの道(単品で配る道)は ``DeliveredTerminalTests``。
+    """
+
+    TOOLS = ("nippou", "kanban", "calendar", "inspection")
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        cls.start_source(source)
+        cls.configure_source("1回目")
+        cls.outcome = cls.export_all()
+        for tool in cls.TOOLS:
+            (source / "tools" / tool / "配布設定" / "設定.json").unlink()
+
+    def tool_file(self, root: Path, tool: str) -> Path:
+        return root / "tools" / tool / "配布設定" / "設定.json"
+
+    def test_まとめたファイルに4ツールの分が入り_ツールのフォルダに無くても配った先で読む(self) -> None:
+        self.assertTrue(self.outcome.get("ok"), self.outcome)
+        data = json.loads((self.dist / "配布設定" / "日報複合ツール.json").read_text(encoding="utf-8-sig"))
+        expected = self.values("1回目")
+        for tool in self.TOOLS:
+            with self.subTest(tool=tool):
+                self.assertFalse(self.tool_file(self.dist, tool).exists(), "ツールのフォルダには無い")
+                self.assertEqual({k: data["tools"][tool]["settings"].get(k) for k in expected[tool]}, expected[tool])
+        self.assertIn("4ツールの分(", "\n".join(self.lines), "配布メモに4ツールの分が入っていると書く")
+        env = self.terminal("配った先", shell_like=True)
+        tails = self.start_all(env, self.wait_for(env, expected))
+        self.assert_values(env, expected, tails, "まとめたファイルだけ")
+
+    def test_両方あれば作った時刻が新しいほうを使う(self) -> None:
+        """カレンダーはあとで設定画面から書き出し直した(フォルダが新しい)。点検表はフォルダに古いものが残っていた。"""
+        out = self.tmp / "両方ある一式"
+        if out.exists():
+            shutil.rmtree(out)
+        shutil.copytree(self.dist, out)
+        expected = self.values("1回目")
+        newer = {"保存用DBフォルダ": str(self.tmp / "フォルダの新しい値"),
+                 "マスタDBフォルダ": str(self.tmp / "フォルダの新しいマスタ")}
+        self.tool_file(out, "calendar").write_text(json.dumps(
+            {"format": 1, "created_at": "2999/01/01 00:00:00", "created_on": "配る元", "settings": newer},
+            ensure_ascii=False), encoding="utf-8")
+        self.tool_file(out, "inspection").write_text(json.dumps(
+            {"format": 1, "created_at": "2000-01-01 00:00:00", "created_on": "配る元",
+             "settings": {"root_folder": str(self.tmp / "フォルダの古い値")}}, ensure_ascii=False), encoding="utf-8")
+        expected["calendar"] = newer
+        env = self.terminal("両方ある端末", root=out, shell_like=True)
+        saved, type(self).dist = self.dist, out
+        try:
+            tails = self.start_all(env, self.wait_for(env, expected))
+        finally:
+            type(self).dist = saved
+        self.assert_values(env, expected, tails, "両方ある")
+
+
+class RedistributedTerminalTests(_FromSource):
+    """**配り直し**を通しで: 配る元で参照設定を変える → 書き出す → make_dist → 配った先(外枠と同じ道)。
+
+        日報複合ツール VER1.5.64。日報、看板、カレンダーの配布設定の参照設定が生きていないのでは?
+        違うPCでやってみたが参照設定が初期値になっていた。大設定のタブ表示権限は読めていた
+
+    配った先の端末が**前に一度配布設定を読み込んでいる**と、前は読み込んだ値も「その端末にすでに
+    ある」と数えていたので、参照先を変えて配り直しても前の値のまま動いていた(まっさらな端末は
+    読む)。配布設定から読み込んだ値のままの項目は新しい値にし、**その端末で直した値は残す**。
+
+    端末は外枠(日報複合ツール.exe)が渡すのと同じ環境(``LOCALAPPDATA`` / ``APPDATA`` だけ。
+    各ツールの手元の領域の指定は渡さない)で、各ツールの ``bridge.py`` を子として起こす。
+    書き出しは現場と同じ大設定の「4ツールの分もまとめて書き出す」(``export_all``)。
+    """
+
+    #: 配った先の端末で、1回目を読み込んだあとに利用者が直す項目(配り直しても戻さない)
+    CHANGED_HERE = {"nippou": "report_output_dir", "calendar": "マスタDBフォルダ"}
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        cls.start_source(source)
+        cls.configure_source("1回目")
+        cls.first_export = cls.export_all()
 
     def test_配り直すと前に読み込んだ端末も新しい参照設定になる_直した値は残す(self) -> None:
         self.assertTrue(self.first_export.get("ok"), self.first_export)

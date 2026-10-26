@@ -1041,7 +1041,7 @@
     (その端末にすでにある設定は上書きしません)。
   </p>
   <p class="card__note" id="dist-meta">
-    {%- if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% if dist.legacy %}(前の版の形){% endif %}
+    {%- if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% if dist.legacy %}(前の版の形){% endif %}{% if dist.integrated %}。日報複合ツールの大設定がまとめたファイル({{ dist.source }})を読んでいます(看板のフォルダの配布設定より新しいため。両方あるときは作った時刻が新しいほう){% endif %}
     {%- else %}まだありません。下の「配布設定を書き出す」で作られます。{% endif -%}
   </p>
   <div class="master-table-wrap" style="max-height:none;margin-top:0" id="dist-contents-wrap"{% if not dist.exists %} hidden{% endif %}>

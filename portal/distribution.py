@@ -120,29 +120,136 @@ def read() -> Optional[Bundle]:
                   str(data.get("version", "")))
 
 
-def tool_settings() -> list[dict[str, Any]]:
-    """各ツールの配布設定(`tools\\<ツール>\\配布設定\\`)が書き出してあるか。
+#: 大設定の「4ツールの分もまとめて書き出す」は、4ツールの配布設定もこのファイル(`日報複合ツール.json`)の
+#: `tools` → `<ツール>` に入れる(各ツールの `tools\\<ツール>\\配布設定\\設定.json` と同じ中身)。
+#: 配った先の各ツールは、自分のフォルダの配布設定と、このファイルの自分の分の**作った時刻が新しいほう**を
+#: 丸ごと使う(同じ時刻ならツールのフォルダのほう。項目ごとには混ぜない)。各ツールの `distribution.read`
+TOOLS_KEY = "tools"
+#: 各ツールの配布設定のファイル(そのツールのフォルダの中)
+TOOL_DIR_NAME = "配布設定"
+TOOL_FILE_NAME = "設定.json"
+#: まとめたファイルに入れられないもの(音声ファイル)の置き場所(日報のフォルダの `配布設定\\音`)
+TOOL_SOUNDS_DIR = "音"
 
-        少なくとも日報管理ツールでは配布設定してもフォルダは生成されていない
 
-    各ツールの設定画面で書き出すと、**そのツールのフォルダの中**にできます(一式の直下ではない)。
-    どこにあるのか・`scripts\\make_dist.bat` で入るのかを大設定で一目で見られるようにします。
+def stamp(text: Any) -> str:
+    """作った時刻を比べられる形に(数字だけ・14桁)。ツールごとに書き方が違う(`2026-10-26 08:57` /
+    `2026/10/26 08:57:11`)ので、数字だけにして並べる。各ツールの `distribution.stamp` と同じ。"""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
+
+
+def _file_data() -> dict[str, Any]:
+    """`日報複合ツール.json` の中身そのもの(無い・読めなければ空)。"""
+    path = file_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _existing_tools() -> dict[str, Any]:
+    tools = _file_data().get(TOOLS_KEY)
+    return dict(tools) if isinstance(tools, dict) else {}
+
+
+def _tool_folder_data(tool: Any) -> Optional[dict[str, Any]]:
+    """そのツールのフォルダの配布設定(`tools\\<ツール>\\配布設定\\設定.json`)の中身。無い・読めなければ None。"""
+    try:
+        data = json.loads((Path(tool.dir) / TOOL_DIR_NAME / TOOL_FILE_NAME).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("settings"), dict) else None
+
+
+def _secret(key: str) -> bool:
+    """値を画面に出さない項目(管理者パスワード。各ツールで鍵の名前が違う)。"""
+    return "password" in key.lower() or "パスワード" in key
+
+
+def _show_tool_value(key: str, value: Any) -> str:
+    if _secret(key):
+        return "(設定済み)"
+    if isinstance(value, bool):
+        return "する" if value else "しない"
+    return str(value)
+
+
+def _tool_version(tool: Any) -> str:
+    try:
+        conf = json.loads((Path(tool.dir) / "config" / "app.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return ""
+    return str(conf.get("version", "")) if isinstance(conf, dict) else ""
+
+
+def _made(data: Optional[dict[str, Any]]) -> dict[str, str]:
+    if not data:
+        return {"created_at": "", "created_on": "", "version": ""}
+    return {"created_at": str(data.get("created_at", "")), "created_on": str(data.get("created_on", "")),
+            "version": str(data.get("version") or data.get("app_version") or "")}
+
+
+def tool_settings(portal_created_at: str = "") -> list[dict[str, Any]]:
+    """4ツールの配布設定の中身(**読むだけ**。配る前に確かめるため)。
+
+        日報・看板・カレンダーの参照設定は大設定のファイルに入らず、各ツールのフォルダの別ファイルに入る
+        ──「そりゃぁ反映しないわな」「両方やってください」
+
+    ツールごとに、そのツールのフォルダの配布設定と、まとめたファイルのそのツールの分を見て、
+    **配った先が使うほう**(作った時刻が新しいほう。同じならツールのフォルダ)の中身を項目ごとに出す。
+    パスワードの値は出さない。大設定の書き出しより古いもの・作った版がいまの版と違うものは一言添える。
     """
     from . import catalog as catalog_mod
 
+    whole = _existing_tools()
     out: list[dict[str, Any]] = []
     for tool in catalog_mod.load().tools:
-        folder = Path(tool.dir) / "配布設定"
-        item: dict[str, Any] = {"id": tool.id, "title": tool.title, "path": str(folder),
-                                "exists": (folder / "設定.json").is_file(),
-                                "created_at": "", "created_on": ""}
-        if item["exists"]:
-            try:
-                data = json.loads((folder / "設定.json").read_text(encoding="utf-8-sig"))
-                item["created_at"] = str(data.get("created_at", ""))
-                item["created_on"] = str(data.get("created_on", ""))
-            except (OSError, ValueError):
-                pass
+        folder = Path(tool.dir) / TOOL_DIR_NAME
+        own = _tool_folder_data(tool)
+        entry = whole.get(tool.id)
+        entry = entry if isinstance(entry, dict) and isinstance(entry.get("settings"), dict) else None
+        if own is not None and (entry is None or stamp(own.get("created_at")) >= stamp(entry.get("created_at"))):
+            use, data = "folder", own
+        elif entry is not None:
+            use, data = "integrated", entry
+        else:
+            use, data = "", None
+        made = _made(data)
+        item: dict[str, Any] = {
+            "id": tool.id, "title": tool.title, "path": str(folder),
+            "exists": data is not None, "use": use,
+            "use_label": {"folder": f"ツールのフォルダ(tools\\{Path(tool.dir).name}\\{TOOL_DIR_NAME})",
+                          "integrated": f"まとめたファイル({TOOL_DIR_NAME}\\{FILE_NAME})",
+                          "": ""}[use],
+            "in_folder": own is not None, "in_file": entry is not None,
+            **made, "contents": [], "notes": [],
+        }
+        if data is not None:
+            labels = data.get("labels") if isinstance(data.get("labels"), dict) else {}
+            item["contents"] = [{"key": k, "label": str(labels.get(k, k)), "value": _show_tool_value(k, v)}
+                                for k, v in data["settings"].items()]
+            if own is not None and entry is not None and own.get("settings") != entry.get("settings"):
+                other = _made(entry if use == "folder" else own)
+                item["notes"].append(
+                    f"ツールのフォルダとまとめたファイルの両方にあり、中身が違います。作った時刻が新しい"
+                    f"{'ツールのフォルダ' if use == 'folder' else 'まとめたファイル'}のほうを使います"
+                    f"(もう一方は 作成 {other['created_at'] or '?'})")
+            if portal_created_at and stamp(made["created_at"]) and stamp(made["created_at"]) < stamp(portal_created_at):
+                item["notes"].append(f"大設定の書き出し({portal_created_at})より古いものです"
+                                     "(配る前に、まとめて書き出し直すか中身を確かめてください)")
+            now = _tool_version(tool)
+            if made["version"] and now and made["version"] != now:
+                item["notes"].append(f"作った版は VER{made['version']}(いまは VER{now})")
+        try:
+            sounds = sorted(p.name for p in (folder / TOOL_SOUNDS_DIR).iterdir() if p.is_file())
+        except OSError:
+            sounds = []
+        if sounds:
+            item["notes"].append(f"音声ファイル {len(sounds)}件は、まとめたファイルには入りません。"
+                                 f"tools\\{Path(tool.dir).name}\\{TOOL_DIR_NAME}\\{TOOL_SOUNDS_DIR} のまま配ります"
+                                 "(scripts\\make_dist.bat が入れます)")
         out.append(item)
     return out
 
@@ -151,11 +258,14 @@ def summary() -> dict[str, Any]:
     """大設定に出す、配布設定のいま。**パスワードの値は出さない。**"""
     bundle = read()
     applied = user_settings.get(user_settings.KEY_DISTRIBUTION_APPLIED)
+    data = _file_data()
     out: dict[str, Any] = {
         "exists": bundle is not None, "path": str(directory()),
         "applied_at": applied.get("at", "") if isinstance(applied, dict) else "",
         "contents": [], "created_at": "", "created_on": "", "version": "",
-        "tools": tool_settings(),
+        # まとめたファイルを作った時刻(大設定の分が既定のままでも、4ツールの分だけ入っていることがある)
+        "file_exists": bool(data), "file_created_at": str(data.get("created_at", "")),
+        "tools": tool_settings(str(data.get("created_at", ""))),
     }
     if bundle is not None:
         out.update(contents=[{"label": LABELS[k], "value": _show(k, v)} for k, v in bundle.settings.items()],
@@ -166,22 +276,30 @@ def summary() -> dict[str, Any]:
 # ------------------------------------------------------------------
 # 書き出す(配る側)。鍵が開いているかは呼ぶ側(web)が確かめる
 # ------------------------------------------------------------------
-def export() -> Result:
+def export(tools: Optional[dict[str, Any]] = None) -> Result:
     """**この端末のいまの設定**を `配布設定\\` に書き出す(前の中身は置き換える)。
 
     この端末で変えていない項目(既定のまま)は入れない ── 配った先も同じ既定で動く。
+
+    ``tools`` は4ツールの配布設定(まとめて書き出すとき。`export_all`)。渡さなければ、いまの
+    ファイルに入っている4ツールの分をそのまま残す(大設定の分だけ書き出し直しても消さない)。
+    大設定の分が既定のままでも、4ツールの分があればファイルは作る(結果は「要りません」)。
     """
     current = user_settings.load()
     settings = {k: current[k] for k, _ in ITEMS if _present(current.get(k))}
     defaults = [label for k, label in ITEMS if k not in settings]
-    if not settings:
-        return Result(False, "書き出せる設定がありません(置き場所も管理者パスワードも既定のままです。"
-                             "配った先も既定で動くので、配布設定は要りません)。", "nothing")
+    keep = _existing_tools() if tools is None else dict(tools)
+    nothing = ("書き出せる設定がありません(置き場所も管理者パスワードも既定のままです。"
+               "配った先も既定で動くので、配布設定は要りません)。")
+    if not settings and (tools is None or not keep):
+        return Result(False, nothing, "nothing")
     target = directory()
     # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を残さない
     staging = target.with_name(target.name + ".作成中")
     meta = {"format": FORMAT, "created_at": _now(), "created_on": identity.current().pc_name,
             "version": app_config.version(), "settings": settings}
+    if keep:
+        meta[TOOLS_KEY] = keep
     try:
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
@@ -194,6 +312,9 @@ def export() -> Result:
     except OSError as exc:
         shutil.rmtree(staging, ignore_errors=True)
         return Result(False, f"{target} に書けませんでした: {exc}", "failed")
+    if not settings:
+        log.info("配布設定に4ツールの分だけ入れました(大設定の分は既定のまま): %s", ", ".join(keep))
+        return Result(False, nothing, "nothing")
     user_settings.update({user_settings.KEY_DISTRIBUTION_APPLIED: {"at": meta["created_at"]}})
     names = [LABELS[k] for k in settings]
     message = (f"配布設定を書き出しました({len(names)}項目: {'・'.join(names)})。一式のフォルダの直下の"
@@ -300,13 +421,21 @@ def export_all() -> dict[str, Any]:
     from . import catalog as catalog_mod
 
     catalog = catalog_mod.load()
-    results = [_outcome(catalog.portal.id, catalog.portal.title, export())]
+    results = []
     for tool in catalog.tools:
         try:
             result = export_tool(tool)
         except Exception as exc:                  # noqa: BLE001 - 残りのツールは続ける
             result = Result(False, str(exc), STATE_FAILED)
         results.append(_outcome(tool.id, tool.title, result))
+    # **4ツールの分も大設定の1つのファイルに入れる**(ツールのフォルダに書き出したものと同じ中身)。
+    # 配った先の各ツールは、ツールのフォルダのものが無くても、このファイルの自分の分を読む
+    tools = {tool.id: data for tool in catalog.tools if (data := _tool_folder_data(tool)) is not None}
+    portal = _outcome(catalog.portal.id, catalog.portal.title, export(tools))
+    if tools:
+        titles = "・".join(t.title for t in catalog.tools if t.id in tools)
+        portal["line"] += f"。4ツールの分({titles})も {TOOL_DIR_NAME}\\{FILE_NAME} にまとめました"
+    results.insert(0, portal)
     for item in results:
         log.info("まとめて書き出す: %s → %s(%s)", item["title"], item["state"], item["message"])
     count = {state: sum(1 for r in results if r["state"] == state)
@@ -325,6 +454,16 @@ def _readme(meta: dict[str, Any]) -> str:
              f"作成: {meta['created_at']}({meta['created_on']} / VER{meta['version']})", "",
              "このフォルダに入っているもの"]
     lines += [f"  {LABELS[k]}: {_show(k, v)}" for k, v in meta["settings"].items()]
+    tools = meta.get(TOOLS_KEY) or {}
+    if tools:
+        lines += ["", "4ツールの配布設定(大設定の「4ツールの分もまとめて書き出す」で入れたもの)"]
+        for tool_id, data in tools.items():
+            labels = data.get("labels") if isinstance(data.get("labels"), dict) else {}
+            names = "・".join(str(labels.get(k, k)) for k in (data.get("settings") or {}))
+            lines.append(f"  {tool_id}: {names}(作成 {data.get('created_at', '?')})")
+        lines += ["  各ツールは、ツールのフォルダ(tools\\<ツール>\\配布設定)のものと、ここにある分の",
+                  "  作った時刻が新しいほうを読みます。日報の音声ファイルはここには入りません",
+                  "  (tools\\nippou\\配布設定\\音 のまま配ります)。"]
     lines += ["", "配った先で起きること",
               "  起動したときにこのフォルダを読み込みます。",
               "  その端末にすでにある設定は、読み込みません(上書きしない)。",

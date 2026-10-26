@@ -26,7 +26,7 @@
   </nav></div></header>
 <main class="page">
   <div class="head">
-    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.13</span></div>
+    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.14</span></div>
     <p class="lead">資材の看板を画面で見て、ラインは「欲しい」を出し、倉庫は「発送した」を付けます。届いたらラインが確認して、看板を元に戻します。</p>
   </div>
 
@@ -335,7 +335,7 @@
         <tr><td>記録</td><td>エラーの記録を探す・なぜなぜ分析シートを作る。ログと記録は、置き場所の中の <b><code>kanban</code> フォルダ</b>に、名前が <code>kanban_</code> で始まるファイルで書きます(<code>kanban\ライン名\kanban_DebugLog_日時.txt</code>・<code>kanban\記録\年月\kanban_記録_PC名_年月日.jsonl</code>。ほかのツールのログと混ざりません)。前の版の <code>KanbanSystem</code> フォルダの記録もそのまま探せます</td><td>要らない</td></tr>
         <tr><td>ファイルの場所</td><td>使っているファイルの置き場所を見る(問い合わせのとき)</td><td>要らない</td></tr>
         <tr><td>パスワード認証</td><td>管理者パスワードで認証する・決める・変える</td><td>—</td></tr>
-        <tr><td>配布設定</td><td>1台で決めた設定をほかのパソコンへ配る</td><td>要る</td></tr>
+        <tr><td>配布設定</td><td>1台で決めた設定をほかのパソコンへ配る<br>日報複合ツールでは、大設定の「4ツールの分もまとめて書き出す」で、このツールの配布設定が大設定の <code>配布設定\日報複合ツール.json</code> にも入ります。このツールのフォルダの配布設定と両方あるときは、<b>作った時刻が新しいほう</b>を使います(同じならこのツールのフォルダのほう)。中身は大設定の「配布設定」の一覧で確かめられます。</td><td>要る</td></tr>
       </tbody>
     </table></div>
     <h3>モードを変えるとき</h3>
@@ -388,7 +388,7 @@
     <div class="warn"><b>気をつけること</b>電源を切る前に、必ず<span class="btnname">終了</span>で閉じてください。いきなり電源を切ると、押した操作が送られずに残ったり、ほかのパソコンの「開いている端末」に <b>?</b> 付きで残ったりします。</div>
   </section>
 
-  <p class="foot">資材発注看板システム VER3.5.13 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
+  <p class="foot">資材発注看板システム VER3.5.14 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
     写真の名前・ライン・資材・コメントは説明のための例です。</p>
 </main>
 </body>

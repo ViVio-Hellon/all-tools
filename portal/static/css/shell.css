@@ -275,6 +275,9 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .dist-tools th,.dist-tools td{border-bottom:1px solid var(--rule);padding:5px 8px;text-align:left;vertical-align:top}
 .dist-tools td.mono{font-family:var(--mono);font-size:var(--fs-sm);word-break:break-all}
 .dist-tools td.is-ok{color:var(--state-ok);font-weight:700}
+.dist-tools td .dist-from{color:var(--ink);font-weight:400;font-size:var(--fs-sm)}
+.dist-tools td .dist-note{color:var(--state-warn,#9a5b00);font-weight:400;font-size:var(--fs-sm);margin-top:2px}
+.dist-items{margin:0;padding-left:18px;word-break:break-all}
 .dist-steps{margin:6px 0 12px;padding-left:22px}
 .dist-steps li{margin:2px 0}
 .dist-all{margin-top:10px}

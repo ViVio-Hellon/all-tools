@@ -29,6 +29,10 @@ r"""日報複合ツール一式の配布用フォルダを作る
 配布設定は、大設定で書き出したもの(一式の直下の `配布設定\`: 共有の DB の置き場所・
 管理者パスワード)と、各ツールの設定画面で書き出したもの(`tools\<ツール>\配布設定\`)を、
 それぞれの決まりどおりに入れます(`--no-settings` でどれも入れない)。
+大設定の「4ツールの分もまとめて書き出す」で書き出した `配布設定\日報複合ツール.json` には4ツールの分も
+入っているので、各ツールのフォルダの配布設定が無くても、この1つのファイルで4ツールに届きます
+(両方あれば、各ツールは作った時刻が新しいほうを読む)。日報の音声ファイルは日報のフォルダの
+`配布設定\音` のまま入れます。
 タブ表示権限の表そのものは共有の DB にあるので、配る必要はありません。
 """
 from __future__ import annotations
@@ -141,9 +145,15 @@ def _portal_settings_lines(folder: Path) -> list[str]:
         if not path.is_file():
             path = folder / "統合ツール.json"        # 名前を変える前に書き出したもの
         data = json.loads(path.read_text(encoding="utf-8-sig"))
-        return [labels.get(k, k) for k in (data.get("settings") or {})] or ["(中身がありません)"]
     except (OSError, ValueError):
         return ["(読めません)"]
+    names = [labels.get(k, k) for k in (data.get("settings") or {})]
+    tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
+    if tools:
+        # 大設定の「4ツールの分もまとめて書き出す」は、4ツールの分もこのファイルに入れる
+        names.append("4ツールの分(" + "・".join(tools) + "。各ツールは、ツールのフォルダの配布設定と"
+                     "作った時刻が新しいほうを読みます)")
+    return names or ["(中身がありません)"]
 
 
 def _excluded(name: str) -> bool:

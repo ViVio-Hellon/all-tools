@@ -169,6 +169,63 @@ class ExportTests(DistributionTestCase):
         self.assertEqual([p.name for p in self.dist_dir.parent.iterdir()], [], "作りかけを残さない")
 
 
+class IntegratedFileTests(DistributionTestCase):
+    """日報複合ツールの大設定がまとめたファイル(`配布設定\\日報複合ツール.json` の tools → inspection)。
+
+    点検表のフォルダの配布設定が無くても、まとめたファイルの点検表の分を読む。両方あれば作った時刻が
+    新しいほうを丸ごと使う(同じならフォルダのほう)。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.whole_dir = self.tmp / "一式" / "配布設定"
+        patcher = mock.patch.dict(os.environ, {"ALLTOOLS_DISTRIBUTION_DIR": str(self.whole_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def put_whole(self, settings, created_at):
+        self.whole_dir.mkdir(parents=True, exist_ok=True)
+        (self.whole_dir / distribution.INTEGRATED_FILE).write_text(json.dumps({
+            "format": 1, "created_at": "2026/10/26 09:00:00", "settings": {},
+            "tools": {"inspection": {"format": 1, "app_id": app_config.app_id(), "created_at": created_at,
+                                     "settings": settings}}}, ensure_ascii=False), encoding="utf-8")
+
+    def test_点検表のフォルダに無くても_まとめたファイルから読む(self):
+        self.put_whole({"root_folder": r"\\srv\まとめ"}, "2026-10-26 09:00:00")
+        line2 = self.terminal("line2")
+        self.assertTrue(line2.dist.read().integrated)
+        self.assertIn("点検表フォルダ", line2.dist.apply_on_start().applied)
+        self.assertEqual(line2.settings.to_dict()["root_folder"], os.path.normpath(r"\\srv\まとめ"))
+
+    def test_両方あれば作った時刻が新しいほう_同じならフォルダ(self):
+        t = self.configured()
+        self.assertTrue(t.dist.export(NEW_PW, ["root_folder"]).ok)
+        made = t.dist.read_own().created_at
+        self.put_whole({"root_folder": r"\\srv\まとめ"}, "2000-01-01 00:00:00")
+        self.assertEqual(t.dist.read().settings["root_folder"], r"\\srv\各課共有\点検表")
+        self.put_whole({"root_folder": r"\\srv\まとめ"}, "2999-01-01 00:00:00")
+        self.assertEqual(t.dist.read().settings["root_folder"], r"\\srv\まとめ")
+        self.put_whole({"root_folder": r"\\srv\まとめ"}, made)
+        self.assertEqual(t.dist.read().settings["root_folder"], r"\\srv\各課共有\点検表")
+
+    def test_まとめたファイルから読んでも_直した値は残し_配り直しで新しくする(self):
+        self.put_whole({"root_folder": r"\\srv\1"}, "2026-10-26 09:00:00")
+        line2, line3 = self.terminal("line2"), self.terminal("line3")
+        line2.dist.apply_on_start()
+        line3.dist.apply_on_start()
+        line3.settings.update(root_folder=r"\\srv\ライン3専用")
+        self.put_whole({"root_folder": r"\\srv\2"}, "2026-10-27 09:00:00")
+        self.assertIn("点検表フォルダ", self.terminal("line2").dist.apply_on_start().applied)
+        self.assertEqual(self.terminal("line2").settings.to_dict()["root_folder"], os.path.normpath(r"\\srv\2"))
+        self.assertEqual(self.terminal("line3").dist.apply_on_start().kept, ["点検表フォルダ"])
+
+    def test_書き出すと名前も入る(self):
+        t = self.configured()
+        t.dist.export(NEW_PW, ["root_folder"])
+        data = json.loads((self.dist_dir / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(data["labels"]["root_folder"], "点検表フォルダ")
+
+
 class ApplyTests(DistributionTestCase):
     def exported(self) -> Terminal:
         t = self.configured()

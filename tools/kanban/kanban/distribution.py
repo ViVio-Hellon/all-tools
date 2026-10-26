@@ -166,11 +166,86 @@ class Bundle:
     created_on: str = ""
     legacy: bool = False
     """前の版の形(``config.json``)で置かれていた。"""
+    integrated: bool = False
+    """日報複合ツールの大設定がまとめたファイル(``<一式>\\配布設定\\日報複合ツール.json``)から読んだ。"""
+    file: str = ""
+    """設定を読んだファイル。"""
+
+
+#: 大設定の「4ツールの分もまとめて書き出す」が、4ツールの分も入れる1つのファイル
+#: (一式の直下の ``配布設定\\日報複合ツール.json`` の ``tools`` → ``kanban``)
+INTEGRATED_FILE = "日報複合ツール.json"
+TOOL_ID = "kanban"
+
+
+def integrated_path() -> Path | None:
+    """まとめたファイルの場所。日報複合ツールの一式の中(``<一式>\\tools\\kanban``)でなければ ``None``。
+
+    ``ALLTOOLS_DISTRIBUTION_DIR``(大設定と同じ差し替え)があればそこ。看板だけの差し替え
+    (``KANBAN_DISTRIBUTION_DIR``。試験)のときは見ない ── 本物の一式の配布設定を読まないように。
+    """
+    custom = os.environ.get("ALLTOOLS_DISTRIBUTION_DIR", "").strip()
+    if custom:
+        return Path(custom) / INTEGRATED_FILE
+    if os.environ.get("KANBAN_DISTRIBUTION_DIR"):
+        return None
+    tool_dir = config.APP_ROOT
+    root = tool_dir.parent.parent
+    if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
+        return None
+    return root / DIR_NAME / INTEGRATED_FILE
+
+
+def stamp(text: Any) -> str:
+    """作った時刻を比べられる形に(数字だけ・14桁)。書き方の違う時刻も並べられる。"""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
+
+
+def read_integrated() -> Bundle | None:
+    """まとめたファイルの看板の分。無い・読めない・看板の分が無いなら ``None``。"""
+    path = integrated_path()
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+        return None
+    tools = data.get("tools") if isinstance(data, dict) else None
+    entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("format") != FORMAT:
+        log.warning("日報複合ツールの配布設定の看板の分は形が違うため読みません: %s", path)
+        return None
+    settings = _clean(entry.get("settings") or {})
+    if not settings:
+        return None
+    return Bundle(settings=settings, created_at=str(entry.get("created_at", "")),
+                  created_on=str(entry.get("created_on", "")), integrated=True, file=str(path))
 
 
 def read(base: Path | None = None) -> Bundle | None:
-    """置いてある配布設定。無い・読めない・形が違うなら ``None``。"""
-    folder = base or directory()
+    """置いてある配布設定。無い・読めない・形が違うなら ``None``。
+
+    ``base`` を渡さなければ(配った先が読むとき)、日報複合ツールの大設定がまとめたファイルも見る。
+    **両方あるときは作った時刻が新しいほうを丸ごと使う**(同じなら看板のフォルダのほう ──
+    まとめて書き出すと両方に同じものが入る)。項目ごとには混ぜない。
+    """
+    own = _read_folder(base or directory())
+    if base is not None:
+        return own
+    whole = read_integrated()
+    if whole is None:
+        return own
+    if own is not None and not own.legacy and stamp(own.created_at) >= stamp(whole.created_at):
+        return own
+    return whole
+
+
+def _read_folder(folder: Path) -> Bundle | None:
+    """看板のフォルダの ``配布設定\\`` の中身。"""
     if not folder.is_dir():
         return None
     path = settings_path(folder)
@@ -187,6 +262,7 @@ def read(base: Path | None = None) -> Bundle | None:
             settings=_clean(data.get("settings") or {}),
             created_at=str(data.get("created_at", "")),
             created_on=str(data.get("created_on", "")),
+            file=str(path),
         )
     legacy = folder / LEGACY_SETTINGS_NAME
     if legacy.is_file():
@@ -261,6 +337,9 @@ def summary() -> dict[str, Any]:
         # 日報複合ツールの一式の中なら、置き場所と配り方(make_dist.bat)の一言
         "where": integrated_where(directory()),
         "legacy": bool(bundle and bundle.legacy),
+        # 日報複合ツールの大設定がまとめたファイルから読んでいる(看板のフォルダのものより新しい)
+        "integrated": bool(bundle and bundle.integrated),
+        "source": bundle.file if bundle else "",
         "items": [
             {
                 "key": key, "label": label, "default": default,
@@ -331,10 +410,15 @@ def export(items: list[str]) -> Result:
         )
 
     folder = directory()
+    from . import app_config
+
     meta = {
         "format": FORMAT,
         "created_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
         "created_on": socket.gethostname(),
+        "version": app_config.version(),
+        # 日報複合ツールの大設定が中身を一覧に出すときの項目の名前(読むときは使わない)
+        "labels": {k: ITEM_LABELS[k] for k in settings},
         "settings": settings,
     }
     # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を
@@ -392,7 +476,7 @@ def verify(expected: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return checks
     if not add(f"{SETTINGS_NAME} がある", settings_path().is_file(), str(settings_path())):
         return checks
-    bundle = read()
+    bundle = read(folder)
     if not add(f"{SETTINGS_NAME} を読める(配った先と同じ読み方で)", bundle is not None,
                f"{len(bundle.settings)} 項目" if bundle else "読めませんでした"):
         return checks
@@ -528,9 +612,12 @@ def describe() -> str:
     """起動の記録の1行。**起動のたびに、何を読んでいるかを残す**(配った先で「効いていない」と
     言われたとき、まず見るところ)。"""
     folder = directory()
+    bundle = read()
+    if bundle is not None and bundle.integrated:
+        return (f"配布設定を読みます: {bundle.file}(日報複合ツールの大設定がまとめたファイル。"
+                f"設定 {len(bundle.settings)}件: {'、'.join(ITEM_LABELS[k] for k in bundle.settings)})")
     if not folder.is_dir():
         return f"配布設定はありません({folder})"
-    bundle = read()
     if bundle is None:
         return (f"配布設定を読めません({settings_path(folder)}): 無い・JSON の形が違う・"
                 "format が違う・知っている項目が1つも無い、のどれか(無いものとして続けます)")

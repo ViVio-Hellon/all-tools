@@ -71,6 +71,8 @@ function renderDistribution(dist) {
   $("dist-state").className = `st st--${dist.exists ? "ok" : "warn"}`;
   $("dist-meta").textContent = dist.exists
     ? `${dist.created_at} に ${dist.created_on} で作成${dist.created_version ? `(VER${dist.created_version})` : ""}`
+      + (dist.integrated ? `。日報複合ツールの大設定がまとめたファイル(${dist.source})を読んでいます`
+        + "(点検表のフォルダの配布設定より新しいため。両方あるときは作った時刻が新しいほう)" : "")
     : "まだありません。下で書き出すと、アプリのフォルダの直下に「配布設定」フォルダができます。";
   $("dist-rows").replaceChildren(...dist.contents.map((c) => {
     const tr = el("tr");

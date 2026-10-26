@@ -140,6 +140,40 @@ class Bundle:
     created_at: str = ""
     created_on: str = ""
     created_version: str = ""
+    # 日報複合ツールの大設定がまとめたファイル(`<一式>\\配布設定\\日報複合ツール.json`)から読んだ
+    integrated: bool = False
+    # 設定を読んだファイル
+    file: str = ""
+
+
+# 大設定の「4ツールの分もまとめて書き出す」が、4ツールの分も入れる1つのファイル
+# (一式の直下の `配布設定\\日報複合ツール.json` の `tools` → `inspection`)
+INTEGRATED_FILE = "日報複合ツール.json"
+TOOL_ID = "inspection"
+
+
+def integrated_path(own_dir: Path) -> Optional[Path]:
+    """まとめたファイルの場所。日報複合ツールの一式の中(`<一式>\\tools\\inspection`)でなければ None。
+
+    `ALLTOOLS_DISTRIBUTION_DIR`(大設定と同じ差し替え)があればそこ。点検表の配布設定の置き場所を
+    差し替えているとき(試験)は見ない ── 本物の一式の配布設定を読まないように。
+    """
+    custom = (os.environ.get("ALLTOOLS_DISTRIBUTION_DIR") or "").strip()
+    if custom:
+        return Path(custom) / INTEGRATED_FILE
+    tool_dir = app_config.APP_ROOT
+    if Path(own_dir) != tool_dir / DIR_NAME:
+        return None
+    root = tool_dir.parent.parent
+    if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
+        return None
+    return root / DIR_NAME / INTEGRATED_FILE
+
+
+def stamp(text: Any) -> str:
+    """作った時刻を比べられる形に(数字だけ・14桁)。書き方の違う時刻も並べられる。"""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
 
 
 def _now() -> str:
@@ -174,7 +208,41 @@ class Distribution:
     # 読む
     # ------------------------------------------------------------------
     def read(self) -> Optional[Bundle]:
-        """置いてある配布設定。無い・読めない・形が違う・ほかの道具のものなら None。"""
+        """置いてある配布設定。無い・読めない・形が違う・ほかの道具のものなら None。
+
+        日報複合ツールの大設定がまとめたファイルも見る。**両方あるときは作った時刻が新しいほうを
+        丸ごと使う**(同じなら点検表のフォルダのほう ── まとめて書き出すと両方に同じものが入る)。
+        項目ごとには混ぜない。
+        """
+        own = self.read_own()
+        whole = self.read_integrated()
+        if whole is None:
+            return own
+        if own is not None and stamp(own.created_at) >= stamp(whole.created_at):
+            return own
+        return whole
+
+    def read_integrated(self) -> Optional[Bundle]:
+        """まとめたファイルの点検表の分。無い・読めない・点検表の分が無いなら None。"""
+        path = integrated_path(self.dir)
+        if path is None or not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            self.log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+            return None
+        tools = data.get("tools") if isinstance(data, dict) else None
+        entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
+        if entry is None:
+            return None
+        bundle = self._bundle_of(entry, path)
+        if bundle is not None:
+            bundle.integrated = True
+        return bundle
+
+    def read_own(self) -> Optional[Bundle]:
+        """点検表のフォルダの `配布設定\\` の中身。"""
         path = self.settings_path
         if not path.is_file():
             return None
@@ -183,6 +251,9 @@ class Distribution:
         except (OSError, ValueError) as exc:
             self.log.warning("配布設定を読めませんでした: %s", exc)
             return None
+        return self._bundle_of(data, path)
+
+    def _bundle_of(self, data: Any, path: Path) -> Optional[Bundle]:
         if not isinstance(data, dict) or data.get("format") != FORMAT:
             self.log.warning("配布設定の形が違うため読みません: %s", path)
             return None
@@ -202,7 +273,7 @@ class Distribution:
             return None
         return Bundle(settings=settings, created_at=str(data.get("created_at", "")),
                       created_on=str(data.get("created_on", "")),
-                      created_version=str(data.get("app_version", "")))
+                      created_version=str(data.get("app_version", "")), file=str(path))
 
     def summary(self) -> Dict[str, Any]:
         """設定画面に出す、配布設定のいま。**パスワードの値は出さない。**"""
@@ -221,13 +292,17 @@ class Distribution:
             "created_at": "",
             "created_on": "",
             "created_version": "",
+            "integrated": False,
+            "source": "",
         }
         if bundle is None:
             return out
         out.update(contents=[{"label": ITEM_LABELS[k], "value": _show(k, v)}
                              for k, v in bundle.settings.items()],
                    created_at=bundle.created_at, created_on=bundle.created_on,
-                   created_version=bundle.created_version)
+                   created_version=bundle.created_version,
+                   # 日報複合ツールの大設定がまとめたファイルから読んでいる(点検表のフォルダのものより新しい)
+                   integrated=bundle.integrated, source=bundle.file)
         return out
 
     # ------------------------------------------------------------------
@@ -255,7 +330,10 @@ class Distribution:
                           + " はこの端末で変えていないため既定のままです)。", REFUSE_NOTHING)
 
         meta = {"format": FORMAT, "app_id": app_config.app_id(), "app_version": app_config.version(),
-                "created_at": _now(), "created_on": platform.node(), "settings": settings}
+                "created_at": _now(), "created_on": platform.node(),
+                # 日報複合ツールの大設定が中身を一覧に出すときの項目の名前(読むときは使わない)
+                "labels": {k: ITEM_LABELS[k] for k in settings},
+                "settings": settings}
         # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を残さない
         # (各ラインがそれを読んでしまう)。作業用の名前はPCごとに分ける ── 共有フォルダで
         # 2台が同時に書き出しても、互いの作りかけを消さない
@@ -368,6 +446,8 @@ class Distribution:
         bundle = self.read()
         if bundle is None:
             return Result(True, "")
+        if bundle.integrated:
+            self.log.info("配布設定を読みます: %s(日報複合ツールの大設定がまとめたファイル)", bundle.file)
         result = self._apply(bundle, overwrite=False)
         if result.applied:
             self.log.info("配布設定を読み込みました: %s(すでにあったので読まなかったもの: %s)",

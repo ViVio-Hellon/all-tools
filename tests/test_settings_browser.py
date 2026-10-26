@@ -167,6 +167,68 @@ class ExportAllTests(SettingsCase):
         self.assertEqual(page.inner_text("#dist-export-all"), "4ツールの分もまとめて書き出す")
 
 
+class ToolDistributionListTests(SettingsCase):
+    """大設定の「配布設定」に、4ツールの配布設定の**中身**が出る(配る前に確かめるため。読むだけ)。
+
+        日報・看板・カレンダーの参照設定は大設定のファイルに入らず、各ツールのフォルダの別ファイルに入る
+        ──「そりゃぁ反映しないわな」「両方やってください」
+
+    中身の決め方(新しいほう・パスワードを出さない・古い印)は `test_distribution.CombinedFileTests`。
+    ここでは画面に出ること(使うほう・項目と値・一言・なし)を見る。
+    """
+
+    def test_ツールごとに使う配布設定と中身と一言が出る_書き出していないツールはなし(self) -> None:
+        from portal import distribution
+
+        real = distribution.summary
+        rows = {
+            "nippou": {"exists": True, "use": "folder", "use_label": r"ツールのフォルダ(tools\nippou\配布設定)",
+                       "created_at": "2026-10-27 09:00", "created_on": "PC1", "version": "4.44.6",
+                       "contents": [{"key": "gw_reference_dir", "label": "参照用マスタの参照パス",
+                                     "value": r"\\srv\参照"},
+                                    {"key": "admin_password", "label": "管理者パスワード", "value": "(設定済み)"}],
+                       "notes": ["音声ファイル 2件は、まとめたファイルには入りません。"]},
+            "kanban": {"exists": True, "use": "integrated", "use_label": r"まとめたファイル(配布設定\日報複合ツール.json)",
+                       "created_at": "2026/10/20 09:00:00", "created_on": "PC1", "version": "",
+                       "contents": [{"key": "shared_db_path", "label": "接続先(共有DB)",
+                                     "value": r"\\srv\看板マスタ.sqlite3"}],
+                       "notes": ["大設定の書き出し(2026/10/27 09:00:00)より古いものです(配る前に、まとめて書き出し直すか中身を確かめてください)"]},
+        }
+
+        def summary():
+            out = real()
+            out["file_exists"] = True
+            out["file_created_at"] = "2026/10/27 09:00:00"
+            out["tools"] = [{**t, **rows.get(t["id"], {"exists": False, "contents": [], "notes": []})}
+                            for t in out["tools"]]
+            return out
+
+        patcher = mock.patch.object(distribution, "summary", summary)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        page = self.open_settings()
+        page.wait_for_function("document.querySelectorAll('#dist-tools tbody tr').length > 0")
+        heads = page.evaluate("[...document.querySelectorAll('#dist-tools thead th')].map(th => th.textContent)")
+        self.assertEqual(heads, ["ツール", "配った先が使う配布設定", "中身"])
+        cells = page.evaluate("Object.fromEntries([...document.querySelectorAll('#dist-tools tbody tr')]"
+                              ".map(tr => [tr.dataset.tool, [...tr.cells].map(td => td.innerText)]))")
+        nippou = cells["nippou"]
+        self.assertIn("あり(作成 2026-10-27 09:00 / PC1 / VER4.44.6)", nippou[1])
+        self.assertIn(r"使うもの: ツールのフォルダ(tools\nippou\配布設定)", nippou[1])
+        self.assertIn("※ 音声ファイル 2件は、まとめたファイルには入りません。", nippou[1])
+        self.assertIn(r"参照用マスタの参照パス: \\srv\参照", nippou[2])
+        self.assertIn("管理者パスワード: (設定済み)", nippou[2])
+        self.assertIn(r"使うもの: まとめたファイル(配布設定\日報複合ツール.json)", cells["kanban"][1])
+        self.assertIn("※ 大設定の書き出し(2026/10/27 09:00:00)より古いものです", cells["kanban"][1])
+        self.assertIn(r"接続先(共有DB): \\srv\看板マスタ.sqlite3", cells["kanban"][2])
+        self.assertIn("なし(書き出していません)", cells["calendar"][1])
+        lead = page.inner_text("#dist-tools >> xpath=preceding-sibling::p[1]")
+        self.assertIn("作った時刻が新しいほう", lead)
+        self.assertIn("日報複合ツール.json", lead)
+        state = page.inner_text("#dist-state")
+        self.assertIn("4ツールの分だけ入っています", state, "大設定の分が既定のままでも、まとめたファイルがあると出す")
+
+
 class RowDialogTests(SettingsCase):
     """タブ表示権限の行の窓: 2重に足さない・断られても打った値を残す・やめるは訊く。"""
 

@@ -289,6 +289,65 @@ class ApplyTests(DistributionTestCase):
         self.assertIn("配布", message)
 
 
+class IntegratedFileTests(DistributionTestCase):
+    """日報複合ツールの大設定がまとめたファイル(``配布設定\\日報複合ツール.json`` の tools → calendar)。
+
+    カレンダーのフォルダの配布設定が無くても、まとめたファイルのカレンダーの分を読む。両方あれば
+    作った時刻が新しいほうを丸ごと使う(同じならフォルダのほう)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.whole_dir = self.root / "一式" / "配布設定"
+        patcher = mock.patch.dict(os.environ, {"ALLTOOLS_DISTRIBUTION_DIR": str(self.whole_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def put_whole(self, settings: dict, created_at: str) -> None:
+        self.whole_dir.mkdir(parents=True, exist_ok=True)
+        (self.whole_dir / distribution.INTEGRATED_FILE).write_text(json.dumps({
+            "format": 1, "created_at": "2026/10/26 09:00:00", "settings": {},
+            "tools": {"calendar": {"format": 1, "created_at": created_at, "settings": settings}}},
+            ensure_ascii=False), encoding="utf-8")
+
+    def test_カレンダーのフォルダに無くても_まとめたファイルから読む(self) -> None:
+        self.dest.use()
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\まとめ"}, "2026/10/26 09:00:00")
+        self.assertTrue(distribution.read().integrated)
+        self.assertIn("まとめたファイル", distribution.describe())
+        self.assertIn("保存用DBの置き場所", distribution.apply_on_start().applied)
+        self.assertEqual(user_settings.data_db_dir_setting(), r"\\srv\まとめ")
+
+    def test_両方あれば作った時刻が新しいほう_同じならフォルダ(self) -> None:
+        self.configure_source()
+        self.assertTrue(self.export().ok)
+        made = distribution.read_own().created_at
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\まとめ"}, "2000/01/01 00:00:00")
+        self.assertEqual(distribution.read().settings[user_settings.KEY_DATA_DB_DIR], SHARE)
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\まとめ"}, "2999/01/01 00:00:00")
+        self.assertEqual(distribution.read().settings[user_settings.KEY_DATA_DB_DIR], r"\\srv\まとめ")
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\まとめ"}, made)
+        self.assertEqual(distribution.read().settings[user_settings.KEY_DATA_DB_DIR], SHARE)
+
+    def test_まとめたファイルから読んでも_直した値は残し_配り直しで新しくする(self) -> None:
+        self.dest.use()
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\1", user_settings.KEY_SYNC_INTERVAL: 30},
+                       "2026/10/26 09:00:00")
+        distribution.apply_on_start()
+        user_settings.set_value(user_settings.KEY_SYNC_INTERVAL, 60)
+        self.put_whole({user_settings.KEY_DATA_DB_DIR: r"\\srv\2", user_settings.KEY_SYNC_INTERVAL: 45},
+                       "2026/10/27 09:00:00")
+        result = distribution.apply_on_start()
+        self.assertEqual(user_settings.data_db_dir_setting(), r"\\srv\2")
+        self.assertEqual(user_settings.sync_interval(), 60)
+        self.assertIn("取り込み間隔(秒)", result.kept)
+
+    def test_書き出すと名前も入る(self) -> None:
+        self.configure_source()
+        self.export()
+        self.assertEqual(self.written()["labels"][user_settings.KEY_DATA_DB_DIR], "保存用DBの置き場所")
+
+
 class FreshTerminalTests(DistributionTestCase):
     """**まっさらな端末で、起動と同じ順に動かして、使える状態になるか。**
 

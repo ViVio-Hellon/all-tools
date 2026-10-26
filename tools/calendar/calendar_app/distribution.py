@@ -160,22 +160,46 @@ class Bundle:
     created_at: str = ""
     created_on: str = ""
     version: str = ""
+    #: 日報複合ツールの大設定がまとめたファイル(``<一式>\\配布設定\\日報複合ツール.json``)から読んだ
+    integrated: bool = False
+    #: 設定を読んだファイル
+    file: str = ""
 
 
-def read() -> Optional[Bundle]:
-    """置いてある配布設定。無い・読めない・形が違うなら None。"""
-    if not DIR.is_dir():
+#: 大設定の「4ツールの分もまとめて書き出す」が、4ツールの分も入れる1つのファイル
+#: (一式の直下の ``配布設定\\日報複合ツール.json`` の ``tools`` → ``calendar``)
+INTEGRATED_FILE = "日報複合ツール.json"
+TOOL_ID = "calendar"
+
+
+def integrated_path() -> Optional[Path]:
+    """まとめたファイルの場所。日報複合ツールの一式の中(``<一式>\\tools\\calendar``)でなければ None。
+
+    ``ALLTOOLS_DISTRIBUTION_DIR``(大設定と同じ差し替え)があればそこ。カレンダーの配布設定の
+    置き場所を差し替えているとき(試験)は見ない ── 本物の一式の配布設定を読まないように。
+    """
+    custom = os.environ.get("ALLTOOLS_DISTRIBUTION_DIR", "").strip()
+    if custom:
+        return Path(custom) / INTEGRATED_FILE
+    tool_dir = app_config.APP_ROOT
+    if DIR != tool_dir / "配布設定":
         return None
-    path = settings_path()
-    if not path.exists():
+    root = tool_dir.parent.parent
+    if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
         return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        log.warning("配布設定を読めませんでした: %s", exc)
-        return None
+    return root / "配布設定" / INTEGRATED_FILE
+
+
+def stamp(text: Any) -> str:
+    """作った時刻を比べられる形に(数字だけ・14桁)。書き方の違う時刻も並べられる。"""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
+
+
+def _bundle_of(data: Any, where: Path, *, integrated: bool) -> Optional[Bundle]:
+    """配布設定の中身(``{"format": 1, "settings": {...}}``)から Bundle を作る。形が違えば None。"""
     if not isinstance(data, dict) or data.get("format") != FORMAT:
-        log.warning("配布設定の形が違うため読みません: %s", path)
+        log.warning("配布設定の形が違うため読みません: %s", where)
         return None
     raw = data.get("settings") or {}
     if not isinstance(raw, dict):
@@ -187,7 +211,56 @@ def read() -> Optional[Bundle]:
     return Bundle(settings=settings,
                   created_at=str(data.get("created_at", "")),
                   created_on=str(data.get("created_on", "")),
-                  version=str(data.get("version", "")))
+                  version=str(data.get("version", "")),
+                  integrated=integrated, file=str(where))
+
+
+def read_integrated() -> Optional[Bundle]:
+    """まとめたファイルのカレンダーの分。無い・読めない・カレンダーの分が無いなら None。"""
+    path = integrated_path()
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+        return None
+    tools = data.get("tools") if isinstance(data, dict) else None
+    entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
+    if entry is None:
+        return None
+    return _bundle_of(entry, path, integrated=True)
+
+
+def read() -> Optional[Bundle]:
+    """置いてある配布設定。無い・読めない・形が違うなら None。
+
+    日報複合ツールの大設定がまとめたファイルも見る。**両方あるときは作った時刻が新しいほうを
+    丸ごと使う**(同じならカレンダーのフォルダのほう ── まとめて書き出すと両方に同じものが入る)。
+    項目ごとには混ぜない。
+    """
+    own = read_own()
+    whole = read_integrated()
+    if whole is None:
+        return own
+    if own is not None and stamp(own.created_at) >= stamp(whole.created_at):
+        return own
+    return whole
+
+
+def read_own() -> Optional[Bundle]:
+    """カレンダーのフォルダの ``配布設定\\`` の中身。"""
+    if not DIR.is_dir():
+        return None
+    path = settings_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        log.warning("配布設定を読めませんでした: %s", exc)
+        return None
+    return _bundle_of(data, path, integrated=False)
 
 
 def summary() -> dict[str, Any]:
@@ -204,6 +277,8 @@ def summary() -> dict[str, Any]:
         "created_at": "",
         "created_on": "",
         "version": "",
+        "integrated": False,
+        "source": "",
     }
     if bundle is None:
         return out
@@ -211,7 +286,9 @@ def summary() -> dict[str, Any]:
                  "value": "(設定済み)" if key == admin_password.KEY else _show(value)}
                 for key, value in bundle.settings.items()]
     out.update(contents=contents, created_at=bundle.created_at,
-               created_on=bundle.created_on, version=bundle.version)
+               created_on=bundle.created_on, version=bundle.version,
+               # 日報複合ツールの大設定がまとめたファイルから読んでいる(カレンダーのフォルダのものより新しい)
+               integrated=bundle.integrated, source=bundle.file)
     return out
 
 
@@ -263,7 +340,10 @@ def export(password: str, items: list[str], *, admin: bool = False) -> Result:
         staging.mkdir(parents=True)
         meta = {"format": FORMAT, "created_at": _now(),
                 "created_on": terminals.identity().pc_name,
-                "version": app_config.version(), "settings": settings}
+                "version": app_config.version(),
+                # 日報複合ツールの大設定が中身を一覧に出すときの項目の名前(読むときは使わない)
+                "labels": {k: ITEM_LABELS[k] for k in settings},
+                "settings": settings}
         settings_path(staging).write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         (staging / README_NAME).write_text(_readme(meta), encoding="utf-8-sig")
@@ -404,9 +484,12 @@ def _apply_locked(bundle: Bundle, overwrite: bool, result: Result) -> None:
 def describe() -> str:
     """起動の記録の1行。**起動のたびに、何を読んでいるかを残す**(配った先で「効いていない」と
     言われたとき、まず見るところ)。"""
+    bundle = read()
+    if bundle is not None and bundle.integrated:
+        return (f"配布設定を読みます: {bundle.file}(日報複合ツールの大設定がまとめたファイル。"
+                f"設定 {len(bundle.settings)}件: {'、'.join(ITEM_LABELS[k] for k in bundle.settings)})")
     if not DIR.is_dir():
         return f"配布設定はありません({DIR})"
-    bundle = read()
     if bundle is None:
         return (f"配布設定を読めません({settings_path()}): 無い・JSON の形が違う・format が違う・"
                 "知っている項目が1つも無い、のどれか(無いものとして続けます)")

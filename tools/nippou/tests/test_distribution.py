@@ -372,6 +372,90 @@ class ApplyTests(DistributionTestCase):
         self.assertEqual(work_context.terminal_line_note(), "")
 
 
+class IntegratedFileTests(DistributionTestCase):
+    """日報複合ツールの大設定がまとめたファイル(`配布設定\\日報複合ツール.json` の tools → nippou)。
+
+        日報・看板・カレンダーの参照設定は大設定のファイルに入らず、各ツールのフォルダの別ファイルに入る
+        ──「そりゃぁ反映しないわな」「両方やってください」
+
+    日報のフォルダの配布設定が無くても、まとめたファイルの日報の分を読む。両方あれば作った時刻が
+    新しいほうを丸ごと使う(同じならフォルダのほう)。覚えた値・直した値の決まりはどちらから読んでも同じ。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        saved = os.environ.get("ALLTOOLS_DISTRIBUTION_DIR")
+        self.addCleanup(lambda: os.environ.__setitem__("ALLTOOLS_DISTRIBUTION_DIR", saved)
+                        if saved is not None else os.environ.pop("ALLTOOLS_DISTRIBUTION_DIR", None))
+        self.whole_dir = self.root / "一式" / "配布設定"
+        os.environ["ALLTOOLS_DISTRIBUTION_DIR"] = str(self.whole_dir)
+
+    def put_whole(self, settings: dict, created_at: str) -> None:
+        from nippou import distribution
+        self.whole_dir.mkdir(parents=True, exist_ok=True)
+        (self.whole_dir / distribution.INTEGRATED_FILE).write_text(json.dumps({
+            "format": 1, "created_at": "2026/10/26 09:00:00", "settings": {},
+            "tools": {"nippou": {"format": 1, "created_at": created_at, "created_on": "配る元",
+                                 "settings": settings}}}, ensure_ascii=False), encoding="utf-8")
+
+    def put_own(self, settings: dict, created_at: str) -> None:
+        from nippou import distribution
+        distribution.folder().mkdir(parents=True, exist_ok=True)
+        distribution.settings_path().write_text(json.dumps({
+            "format": 1, "created_at": created_at, "created_on": "配る元", "settings": settings},
+            ensure_ascii=False), encoding="utf-8")
+
+    def test_日報のフォルダに無くても_まとめたファイルから読む(self) -> None:
+        from nippou import config, distribution, user_settings
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\参照"}, "2026-10-26 09:00")
+        self.dest.use()
+        self.assertTrue(distribution.read().integrated)
+        self.assertIn("まとめたファイル", distribution.describe())
+        self.assertIn("参照用マスタの参照パス", distribution.apply_on_start().applied)
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照")
+
+    def test_両方あれば作った時刻が新しいほう_同じならフォルダ(self) -> None:
+        from nippou import config, distribution
+        self.put_own({config.KEY_REFERENCE_DIR: r"\\srv\フォルダ"}, "2026-10-26 09:05")
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\まとめ"}, "2026/10/26 09:00:30")
+        self.assertEqual(distribution.read().settings[config.KEY_REFERENCE_DIR], r"\\srv\フォルダ")
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\まとめ"}, "2026/10/26 09:06:00")
+        self.assertEqual(distribution.read().settings[config.KEY_REFERENCE_DIR], r"\\srv\まとめ")
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\まとめ"}, "2026-10-26 09:05")
+        self.assertEqual(distribution.read().settings[config.KEY_REFERENCE_DIR], r"\\srv\フォルダ")
+
+    def test_まとめたファイルから読んでも_直した値は残し_読み込んだ値は配り直しで新しくする(self) -> None:
+        from nippou import config, distribution, user_settings
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\参照", config.KEY_ACCESS_DIR: r"\\srv\日報"},
+                       "2026-10-26 09:00")
+        self.dest.use()
+        distribution.apply_on_start()
+        user_settings.save(config.KEY_ACCESS_DIR, r"\\この端末\日報")
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\参照2", config.KEY_ACCESS_DIR: r"\\srv\日報2"},
+                       "2026-10-27 09:00")
+        result = distribution.apply_on_start()
+        self.assertEqual(user_settings.get(config.KEY_REFERENCE_DIR), r"\\srv\参照2")
+        self.assertEqual(user_settings.get(config.KEY_ACCESS_DIR), r"\\この端末\日報")
+        self.assertIn("共有の日報管理のパス", result.kept)
+
+    def test_音声ファイルはまとめたファイルから読んでも日報のフォルダのもの(self) -> None:
+        from nippou import config, distribution
+        self.put_whole({config.KEY_REFERENCE_DIR: r"\\srv\参照"}, "2026-10-26 09:00")
+        (distribution.folder() / distribution.SOUNDS_DIRNAME).mkdir(parents=True)
+        (distribution.folder() / distribution.SOUNDS_DIRNAME / "ok.wav").write_bytes(b"RIFF")
+        bundle = distribution.read()
+        self.assertTrue(bundle.integrated)
+        self.assertEqual([p.name for p in bundle.sounds], ["ok.wav"])
+
+    def test_書き出すと名前と版も入る(self) -> None:
+        from nippou import app_config
+        self.configure_source()
+        self.assertTrue(self.export().ok)
+        data = self.written()
+        self.assertEqual(data["labels"]["access_dir"], "共有の日報管理のパス")
+        self.assertEqual(data["version"], app_config.version())
+
+
 class SoundTests(DistributionTestCase):
     """音声ファイルは**端末の中へ写す** ── あとで `配布設定\\` を消しても鳴る。"""
 

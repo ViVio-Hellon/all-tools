@@ -258,10 +258,14 @@ class Bundle:
     sounds: list[Path] = field(default_factory=list)
     created_at: str = ""
     created_on: str = ""
-    #: 読んだ所(`配布設定\\` か、前の版の置き場所)
+    #: 読んだ所(`配布設定\\` か、前の版の置き場所)。音声ファイルはいつもここ(`音\\`)
     source: Optional[Path] = None
     #: 前の版の置き場所から読んだ
     legacy: bool = False
+    #: 日報複合ツールの大設定がまとめたファイル(`<一式>\\配布設定\\日報複合ツール.json`)から読んだ
+    integrated: bool = False
+    #: 設定を読んだファイル
+    file: Optional[Path] = None
 
 
 def _is_set(value: Any) -> bool:
@@ -297,8 +301,82 @@ def _sound_files(base: Path) -> list[Path]:
         return []
 
 
+# ------------------------------------------------------------------
+# 日報複合ツールの大設定がまとめたファイル
+# ------------------------------------------------------------------
+#: 大設定の「4ツールの分もまとめて書き出す」が、4ツールの分も入れる1つのファイル
+#: (一式の直下の `配布設定\\日報複合ツール.json` の `tools` → `nippou`)
+INTEGRATED_FILE = "日報複合ツール.json"
+TOOL_ID = "nippou"
+
+
+def integrated_path() -> Optional[Path]:
+    """まとめたファイルの場所。日報複合ツールの一式の中(`<一式>\\tools\\nippou`)でなければ None。
+
+    `ALLTOOLS_DISTRIBUTION_DIR`(大設定と同じ差し替え)があればそこ。日報だけの差し替え
+    (`NIPPOU_DIST_DIR`。試験)のときは見ない ── 本物の一式の配布設定を読まないように。
+    """
+    custom = os.environ.get("ALLTOOLS_DISTRIBUTION_DIR", "").strip()
+    if custom:
+        return Path(custom) / INTEGRATED_FILE
+    if os.environ.get("NIPPOU_DIST_DIR", "").strip():
+        return None
+    tool_dir = launch_dir()
+    root = tool_dir.parent.parent
+    if tool_dir.parent.name != "tools" or not (root / "config" / "tools.json").is_file():
+        return None
+    return root / DIR_NAME / INTEGRATED_FILE
+
+
+def stamp(text: Any) -> str:
+    """作った時刻を比べられる形に(数字だけ・14桁)。`2026-10-26 08:57` と `2026/10/26 08:57:11` を並べる。"""
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
+
+
+def _read_integrated() -> tuple[Optional[Bundle], str]:
+    """まとめたファイルの日報の分。無い・日報の分が無いなら (None, "")。"""
+    path = integrated_path()
+    if path is None:
+        return None, ""
+    data, error = _read_json(path)
+    if error or data is None:
+        return None, error
+    entry = (data.get("tools") or {}).get(TOOL_ID) if isinstance(data.get("tools"), dict) else None
+    if not isinstance(entry, dict):
+        return None, ""
+    if entry.get("format") != FORMAT:
+        return None, (f"配布設定の形が違うため読みません({path} の日報の分): "
+                      f"format={entry.get('format')!r}")
+    settings = _clean(entry.get("settings"))
+    if not settings:
+        return None, ""
+    return Bundle(settings=settings, created_at=str(entry.get("created_at", "")),
+                  created_on=str(entry.get("created_on", "")), source=folder(),
+                  integrated=True, file=path), ""
+
+
 def _read() -> tuple[Optional[Bundle], str]:
-    """置いてある配布設定と、読めなかった理由。"""
+    """置いてある配布設定と、読めなかった理由。
+
+    【まとめたファイルと日報のフォルダの両方にあるとき】**作った時刻が新しいほう**を丸ごと使う
+    (同じ時刻なら日報のフォルダのほう ── まとめて書き出すと両方に同じものが入る)。項目ごとに
+    混ぜない。音声ファイルは、まとめたファイルには入らないので、いつも日報のフォルダの `音\\`。
+    """
+    own, own_error = _read_own()
+    whole, whole_error = _read_integrated()
+    if whole is None:
+        if whole_error and own is None:
+            return None, whole_error
+        return own, own_error
+    if own is not None and not own.legacy and stamp(own.created_at) >= stamp(whole.created_at):
+        return own, own_error
+    whole.sounds = _sound_files(folder())
+    return whole, ""
+
+
+def _read_own() -> tuple[Optional[Bundle], str]:
+    """日報のフォルダ(または前の版の置き場所)の配布設定と、読めなかった理由。"""
     base = folder()
     if base.is_dir():
         data, error = _read_json(settings_path(base))
@@ -318,7 +396,7 @@ def _read() -> tuple[Optional[Bundle], str]:
         return Bundle(settings=settings, sounds=sounds,
                       created_at=str(meta.get("created_at", "")),
                       created_on=str(meta.get("created_on", "")),
-                      source=base), ""
+                      source=base, file=settings_path(base)), ""
     # 前の版(平らな { 鍵: 値 } の形)
     for old in _legacy_dirs():
         data, error = _read_json(old / SETTINGS_NAME)
@@ -439,6 +517,7 @@ def summary() -> dict[str, Any]:
         "created_at": "",
         "created_on": "",
         "legacy": False,
+        "integrated": False,
         "source": "",
         "error": error,
         "reading": {"applied": [], "kept": []},
@@ -448,7 +527,9 @@ def summary() -> dict[str, Any]:
         return out
     out.update(contents=contents(bundle), created_at=bundle.created_at,
                created_on=bundle.created_on, legacy=bundle.legacy,
-               source=str(bundle.source or ""),
+               source=str(bundle.file or bundle.source or ""),
+               # 日報複合ツールの大設定がまとめたファイルから読んでいる(日報のフォルダのものより新しい)
+               integrated=bundle.integrated,
                reading=reading(bundle),
                # 困りごとの札を出すため(パスワードは撹拌した値なので出しても
                # 平文にはならないが、画面には要らないので外す)
@@ -593,7 +674,10 @@ def export(password: str, items: list[str], files: list[str], *,
     target = folder()
     staging = target.with_name(target.name + ".作成中")
     meta = {"format": FORMAT, "created_at": _now(),
-            "created_on": platform.node(), "settings": settings}
+            "created_on": platform.node(), "version": app_config.version(),
+            # 日報複合ツールの大設定が中身を一覧に出すときの項目の名前(読むときは使わない)
+            "labels": {k: i.label for i in ITEMS for k in i.setting_keys if k in settings},
+            "settings": settings}
     try:
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
@@ -837,6 +921,7 @@ def describe() -> str:
         return error
     if bundle is None:
         return f"配布設定はありません({folder()})"
-    note = "(前の版の置き場所)" if bundle.legacy else ""
-    return (f"配布設定を読みます: {bundle.source}{note} "
+    note = ("(前の版の置き場所)" if bundle.legacy
+            else "(日報複合ツールの大設定がまとめたファイル)" if bundle.integrated else "")
+    return (f"配布設定を読みます: {bundle.file or bundle.source}{note} "
             f"(設定 {len(bundle.settings)}件・音 {len(bundle.sounds)}件)")

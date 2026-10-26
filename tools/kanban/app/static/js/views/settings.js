@@ -202,6 +202,8 @@ function renderDistribution(d) {
   stateEl.classList.toggle('is-ok', d.exists);
   document.getElementById('dist-meta').textContent = d.exists
     ? `${d.created_at} に ${d.created_on} で作成`
+      + (d.integrated ? `。日報複合ツールの大設定がまとめたファイル(${d.source})を読んでいます`
+        + '(看板のフォルダの配布設定より新しいため。両方あるときは作った時刻が新しいほう)' : '')
     : 'まだありません。下の「配布設定を書き出す」で作られます。';
   const table = document.getElementById('dist-contents');
   table.querySelectorAll('tr:not(:first-child)').forEach((tr) => tr.remove());

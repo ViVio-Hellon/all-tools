@@ -236,6 +236,68 @@ class ApplyTest(DistributionTestBase):
         self.assertEqual(config.load_config().import_interval_sec, 45, "この端末の設定まで消えた")
 
 
+class IntegratedFileTest(DistributionTestBase):
+    """日報複合ツールの大設定がまとめたファイル(``配布設定\\日報複合ツール.json`` の tools → kanban)。
+
+    看板のフォルダの配布設定が無くても、まとめたファイルの看板の分を読む。両方あれば作った時刻が
+    新しいほうを丸ごと使う(同じならフォルダのほう)。
+    """
+
+    ENV = DistributionTestBase.ENV + ("ALLTOOLS_DISTRIBUTION_DIR",)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.whole_dir = self.dir / "一式" / "配布設定"
+        os.environ["ALLTOOLS_DISTRIBUTION_DIR"] = str(self.whole_dir)
+
+    def put_whole(self, settings: dict, created_at: str) -> None:
+        self.whole_dir.mkdir(parents=True, exist_ok=True)
+        (self.whole_dir / distribution.INTEGRATED_FILE).write_text(json.dumps({
+            "format": 1, "created_at": "2026/10/26 09:00:00", "settings": {},
+            "tools": {"kanban": {"format": 1, "created_at": created_at, "settings": settings}}},
+            ensure_ascii=False), encoding="utf-8")
+
+    def test_the_combined_file_is_read_without_the_folder(self):
+        self.use_terminal("配った先")
+        self.put_whole({"shared_db_path": r"\\server\まとめ\看板マスタ.sqlite3"}, "2026/10/26 09:00:00")
+        self.assertTrue(distribution.read().integrated)
+        self.assertIn("まとめたファイル", distribution.describe())
+        self.assertIn("接続先(共有DB)", distribution.apply_on_start().applied)
+        self.assertEqual(config.load_config().shared_db_path, r"\\server\まとめ\看板マスタ.sqlite3")
+
+    def test_the_newer_one_is_used_and_the_folder_wins_a_tie(self):
+        self.configure_source()
+        self.assertTrue(self.export_default().ok)
+        made = distribution.read(self.folder).created_at
+        self.put_whole({"shared_db_path": r"\\server\まとめ.sqlite3"}, "2000/01/01 00:00:00")
+        self.assertEqual(distribution.read().settings["shared_db_path"], r"\\server\看板マスタ.sqlite3")
+        self.put_whole({"shared_db_path": r"\\server\まとめ.sqlite3"}, "2999/01/01 00:00:00")
+        self.assertEqual(distribution.read().settings["shared_db_path"], r"\\server\まとめ.sqlite3")
+        self.put_whole({"shared_db_path": r"\\server\まとめ.sqlite3"}, made)
+        self.assertEqual(distribution.read().settings["shared_db_path"], r"\\server\看板マスタ.sqlite3")
+
+    def test_what_the_terminal_chose_is_kept_and_redistribution_updates(self):
+        self.use_terminal("配った先")
+        self.put_whole({"shared_db_path": r"\\server\1.sqlite3", "import_interval_sec": 45}, "2026/10/26 09:00:00")
+        distribution.apply_on_start()
+        self.configure(import_interval_sec=10)
+        self.put_whole({"shared_db_path": r"\\server\2.sqlite3", "import_interval_sec": 90}, "2026/10/27 09:00:00")
+        result = distribution.apply_on_start()
+        cfg = config.load_config()
+        self.assertEqual(cfg.shared_db_path, r"\\server\2.sqlite3")
+        self.assertEqual(cfg.import_interval_sec, 10)
+        self.assertIn("取り込み間隔", result.kept)
+
+    def test_the_export_carries_names_and_version(self):
+        from kanban import app_config
+
+        self.configure_source()
+        self.export_default()
+        data = json.loads((self.folder / "設定.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["labels"]["shared_db_path"], "接続先(共有DB)")
+        self.assertEqual(data["version"], app_config.version())
+
+
 class LegacyTest(DistributionTestBase):
     """前の版が書いた ``配布設定\\config.json``(項目が平らに並ぶ形)も読む。"""
 

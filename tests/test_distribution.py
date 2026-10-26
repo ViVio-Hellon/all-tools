@@ -198,6 +198,140 @@ class ToolSettingsTests(unittest.TestCase):
     # `test_settings_browser.py` の ExportAllTests
 
 
+class CombinedFileTests(unittest.TestCase):
+    """4ツールの分も大設定の1つのファイル(`配布設定\\日報複合ツール.json` の tools)に入れる・中身を一覧に出す。
+
+        日報・看板・カレンダーの参照設定は大設定のファイルに入らず、各ツールのフォルダの別ファイルに入る
+        ──「そりゃぁ反映しないわな」「両方やってください」
+
+    ツールのフォルダは一時フォルダへ向ける(本物の一式の tools\\<ツール>\\配布設定 を書かない)。
+    本物の4ツールが読むところまで通しで流すのは `test_make_dist.CombinedFileDeliveredTests`。
+    """
+
+    def setUp(self) -> None:
+        from unittest import mock
+
+        from portal import catalog as catalog_mod
+
+        clear_terminal()
+        shutil.rmtree(DIST, ignore_errors=True)
+        self.addCleanup(clear_terminal)
+        self.addCleanup(shutil.rmtree, DIST, True)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        real = catalog_mod.load()
+        self.tools = [type(t)(**{**t.__dict__, "dir": self.tmp / "tools" / t.id}) for t in real.tools]
+        for tool in self.tools:
+            (tool.dir / "config").mkdir(parents=True)
+            (tool.dir / "config" / "app.json").write_text(json.dumps({"version": "9.9.9"}), encoding="utf-8")
+        fake = mock.Mock(tools=self.tools, portal=real.portal)
+        patcher = mock.patch.object(catalog_mod, "load", return_value=fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def put_tool(self, tool_id: str, settings: dict, created_at: str, **extra) -> None:
+        folder = self.tmp / "tools" / tool_id / "配布設定"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "設定.json").write_text(json.dumps(
+            {"format": 1, "created_at": created_at, "created_on": "配る元", "settings": settings, **extra},
+            ensure_ascii=False), encoding="utf-8")
+
+    def export_all(self, written: dict) -> dict:
+        """各ツールの書き出し(子のプロセス)の代わりに、そのツールのフォルダへ書く。"""
+        from unittest import mock
+
+        def run(args, **kwargs):
+            tool = Path(kwargs["cwd"]).name
+            if tool in written:
+                self.put_tool(tool, *written[tool])
+                reply = {"ok": True, "message": "書き出しました", "reason": "", "applied": ["x"]}
+            else:
+                reply = {"ok": False, "message": "書き出せる設定がありません", "reason": "nothing"}
+            return ExportAllTests.answer(reply)
+
+        for tool in self.tools:
+            (tool.dir / distribution.TOOL_EXPORTER).write_text("", encoding="utf-8")
+        with mock.patch.object(distribution.subprocess, "run", side_effect=run):
+            return distribution.export_all()
+
+    def test_まとめて書き出すと4ツールの分も大設定のファイルに入る(self) -> None:
+        user_settings.update({user_settings.KEY_SHARED_DIR: r"\\srv\共有"})
+        outcome = self.export_all({
+            "nippou": ({"gw_reference_dir": r"\\srv\参照"}, "2026-10-27 09:00"),
+            "kanban": ({"shared_db_path": r"\\srv\看板マスタ.sqlite3"}, "2026/10/27 09:00:01"),
+        })
+        data = json.loads(distribution.file_path().read_text(encoding="utf-8"))
+        self.assertEqual(data["settings"], {user_settings.KEY_SHARED_DIR: r"\\srv\共有"})
+        self.assertEqual(sorted(data["tools"]), ["kanban", "nippou"], "書き出せたツールの分だけ")
+        self.assertEqual(data["tools"]["nippou"]["settings"], {"gw_reference_dir": r"\\srv\参照"})
+        self.assertEqual(data["tools"]["nippou"]["created_at"], "2026-10-27 09:00", "ツールのフォルダと同じ中身")
+        portal = outcome["results"][0]
+        self.assertEqual(portal["state"], distribution.STATE_DONE)
+        self.assertIn("4ツールの分(日報・看板)も 配布設定\\日報複合ツール.json にまとめました", portal["line"])
+        readme = (DIST / distribution.README_NAME).read_text(encoding="utf-8-sig")
+        self.assertIn("4ツールの配布設定", readme)
+        # 大設定の分だけ書き出し直しても、4ツールの分は消さない
+        self.assertTrue(distribution.export().ok)
+        self.assertEqual(sorted(json.loads(distribution.file_path().read_text(encoding="utf-8"))["tools"]),
+                         ["kanban", "nippou"])
+
+    def test_大設定の分が既定のままでも4ツールの分でファイルを作る(self) -> None:
+        outcome = self.export_all({"calendar": ({"保存用DBフォルダ": r"\\srv\暦"}, "2026/10/27 09:00:00")})
+        self.assertEqual(outcome["results"][0]["state"], distribution.STATE_NOT_NEEDED)
+        self.assertIn("まとめました", outcome["results"][0]["line"])
+        summary = distribution.summary()
+        self.assertFalse(summary["exists"], "大設定の分は無い(読み込み直すものは無い)")
+        self.assertTrue(summary["file_exists"])
+        self.assertEqual(json.loads(distribution.file_path().read_text(encoding="utf-8"))["tools"]["calendar"]
+                         ["settings"], {"保存用DBフォルダ": r"\\srv\暦"})
+
+    def test_一覧は配った先が使うほうの中身_パスワードは出さない_古い版の印(self) -> None:
+        user_settings.update({user_settings.KEY_SHARED_DIR: r"\\srv\共有"})
+        # まとめて書き出す(日報・看板・点検表)
+        self.export_all({
+            "nippou": ({"gw_reference_dir": r"\\srv\参照", "admin_password": "pbkdf2$x"}, "2026-10-27 09:00",
+                       ),
+            "kanban": ({"shared_db_path": r"\\srv\1.sqlite3"}, "2026/10/27 09:00:00"),
+            "inspection": ({"root_folder": r"\\srv\点検表"}, "2026-10-27 09:00:00"),
+        })
+        # そのあと: 日報は設定画面で書き出し直した(新しい・名前と版つき)。看板はフォルダに古いものを戻した
+        self.put_tool("nippou", {"gw_reference_dir": r"\\srv\参照2", "admin_password": "pbkdf2$y"},
+                      "2999-01-01 09:00", labels={"gw_reference_dir": "参照用マスタの参照パス",
+                                                  "admin_password": "管理者パスワード"}, version="9.9.9")
+        self.put_tool("kanban", {"shared_db_path": r"\\srv\0.sqlite3"}, "2000/01/01 00:00:00", version="1.0.0")
+        (self.tmp / "tools" / "nippou" / "配布設定" / "音").mkdir()
+        (self.tmp / "tools" / "nippou" / "配布設定" / "音" / "ok.wav").write_bytes(b"RIFF")
+        (self.tmp / "tools" / "inspection" / "配布設定" / "設定.json").unlink()   # まとめたファイルだけ
+        found = {t["id"]: t for t in distribution.summary()["tools"]}
+
+        nippou = found["nippou"]
+        self.assertEqual(nippou["use"], "folder")
+        self.assertEqual(nippou["contents"], [
+            {"key": "gw_reference_dir", "label": "参照用マスタの参照パス", "value": r"\\srv\参照2"},
+            {"key": "admin_password", "label": "管理者パスワード", "value": "(設定済み)"}])
+        self.assertNotIn("pbkdf2", json.dumps(found, ensure_ascii=False), "パスワードの値を出さない")
+        self.assertTrue(any("両方にあり、中身が違います" in n and "ツールのフォルダのほうを使います" in n
+                            for n in nippou["notes"]), nippou["notes"])
+        self.assertTrue(any("音声ファイル 1件は、まとめたファイルには入りません" in n for n in nippou["notes"]))
+
+        kanban = found["kanban"]
+        self.assertEqual(kanban["use"], "integrated", "フォルダのほうが古いので、まとめたファイルを使う")
+        self.assertEqual(kanban["contents"][0]["value"], r"\\srv\1.sqlite3")
+        self.assertIn("まとめたファイル", kanban["use_label"])
+
+        inspection = found["inspection"]
+        self.assertEqual((inspection["use"], inspection["in_folder"], inspection["in_file"]),
+                         ("integrated", False, True))
+        self.assertEqual(found["calendar"]["exists"], False)
+
+        # 大設定の書き出しより古いもの・作った版がいまと違うもの
+        self.put_tool("calendar", {"保存用DBフォルダ": r"\\srv\暦"}, "2000/01/01 00:00:00", version="1.0.0")
+        calendar = {t["id"]: t for t in distribution.summary()["tools"]}["calendar"]
+        self.assertTrue(any("大設定の書き出し" in n and "より古いもの" in n for n in calendar["notes"]), calendar["notes"])
+        self.assertTrue(any("作った版は VER1.0.0(いまは VER9.9.9)" in n for n in calendar["notes"]))
+
+
 class ExportAllTests(unittest.TestCase):
     """大設定の「4ツールの分もまとめて書き出す」(`distribution.export_all`)。
 
