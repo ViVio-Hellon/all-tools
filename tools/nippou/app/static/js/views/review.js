@@ -64,9 +64,20 @@ export function start() {
      ================================================================ */
   let closing = readClosing();
   let stage = "warn";
+  /*
+    **入力画面の「共有へ保存」が通って出した画面か**(`data-after="push"`)。
+
+        VBAでは入力完了後に保存で集計後のグラフを前面に出してました
+
+    そのときは理由も描いてあるので訊きに行きません ── 訊くと時計の答え
+    (自動で送れた直・終わった前の直)が返り、いま送った直とは別の話を上書きします。
+    閉じるときは**見た直**を添えます(サーバは時計の覚えに触らない)。
+  */
+  const review = document.getElementById("review");
+  const afterPush = review?.dataset.after === "push";
 
   /* なぜ出ているのか(と、どの機会で出ているのか)をサーバに訊く */
-  (async () => {
+  if (!afterPush) (async () => {
     try {
       const body = await api.get("/api/graph/review");
       if (body.stage) stage = body.stage;
@@ -147,7 +158,10 @@ export function start() {
    */
   async function leave() {
     try {
-      const body = await api.post("/api/graph/review/ack", { stage });
+      const body = await api.post("/api/graph/review/ack", afterPush
+        ? { after: "push", report_date: review.dataset.reportDate || "",
+            shift: review.dataset.shift || "" }
+        : { stage });
       toast(body.message, "ok");
       if (document.fullscreenElement) {
         try { await document.exitFullscreen(); } catch { /* 抜けられなくてよい */ }

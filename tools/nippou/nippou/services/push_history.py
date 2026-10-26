@@ -299,6 +299,30 @@ def record_handover(repo: NippouRepository, pressed: Pressed,
 
 
 # ------------------------------------------------------------------
+# 入力画面の印「この直は共有へ保存済み」
+# ------------------------------------------------------------------
+def mark(repo: NippouRepository, report_date: str, line: str, shift: str,
+         *, now: Optional[datetime] = None):
+    """その直を共有へ保存したか(`logic/push_mark`)。**数を集めるだけ**で、決めるのはあちら。
+
+    読むのは手元の SQLite だけです(保存したページ・未送信の印・この表)。共有の
+    T_共有保存履歴 は読みません ── 入力画面は打つたびに描き直すので、ネットワークの
+    向こうを毎回読むと打つ手が止まります。手元の未送信の印と同じ所から読むので、
+    印と中身が食い違いません。
+    """
+    from ..logic import push_mark
+
+    pages = len(repo.saved_pages(report_date, line, shift))
+    if pages <= 0:
+        return push_mark.PushMark()
+    unsynced = sum(1 for h in repo.pending_sync_headers()
+                   if (h.report_date, h.line, h.shift) == (report_date, line, shift))
+    return push_mark.decide(pages=pages, unsynced=unsynced,
+                            history=repo.push_history_of(report_date, line, shift),
+                            now=now or datetime.now())
+
+
+# ------------------------------------------------------------------
 # 共有の T_共有保存履歴
 # ------------------------------------------------------------------
 def _quote(name: str) -> str:

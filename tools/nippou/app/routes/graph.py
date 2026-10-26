@@ -451,12 +451,16 @@ def _sweep_legends():
 # 直の終わりの確認 (VBA `graphF` を最大化して出していたもの)
 # ------------------------------------------------------------------
 def _review_state(ctx):
-    """いま確認画面を出すべきか。**判断は `logic/shift_review.py`。**
+    """いま確認画面(画面いっぱい)を出すべきか。**判断は `logic/shift_review.py`。**
 
-    機会は直に2度まで:
+    画面いっぱいにするのは(現場の決め):
 
-        1. 終わりが近づいたとき(既定15分前)
-        2. **終わったのに、まだ共有へ渡していないとき**(1度だけ)
+        (b) 残り5分の自動確定で共有へ自動で送れたとき(1度だけ)
+        (c) **終わったのに、まだ共有へ渡していないとき**(1度だけ)
+
+    (a) 入力画面の「共有へ保存」が通ったときは、押した画面が連れて来ます
+    (`routes/settings._after_push_review`)。**15分前は画面いっぱいにせず帯**です
+    (`_notice`)。
 
     **どの直について出しているかは、この答えが持ちます**(`report_date`
     / `shift`)── 締めくくりの帯も、閉じたときに覚える相手も、ここから
@@ -464,31 +468,105 @@ def _review_state(ctx):
     """
     from nippou.logic import shift_review
 
-    from ..current import build_service, current_calculator
+    now, calc, report_date, shift = _now_shift(ctx)
+    minutes_left = calc.minutes_until_shift_end(now, ctx.force_day_shift())
 
-    calc = current_calculator()
-    service = build_service(ctx, calc)
-    now = datetime.now()
-    shift, report_date = service.current_shift_info(now, ctx.force_day_shift())
+    # (b) いまの直を自動確定で送れた
+    auto = shift_review.evaluate_auto(
+        report_date, shift, outcome=_auto_outcome(ctx.line, report_date, shift),
+        recall_mode=ctx.recall.active)
+    if auto.due:
+        return auto
 
-    state = shift_review.evaluate(
-        now, calc, report_date, shift,
-        force_day_shift=ctx.force_day_shift(),
-        warn_minutes=SETTINGS.print_warning_minutes,
-        recall_mode=ctx.recall.active,
-        # 空のグラフを全画面で出しても確かめようがない
-        has_data=bool(get_repo().list_headers_for_date(report_date, line=ctx.line)))
-    if state.due:
-        return state
-
-    # いまの直で出す用が無いなら、**終わったまま残っている直**を見る
+    # (c) いまの直で出す用が無いなら、**終わったまま残っている直**を見る
     ended = _ended_unsynced(ctx.line, (report_date, shift))
     if ended is not None:
         found = shift_review.evaluate_ended(
             ended[0], ended[1], unsynced=True, recall_mode=ctx.recall.active)
         if found.due:
             return found
-    return state
+    return shift_review.ReviewState(
+        report_date=report_date, shift=shift, minutes_left=minutes_left,
+        acknowledged=shift_review.gate().acknowledged(report_date, shift))
+
+
+def _now_shift(ctx):
+    """いま・時計・いまの直 `(now, calc, 報告日, 直)`。"""
+    from ..current import build_service, current_calculator
+
+    calc = current_calculator()
+    service = build_service(ctx, calc)
+    now = datetime.now()
+    shift, report_date = service.current_shift_info(now, ctx.force_day_shift())
+    return now, calc, report_date, shift
+
+
+def _notice(ctx) -> dict | None:
+    """**帯で知らせること**(画面いっぱいにはしない)。無ければ None。
+
+        直の終わりの15分前は、画面いっぱいの確認をやめて「帯の知らせ」にする
+
+    先に自動確定で送れなかった知らせ(赤)、無ければ15分前の知らせ(黄)。15分前の
+    知らせは**まだ共有へ保存していない直だけ**(入力画面の「共有へ保存済み」の印と
+    同じ所から決める ── `services/push_history.mark`)。
+    """
+    from nippou.logic import push_mark, shift_review
+    from nippou.services import push_history
+
+    now, calc, report_date, shift = _now_shift(ctx)
+    auto = shift_review.evaluate_auto(
+        report_date, shift, outcome=_auto_outcome(ctx.line, report_date, shift),
+        recall_mode=ctx.recall.active)
+    if auto.stage == shift_review.STAGE_AUTO_FAIL:
+        # 送れなかった知らせが出ている(閉じた)直には、15分前の知らせを重ねない
+        # ── 言いたいこと(共有へまだ出ていない)は同じで、こちらのほうが詳しい
+        return auto.notice_dict()
+    repo = get_repo()
+    try:
+        has_data = bool(repo.saved_pages(report_date, ctx.line, shift))
+        pushed = push_history.mark(repo, report_date, ctx.line, shift,
+                                   now=now).state == push_mark.STATE_SAVED
+    except Exception:                             # noqa: BLE001 - 知らせないだけ
+        log.exception("直の終わりの知らせ: いまの直を読めませんでした")
+        return None
+    warn = shift_review.evaluate(
+        now, calc, report_date, shift, force_day_shift=ctx.force_day_shift(),
+        warn_minutes=SETTINGS.print_warning_minutes, recall_mode=ctx.recall.active,
+        has_data=has_data, pushed=pushed)
+    return warn.notice_dict()
+
+
+def _auto_outcome(line: str, report_date: str, shift: str) -> str:
+    """その直の**残り5分の自動確定の送り**(`shift_review.AUTO_*`)。自動で送っていなければ空。
+
+    共有保存の履歴(`push_history`)の、その直の**最後の1行**で決めます ── 自動確定の
+    あとに人が「共有へ保存」を押していれば、そちらが最後なので自動の知らせは出しません。
+    送れた(送れなかった)と言うのは、手元の未送信の印と合っているときだけです。
+    """
+    from nippou.logic import shift_review
+    from nippou.services import push_history
+
+    repo = get_repo()
+    try:
+        rows = [r for r in repo.push_history_of(report_date, line, shift)
+                if r.get("result") in (push_history.SENT, push_history.PARTIAL,
+                                       push_history.FAILED, push_history.BLOCKED,
+                                       push_history.NOTHING)]
+        if not rows or rows[-1].get("via") != push_history.VIA_AUTO_CLOSE:
+            return ""
+        pending = any((h.report_date, h.line, h.shift) == (report_date, line, shift)
+                      for h in repo.pending_sync_headers())
+    except Exception:                             # noqa: BLE001 - 知らせないだけ
+        log.exception("自動確定の送りを読めませんでした %s/%s", report_date, shift)
+        return ""
+    result = rows[-1].get("result")
+    if result == push_history.SENT:
+        return "" if pending else shift_review.AUTO_SENT
+    if not pending:
+        return ""
+    if result == push_history.BLOCKED:
+        return shift_review.AUTO_BLOCKED
+    return shift_review.AUTO_FAILED
 
 
 def _ended_unsynced(line: str, current: tuple[str, str]) -> tuple[str, str] | None:
@@ -519,7 +597,33 @@ def review_state():
 
     2つ目は「あとで」で閉じたまま直が終わった場合のための呼び戻しです。
     """
-    return jsonify(_review_state(work_context.get_context()).as_dict())
+    ctx = work_context.get_context()
+    body = _review_state(ctx).as_dict()
+    # **帯の知らせ**(15分前・自動で送れなかった)。画面いっぱいとは別に返す
+    body["notice"] = _notice(ctx)
+    return jsonify(body)
+
+
+@bp.post("/api/graph/review/notice/ack")
+def review_notice_ack():
+    """帯の知らせを閉じた(「×」)。**その直のその知らせは、もう出しません。**
+
+    覚えるのはサーバ(`logic/shift_review.ReviewGate`)── 画面に覚えさせると、
+    画面を移るたび・タブを開き直すたびにまた出ます。
+    """
+    from nippou.logic import shift_review
+
+    payload = request.get_json(silent=True) or {}
+    stage = str(payload.get("stage") or "").strip()
+    report_date = str(payload.get("report_date") or "").strip()
+    shift = str(payload.get("shift") or "").strip()
+    if stage not in shift_review.NOTICE_STAGES or not report_date or not shift:
+        return jsonify(error_body("bad_request", "どの知らせかが分かりません")), 400
+    shift_review.gate().mark(report_date, shift, stage)
+    ctx = work_context.get_context()
+    log_button_click("shift_notice_ack", line=ctx.line,
+                     extra=f"{report_date}/{shift}/{stage}")
+    return jsonify({"acknowledged": True, "stage": stage})
 
 
 @bp.get("/graph/review")
@@ -536,9 +640,15 @@ def review_page():
 
     end = ctx.business_date(calc)
     report_date = format_business_date(end)
+    # **共有へ保存が通って来たのなら、送ったその直を映す**(`?after=push`)。
+    # 時計の確認(`_review_state`)に任せると、終わったまま残っている前の直を
+    # 映すことがあります ── 押した人が見たいのは、いま送った直の数字です
+    after = _after_push_key()
     # **締めくくりはサーバが描いておく。** 応答を1つ待つあいだ空の帯が
     # 見える、をなくします(v3.59.0 の入力画面と同じ作り)
-    target_date, target_shift = _closing_target(ctx)
+    target_date, target_shift = after or _closing_target(ctx)
+    closing = _closing(ctx, target_date, target_shift, just_pushed=bool(after),
+                       after_push=bool(after))
     return render_template(
         "graph_review.html",
         sound_cue=_daily_result_cue(target_date, target_shift),
@@ -546,8 +656,28 @@ def review_page():
         history=_history(end.replace(day=1), end, ctx.line),
         report_date=report_date,
         line=ctx.line,
-        closing=_closing(ctx, target_date, target_shift),
+        closing=closing,
+        after_push=bool(after),
+        target_date=target_date,
+        target_shift=target_shift,
+        after_reason=(f"共有へ保存しました。{closing.who} の実績です ── 確かめたら"
+                      f"「{closing.label}」を押してください") if after else "",
         **shell.shell_context("graph", ribbon=_ribbon(ctx, calc)))
+
+
+def _after_push_key() -> tuple[str, str] | None:
+    """共有へ保存が通って来た確認画面なら、送った直 `(報告日, 直)`。そうでなければ None。
+
+    道はサーバが返したもの(`routes/settings._after_push_review`)。日と直を道に
+    持たせるのは、送ってから描くまでのあいだに直が変わっても、**送った直**を映すためです。
+    """
+    if request.args.get("after") != "push":
+        return None
+    report_date = (request.args.get("report_date") or "").strip()
+    shift = (request.args.get("shift") or "").strip()
+    if not report_date or not shift:
+        return None
+    return report_date, shift
 
 
 def _daily_result_cue(report_date: str, shift: str) -> str:
@@ -602,7 +732,8 @@ def _closing_target(ctx) -> tuple[str, str]:
     return ended if ended is not None else (report_date, shift)
 
 
-def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False):
+def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False,
+             after_push: bool = False):
     """締めくくりの成り行き。**組み立てるのは `logic/shift_closing`。**
 
     ここは数を集めるだけです ── 保存してあるページ、7項目の指摘、
@@ -650,7 +781,8 @@ def _closing(ctx, report_date: str, shift: str, *, just_pushed: bool = False):
     return shift_closing.build(
         report_date=report_date, line=ctx.line, shift=shift, pages=pages,
         unsynced=unsynced, findings=findings, counted=counted,
-        just_pushed=just_pushed, shown_date=shown, current=current)
+        just_pushed=just_pushed, shown_date=shown, current=current,
+        after_push=after_push)
 
 
 @bp.get("/api/graph/review/closing")
@@ -677,15 +809,42 @@ def review_ack():
 
     payload = request.get_json(silent=True) or {}
     stage = (payload.get("stage") or shift_review.STAGE_WARN).strip()
-    if stage not in (shift_review.STAGE_WARN, shift_review.STAGE_END):
+    if stage not in (shift_review.STAGE_WARN, *shift_review.SCREEN_STAGES):
         stage = shift_review.STAGE_WARN
 
     ctx = work_context.get_context()
+    if payload.get("after") == "push":
+        return _ack_after_push(ctx, payload)
     report_date, shift = _closing_target(ctx)
     shift_review.gate().mark(report_date, shift, stage)
     log_button_click("shift_review_ack", line=ctx.line,
                      extra=f"{report_date}/{shift}/{stage}")
     return jsonify({"acknowledged": True, "stage": stage,
+                    "message": f"{shift} の実績を確認しました", "next": "/"})
+
+
+def _ack_after_push(ctx, payload: dict):
+    """共有へ保存のあとに出した確認を閉じる(「確認しました」)。
+
+    **ほかの機会(自動確定で送れた・終わったのに渡していない)の覚えには触りません。**
+    あちらは別の機会で、出す・出さないの決まりは変えない(`logic/shift_review`)。
+
+    ただ1つ、**いままさにその直の確認が画面いっぱいに出る**ときは、その機会も
+    答えたことにします ── 覚えないと、入力画面へ戻った途端に1分タイマーが
+    同じ直の同じ数字を画面いっぱいにもう一度出します(見たばかりのものを二度)。
+    """
+    from nippou.logic import shift_review
+
+    report_date = str(payload.get("report_date") or "").strip()
+    shift = str(payload.get("shift") or "").strip()
+    stage = ""
+    state = _review_state(ctx)
+    if state.due and (state.report_date, state.shift) == (report_date, shift):
+        stage = state.stage
+        shift_review.gate().mark(report_date, shift, stage)
+    log_button_click("shift_review_ack", line=ctx.line,
+                     extra=f"{report_date}/{shift}/after_push{('/' + stage) if stage else ''}")
+    return jsonify({"acknowledged": True, "stage": stage, "after": "push",
                     "message": f"{shift} の実績を確認しました", "next": "/"})
 
 

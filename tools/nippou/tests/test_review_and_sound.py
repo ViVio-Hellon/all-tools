@@ -59,19 +59,23 @@ class ReviewRuleTests(unittest.TestCase):
     def _eval(self, now, **kw):
         return shift_review.evaluate(now, self.calc, "2026年1月5日", "1直", **kw)
 
-    def test_終わりが近ければ出す(self) -> None:
+    def test_終わりが近ければ帯で知らせる_画面いっぱいにはしない(self) -> None:
+        """まだ入力終わってなかったらどうするのさ? ── 15分前は帯(v4.45)。"""
         state = self._eval(self.near)
-        self.assertTrue(state.due)
-        self.assertIn("確認してください", state.reason)
+        self.assertTrue(state.notice)
+        self.assertFalse(state.due, "15分前に画面いっぱいへ連れて行きます(打つ手が止まる)")
+        self.assertEqual(state.reason, "あと10分で直の終わりです。"
+                                       "打ち終えたら「共有へ保存」を押してください")
+        self.assertEqual(state.notice_dict()["stage"], shift_review.STAGE_WARN)
 
     def test_まだ間があれば出さない(self) -> None:
-        self.assertFalse(self._eval(self.far).due)
+        self.assertFalse(self._eval(self.far).notice)
 
-    def test_確認済みなら出さない(self) -> None:
-        """一度見たものを何度も出すと、次から読まずに閉じる。"""
+    def test_閉じたら出さない(self) -> None:
+        """一度読んだものを何度も出すと、次から読まずに閉じる。"""
         shift_review.gate().mark("2026年1月5日", "1直")
         state = self._eval(self.near)
-        self.assertFalse(state.due)
+        self.assertFalse(state.notice)
         self.assertTrue(state.acknowledged)
 
     def test_直が変わればまた出す(self) -> None:
@@ -80,26 +84,64 @@ class ReviewRuleTests(unittest.TestCase):
         self.assertFalse(other.acknowledged)
 
     def test_呼出モード中は出さない(self) -> None:
-        """過去のデータを直している最中。「この直の実績」は当てはまらない。"""
-        self.assertFalse(self._eval(self.near, recall_mode=True).due)
+        """過去のデータを直している最中。「この直の終わり」は当てはまらない。"""
+        self.assertFalse(self._eval(self.near, recall_mode=True).notice)
 
     def test_データが無ければ出さない(self) -> None:
-        """空のグラフを全画面で出しても確かめようがない。"""
-        self.assertFalse(self._eval(self.near, has_data=False).due)
+        self.assertFalse(self._eval(self.near, has_data=False).notice)
 
-    def test_理由に残り時間が入る(self) -> None:
-        self.assertIn("分", self._eval(self.near).reason)
+    def test_共有へ保存済みなら出さない(self) -> None:
+        self.assertFalse(self._eval(self.near, pushed=True).notice)
 
     def test_終わり間際でも出す(self) -> None:
         # 17:00ちょうどは次の直(2直)に入るので、その1分前で見る
         state = self._eval(datetime(2026, 1, 5, 16, 59))
-        self.assertTrue(state.due)
-        self.assertIn("1分", state.reason)
+        self.assertTrue(state.notice)
+        self.assertIn("あと1分", state.reason)
 
     def test_猶予はサーバが決める(self) -> None:
         # 15分前が既定。5分にすれば10分前では出ない
-        self.assertTrue(self._eval(self.near, warn_minutes=15).due)
-        self.assertFalse(self._eval(self.near, warn_minutes=5).due)
+        self.assertTrue(self._eval(self.near, warn_minutes=15).notice)
+        self.assertFalse(self._eval(self.near, warn_minutes=5).notice)
+
+
+class AutoReviewRuleTests(unittest.TestCase):
+    """`shift_review.evaluate_auto` ── 残り5分の自動確定で送れた/送れなかった。"""
+
+    def setUp(self) -> None:
+        shift_review.reset()
+        self.addCleanup(shift_review.reset)
+
+    def _eval(self, outcome, **kw):
+        return shift_review.evaluate_auto("2026年1月5日", "1直", outcome=outcome, **kw)
+
+    def test_送れたら画面いっぱい_1度だけ(self) -> None:
+        state = self._eval(shift_review.AUTO_SENT)
+        self.assertTrue(state.due)
+        self.assertFalse(state.notice)
+        self.assertEqual(state.stage, shift_review.STAGE_AUTO)
+        self.assertIn("共有へ自動で保存しました", state.reason)
+        shift_review.gate().mark("2026年1月5日", "1直", shift_review.STAGE_AUTO)
+        self.assertFalse(self._eval(shift_review.AUTO_SENT).due)
+
+    def test_直すところがあれば帯で_画面いっぱいにはしない(self) -> None:
+        state = self._eval(shift_review.AUTO_BLOCKED)
+        self.assertFalse(state.due)
+        self.assertTrue(state.notice)
+        self.assertEqual(state.level, "error")
+        self.assertIn("自動では共有へ送れませんでした。直すところがあります", state.reason)
+
+    def test_共有に届かなくても帯(self) -> None:
+        state = self._eval(shift_review.AUTO_FAILED)
+        self.assertEqual((state.due, state.notice), (False, True))
+        self.assertIn("自動では共有へ送れませんでした", state.reason)
+
+    def test_自動で送っていなければ何も出さない(self) -> None:
+        state = self._eval("")
+        self.assertEqual((state.due, state.notice), (False, False))
+
+    def test_呼出モード中は出さない(self) -> None:
+        self.assertFalse(self._eval(shift_review.AUTO_SENT, recall_mode=True).due)
 
 
 # ==================================================================

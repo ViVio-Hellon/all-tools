@@ -20,7 +20,22 @@
   【1分に3つ、順番が要る】
       1. 直が変わっていないか (GET /api/shift/key)
       2. 自動確定 (POST /api/entry/close)
-      3. 確認画面へ連れて行くか (GET /api/graph/review)
+      3. 確認画面へ連れて行くか・帯で知らせるか (GET /api/graph/review)
+
+  【画面いっぱいにするのは3つだけ ── 15分前は帯】
+
+      まだ入力終わってなかったらどうするのさ?
+
+  前は15分前に確認画面(画面いっぱい)へ連れて行っていました。いまは:
+
+      15分前                   帯「あと15分で直の終わりです。打ち終えたら…」(閉じられる)
+      残り5分の自動確定で送れた  画面いっぱいの実績(VBA の直の終わりのグラフと同じ合図)
+      自動確定で送れなかった    帯「自動では共有へ送れませんでした。直すところがあります」
+      渡さないまま直が終わった  画面いっぱい(1度だけ)
+
+  (入力画面の「共有へ保存」が通ったときの画面いっぱいは、押した画面が連れて行く ──
+  `views/entry.js`)。どれにするかは**サーバが決めます**(`logic/shift_review.py`)。
+  ここは `due` なら連れて行き、`notice` があれば帯に写すだけです。
 
   **確定は確認より先**です。逆にすると、確認画面が「確定前の集計」を
   映したまま遷移してしまい、同じ直の数字が画面ごとに食い違って見えます。
@@ -160,7 +175,10 @@ async function autoConfirm() {
     //
     // 塗り直すのは `ran`(いまの直を確定した)でも同じです。**片方だけ
     // 直すと、同じ症状が残る側と消える側ができます。**
-    refreshUnlessTyping();
+    //
+    // **塗り終えるまで待つ。** このあとの確認(自動で送れたら画面いっぱいの実績)が
+    // 塗り直しと競うと、あとから着いた塗り直しが確認画面を上書きします
+    await refreshUnlessTyping();
   } catch (err) {
     // 繋がらないのは `health.js` が知らせる。ここでは黙る
   }
@@ -183,7 +201,7 @@ function refreshUnlessTyping() {
   // 設定)にはその確かめが無く、1分ごとの塗り直しで打った値が消えていました。
   // 打ちかけがあれば塗り直しません(次に開いたときに新しくなる)
   if (!savesTyped() && typedHere()) return;
-  refresh();
+  return refresh();
 }
 
 /** 出る前に打ちかけを**置いてくれる**画面か(日報入力)。設定の確かめは訊くだけなので、1分ごとに訊かせない */
@@ -214,13 +232,15 @@ const KEEP_HERE = ["/settings"];
 */
 let reviewNoted = "";
 
-/** 実績の確認画面を出すべきか訊いて、そうなら連れて行く。 */
+/** 実績の確認画面を出すべきか訊いて、そうなら連れて行く。帯の知らせも写す。 */
 async function reviewCheck() {
-  // すでに確認画面に居るなら何もしない(自分自身へ飛ばさない)
-  if (location.pathname === REVIEW_URL) return;
-  if (KEEP_HERE.some((path) => location.pathname.startsWith(path))) return;
+  // すでに確認画面に居るなら何もしない(自分自身へ飛ばさない。帯は覆いの下なので伏せる)
+  if (location.pathname === REVIEW_URL) { paintNotice(null); return; }
   try {
     const body = await background.get("/api/graph/review");
+    // **帯は設定の画面にも出す**(連れて行かないだけ)。打つ手は止めない
+    paintNotice(body.notice);
+    if (KEEP_HERE.some((path) => location.pathname.startsWith(path))) return;
     if (!body.due) { reviewNoted = ""; return; }
     if (!savesTyped() && typedHere()) {
       // 知らせるのは画面ごとに1度(1分ごとに出すと、打つ手が止まる)
@@ -235,6 +255,40 @@ async function reviewCheck() {
     await go(REVIEW_URL);
   } catch (err) {
     // 同上
+  }
+}
+
+/*
+  ---- 帯の知らせ ----
+
+  **写すだけ**(文言・強さ・出すかはサーバ)。焦点は動かしません ── 打っている欄は
+  そのまま、打ちかけも消えません(画面を引き直さない)。「閉じる」はサーバに覚えて
+  もらいます(画面を移っても・開き直しても、その直のその知らせはもう出ない)。
+*/
+let shownNotice = null;
+
+function paintNotice(notice) {
+  const box = document.getElementById("shift-notice");
+  const text = document.getElementById("shift-notice-text");
+  if (!box || !text) return;
+  shownNotice = notice || null;
+  if (!notice || !notice.text) { box.hidden = true; return; }
+  if (text.textContent !== notice.text) text.textContent = notice.text;
+  box.dataset.level = notice.level || "warn";
+  box.dataset.stage = notice.stage || "";
+  box.hidden = false;
+}
+
+async function closeNotice() {
+  const notice = shownNotice;
+  const box = document.getElementById("shift-notice");
+  if (box) box.hidden = true;           // 押したらすぐ消す(覚えるのはこのあと)
+  if (!notice) return;
+  try {
+    await background.post("/api/graph/review/notice/ack", {
+      stage: notice.stage, report_date: notice.report_date, shift: notice.shift });
+  } catch (err) {
+    // 覚えられなければ、次の1分でまた出る(消したままにしない)
   }
 }
 
@@ -254,6 +308,8 @@ export function startShiftEndWatch() {
     ?.addEventListener("click", async () => {
       if (await leaving()) location.reload();
     });
+  document.getElementById("shift-notice-close")
+    ?.addEventListener("click", () => { closeNotice(); });
   // タブに戻ってきた・スリープから起きた瞬間も確かめる。**放置していた
   // あいだに直が変わっていることがあり**、次の周期まで古い直のまま操作
   // できてしまう。戻ったことに気づくのは `health.js`(`app:resume`)──

@@ -1160,6 +1160,23 @@ input.is-auto::after, select.is-auto::after{ content:none; }
 .badge--done{ background:var(--state-ok-bg); color:var(--state-ok); }
 .badge--alert{ background:var(--state-error-bg); color:var(--state-error); }
 
+/* 入力画面の「この直は共有へ保存済み」(`logic/push_mark`)。
+   **保存済み・直した**は目に入る強さで、**まだ**は灰の小さな字(ふだんの入力の邪魔をしない) */
+.push-mark{
+  display:inline-block; padding:2px var(--sp-3); border-radius:99px;
+  font-size:var(--fs-sm); font-weight:700; border:1px solid transparent;
+}
+.push-mark[data-level="ok"]{
+  background:var(--state-ok-bg); color:var(--state-ok); border-color:var(--state-ok-line);
+}
+.push-mark[data-level="todo"]{
+  background:var(--state-warn-bg); color:var(--state-warn); border-color:var(--state-warn-line);
+}
+.push-mark[data-level="quiet"]{
+  padding:0; font-weight:400; color:var(--muted); font-size:var(--fs-xs);
+}
+.push-mark[hidden]{ display:none; }
+
 /* ==================================================================
    トースト
    ================================================================== */

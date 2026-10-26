@@ -331,7 +331,28 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
     body["shift_findings"] = _shift_findings(
         report_date, line, shift, admin=ctx.editor,
         screen=_screen_page(state, report_date, line, shift, page)).as_dict()
+    # **この直を共有へ保存したか。** 画面の上に出し続けます(`logic/push_mark`)
+    #
+    #     現ツールでは何をもってこの直を打ち切ったと確認するのか?
+    #
+    # 「共有へ保存」はトーストが数秒出るだけで、目を離せば何も残りませんでした。
+    # **開いている直**について出すので、過去の直を開いて(呼び出して)いるときも
+    # その直のことが出ます
+    body["push_mark"] = _push_mark(report_date, line, shift)
     return body
+
+
+def _push_mark(report_date: str, line: str, shift: str) -> dict:
+    """「この直は共有へ保存済み(16:52 山田)」の印。**読めなくても画面は出す**(印が出ないだけ)。"""
+    from nippou.logic import push_mark
+    from nippou.services import push_history
+
+    try:
+        return push_history.mark(get_repo(), report_date, line, shift).as_dict()
+    except Exception:                             # noqa: BLE001 - 画面は出す
+        log.exception("共有へ保存済みの印を決められませんでした key=%s",
+                      (report_date, line, shift))
+        return push_mark.PushMark().as_dict()
 
 
 def _computed_totals_from_saved(state, report_date: str, line: str, shift: str,

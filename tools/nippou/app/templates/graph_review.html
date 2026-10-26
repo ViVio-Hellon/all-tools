@@ -3,7 +3,11 @@
 
 {% block content %}
 {#
-  直の終わりに出す、画面いっぱいの確認 (VBA `graphF` を最大化していたもの)。
+  直の実績を出す、画面いっぱいの確認 (VBA `graphF` を最大化していたもの)。
+
+  出すのは3つのとき(`logic/shift_review`): 入力画面の「共有へ保存」が通ったとき
+  (`?after=push`)・残り5分の自動確定で共有へ自動で送れたとき・共有へ渡さないまま
+  直が終わったとき(1度だけ)。**15分前は出しません**(帯で知らせる ── `base.html`)。
 
   **閉じる道は「確認しました」だけ。** レールも帯も覆うので、押すまで
   他の画面へ行けない ── 入力しっ放しで直が終わると、間違いに気づくのは
@@ -15,7 +19,11 @@
 {# 「本日の梱包結果」の音(VBA `音楽を流す` の「本日の梱包結果なのだ」)。
    **鳴らすかはサーバが決めて、ここに置きます**(締めくくる直ごとに1回)。
    空なら鳴らしません(`routes/graph.review_page`) #}
-<div class="review" id="review" data-sound-cue="{{ sound_cue or '' }}">
+{# `data-after="push"` は**入力画面の「共有へ保存」が通って出した画面**(VBA の保存 →
+   `graphF`)。閉じるときに「どの直を見たか」をそのまま返します(`views/review.js`) #}
+<div class="review" id="review" data-sound-cue="{{ sound_cue or '' }}"
+     data-after="{{ 'push' if after_push else '' }}"
+     data-report-date="{{ target_date }}" data-shift="{{ target_shift }}">
   <div class="review__head">
     <div>
       <h1>{{ ribbon.shift }} の実績</h1>
@@ -42,7 +50,13 @@
      狭い画面(幅1100px未満・高さ540px未満)では縦に流します #}
   <div class="review__body">
    <div class="review__side">
+    {# なぜ出ているか。時計で出したときは画面が訊きに行き、共有へ保存のあとに出した
+       ときはサーバがここに描いておきます(訊くと時計の答え ── 別の直の話 ── が来るため) #}
+    {% if after_push %}
+    <div class="review__note msg msg--ok" id="review-reason">{{ after_reason }}</div>
+    {% else %}
     <div class="review__note msg msg--warn" id="review-reason" hidden></div>
+    {% endif %}
 
     {# ================================================================
        締めくくり ── **この直をどう終わらせるか**

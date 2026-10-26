@@ -259,6 +259,26 @@
 .shiftmoved__mark{ font-size:var(--fs-sm); }
 .shiftmoved__text{ font-weight:700; }
 
+/* 直の終わりの知らせ(15分前・自動で送れなかった)。**打つ手を止めない帯**。
+   上の帯(直が変わった)と同じ場所に出るので、そちらが出ているときはその下へずらす */
+.shiftnotice{
+  position:fixed; inset:0 0 auto 0; z-index:58;
+  display:flex; align-items:center; justify-content:center; gap:var(--sp-3);
+  padding:var(--sp-2) var(--sp-3);
+  background:var(--state-warn-bg);
+  color:var(--state-warn);
+  border-bottom:2px solid var(--state-warn-line);
+  box-shadow:0 2px 6px rgba(0,0,0,.12);
+}
+.shiftnotice[data-level="error"]{
+  background:var(--state-error-bg); color:var(--state-error);
+  border-bottom-color:var(--state-error);
+}
+.shiftmoved:not([hidden]) ~ .shiftnotice{ top:48px; }
+.shiftnotice[hidden]{ display:none; }
+.shiftnotice__mark{ font-size:var(--fs-sm); }
+.shiftnotice__text{ font-weight:700; }
+
 /* ==================================================================
    トースト
    ================================================================== */

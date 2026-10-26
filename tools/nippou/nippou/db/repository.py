@@ -817,6 +817,13 @@ class NippouRepository:
         sql += " ORDER BY pressed_at, rowid"
         return [dict(r) for r in self.conn.execute(sql).fetchall()]
 
+    def push_history_of(self, report_date: str, line: str, shift: str) -> list[dict]:
+        """その直の押した記録(古い順)。入力画面の「共有へ保存済み」の印に使う。"""
+        rows = self.conn.execute(
+            "SELECT * FROM push_history WHERE line=? AND report_date=? AND shift=? "
+            "ORDER BY pressed_at, rowid", (line, report_date, shift)).fetchall()
+        return [dict(r) for r in rows]
+
     def mark_push_history_shared(self, ids: list[str]) -> None:
         if not ids:
             return

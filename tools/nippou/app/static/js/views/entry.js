@@ -14,7 +14,7 @@ import { api, tokenUrl } from "../api.js";
 import { openPage } from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
-import { beforeLeave, onSaved, pageSignal, refresh } from "../nav.js";
+import { beforeLeave, go, onSaved, pageSignal, refresh } from "../nav.js";
 import { paintRibbon, showShiftMoved } from "../ribbon.js";
 import { playKey } from "../sound.js";
 // 開閉と焦点の戻しは1か所に置く(作業者選択・全停入力と同じ作り)
@@ -738,6 +738,7 @@ function paint(view, { forceRow = 0, since = null } = {}) {
   paintNeedsWorker(view);
   paintSheets(view.sheets);
   paintShiftFindings(view.shift_findings);
+  paintPushMark(view.push_mark);
   paintFilled(view.filled);
   // 「直の終わり」の時刻(**開いている直の**終わり)。直が変われば変わる
   if (typeof view.shift_end === "string") {
@@ -1034,6 +1035,24 @@ function paintPageGuide(guide) {
     const btn = document.getElementById(id);
     if (btn) btn.hidden = guide.action !== action;
   }
+}
+
+/**
+ * 「この直は共有へ保存済み(16:52 山田)」の印。**決めるのはサーバ**(`logic/push_mark`)。
+ *
+ *     現ツールでは何をもってこの直を打ち切ったと確認するのか?
+ *
+ * 保存の応答のたびに塗り直します ── 共有へ保存したあとに行を直して保存すると、
+ * その応答で「共有へ保存したあとに直した行があります」に変わります。
+ * 付いていない応答(ロット引きなど)では触りません。
+ */
+function paintPushMark(mark) {
+  const el = document.getElementById("push-mark");
+  if (!el || !mark) return;
+  el.hidden = !mark.shown;
+  el.dataset.state = mark.state || "none";
+  el.dataset.level = mark.level || "quiet";
+  el.textContent = mark.text || "";
 }
 
 /**
@@ -3378,6 +3397,8 @@ export function start() {
     }
     // **進み具合を出す**(確かめる → 送る → 写す → 月替わり)。`progress.js`
     const stop = watchJob("共有へ保存しています");
+    // 送り切れたら出す、直の実績の確認画面(サーバが決めた道。空なら出さない)
+    let review = "";
     try {
       // **押した人を添える。** 共有保存の履歴に「押した作業者」として残る
       // (いま欄に出ている作業者。前の直の残りを送るときは担当者と違う)
@@ -3390,7 +3411,22 @@ export function start() {
       const held = body.held || [];
       toast(body.message || "共有へ保存しました",
             (body.failed || held.length) ? "warn" : "ok");
-      await refresh();
+      /*
+        **いまの直を送り切れたら、その直の実績のグラフを画面いっぱいに出す**(VBA `graphF`)。
+
+            VBAでは入力完了後に保存で集計後のグラフを前面に出してました
+
+        グラフが出たことが「保存を押した」確かめになります。出すかどうかは
+        サーバが決めて道を返します(`routes/settings._after_push_review` ──
+        いまの直のボタンで、1ページも残さず送れたときだけ)。過去分のボタン・
+        送れなかったページがあるときは返さないので、今までどおりここに残ります。
+
+        **移るのは応答を受け取ってから。** 応答は送る → 後始末(集計CSV・
+        履歴・月替わり)が済んでから返るので、確認画面は送ったあとの数字を
+        描きます(`shift_end.js` の「確定は確認より先」と同じ考え)
+      */
+      review = (scope === "current" && body.review) || "";
+      if (!review) await refresh();
       // **止めた直を、断りと同じ形で並べる**(過去分のボタン)。送れた直は
       // 共有へ出て、止めた直は手元に残り赤い帯に出たままです。塗り直した
       // あとに出す(先に出すと塗り直しで消えます)
@@ -3423,6 +3459,8 @@ export function start() {
     } finally {
       stop();                 // **必ず消す**(枠が出たままになる)
     }
+    // 進み具合の枠を消してから移る(出る前の確かめ ── 打ちかけを置く ── も通る)
+    if (review) await go(review);
   }
 
   /** 止められた直の断りを、**どの直の話か**を付けて1列に。 */

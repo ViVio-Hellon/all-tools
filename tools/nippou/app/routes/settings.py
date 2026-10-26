@@ -973,6 +973,9 @@ def _push(ctx):
     from nippou.logic import sound
 
     return jsonify({
+        # **いまの直を送り切れたら、その直の実績のグラフを画面いっぱいに出す**(VBA `graphF`)。
+        # 画面はここに道があれば連れて行くだけ(`views/entry.js` の pushShared)
+        "review": _after_push_review(scope, mine, summary, held),
         # **音の出来事「共有へ保存した」**(v4.4.0)。送れなかったページが
         # あるときは鳴らしません ── 済んだ音で、残りがあることを隠さない
         # (止めた直があるときも同じ)
@@ -994,6 +997,47 @@ def _push(ctx):
         "standard_time": standard.as_dict(),
         "message": "\n".join(lines + roll_lines),
     })
+
+
+def _after_push_review(scope: str, mine, summary, held) -> str:
+    """共有へ保存が通ったあとに出す、直の実績の確認画面の道。出さないときは空。
+
+        VBAでは入力完了後に保存で集計後のグラフを前面に出してました。
+        現ツールでは共有保存をしてもそうはなりません。
+
+    VBA は保存すると `graphF` を最大化して出し、それが「保存を押した」確かめにも
+    なっていました。同じに、**いまの直を送り切れたら**その直の実績を出します。
+
+    出さないとき(今までどおり断り・知らせを並べるだけ):
+
+        - いまの直のボタンではない(過去分を共有へ送る・まとめて送る)── いまの直の話ではない
+        - 1ページでも送れなかった・中止した・止めた直がある ── 送れていないのに「済んだ」画面を出さない
+        - いまの直に保存したページが無い・まだ未送信が残っている
+
+    **送ったあとの数字を映します。** この道を返すのは、送る → 後始末(集計CSV・履歴・
+    月替わり)が済んでから(この応答)なので、画面はそのあとに確認画面を描きます。
+    """
+    from urllib.parse import urlencode
+
+    from nippou.logic import push_scope
+
+    if scope != push_scope.SCOPE_CURRENT or mine is None:
+        return ""
+    if summary.failed or summary.stopped or held:
+        return ""
+    report_date, line, shift = mine
+    try:
+        repo = get_repo()
+        if not repo.saved_pages(report_date, line, shift):
+            return ""
+        if any((h.report_date, h.line, h.shift) == (report_date, line, shift)
+               for h in repo.pending_sync_headers()):
+            return ""
+    except Exception:                             # noqa: BLE001 - 出さないだけ
+        log.exception("共有へ保存のあとの確認画面: いまの直を読めませんでした")
+        return ""
+    return "/graph/review?" + urlencode({"after": "push", "report_date": report_date,
+                                         "shift": shift})
 
 
 def _sent_shifts(summary) -> list[str]:

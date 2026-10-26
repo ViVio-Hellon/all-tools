@@ -8,9 +8,13 @@
 【何が足りていなかったか】
 直の終わりまわりの仕掛けは、実はもう揃っています:
 
-    15分前  画面いっぱいの確認が出る(`logic/shift_review.py`)
+    15分前  帯で知らせる(v4.45 から。前は画面いっぱいの確認 ── `logic/shift_review.py`)
      5分前  自動確定 ── チェック → 集計 → 締めた印
             → **7項目が綺麗なら共有へも自動で送る**(`services/shift_close`)
+            → 送れたらこの画面(画面いっぱい)、送れなければ帯
+
+    この画面が画面いっぱいに出るのは、共有へ保存が通ったとき・自動で送れたとき・
+    渡さないまま直が終わったとき(1度だけ)の3つです
 
 足りないのは**結果が残らないこと**でした。送れたのか、何が残っているのかは
 トーストで数秒出て消えます。そして画面いっぱいの確認は、**出口が
@@ -73,6 +77,10 @@ class Closing:
     #: (いまの直だけ)、終わったのに渡していない前の直なら「過去分を共有へ送る」の
     #: 道で送ります(`logic/push_scope`)── いまの直の途中に引っかからないように
     current: bool = True
+    #: **入力画面の「共有へ保存」が通って出した画面か**(VBA の保存 → `graphF`)。
+    #: 押した確かめとして出しているので、出口は「確認しました」(入力画面へ戻る)。
+    #: 直の終わりの話ではないので「(終わる)」とは言いません
+    after_push: bool = False
 
     @property
     def push_scope(self) -> str:
@@ -101,6 +109,8 @@ class Closing:
     def label(self) -> str:
         if self.action == ACT_PUSH and not self.current:
             return "過去分を共有へ送って終わる"
+        if self.action == ACT_DONE and self.after_push:
+            return "確認しました"
         return _LABELS[self.action]
 
     @property
@@ -140,6 +150,9 @@ class Closing:
         if self.action == ACT_PUSH:
             return ("押すと、この直を共有の日報管理へ書き写します"
                     "(共有へ出ていない前の直は、入力画面の赤い帯から)")
+        if self.action == ACT_DONE and self.after_push:
+            return ("この直は共有へ保存済みです。「確認しました」で入力画面へ戻ります"
+                    "(直したら、もう一度「共有へ保存」を押してください)")
         if self.action == ACT_DONE:
             return "この直でやることは残っていません"
         return ""
@@ -160,6 +173,7 @@ class Closing:
             "shown_date": self.shown_date, "who": self.who,
             "can_push": self.can_push,
             "current": self.current, "push_scope": self.push_scope,
+            "after_push": self.after_push,
         }
 
 
@@ -167,7 +181,7 @@ def build(*, report_date: str = "", line: str = "", shift: str = "",
           pages: int = 0, unsynced: int = 0,
           findings: list | tuple = (), counted: bool = True,
           just_pushed: bool = False, shown_date: str = "",
-          current: bool = True) -> Closing:
+          current: bool = True, after_push: bool = False) -> Closing:
     """成り行きを組み立てる。
 
     ``findings`` は**この直のぶんだけ**(`services/shift_check` の結果)。
@@ -182,4 +196,4 @@ def build(*, report_date: str = "", line: str = "", shift: str = "",
                    pages=max(0, pages), unsynced=max(0, unsynced),
                    findings=tuple(findings), counted=counted,
                    just_pushed=just_pushed, shown_date=shown_date,
-                   current=current)
+                   current=current, after_push=after_push)

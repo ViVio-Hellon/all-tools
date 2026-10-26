@@ -15,6 +15,18 @@
   {% elif view.recall %}
   <span class="badge badge--todo" id="recall-badge">この直の第{{ view.page }}ページを直しています</span>
   {% endif %}
+  {# ---- **この直を共有へ保存したか**(`logic/push_mark`)----
+
+       現ツールでは何をもってこの直を打ち切ったと確認するのか?
+
+     「共有へ保存」はトーストが数秒出るだけで、目を離せば何も残りませんでした。
+     開いている直について、いつも1行出します ── 保存済み(緑)/ 保存したあとに
+     直した・送れなかった(黄)/ まだ(灰。ふだんの入力の邪魔をしない)。
+     文言も強さもサーバが決め、保存のたびに塗り直します(`paintPushMark`) #}
+  {% set pm = view.push_mark or {} %}
+  <span class="push-mark" id="push-mark" role="status"
+        data-state="{{ pm.state or 'none' }}" data-level="{{ pm.level or 'quiet' }}"
+        {% if not pm.shown %}hidden{% endif %}>{{ pm.text }}</span>
 </div>
 
 {# ---- 後日作成(v4.0.0)── **後から作っていることを、打っているあいだ言い続ける** ---- #}

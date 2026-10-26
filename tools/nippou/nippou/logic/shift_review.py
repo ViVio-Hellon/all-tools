@@ -5,10 +5,24 @@
 最大化して出し、閉じるまで作業に戻れないようにしていました。入力しっ放しで
 終わると、間違いに気づくのは翌日の集計になります。
 
-【いつ出すか】
-直の終わりが近づいたら(既定15分前)。判断は `logic/shift.ShiftCalculator`
-が持つ「あと何分か」をそのまま使います ── 印刷の催促と同じものさしなので、
-片方だけ直して食い違う、が起きません。
+【いつ出すか ── 画面いっぱいは3つだけ(v4.45 の現場の決め)】
+
+    (a) 入力画面の「共有へ保存」が通ったとき   ── `routes/settings._after_push_review`
+    (b) 残り5分の自動確定で共有へ自動で送れたとき ── `evaluate_auto`(`STAGE_AUTO`)
+    (c) 共有へ渡さないまま直が終わったとき(1度だけ)── `evaluate_ended`(`STAGE_END`)
+
+**直の終わりの15分前は、画面いっぱいにしません**(`evaluate` → 帯の知らせ):
+
+    まだ入力終わってなかったらどうするのさ?
+
+打っている最中に画面ごと持って行かれると、打つ手が止まります。15分前は
+「あと15分で直の終わりです。打ち終えたら「共有へ保存」を押してください」の
+**帯**にして(閉じられる)、もう共有へ保存してある直には出しません。
+5分前の自動確定で送れなかったとき(直すところがある・共有に届かない)も
+帯で知らせ、入力画面に留めます(`evaluate_auto` の `notice`)。
+
+判断は `logic/shift.ShiftCalculator` が持つ「あと何分か」をそのまま使います
+── 印刷の催促と同じものさしなので、片方だけ直して食い違う、が起きません。
 
 【一度確認したら、その直では出さない】
 確認したかどうかは**プロセスが覚えます**(`ReviewGate`)。画面に覚えさせると
@@ -32,9 +46,21 @@ from .shift import ShiftCalculator
 
 log = get_logger("shift_review")
 
-#: 出す機会は直に2度まで。**それ以上は出しません**
-STAGE_WARN = "warn"   # 終わりが近づいたとき(既定15分前)
-STAGE_END = "end"     # 直が終わったのに、まだ共有へ渡していないとき
+#: 出す機会。**同じ機会は直に1度まで**(閉じたら覚える ── `ReviewGate`)
+STAGE_WARN = "warn"   # 終わりが近づいたとき(既定15分前)── **帯**(閉じたら覚える)
+STAGE_END = "end"     # 直が終わったのに、まだ共有へ渡していないとき ── 画面いっぱい
+STAGE_AUTO = "auto"   # 残り5分の自動確定で共有へ自動で送れたとき ── 画面いっぱい
+STAGE_AUTO_FAIL = "autofail"  # 自動確定で共有へ送れなかったとき ── **帯**(閉じたら覚える)
+
+#: 画面いっぱいにする機会(確認画面の「確認しました」で覚える)
+SCREEN_STAGES = (STAGE_END, STAGE_AUTO)
+#: 帯で知らせる機会(帯の「×」で覚える)
+NOTICE_STAGES = (STAGE_WARN, STAGE_AUTO_FAIL)
+
+#: 自動確定の送り(`services/push_history` の行から呼ぶ側が読む)
+AUTO_SENT = "sent"
+AUTO_BLOCKED = "blocked"
+AUTO_FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -47,15 +73,27 @@ class ReviewState:
     minutes_left: int = -1
     reason: str = ""
     acknowledged: bool = False
-    #: どの機会で出しているか(`STAGE_WARN` / `STAGE_END`)
+    #: どの機会で出しているか(`STAGE_WARN` / `STAGE_END` / `STAGE_AUTO` …)
     stage: str = STAGE_WARN
+    #: **帯で知らせるか**(画面いっぱいにはしない)。文言は `reason`
+    notice: bool = False
+    #: 帯の強さ(`warn` = 黄 / `error` = 赤)
+    level: str = "warn"
+
+    def notice_dict(self) -> dict | None:
+        """帯の中身。出さないときは None。**画面はこれを写すだけ。**"""
+        if not self.notice:
+            return None
+        return {"stage": self.stage, "report_date": self.report_date,
+                "shift": self.shift, "text": self.reason, "level": self.level,
+                "minutes_left": self.minutes_left}
 
     def as_dict(self) -> dict:
         return {
             "due": self.due, "report_date": self.report_date,
             "shift": self.shift, "minutes_left": self.minutes_left,
             "reason": self.reason, "acknowledged": self.acknowledged,
-            "stage": self.stage,
+            "stage": self.stage, "notice": self.notice_dict(),
         }
 
 
@@ -106,38 +144,83 @@ def reset() -> None:
 def evaluate(now: datetime, calc: ShiftCalculator, report_date: str,
              shift: str, *, force_day_shift: bool = False,
              warn_minutes: int = 15, recall_mode: bool = False,
-             has_data: bool = True) -> ReviewState:
-    """いま確認画面を出すべきか。
+             has_data: bool = True, pushed: bool = False) -> ReviewState:
+    """直の終わりが近いことを**帯で**知らせるか(`notice`)。**画面いっぱいにはしません。**
 
-    出さない場面が4つあります。どれも**出すほうが害になる**もの:
+        まだ入力終わってなかったらどうするのさ?
 
-    1. **確認済み。** 一度見たものを何度も出すと、次から読まずに閉じる
+    前は15分前に確認画面(画面いっぱい)へ連れて行っていました。打っている最中に
+    画面ごと持って行かれると打つ手が止まるので、帯にしました(`due` は立てない)。
+
+    出さない場面が5つあります。どれも**出すほうが害になる**もの:
+
+    1. **閉じた(覚えた)。** 一度読んだものを何度も出すと、次から読まずに閉じる
     2. **呼出モード中。** 過去のデータを直している最中なので、
-       「この直の実績」は当てはまらない
-    3. **その直のデータがまだ無い。** 空のグラフを全画面で出しても、
-       確かめようがない
-    4. 直の終わりまで、まだ間がある
+       「この直の終わり」は当てはまらない
+    3. **その直のデータがまだ無い。** 共有へ保存するものが無い
+    4. **もう共有へ保存してある**(`pushed` ── 入力画面の「共有へ保存済み」の印)。
+       済んだことを催促しない
+    5. 直の終わりまで、まだ間がある
     """
     acknowledged = _gate.acknowledged(report_date, shift)
     minutes_left = calc.minutes_until_shift_end(now, force_day_shift)
     base = ReviewState(report_date=report_date, shift=shift,
                        minutes_left=minutes_left, acknowledged=acknowledged)
 
-    if acknowledged:
-        return base
-    if recall_mode:
-        return base
-    if not has_data:
+    if acknowledged or recall_mode or not has_data or pushed:
         return base
     if minutes_left < 0 or minutes_left > warn_minutes:
         return base
 
     if minutes_left <= 0:
-        reason = f"{shift} の終了時刻です。実績を確認してください"
+        reason = "直の終わりです。打ち終えたら「共有へ保存」を押してください"
     else:
-        reason = f"{shift} 終了まで {minutes_left}分 です。実績を確認してください"
-    return ReviewState(due=True, report_date=report_date, shift=shift,
-                       minutes_left=minutes_left, reason=reason)
+        reason = (f"あと{minutes_left}分で直の終わりです。"
+                  "打ち終えたら「共有へ保存」を押してください")
+    return ReviewState(report_date=report_date, shift=shift,
+                       minutes_left=minutes_left, reason=reason, notice=True)
+
+
+def evaluate_auto(report_date: str, shift: str, *, outcome: str,
+                  recall_mode: bool = False) -> ReviewState:
+    """**残り5分の自動確定**で共有へ送った(送れなかった)直の知らせ。
+
+        5分前の自動確定は、共有へ自動で送るまま(現場の決め)
+
+    ``outcome`` はその直の自動確定の送り(呼ぶ側が共有保存の履歴から読む):
+
+        AUTO_SENT     送れた   → 画面いっぱいの実績(`due`。VBA の直の終わりのグラフと同じ合図)
+        AUTO_BLOCKED  直すところがあって送らなかった → 帯(入力画面に留める)
+        AUTO_FAILED   共有に届かなかった              → 帯
+        ""            自動では送っていない(人が押した・まだ5分前でない)→ 何も出さない
+
+    どれも**直に1度だけ**です(画面は「確認しました」、帯は「×」で覚える)。
+    """
+    if recall_mode or not outcome:
+        return ReviewState(report_date=report_date, shift=shift, stage=STAGE_AUTO)
+    if outcome == AUTO_SENT:
+        acknowledged = _gate.acknowledged(report_date, shift, STAGE_AUTO)
+        base = ReviewState(report_date=report_date, shift=shift,
+                           acknowledged=acknowledged, stage=STAGE_AUTO)
+        if acknowledged:
+            return base
+        return ReviewState(
+            due=True, report_date=report_date, shift=shift, stage=STAGE_AUTO,
+            reason=(f"残り5分の自動確定で、{shift} を共有へ自動で保存しました。"
+                    "実績を確かめてください"))
+    acknowledged = _gate.acknowledged(report_date, shift, STAGE_AUTO_FAIL)
+    base = ReviewState(report_date=report_date, shift=shift,
+                       acknowledged=acknowledged, stage=STAGE_AUTO_FAIL)
+    if acknowledged:
+        return base
+    if outcome == AUTO_BLOCKED:
+        reason = ("自動では共有へ送れませんでした。直すところがあります"
+                  "(入力画面の帯を見て直し、「共有へ保存」を押してください)")
+    else:
+        reason = ("自動では共有へ送れませんでした。共有に届きません"
+                  "(つながったら「共有へ保存」を押してください)")
+    return ReviewState(report_date=report_date, shift=shift, stage=STAGE_AUTO_FAIL,
+                       reason=reason, notice=True, level="error")
 
 
 def evaluate_ended(report_date: str, shift: str, *,

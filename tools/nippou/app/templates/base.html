@@ -80,6 +80,30 @@
   <button class="btn btn--sm" type="button" id="shift-moved-reload">画面を引き直す</button>
 </div>
 
+{#
+  直の終わりの知らせ ── **打つ手を止めない帯**(画面いっぱいにしない)
+
+      直の終わりの15分前は、画面いっぱいの確認をやめて「帯の知らせ」にする
+      (まだ入力終わってなかったらどうするのさ?)
+
+  出すのは2つ。どちらも**決めるのはサーバ**(`logic/shift_review` ── 帯の中身は
+  `GET /api/graph/review` の `notice`)で、`shift_end.js` が1分ごとに写します:
+
+      15分前      「あと15分で直の終わりです。打ち終えたら「共有へ保存」を押してください」
+                  (まだ共有へ保存していない直だけ)
+      自動確定で送れなかった  「自動では共有へ送れませんでした。直すところがあります」
+
+  **焦点を取りません**(`role="status"`。打っている欄はそのまま)。閉じられます ──
+  閉じたらその直のその知らせはもう出ません(覚えるのはサーバ)。外枠の側に置くので、
+  画面を移っても(`nav.js` の差し替え)消えません。
+#}
+<div class="shiftnotice" id="shift-notice" hidden role="status" aria-live="polite">
+  <span class="shiftnotice__mark" aria-hidden="true">●</span>
+  <span class="shiftnotice__text" id="shift-notice-text"></span>
+  <button class="btn btn--sm" type="button" id="shift-notice-close"
+          aria-label="この知らせを閉じる">閉じる</button>
+</div>
+
 {# 別窓(早見表だけ ── v4.16.0)では帯もレールも出さない。**ほかの画面へ移る道を作らない** #}
 {% if not bare %}
 <header class="ribbon">
