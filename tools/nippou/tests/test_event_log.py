@@ -402,6 +402,41 @@ class ToolFolderTests(unittest.TestCase):
             self.assertTrue(path.exists(), path.name)
 
 
+class TerminalNameTests(unittest.TestCase):
+    """記録とログのファイル名の「端末」は、**アクセス権限の表・「ほかの端末」の知らせと同じ PC 名**。
+
+    前は `socket.gethostname()`(ネットワークの名前)だけを見ていて、`COMPUTERNAME` と違う PC
+    では、ログの `nippou_動作記録_<端末>.log` と知らせに出る PC 名が食い違っていました
+    (混在の通しの試験 `test_flow_mixed_launch` で、PC ごとに分かれるはずのログが1つに混ざった)。
+    """
+
+    def test_COMPUTERNAMEが先(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from nippou import logging_setup
+        from nippou.db.repository import this_pc
+        from nippou.services import event_log, push_history
+
+        with patch.dict(os.environ, {"COMPUTERNAME": "PC-L1A"}), \
+                patch("socket.gethostname", return_value="dns-name-of-this-machine"):
+            self.assertEqual(push_history.terminal_name(), "PC-L1A")
+            self.assertEqual(event_log.terminal_name(), "PC-L1A")
+            self.assertEqual(event_log.terminal_name(), this_pc())
+            self.assertEqual(logging_setup.log_file_name(), "nippou_動作記録_PC-L1A.log")
+
+    def test_COMPUTERNAMEが無ければネットワークの名前(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from nippou.services import event_log
+
+        env = {k: v for k, v in os.environ.items() if k != "COMPUTERNAME"}
+        with patch.dict(os.environ, env, clear=True), \
+                patch("socket.gethostname", return_value="linux-box"):
+            self.assertEqual(event_log.terminal_name(), "linux-box")
+
+
 class LoggingSetupTests(unittest.TestCase):
     """`nippou.log` の書き先。**書けなくても起動を止めない。**"""
 

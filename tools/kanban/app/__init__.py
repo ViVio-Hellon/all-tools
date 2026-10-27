@@ -298,7 +298,7 @@ _TRACE_SKIP = ("/api/alive", "/api/health", "/api/client-log", "/api/trace")
 
 #: 断ったうちで「ふつうの流れ」のもの(パスワードを訊く)。操作の足跡として残し、
 #: 断った操作の一覧には出さない
-_TRACE_NORMAL_CODES = frozenset({"locked", "need_password_setup"})
+_TRACE_NORMAL_CODES = frozenset({"locked"})
 
 
 def _register_trace(app: Flask) -> None:

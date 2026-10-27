@@ -174,6 +174,32 @@ class SignalTests(BackgroundCase):
         self.wait_js(page, "window.__resumes.includes('sleep')", "スリープ明けの合図")
         self.wait_sent(page, mark, "/api/alive", what="スリープ明けの心拍")
 
+    def test_PCの時計が後ろへ飛んでも表に戻れば待たずに送る(self) -> None:
+        """戻った合図を1秒に束ねるのを壁の時計(`Date.now()`)で数えていたので、いちど戻った
+        あとに PC の時計を合わせ直して1時間戻すと、「前に戻ったのは未来」になり、1時間のあいだ
+        表に戻っても心拍・確かめ・`app:resume` を送らなかった(次の周期で取り戻すまで古い状態)。"""
+        page = self.open_watched()
+        self.set_visibility(page, "hidden")
+        page.wait_for_timeout(200)
+        self.past_debounce(page)
+        self.set_visibility(page, "visible")
+        self.wait_js(page, "window.__resumes.filter(w => w === 'visible').length === 1", "1回目に戻った合図")
+        # PC の時計を1時間戻す(画面の `Date.now()` だけが戻る。`performance.now()` は進んだまま)
+        tick = page.evaluate("performance.now()")
+        page.clock.set_system_time((page.evaluate("Date.now()") - 3600_000) / 1000)
+        self.assertGreaterEqual(page.evaluate("performance.now()"), tick,
+                                "試験の前提: 時計を戻しても performance.now() は戻らない")
+        self.set_visibility(page, "hidden")
+        page.wait_for_timeout(200)
+        self.past_debounce(page)
+        mark = len(self.requests)
+        self.set_visibility(page, "visible")
+        self.wait_js(page, "window.__resumes.filter(w => w === 'visible').length === 2",
+                     "時計が後ろへ飛んだあとに戻った合図")
+        for prefix in ("/api/alive", "/api/health", "/api/tab/ping"):
+            self.wait_sent(page, mark, prefix, what=f"時計が後ろへ飛んだあとの {prefix}")
+        self.assertEqual(self.errors, [])
+
 
 class ViewerNoteTests(BackgroundCase):
     def test_打てるタブが裏に回ると見るだけのタブに一言(self) -> None:

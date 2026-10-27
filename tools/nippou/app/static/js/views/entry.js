@@ -349,7 +349,9 @@ function advance(el) {
   if (!target) return;
   // **自動で進んだ時刻を覚える。** 2桁打って進んだ直後に、押し癖の Enter が
   // 来ると1つ飛ばしてしまうので、その1回だけ見送ります(`moveByEnter`)
-  target.dataset.autoArrived = String(Date.now());
+  // (`performance.now()` で覚える ── 壁の時計は合わせ直しで後ろへ飛ぶと、
+  // ずっとあとの Enter まで「進んだ直後」に見える)
+  target.dataset.autoArrived = String(performance.now());
   revealStop(target);
   target.focus();
 }
@@ -457,9 +459,10 @@ function enterStep(el, back) {
 function moveByEnter(el, back) {
   // **押し癖の Enter で1つ飛ばさない。** 2桁で自動で進んだ直後の空の欄は、
   // 1回だけ見送る(もう1回押せば進む)
-  const arrived = Number(el.dataset.autoArrived || 0);
+  const arrived = el.dataset.autoArrived ? Number(el.dataset.autoArrived) : null;
   delete el.dataset.autoArrived;
-  if (!back && !el.value && arrived && Date.now() - arrived < AUTO_ENTER_GRACE_MS) {
+  if (!back && !el.value && arrived !== null
+      && performance.now() - arrived < AUTO_ENTER_GRACE_MS) {
     return false;
   }
   let target = el;

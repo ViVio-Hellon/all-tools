@@ -12,7 +12,7 @@
 誰も見ていない**と判断して終わる。タブを閉じたことは ``sendBeacon`` で
 即座に伝わるので、たいていは待たずに終わる。
 
-【間違って落とさないための6つ】
+【間違って落とさないための7つ】
 1. **猶予を置く。** 画面の作り直し(再読込・画面遷移)でも心拍は
    一瞬途切れる。閉じた合図が来ても ``GRACE_SEC`` は待ち、そのあいだに
    心拍が戻れば取り消す
@@ -24,6 +24,8 @@
    下の説明を参照
 5. **裏に回った画面の心拍は当てにしない。** 下の説明を参照
 6. **プロセス自身が止まっていたら(スリープ)、戻った時点から数え直す**
+7. **画面は1枚ずつ数える。** 閉じた合図で終わるのは、最後の1枚が閉じたとき
+   だけ。下の説明を参照
 
 【なぜ粘るのか ── 効くのは「目覚めた瞬間」】
 蓋を閉じて帰ると、PC が寝てプロセスも止まる。そのあいだは何も送れない。
@@ -65,14 +67,49 @@ Windows の ``time.monotonic()`` は休止中も進むので、蓋を開けた�
 見張りの1周が ``WAKE_GAP_SEC`` 以上あいたら「プロセスごと止まっていた」と
 みなし、**そこから数え直します**(画面が戻ってくるのを ``IDLE_SEC`` 待つ)。
 あわせて同期を1回頼みます ── 寝ているあいだの他ラインの登録を早く見せる。
+
+数え直すのは心拍だけではありません。以前は最後の心拍の時刻しか直して
+いなかったので、次の2つで起きた瞬間に終わっていました。
+
+* **再読込の途中で眠った**(閉じた合図は届き、新しいページの心拍がまだ)
+  → 起きた最初の見回りで「画面が閉じられました」
+* **タブを閉じたあと、未送信を抱えて粘っている途中で眠った**
+  → 起きた瞬間に ``HOLD_SEC`` が切れた扱いになり、送り直す前に
+  「未送信がN件のまま終了」
+
+いまは**時刻をすべて「起きていた時間だけを数える時計」で持ち**
+(``awake_clock``)、目覚めたら閉じた合図の猶予と粘りも、起きた時点から
+数え直します。
+
+【画面は1枚ずつ数える】
+以前はどの画面の合図かを区別していなかったので、**2枚のうち1枚を
+閉じただけでアプリごと終わって**いました(閉じた合図から猶予8秒、
+心拍は20秒おきなので、残った画面の次の心拍が間に合わない)。
+``Start.vbs`` をもう一度押すと、断られた2枚目のタブが開きます ──
+この2枚目を閉じても、使っている画面を閉じても、同じように終わりました。
+残った画面には少しして「繋がりません」が出ます。
+
+いまは画面ごとに覚えて、**最後の1枚が閉じたときだけ**猶予のあとで
+終わります。閉じた画面のほかに、最近の心拍がある画面か、裏に回った画面が
+残っていれば終わりません(看板の ``kanban/screen.py``・日報の
+``nippou/idle_exit.py`` と同じ決まり)。
+
+**閉じたページからの遅れた合図で生き返らせない。** タブを閉じると、
+ブラウザは「隠れます」と「閉じます」を続けて出し、送りかけの心拍が
+あとから着くこともあります。サーバに着く順は決まっていないので、
+画面は**読み込むたびに別のページ番号**(``page``)を添え、閉じたページ
+番号から来たものは受け付けません。再読込したページは番号が変わるので、
+これまでどおり猶予のうちに戻ってこられます。
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable, Optional
 
+from . import awake_clock
 from .logging_utils import get_logger
 
 log = get_logger("idle_exit")
@@ -102,6 +139,19 @@ WAKE_GAP_SEC = 30.0
 # その場合はいつまで待っても送れないので、歯止めとして置いている。
 HOLD_SEC = 600.0
 
+# 閉じたページ番号を覚えておく長さ(秒・起きていた時間)。遅れた合図は
+# 長くても数秒で着くので、十分に長く、しかし増え続けない長さ
+GONE_KEEP_SEC = 600.0
+
+
+@dataclass
+class Screen:
+    """開いている画面(タブ)1枚の様子。"""
+
+    seen: float                 # 最後に合図が来た時刻(``awake_clock``)
+    hidden: bool = False        # 最後の合図で「裏に回っている」と言ったか
+    page: str = ""              # 読み込みごとのページ番号(古い画面は "")
+
 
 class IdleWatch:
     """画面の生き死にを見て、居なくなったら止める。"""
@@ -114,7 +164,8 @@ class IdleWatch:
                  grace_sec: float = GRACE_SEC,
                  tick_sec: float = TICK_SEC,
                  hold_sec: float = HOLD_SEC,
-                 on_exit: Optional[Callable[[int], None]] = None) -> None:
+                 on_exit: Optional[Callable[[int], None]] = None,
+                 clock: Optional[Callable[[], float]] = None) -> None:
         """
         :param busy:   いま処理中か(処理中は落とさない)
         :param unsent: **まだ外へ出せていない仕事の数。** 0 なら粘る理由が
@@ -122,6 +173,8 @@ class IdleWatch:
         :param retry:  粘りはじめに1回だけ頼む再送(待たずに試させる)
         :param on_exit: 終わるときに、その時点の ``unsent`` を渡す。
                        残したまま終わったことを覚えておくために使う
+        :param clock:  時計。既定は**スリープを数えない時計**(``awake_clock``)。
+                       試験は自分の時計を渡せる
         """
         self._stop = stop
         self._busy = busy
@@ -132,16 +185,21 @@ class IdleWatch:
         self.grace_sec = grace_sec
         self.tick_sec = tick_sec
         self.hold_sec = hold_sec
+        self._clock = clock or awake_clock.now
 
         self._lock = threading.Lock()
-        self._seen: Optional[float] = None     # 最後の心拍。None = まだ1度も
-        self._leaving_at: Optional[float] = None
-        #: 裏に回っている画面(画面ID → 裏に回った時刻)。**1つでもあれば
-        #: 心拍の途切れでは終わらない**
-        self._background: dict[str, float] = {}
-        #: 閉じた合図を送ってきた画面。**あとから届く「隠れます」で閉じた
-        #: 扱いを取り消さない**ため(合図は非同期で、順番が入れ替わる)
+        #: 開いている画面(画面ID → 様子)。**1枚ずつ数える** ── 閉じた合図で
+        #: 外すのはその1枚だけで、最後の1枚が閉じたときだけ終わる支度に入る。
+        #: 画面IDを送ってこない相手は "" の1枚として数える
+        self._screens: dict[str, Screen] = {}
+        #: 閉じたページ番号と、閉じた時刻。**ここから来た合図は受け付けない**
+        self._gone: dict[str, float] = {}
+        #: ページ番号を添えない古い画面のための控え。閉じた画面IDから遅れて
+        #: 届く「隠れます」で閉じた扱いを取り消さない
         self._left: set[str] = set()
+        self._ever = False                      # 1度でも繋がったか
+        #: 最後の1枚が閉じた時刻。None = 閉じていない(または戻ってきた)
+        self._leaving_at: Optional[float] = None
         #: 見張りの前の1周(単調時計・実時刻)。スリープを見分けるため
         self._last_tick: Optional[tuple[float, float]] = None
         self._holding_since: Optional[float] = None
@@ -149,56 +207,102 @@ class IdleWatch:
         self._thread: Optional[threading.Thread] = None
 
     # -- 画面から ------------------------------------------------------
-    def beat(self, screen_id: str = "", *, hidden: bool = False) -> None:
+    def beat(self, screen_id: str = "", *, hidden: bool = False,
+             page: str = "") -> bool:
         """画面が生きている。**閉じた合図も取り消す**(再読込のとき)。
 
         ``hidden`` は「この画面は裏に回っている」。裏に回った画面は
         心拍が間引かれたり止まったりするので、その間は途切れで終わらない。
+
+        閉じたページ(``page``)から遅れて着いたものは受け付けない(False)。
         """
         with self._lock:
-            if hidden and screen_id in self._left:
-                # 閉じた画面から遅れて届いた「隠れます」。閉じるときにも
-                # 見え方が変わるので飛ぶ。**これで閉じた扱いを取り消すと、
-                # 裏のまま閉じたタブでいつまでも終わらない**(実際になった)
-                return
+            if page and page in self._gone:
+                # 閉じたページから遅れて届いた合図(「隠れます」・送りかけの心拍)。
+                # **これで閉じた扱いを取り消すと、閉じたタブでいつまでも
+                # 終わらない**(実際になった)
+                return False
+            if not page and hidden and screen_id in self._left:
+                # ページ番号を持たない古い画面の、閉じたあとの「隠れます」
+                return False
             self._left.discard(screen_id)
-            self._seen = time.monotonic()
+            was = any(s.hidden for s in self._screens.values())
+            self._screens[screen_id] = Screen(seen=self._clock(), hidden=hidden,
+                                              page=page)
+            self._ever = True
             self._leaving_at = None
-            was = bool(self._background)
-            if hidden:
-                self._background.setdefault(screen_id, self._seen)
-            else:
-                self._background.pop(screen_id, None)
-            now = bool(self._background)
+            now = any(s.hidden for s in self._screens.values())
         if now != was:
             log.info("画面が裏に回りました。心拍が途切れても終了しません" if now
                      else "画面が表に戻りました。心拍の見張りを再開します")
+        return True
 
-    def leaving(self, screen_id: str = "") -> None:
-        """画面が閉じた(``sendBeacon``)。猶予のあとで落とす。"""
+    def leaving(self, screen_id: str = "", *, page: str = "") -> None:
+        """画面が閉じた(``sendBeacon``)。**最後の1枚なら**猶予のあとで落とす。
+
+        ほかに画面が残っていれば、その1枚を外すだけ ── 2枚開いていて
+        1枚を閉じただけで、アプリごと終わってはいけない(断られた2枚目を
+        閉じたときも、使っている画面を閉じたときも同じ)。
+
+        同じタブでも**別のページ**(再読込で先に着いた新しいほう)は外さない。
+        """
         with self._lock:
-            if self._seen is None:
+            if not self._ever:
                 return                          # 1度も繋がっていない
-            self._leaving_at = time.monotonic()
-            # 閉じた画面は裏にも居ない。**残すと、閉じたのに終わらない**
-            self._background.pop(screen_id, None)
-            self._left.add(screen_id)
-        log.info("画面が閉じました。%.0f秒 待って終了します", self.grace_sec)
+            now = self._clock()
+            if page:
+                self._gone[page] = now
+                for old in [p for p, at in self._gone.items()
+                            if now - at > GONE_KEEP_SEC]:
+                    del self._gone[old]
+            else:
+                self._left.add(screen_id)
+            current = self._screens.get(screen_id)
+            if current is not None and (not page or not current.page
+                                        or current.page == page):
+                # 閉じた画面は裏にも居ない。**残すと、閉じたのに終わらない**
+                del self._screens[screen_id]
+            self._prune(now)
+            left = len(self._screens)
+            if not left:
+                self._leaving_at = now
+        if left:
+            log.info("画面が1枚閉じました。ほかの画面が開いているので続けます(残り %d枚)",
+                     left)
+        else:
+            log.info("画面が閉じました。%.0f秒 待って終了します", self.grace_sec)
 
     def in_background(self) -> bool:
         """裏に回っている画面があるか。"""
         with self._lock:
-            return bool(self._background)
+            return any(s.hidden for s in self._screens.values())
+
+    def screens(self) -> dict:
+        """いま居るとみなしている画面の数(見えている / 裏に回っている)。"""
+        with self._lock:
+            self._prune(self._clock())
+            hidden = sum(1 for s in self._screens.values() if s.hidden)
+            return {"visible": len(self._screens) - hidden, "hidden": hidden}
 
     def woke(self) -> None:
         """プロセスごと止まっていた(スリープ)。**ここから数え直す。**
 
         画面も同じだけ止まっていたので、心拍が無かったのは画面のせいではない。
         画面が戻ってくるのを ``idle_sec`` 待つ。
+
+        **閉じた合図の猶予と、未送信の粘りも数え直す。** 再読込の途中で
+        眠ったなら新しいページはまだ読み込みの途中、粘っている途中で眠ったなら
+        送り直しはまだ1回も試せていない ── どちらも、起きた瞬間に「時間切れ」で
+        終わらせてはいけない(以前は最後の心拍しか直していなかった)。
         """
         with self._lock:
-            if self._seen is not None:
-                self._seen = time.monotonic()
+            now = self._clock()
+            for screen in self._screens.values():
+                screen.seen = max(screen.seen, now)
+            if self._leaving_at is not None:
+                self._leaving_at = max(self._leaving_at, now)
+            if self._holding_since is not None:
+                self._holding_since = max(self._holding_since, now)
         log.info("スリープから戻りました。画面の心拍を%.0f秒 待ちます", self.idle_sec)
         # 寝ているあいだの送信待ち・他ラインの登録を、次の定期実行を待たずに
         if self._retry is not None:
@@ -243,51 +347,68 @@ class IdleWatch:
     def _loop(self) -> None:
         self.check_wake()
         while not self._done.wait(self.tick_sec):
-            self.check_wake()
-            why = self.overdue()
-            if why is None:
-                self._holding_since = None      # 誰か見に来た。粘りは解く
-                continue
-            if self._busy():
-                # **処理中は落とさない。** 取り込み元へ送っている途中で終わると、
-                # 送れたかどうかが分からないまま終わる。終わればまた見に来る
-                log.info("誰も見ていませんが、処理中なので待ちます")
-                continue
-            if self._holding(why):
-                continue
+            if self.step():
+                return
 
-            remaining = self._count()
-            if remaining:
-                # **残したまま終わる。** ここを黙って終わると、翌朝
-                # 「あの連絡が来ていない」まで誰も気づけない
-                log.warning("未送信が%s件のまま終了します(%.0f秒 待ちました / %s)",
-                            remaining, self.hold_sec, why)
-            else:
-                log.info("誰も見ていないので終了します(%s)", why)
-            if self._on_exit is not None:
-                try:
-                    self._on_exit(remaining)
-                except Exception as exc:          # noqa: BLE001 - 覚え書きで止めない
-                    log.warning("終了時の覚え書きに失敗しました: %s", exc)
-            self._done.set()
-            self._stop()
-            return
+    def step(self, mono: Optional[float] = None,
+             wall: Optional[float] = None) -> bool:
+        """見張りの1周。終わらせたら ``True``。
+
+        試験はこれを自分で回す(``mono`` / ``wall`` はスリープを見分ける時計。
+        省けば本物の時計)。
+        """
+        self.check_wake(mono, wall)
+        why = self.overdue()
+        if why is None:
+            with self._lock:
+                self._holding_since = None      # 誰か見に来た。粘りは解く
+            return False
+        if self._busy():
+            # **処理中は落とさない。** 取り込み元へ送っている途中で終わると、
+            # 送れたかどうかが分からないまま終わる。終わればまた見に来る
+            log.info("誰も見ていませんが、処理中なので待ちます")
+            return False
+        if self._holding(why):
+            return False
+
+        remaining = self._count()
+        if remaining:
+            # **残したまま終わる。** ここを黙って終わると、翌朝
+            # 「あの連絡が来ていない」まで誰も気づけない
+            log.warning("未送信が%s件のまま終了します(%.0f秒 待ちました / %s)",
+                        remaining, self.hold_sec, why)
+        else:
+            log.info("誰も見ていないので終了します(%s)", why)
+        if self._on_exit is not None:
+            try:
+                self._on_exit(remaining)
+            except Exception as exc:              # noqa: BLE001 - 覚え書きで止めない
+                log.warning("終了時の覚え書きに失敗しました: %s", exc)
+        self._done.set()
+        self._stop()
+        return True
 
     def _holding(self, why: str) -> bool:
         """まだ外へ出せていない仕事があるあいだ、粘るか。
 
         **粘るのは送り終わるまで**で、上限に達したら諦める。
         送る先が決まっていなければ ``unsent`` が 0 を返すので、粘らない。
+        上限は**起きていた時間で**数える(スリープのあいだは数えない)。
         """
         if self.hold_sec <= 0:
             return False                          # 粘らない設定
         if self._count() <= 0:
-            self._holding_since = None
+            with self._lock:
+                self._holding_since = None
             return False
 
-        now = time.monotonic()
-        if self._holding_since is None:
-            self._holding_since = now
+        with self._lock:
+            now = self._clock()
+            first = self._holding_since is None
+            if first:
+                self._holding_since = now
+            since = self._holding_since
+        if first:
             log.info("未送信が%s件あるので、最大%.0f秒 送り終わるのを待ちます(%s)",
                      self._count(), self.hold_sec, why)
             # 次の定期実行を待たずに1回試させる。**目覚めた直後**はここが効く
@@ -297,7 +418,7 @@ class IdleWatch:
                 except Exception as exc:          # noqa: BLE001 - 待つのが目的
                     log.warning("送り直しを頼めませんでした: %s", exc)
             return True
-        return now - self._holding_since < self.hold_sec
+        return now - since < self.hold_sec
 
     def _count(self) -> int:
         """まだ外へ出せていない仕事の数。数えられなければ 0 として扱う。"""
@@ -310,22 +431,36 @@ class IdleWatch:
     def overdue(self) -> Optional[str]:
         """終わってよいか。よければ理由、まだなら ``None``。"""
         with self._lock:
-            seen, leaving = self._seen, self._leaving_at
-            background = bool(self._background)
-        if seen is None:
-            # 1度も繋がっていない。``--no-browser`` で立てておく使い方を
-            # 巻き添えにしない
-            return None
-        now = time.monotonic()
-        if leaving is not None and now - leaving >= self.grace_sec:
-            return "画面が閉じられました"
-        if background:
-            # **裏に回った画面の心拍は当てにしない。** ブラウザが間引く・
-            # 凍らせるので、途切れても誰も居なくなったとは言えない
-            return None
-        if now - seen >= self.idle_sec:
-            return f"{self.idle_sec:.0f}秒 心拍がありません"
-        return None
+            if not self._ever:
+                # 1度も繋がっていない。``--no-browser`` で立てておく使い方を
+                # 巻き添えにしない
+                return None
+            now = self._clock()
+            leaving = self._leaving_at
+            if leaving is not None:
+                # 最後の1枚が閉じた。**猶予のうちは待つ**(再読込なら戻ってくる)
+                if now - leaving >= self.grace_sec:
+                    return "画面が閉じられました"
+                return None
+            self._prune(now)
+            if self._screens:
+                # 開いている画面がある。**裏に回った画面の心拍は当てにしない**
+                # ── ブラウザが間引く・凍らせるので、途切れても誰も居なくなったとは
+                # 言えない(``_prune`` は裏の画面を外さない)
+                return None
+        return f"{self.idle_sec:.0f}秒 心拍がありません"
+
+    def _prune(self, now: float) -> None:
+        """もう居ないとみなす画面を外す。**錠の中で呼ぶ。**
+
+        外すのは**見えている画面で、心拍が ``idle_sec`` 途切れたもの**だけ。
+        裏に回った画面は外さない(上の【裏に回った画面】── 上限は置かない)。
+        ここで外したものは ``_leaving_at`` を立てない。閉じた合図が届かないまま
+        消えた(ブラウザごと落ちた)場合なので、猶予ではなく無通信で判断する。
+        """
+        for sid in [k for k, s in self._screens.items()
+                    if not s.hidden and now - s.seen >= self.idle_sec]:
+            del self._screens[sid]
 
 
 # ---------------------------------------------------------------------------

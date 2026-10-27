@@ -73,9 +73,12 @@ async function report(kind, message, where, stack) {
   if (sent >= MAX_SEND) return;
   if (HARMLESS.some((re) => re.test(message))) return;
   const key = `${message}@${where}`;
-  const last = recent.get(key) || 0;
-  if (Date.now() - last < 10_000) return;      // 同じものは10秒に1度
-  recent.set(key, Date.now());
+  // 同じものは10秒に1度。**`performance.now()` で数える** ── 壁の時計だと、
+  // PC の時計が後ろへ飛んだあと(合わせ直し)同じエラーを追いつくまで送らない
+  const last = recent.get(key);
+  const now = performance.now();
+  if (last !== undefined && now - last < 10_000) return;
+  recent.set(key, now);
   sent += 1;
   try {
     const body = await background.post("/api/log/client", {

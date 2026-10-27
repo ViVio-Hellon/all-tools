@@ -11,6 +11,7 @@
 
 import { api, withLine } from '../api.js';
 import * as desktop from '../desktop.js';
+import { ask } from '../dialog.js';
 import { isQuietLeave } from '../leave.js';
 import { bad, ok, warn } from '../toast.js';
 
@@ -340,9 +341,10 @@ async function acknowledge(a, inFlow = false) {
     warn('ほかの操作を送っています。終わってから、もう一度「確認した」を押してください。');
     return;
   }
-  if (!confirm(`${a.message}。\n\n${a.material} ${a.size}(管理番号 ${a.mgmt_no})\n`
+  if (!(await ask(`${a.message}。\n\n${a.material} ${a.size}(管理番号 ${a.mgmt_no})\n`
                + '倉庫はすでに発送しています。資材を確かめましたか？\n\n'
-               + '[OK] を押すと発送の印(緑)を消します。もう一度必要なら、そのあとで出し直してください。')) return;
+               + '「確かめた」を押すと発送の印(緑)を消します。もう一度必要なら、そのあとで出し直してください。',
+               { ok: '確かめた', cancel: 'やめる' }))) return;
   if (!inFlow) acting = true;
   try {
     const r = await send('/api/board/acknowledge', { line, mgmt_no: a.mgmt_no, rev: a.rev });
@@ -464,7 +466,7 @@ function wireLeaving() {
   // 日報複合ツールの窓の×・終了(外枠が先に頼んでくる)。すぐ「受けた」を返し、書きかけを
   // 置いて、残っていれば閉じてよいかを訊いてから「済んだ」を返す(日報と同じ約束)
   window.__alltoolsHandlesClose = true;
-  window.addEventListener('message', (event) => {
+  window.addEventListener('message', async (event) => {
     const data = event.data;
     if (event.source !== window.parent || window.parent === window) return;
     if (!data || data.type !== 'alltools:before-close') return;
@@ -478,9 +480,11 @@ function wireLeaving() {
       saveOpenDraft();
       const n = draftCount();
       if (n) {
-        okToClose = confirm(`まだ送っていないコメント(書きかけ)が ${n} 件あります。\n`
+        // 外枠は「受けた」のあと「済んだ」を待つ(本人が読むあいだ見切らない)。
+        // この端末に残せないときは、閉じると消えるので「閉じない」を既定にする
+        okToClose = await ask(`まだ送っていないコメント(書きかけ)が ${n} 件あります。\n`
           + (draftsSaved ? 'この端末に下書きとして残し、次に開いたときに出します。' : 'この端末に残せません。閉じると消えます。')
-          + '\n\n閉じますか？');
+          + '\n\n閉じますか？', { ok: '閉じる', cancel: '閉じない', danger: !draftsSaved });
       }
     } catch (e) { okToClose = true; }
     reply('alltools:before-close-done', { ok: okToClose });
@@ -492,12 +496,22 @@ function wireComments() {
   if (!modal) return;
   const body = document.getElementById('cm-body');
   // 書きかけがあれば訊く(閉じても下書きとして残す。送ったつもりで閉じるのを防ぐ)
-  const close = () => {
+  let asking = false;
+  const close = async () => {
+    if (asking) return;
     saveOpenDraft();
-    if (body.value.trim() && !confirm('まだ送っていないコメントがあります(送るには「送る」)。\n'
-      + '閉じても下書きとしてこの端末に残し、次に開いたときに出します。\n\n閉じますか？')) {
-      body.focus();
-      return;
+    if (body.value.trim()) {
+      asking = true;
+      let yes = false;
+      try {
+        yes = await ask('まだ送っていないコメントがあります(送るには「送る」)。\n'
+          + '閉じても下書きとしてこの端末に残し、次に開いたときに出します。\n\n閉じますか？',
+          { ok: '閉じる', cancel: '書き続ける' });
+      } finally {
+        asking = false;
+      }
+      if (!yes) { body.focus(); return; }
+      if (modal.hidden) return;        // 訊いているあいだに閉じられた
     }
     modal.hidden = true;
     openThread = null;
@@ -516,8 +530,9 @@ function wireComments() {
   // (捨てないと、閉じるたび・離れるたびに「送っていないコメントがあります」と訊かれる)
   const discard = document.getElementById('cm-discard');
   if (discard) {
-    discard.addEventListener('click', () => {
-      if (!confirm('この看板の書きかけ(下書き)を消しますか？\n消すと戻せません。')) return;
+    discard.addEventListener('click', async () => {
+      if (!(await ask('この看板の書きかけ(下書き)を消しますか？\n消すと戻せません。',
+        { ok: '消す', cancel: 'やめる', danger: true }))) return;
       body.value = '';
       saveOpenDraft();
       discard.hidden = true;
@@ -852,8 +867,9 @@ async function press(rowEl, cell) {
     if (kind === 'size' && cell.dataset.state === 'ordered') {
       const ship = rowEl.querySelector('.cell--ship');
       if (ship && ship.dataset.state === 'shipped') {
-        if (!confirm('この資材は届いていますか？\n' +
-                     '[OK]を選択すると、発注状態と発送状態の両方がクリアされます。')) return;
+        if (!(await ask('この資材は届いていますか？\n' +
+                        '「届いた」を押すと、発注状態と発送状態の両方がクリアされます。',
+                        { ok: '届いた', cancel: 'やめる' }))) return;
         body.delivered = true;
       }
     }
@@ -940,11 +956,11 @@ function wireToolbar() {
 
   on('batch-reset', () => batch('batch-reset', 'batch_reset', '届いた資材を一括確認する',
     (n) => `${n} 件の資材到着を確認し、表示を元に戻しますか？`,
-    (r) => `${r.done} 件をリセットしました`));
+    (r) => `${r.done} 件をリセットしました`, '元に戻す'));
 
   on('batch-ship', () => batch('batch-ship', 'batch_ship', 'まとめて発送済みにする',
     (n) => `このラインの未発送品 ${n} 件を、まとめて発送済みにしますか？`,
-    (r) => `${r.done} 件を発送済みにしました`));
+    (r) => `${r.done} 件を発送済みにしました`, '発送済みにする'));
 }
 
 /**
@@ -955,7 +971,7 @@ function wireToolbar() {
  * まで動いた。訊いた行と版(`[{mgmt_no, rev}]`)を送り、サーバは版が同じ行だけを
  * 動かして、飛ばした行を返す。
  */
-async function batch(path, flag, action, question, done) {
+async function batch(path, flag, action, question, done, okLabel) {
   if (busy || acting) {
     warn('ほかの操作を送っています。終わってから、もう一度押してください。');
     return;
@@ -968,7 +984,7 @@ async function batch(path, flag, action, question, done) {
     const items = [...rowsByNo.values()].filter((r) => r[flag])
       .map((r) => ({ mgmt_no: String(r.mgmt_no), rev: r.rev }));
     if (!items.length) { warn('対象の看板がもうありません(ほかの端末が先に動かしました)。'); return; }
-    if (!confirm(question(items.length))) return;
+    if (!(await ask(question(items.length), { ok: okLabel, cancel: 'やめる' }))) return;
     const r = await send(`/api/board/${path}`, { line, items }, action);
     if (r) {
       ok(done(r));

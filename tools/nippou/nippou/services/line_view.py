@@ -85,11 +85,26 @@ def resolve(asked: object, own_line: str) -> str:
     return text
 
 
+def reads_local(line: str, own_line: str) -> bool:
+    """そのラインを**手元の作業用DB**で読むか(読まなければ、そのラインの控え)。
+
+    この端末のラインなら手元。ただし **ラインを持たない Administrator の PC**(アクセス権限の
+    表で Administrator だけ。この端末のラインを決めていない)は、どのラインも控えから読みます。
+    決めていない端末の「この端末のライン」は仮の L-1 で、手元にはそのラインの日報がありません
+    ── 前は、選ぶ欄で L-1 を選ぶと**手元の空の表**を出していました(HVC などほかのラインは
+    控えから出るのに、L-1 だけ「この期間に保存された日はありません」)。
+    """
+    if line != own_line:
+        return False
+    from .. import work_context
+    return work_context.terminal_line_decided() or not allowed()
+
+
 @contextmanager
 def repo_for(line: str, own_line: str, own_repo: NippouRepository
              ) -> Iterator[NippouRepository]:
     """そのラインを読むリポジトリ。この端末のラインなら手元、ほかは控えの写し(メモリー)。"""
-    if line == own_line:
+    if reads_local(line, own_line):
         yield own_repo
         return
     from . import local_backup

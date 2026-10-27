@@ -211,6 +211,22 @@
 .modal__box h2 { margin-bottom: .5rem; }
 .modal__actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; }
 
+/* --- 確かめの窓(js/dialog.js) -------------------------------------- */
+/* ブラウザ標準の確かめの窓の代わり。**ほかの覆い(コメント・パスワード)より上**に
+   出す ── コメントの窓を閉じるときに「送っていないコメントがあります」と訊く。
+   流れて消える知らせ(.toasts)と「この画面では操作できません」(#screen-blocked)
+   よりは下(知らせは読めるように、使えない画面では覆いのほうを先に押してもらう) */
+.modal.ask { z-index: 180; }
+.ask__box { width: min(30rem, calc(100vw - 2rem)); }
+.ask__msg {
+  margin: 0; white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere;
+  max-height: 60vh; overflow: auto;
+}
+/* **Enter で押されるボタンを、いつも見せる。** マウスで開いたときはブラウザが
+   焦点の枠(:focus-visible)を出さないので、どちらが既定か分からなくなる */
+.ask__box .btn:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ask__box .modal__actions .btn { min-width: 6rem; }
+
 /* --- フォルダ参照(設定画面) ---------------------------------------- */
 /* サーバ側のフォルダを一覧する。ブラウザのファイル選択ダイアログは
    クライアント側のパスしか返さないので使えない */

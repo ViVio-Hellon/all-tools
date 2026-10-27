@@ -137,7 +137,7 @@ def check_environment(args=None) -> int:
            else "[あり]" if status.exists else "[なし(組み込みの既定で動きます)]")
     )
     print(f"担当ライン    : {cfg.line or '(未設定)'}")
-    print(f"管理者パスワード: {'設定あり' if cfg.admin_password_hash else '未設定'}")
+    print(f"管理者パスワード: {'この端末で決めた値' if cfg.admin_password_hash else '既定の値'}")
     from kanban import distribution
 
     bundle = distribution.read()

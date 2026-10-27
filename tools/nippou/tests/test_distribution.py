@@ -191,6 +191,28 @@ class ExportTests(DistributionTestCase):
         self.export(files=[])
         self.assertFalse(distribution.sounds_dir().exists())
 
+    def test_まとめて書き出すと残した音と音の名前を揃える_置き場所は入れない(self) -> None:
+        """大設定の「まとめて書き出す」(`keep_previous`)は、前の `音\\` を残す。音の名前も残した音に合わせて前のまま
+        (この端末で名前を変えていても、残した音のファイルと食い違わせない)。"""
+        from nippou import config, distribution, user_settings
+        from nippou.logic.sound import SOUNDS
+        self.configure_source()
+        self.make_sounds()
+        spec = next(s for s in SOUNDS if s.default_file)
+        key = config.sound_file_key(spec.key)
+        user_settings.save(key, spec.default_file)
+        self.assertTrue(self.export(files=["sounds"]).ok)
+        user_settings.save(key, "あとで変えた名前.wav")      # そのあと、この端末で名前を変えた
+        items = [i.key for i in distribution.ITEMS if i.default]
+        result = distribution.export("", items, [], admin=True, keep_previous=True)
+        self.assertTrue(result.ok, result.message)
+        written = self.written()["settings"]
+        self.assertEqual(written[key], spec.default_file, "残した音のファイルと名前を揃える")
+        self.assertNotIn(config.KEY_SOUND_DIR, written)
+        self.assertEqual(len(list(distribution.sounds_dir().iterdir())), 5)
+        self.assertEqual(result.carried, ["音声ファイル 5 個"], "ラインは前に入れていないので残さない")
+        self.assertNotIn(config.KEY_TERMINAL_LINE, written)
+
     def test_画面にパスワードの値を出さない(self) -> None:
         from nippou import distribution, user_settings
         self.configure_source()

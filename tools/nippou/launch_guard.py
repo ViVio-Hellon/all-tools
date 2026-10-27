@@ -773,6 +773,15 @@ def is_port_free(port: int, host: str = "") -> bool:
     """
     host = host or app_config.host()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if os.name != "nt":
+            # **待ち受け(waitress)と同じ確かめ方にする。** waitress は SO_REUSEADDR を付けて
+            # 待ち受けるので、閉じたばかりの接続の名残(TIME_WAIT)があっても同じ番号で立てる。
+            # ここで付けずに試すと、Linux では閉じて開き直したとき(1分ほど)「使用中」に見え、
+            # 隣の番号へずれる・候補が1つなら「使えるポートがありません」で起動できなかった。
+            # 待ち受けている相手がいれば、付けても bind できない(使用中の判定は変わらない)。
+            # Windows は付けると待ち受け中の番号まで取れてしまうので付けない(Windows で名残が
+            # 「使用中」に見えるかは、この機械では確かめていない)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
             return True

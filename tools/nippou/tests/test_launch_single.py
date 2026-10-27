@@ -401,6 +401,59 @@ class PickPortTests(GuardTestCase):
             self.assertEqual(launch_guard.pick_port(), self.ports()[0])
 
 
+class PortFreeTests(unittest.TestCase):
+    """ポートが空いているかは、**待ち受け(waitress)と同じ確かめ方**で見る。
+
+    waitress は SO_REUSEADDR を付けて待ち受けます。付けずに試していたので、Linux では閉じて
+    すぐ開き直すと、閉じたばかりの接続の名残(TIME_WAIT)で「使用中」に見えていました(隣の
+    番号へずれる・候補が1つなら「使えるポートがありません」で起動できない)。混在の通しの試験
+    (`test_flow_mixed_launch`)で、同じ PC の vbs を開き直したときに見つかったもの。
+    """
+
+    @staticmethod
+    def _closed_port() -> int:
+        """待ち受けて1回やりとりし、**こちらから先に閉じた**番号(名残が残る)。"""
+        import socket
+
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        client = socket.create_connection(("127.0.0.1", port))
+        conn, _ = server.accept()
+        conn.close()                 # 待ち受けた側が先に閉じる(HTTP の応答のあとと同じ)
+        client.recv(1)
+        client.close()
+        server.close()
+        return port
+
+    @unittest.skipIf(os.name == "nt", "Windows では SO_REUSEADDR を付けない(付けると待ち受け中の番号も取れる)")
+    def test_閉じたばかりの名残があっても空いていると見る(self) -> None:
+        import socket
+
+        port = self._closed_port()
+        plain = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            plain.bind(("127.0.0.1", port))
+        except OSError:
+            pass                     # 名残がある(付けずに試すと「使用中」に見える)
+        else:
+            plain.close()
+            self.skipTest("この機械では名残が残らなかった")
+        plain.close()
+        self.assertTrue(launch_guard.is_port_free(port, "127.0.0.1"),
+                        "閉じたばかりの名残を「使用中」と見た(開き直すと番号がずれる/起動できない)")
+
+    def test_待ち受けている相手がいれば使用中(self) -> None:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
+            other.bind(("127.0.0.1", 0))
+            other.listen(1)
+            self.assertFalse(launch_guard.is_port_free(other.getsockname()[1], "127.0.0.1"))
+
+
 class ExtrasReportTests(GuardTestCase):
     """2つ動いていることを、**押した人に見える形で**言う。"""
 

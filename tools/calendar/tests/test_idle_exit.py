@@ -8,12 +8,12 @@
 しかもタブは開いたままなので、**利用者には送られたように見えていた。**
 
 ``_loop`` を回さず、``overdue`` の材料と ``_holding`` を直に動かして見る
-(時間で待つ試験にすると、遅いうえに時々落ちる)。
+(時間で待つ試験にすると、遅いうえに時々落ちる)。時計は試験が持ち、
+進めたいぶんだけ進める。
 """
 
 from __future__ import annotations
 
-import time
 import unittest
 
 from . import _isolation
@@ -31,9 +31,14 @@ class _Watch:
         self.retried = 0
         self.exited_with: list[int] = []
         self.unsent = unsent
+        self.clock = 1000.0
         self.watch = idle_exit.IdleWatch(
             self._stop, lambda: False, lambda: self.unsent, self._retry,
-            on_exit=self.exited_with.append, **kwargs)
+            on_exit=self.exited_with.append, clock=lambda: self.clock, **kwargs)
+
+    def wait(self, sec: float) -> None:
+        """時計を進める(起きていた時間)。"""
+        self.clock += sec
 
     def _stop(self) -> None:
         self.stopped += 1
@@ -59,8 +64,8 @@ class _Watch:
 def _watch(unsent: int = 0, **kwargs) -> _Watch:
     box = _Watch(unsent, **kwargs)
     box.watch.beat()                              # 1度は繋がった状態にする
-    # 心拍を過去にずらす = 誰も見ていない状態
-    box.watch._seen = time.monotonic() - idle_exit.IDLE_SEC - 1
+    # 心拍が途切れたまま時間が過ぎた = 誰も見ていない状態
+    box.wait(idle_exit.IDLE_SEC + 1)
     return box
 
 
@@ -97,7 +102,7 @@ class HoldTests(unittest.TestCase):
         box.tick()
         self.assertEqual(box.stopped, 0)
 
-        box.watch._holding_since = time.monotonic() - 61
+        box.wait(61)
         box.tick()
         self.assertEqual(box.stopped, 1)
 
@@ -110,7 +115,7 @@ class HoldTests(unittest.TestCase):
         """残したまま終わったことを覚えておくため(翌朝これが要る)。"""
         box = _watch(unsent=3, hold_sec=60.0)
         box.tick()
-        box.watch._holding_since = time.monotonic() - 61
+        box.wait(61)
         box.tick()
         self.assertEqual(box.exited_with, [3])
 
@@ -173,9 +178,11 @@ class DefaultTests(unittest.TestCase):
     def test_渡さなければ今までどおり(self) -> None:
         """``unsent`` を渡さない使い方(他プロジェクト)を壊さない。"""
         stopped = []
-        watch = idle_exit.IdleWatch(lambda: stopped.append(1), lambda: False)
+        clock = [1000.0]
+        watch = idle_exit.IdleWatch(lambda: stopped.append(1), lambda: False,
+                                    clock=lambda: clock[0])
         watch.beat()
-        watch._seen = time.monotonic() - idle_exit.IDLE_SEC - 1
+        clock[0] += idle_exit.IDLE_SEC + 1
         self.assertFalse(watch._holding(watch.overdue() or ""))
         self.assertEqual(watch._count(), 0)
 

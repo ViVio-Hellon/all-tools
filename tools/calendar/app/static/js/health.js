@@ -21,6 +21,12 @@
                      (visibilitychange / resume / pageshow / online)
     スリープ明け   … 時計の飛びで気づく(下の WAKE_GAP_MS)。表のまま蓋を
                      閉じると、どのイベントも来ないため
+
+  **心拍には読み込みごとのページ番号(page)を添える。** タブを閉じると
+  「隠れます」と「閉じます」が続けて飛び、送りかけの心拍もあとから着く。
+  サーバに着く順は決まっていないので、サーバは閉じたページ番号から来た
+  ものを受け付けない(閉じたのに終わらない、を作らない)。再読込・戻る/進む
+  のキャッシュから戻ったときは番号が変わるので、そのまま受け付けられる。
 */
 
 import { tokenUrl } from "./api.js";
@@ -107,7 +113,14 @@ function visibleNow() {
   return document.visibilityState !== "hidden";
 }
 
+/** 読み込みごとのページ番号。タブの名前(`screen.id()`)とは別で、再読込で変わる。 */
+function newPage() {
+  if (window.crypto && window.crypto.randomUUID) return crypto.randomUUID();
+  return `p-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export function beat() {
+  let page = newPage();
   /**
    * @param {"visible"|"hidden"|"frozen"} state いまの見え方
    * @param {{leaving?: boolean, beacon?: boolean}} opts
@@ -117,7 +130,7 @@ export function beat() {
     if (closing && !leaving) return;
     // **どの画面からの心拍か**も伝える。閉じたなら次の画面が使えるように
     // 空け、取って代わられていたらその旨が返る(`screen.js`)
-    const body = JSON.stringify({ leaving, state, screen_id: screen.id() });
+    const body = JSON.stringify({ leaving, state, screen_id: screen.id(), page });
     if (beacon && navigator.sendBeacon) {
       // タブを閉じる・凍らされる瞬間は fetch が届かないことがある。
       // `sendBeacon` はそのあとでも送ってくれる
@@ -180,6 +193,8 @@ export function beat() {
   window.addEventListener("pageshow", (event) => {
     if (!event.persisted) return;
     closing = false;
+    // 閉じた合図を送ったページ番号は、サーバがもう受け付けない。**番号を改める**
+    page = newPage();
     screen.claim().then(() => resume("pageshow"));
   });
   // ネットワークが戻った(スリープ明けに来ることが多い)

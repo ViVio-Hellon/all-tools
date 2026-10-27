@@ -122,6 +122,9 @@ def alive():
     タイマーを間引かれ・凍らされて心拍が止まるので、そのあいだは
     自動終了もタブの空き判定もしない(``idle_exit`` / ``screen_lock``)。
 
+    ``page`` は読み込みごとのページ番号。**閉じたページから遅れて届いた
+    合図で、閉じた扱いを取り消さない**ため(``idle_exit``)。
+
     **いま使ってよい画面かどうかも一緒に返す**(``active``)。
     別の画面に取って代わられた画面は、ここで初めてそれを知る ──
     黙って古い表示を続けさせない(基盤仕様書 2.9)。
@@ -145,6 +148,8 @@ def alive():
     screen_id = str(body.get("screen_id", ""))
     leaving = bool(body.get("leaving"))
     hidden = str(body.get("state", "")) in HIDDEN_STATES
+    # 長さを切る(画面が名乗る値をそのまま鍵にするので、際限なく溜めない)
+    page = str(body.get("page", ""))[:64]
 
     # 画面が閉じたなら、次の画面がすぐ使えるように空ける
     if leaving and screen_id:
@@ -158,11 +163,14 @@ def alive():
         return jsonify({"ok": True, "watching": False, "active": active})
 
     if leaving:
-        watch.leaving(screen_id)
+        # **閉じたのはこの1枚だけ。** ほかの画面が残っていれば終わらない
+        # (断られた2枚目を閉じても、使っている画面を閉じても)
+        watch.leaving(screen_id, page=page)
     else:
         # **取って代わられた画面の「裏に回った」は数えない。** 数えると、
-        # 使われていない画面のせいでいつまでも終わらない
-        watch.beat(screen_id, hidden=hidden and active)
+        # 使われていない画面のせいでいつまでも終わらない(見えている画面と
+        # して数え、心拍が途切れたら外す)
+        watch.beat(screen_id, hidden=hidden and active, page=page)
     return jsonify({"ok": True, "watching": True, "active": active})
 
 

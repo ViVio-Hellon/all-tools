@@ -556,6 +556,125 @@ class CombinedFileDeliveredTests(_FromSource):
         self.assert_values(env, expected, tails, "両方ある")
 
 
+class KeptLineAndSoundsDeliveredTests(_FromSource):
+    """前に各ツールの設定画面で入れていた**ラインと日報の音声ファイル**が、まとめて書き出したあとも残り、
+    配った先に届くか(通しで)。
+
+        まとめて書き出したら、日報の設定画面で入れていた音声ファイル(配布設定\\音)とラインが消えた
+        (既定の選び方で各ツールの配布設定を丸ごと書き直していた)→「音声ファイルとラインは残して書き出す」
+
+    配る元: 各ツールの参照設定を決め、日報・看板・カレンダーの設定画面でラインを(日報は音声ファイルも)
+    選んで書き出す → この端末のラインを変える(残すのは前に入れていた値)→ 大設定の「4ツールの分も
+    まとめて書き出す」→ make_dist → 配った先(外枠と同じ道: 各ツールの bridge.py)でラインと音が届く。
+    ツールのフォルダの 設定.json が無く、まとめたファイルの tools だけでも届く。
+    """
+
+    #: ツール → (この端末の設定ファイルの鍵, 前に入れたライン, そのあと配る元で変えたライン, 結果の一言)
+    LINES = {
+        "nippou": ("terminal_line", "L-1", "L-9", "音声ファイル 1 個・ライン(L-1)はそのまま残しました"),
+        "kanban": ("line", "L-2", "L-8", "担当ライン(L-2)はそのまま残しました"),
+        "calendar": ("PCライン", "L-3", "L-7", "ライン(L-3)はそのまま残しました"),
+    }
+    #: 設定画面で選んで書き出す(既定の選び方 + ライン。日報は音声ファイルも)
+    SCREEN = {
+        "nippou": ("from nippou import distribution as d; "
+                   "r = d.export('', [i.key for i in d.ITEMS if i.default] + [d.ITEM_LINE], [d.FILE_SOUNDS], admin=True)"),
+        "kanban": "from kanban import distribution as d; r = d.export([k for k, _, x in d.ITEMS if x] + ['line'])",
+        "calendar": ("from calendar_app import distribution as d; "
+                     "r = d.export('', [k for k, _, x in d.ITEMS if x] + ['PCライン'], admin=True)"),
+    }
+    SOUND = b"RIFF-kept-sound"
+
+    @classmethod
+    def set_lines(cls, which: int) -> None:
+        for tool, spec in cls.LINES.items():
+            path, _key = cls.settings_file(cls.pc1, tool)
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            data[spec[0]] = spec[which]
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    @classmethod
+    def prepare(cls, source: Path) -> None:
+        cls.start_source(source)
+        cls.configure_source("1回目")
+        # 日報: この端末で鳴らしている音声ファイル(1つ)
+        sounds = cls.tmp / "配る元の音"
+        sounds.mkdir()
+        cls.sound_name = subprocess.run(
+            [sys.executable, "-c", "from nippou.logic.sound import SOUNDS; "
+                                   "print(next(s.default_file for s in SOUNDS if s.default_file))"],
+            cwd=source / "tools" / "nippou", env=cls.pc1, capture_output=True, text=True, encoding="utf-8",
+            check=True).stdout.strip()
+        (sounds / cls.sound_name).write_bytes(cls.SOUND)
+        path, _key = cls.settings_file(cls.pc1, "nippou")
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        data["sound_dir"] = str(sounds)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        cls.set_lines(1)
+        cls.screen_errors = {}
+        for tool, code in cls.SCREEN.items():
+            done = subprocess.run([sys.executable, "-c", code + "; import sys; sys.exit(0 if r.ok else r.message)"],
+                                  cwd=source / "tools" / tool, env=cls.pc1, capture_output=True, timeout=120)
+            if done.returncode:
+                cls.screen_errors[tool] = done.stderr.decode("utf-8", errors="replace")[-1500:]
+        cls.set_lines(2)                     # そのあと配る元の端末でラインを変えた
+        cls.outcome = cls.export_all()
+
+    def tool_settings(self, root: Path, tool: str) -> dict:
+        return json.loads((root / "tools" / tool / "配布設定" / "設定.json").read_text(encoding="utf-8-sig"))["settings"]
+
+    def test_まとめて書き出してもラインと音声ファイルが残り_結果の1行に出る(self) -> None:
+        self.assertEqual(self.screen_errors, {}, "設定画面と同じ書き出しができていない")
+        self.assertTrue(self.outcome.get("ok"), self.outcome)
+        lines = {r["id"]: r["line"] for r in self.outcome["results"]}
+        whole = json.loads((self.dist / "配布設定" / "日報複合ツール.json").read_text(encoding="utf-8-sig"))
+        for tool, (key, before, _after, said) in self.LINES.items():
+            with self.subTest(tool=tool):
+                self.assertEqual(self.tool_settings(self.dist, tool).get(key), before,
+                                 "ツールのフォルダの 設定.json に、前に入れていたラインが値のまま残る")
+                self.assertEqual(whole["tools"][tool]["settings"].get(key), before, "まとめたファイルの tools にも入る")
+                self.assertIn(said, lines[tool])
+        self.assertNotIn("そのまま残しました", lines["inspection"], "点検表にはラインが無い")
+        kept = self.dist / "tools" / "nippou" / "配布設定" / "音"
+        self.assertEqual([(p.name, p.read_bytes()) for p in kept.iterdir()], [(self.sound_name, self.SOUND)],
+                         "日報の音声ファイルは消さずに残し、配布用フォルダにも入る")
+        self.assertNotIn("sound_dir", self.tool_settings(self.dist, "nippou"), "音を残すので音の置き場所は入れない")
+        self.assertFalse((self.dist / "配布設定" / "音").exists(), "まとめたファイルの側には音は入らない")
+        self.assertNotIn("sound_dir", whole["tools"]["nippou"]["settings"])
+
+    def deliver(self, root: Path, name: str) -> None:
+        expected = self.values("1回目")
+        for tool, (key, before, _after, _said) in self.LINES.items():
+            expected[tool] = {**expected[tool], key: before}
+        env = self.terminal(name, root=root, shell_like=True)
+        sound = Path(env["LOCALAPPDATA"]) / "NippouTool" / "data" / "音声" / self.sound_name
+        wait = self.wait_for(env, expected)
+        saved, type(self).dist = self.dist, root
+        try:
+            tails = self.start_all(env, lambda tool: wait(tool) and (tool != "nippou" or sound.is_file()))
+        finally:
+            type(self).dist = saved
+        self.assert_values(env, expected, tails, name)
+        self.assertTrue(sound.is_file(), f"日報の音声ファイルが配った先の端末へ写っていない\n{tails['nippou']}")
+        self.assertEqual(sound.read_bytes(), self.SOUND)
+        stored = self.stored_values(env, "nippou")
+        self.assertEqual(Path(stored.get("sound_dir", "")), sound.parent, "写した音で鳴る(音の置き場所はこの端末の中)")
+
+    def test_配った先の端末にラインと音声ファイルが届く(self) -> None:
+        self.assertTrue(self.outcome.get("ok"), self.outcome)
+        self.deliver(self.dist, "配った先")
+
+    def test_ツールのフォルダの設定が無くても_まとめたファイルからラインが届き_音は日報のフォルダから届く(self) -> None:
+        self.assertTrue(self.outcome.get("ok"), self.outcome)
+        out = self.tmp / "まとめたファイルだけの一式"
+        if out.exists():
+            shutil.rmtree(out)
+        shutil.copytree(self.dist, out)
+        for tool in ("nippou", "kanban", "calendar", "inspection"):
+            (out / "tools" / tool / "配布設定" / "設定.json").unlink()
+        self.deliver(out, "まとめたファイルだけの端末")
+
+
 class RedistributedTerminalTests(_FromSource):
     """**配り直し**を通しで: 配る元で参照設定を変える → 書き出す → make_dist → 配った先(外枠と同じ道)。
 

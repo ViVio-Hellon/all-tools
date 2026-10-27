@@ -7,6 +7,7 @@
 
 import { api } from '../api.js';
 import * as desktop from '../desktop.js';
+import { ask } from '../dialog.js';
 import { bad, ok, warn } from '../toast.js';
 import { wireStats } from './stats.js';
 import { wireTrace } from './trace.js';
@@ -45,11 +46,13 @@ export function start(initial) {
   on('reimport', onReimport);
   on('retry-failed', () => onFailed('/api/sync/retry-failed',
     'あきらめた操作を、もう一度共有DBへ送ります。', null));
+  // 捨てた操作は戻せない。「やめる」を既定にする
   on('discard-failed', () => onFailed('/api/sync/discard-failed',
     '送れない操作を捨てて、共有DBの今の状態に戻します。',
     'この端末で押したが共有DBへ届かなかった操作を捨てます。\n'
     + '共有DBにある看板は共有DBの状態に、共有DBに無い看板は手元からも消えます。\n\n'
-    + '捨てた操作は戻せません(ログには残ります)。よろしいですか？'));
+    + '捨てた操作は戻せません(ログには残ります)。よろしいですか？',
+    { ok: '捨てる', cancel: 'やめる', danger: true }));
   on('master-open', () => openTable(0));
   on('master-add', showAddForm);
   wireDirtyFields();
@@ -104,8 +107,8 @@ function reloadSoon(ms, origin) {
 }
 
 /** 要確認の片付け(捨てる / もう一度送る)。終わったら数字を出し直すため読み直す */
-async function onFailed(path, note, question) {
-  if (question && !confirm(question)) return;
+async function onFailed(path, note, question, choices) {
+  if (question && !(await ask(question, choices))) return;
   const creds = await askPassword(note);
   if (!creds) return;
   try {
@@ -281,30 +284,13 @@ function wireBehavior() {
 // **認証するためだけの入口。** 以前は守られた操作を押したときに出る確認
 // 画面でしか入れられず、マスタを 5 マス直せば 5 回打つことになっていた。
 //
-// 状態は 3 つ(未設定 / 未認証 / 認証済み)。**どれも画面の中で切り替える**
-// ── 別の面の操作でパスワードを決めた・認証した、のあとで読み直さずに戻って
-// きても、古い表示(「未設定です」など)を出したままにしない。
+// 状態は 2 つ(未認証 / 認証済み)。**どちらも画面の中で切り替える**
+// ── 別の面の操作で認証した、のあとで読み直さずに戻ってきても、古い表示を
+// 出したままにしない。
+//
+// 決めていない端末は既定の値(日報・カレンダー・点検表と同じ)で開く。以前は既定の
+// 値が無く、「未設定」のときは最初に鍵を開けようとした人がその場で決めていた
 function wireUnlock() {
-  const setup = document.getElementById('setup-form');
-  if (setup) {
-    setup.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const pw = setup.elements.new_password;
-      const confirm = setup.elements.new_password_confirm;
-      if (!pw.value) { bad('パスワードを入れてください'); pw.focus(); return; }
-      if (pw.value !== confirm.value) { bad('確認用のパスワードが一致しません'); confirm.focus(); return; }
-      try {
-        const r = await api.post('/api/admin/password',
-          { new_password: pw.value, new_password_confirm: confirm.value });
-        setup.reset();
-        ok(r.message);
-        refreshLock();
-      } catch (e) {
-        bad(e.message);
-      }
-    });
-  }
-
   const form = document.getElementById('unlock-form');
   if (form) {
     form.addEventListener('submit', async (ev) => {
@@ -353,10 +339,9 @@ async function refreshLock() {
 /** 認証の状態を画面(タブの下の帯・パスワード認証の面)へ反映する */
 function applyLock(st) {
   if (!st || !('admin_unlocked' in st)) return;
-  if ('has_admin_password' in st) state.has_admin_password = st.has_admin_password;
+  if ('admin_password_custom' in st) state.admin_password_custom = st.admin_password_custom;
   state.admin_unlocked = st.admin_unlocked;
-  const has = !!state.has_admin_password;
-  const open = has && st.admin_unlocked;
+  const open = !!st.admin_unlocked;
   const show = (id, visible) => {
     const el = document.getElementById(id);
     if (el) el.hidden = !visible;
@@ -365,24 +350,26 @@ function applyLock(st) {
   const bar = document.getElementById('lockbar');
   if (bar) {
     bar.classList.toggle('is-open', open);
-    bar.classList.toggle('is-unset', !has);
-    document.getElementById('lockbar-text').textContent = !has
-      ? '管理者パスワードが未設定です ── 「パスワード認証」で決めてください'
-      : open ? '認証済み ── 設定を変えるときにパスワードを訊きません'
-        : '未認証 ── 設定を変えるときにパスワードを訊きます';
+    document.getElementById('lockbar-text').textContent = open
+      ? '認証済み ── 設定を変えるときにパスワードを訊きません'
+      : '未認証 ── 設定を変えるときにパスワードを訊きます';
     show('lockbar-lock', open);
     show('lockbar-go', !open);
   }
 
   const chip = document.getElementById('auth-state');
   if (chip) {
-    chip.textContent = !has ? '未設定' : open ? '認証済み' : '未認証';
+    chip.textContent = open ? '認証済み' : '未認証';
     chip.classList.toggle('is-ok', open);
   }
-  show('setup-form', !has);
-  show('unlock-form', has && !open);
+  show('unlock-form', !open);
   show('auth-ok', open);
-  show('password-card', has);
+  const source = document.getElementById('password-source');
+  if (source && 'admin_password_custom' in st) {
+    source.textContent = st.admin_password_custom
+      ? 'この端末のパスワードは、この端末で変えた値か、配布設定から来た値です。'
+      : 'この端末はまだ既定のパスワードのままです(日報・カレンダー・点検表と同じ値)。';
+  }
   const status = document.getElementById('unlock-status');
   if (status && open) {
     const min = Math.floor((st.admin_unlock_remaining_sec || 0) / 60) + 1;
@@ -494,8 +481,9 @@ async function onModeChange(ev) {
     // **デスクトップ版はその場で切り替えられる。** ポートを使わないので、外枠が
     // Python だけを立て直す(書き戻しを済ませてから)。窓はそのまま
     if (desktop.isDesktop) {
-      if (confirm(`${r.label}に切り替えます。\n共有DBへの書き戻しを済ませてから、${r.label}で開き直します。\n\nいま切り替えますか？`
-        + '\n(「キャンセル」なら、次にアプリを開いたときから切り替わります)')) {
+      if (await ask(`${r.label}に切り替えます。\n共有DBへの書き戻しを済ませてから、${r.label}で開き直します。\n\nいま切り替えますか？`
+        + '\n(「次に開いたときから」なら、次にアプリを開いたときから切り替わります)',
+        { ok: 'いま切り替える', cancel: '次に開いたときから' })) {
         showModeNotice(r.label, '', true);
         await desktop.restartApp();
         return;
@@ -1134,13 +1122,11 @@ async function onReimport() {
 // 閉まっていることがある)。パスワードを入れて操作が通ると認証済みになるので、
 // そのあと帯の表示を取り直す。
 async function askPassword(note) {
-  if (state.has_admin_password) {
-    try {
-      const st = await api.get('/api/admin/state');
-      applyLock(st);
-      if (st.admin_unlocked) return {};
-    } catch (e) { /* 確かめられなければ訊く */ }
-  }
+  try {
+    const st = await api.get('/api/admin/state');
+    applyLock(st);
+    if (st.admin_unlocked) return {};
+  } catch (e) { /* 確かめられなければ訊く */ }
   const creds = await promptPassword(note);
   if (creds) setTimeout(refreshLock, 1500);
   return creds;
@@ -1150,17 +1136,10 @@ function promptPassword(note) {
   return new Promise((resolve) => {
     const box = document.getElementById('pw');
     const input = document.getElementById('pw-input');
-    const confirmField = document.getElementById('pw-confirm-field');
-    const confirmInput = document.getElementById('pw-confirm');
     const err = document.getElementById('pw-error');
-    const setup = !state.has_admin_password;
 
-    document.getElementById('pw-note').textContent = setup
-      ? `${note} 管理者パスワードがまだ設定されていません。ここで新しく設定します。`
-      : note;
-    confirmField.hidden = !setup;
+    document.getElementById('pw-note').textContent = note;
     input.value = '';
-    confirmInput.value = '';
     err.hidden = true;
     box.hidden = false;
     input.focus();
@@ -1177,16 +1156,7 @@ function promptPassword(note) {
         err.hidden = false;
         return;
       }
-      if (setup && input.value !== confirmInput.value) {
-        err.textContent = '確認用のパスワードが一致しません';
-        err.hidden = false;
-        return;
-      }
-      // 登録できたら、次からは確認欄を出さない
-      if (setup) state.has_admin_password = true;
-      done(setup
-        ? { password: input.value, password_confirm: confirmInput.value }
-        : { password: input.value });
+      done({ password: input.value });
     };
 
     const onKey = (ev) => {
@@ -1649,9 +1619,11 @@ async function refreshRun() {
     const t = refreshPlanView.tables.find((x) => x.name === name);
     return `・${name}(いま ${t.current_rows} 行 → Access ${t.rows} 行)`;
   });
-  if (!confirm('次の表の中身を Access の最新に入れ替えます。\n\n' + lines.join('\n')
+  // 共有DBの表を書き換える。「やめる」を既定にする(Enter を続けて押しただけで書かない)
+  if (!(await ask('次の表の中身を Access の最新に入れ替えます。\n\n' + lines.join('\n')
     + '\n\n看板の表は、状態(赤・緑・注文中)はいまのまま残します。'
-    + '\n書く前に共有DBの控えを取ります。よろしいですか？')) return;
+    + '\n書く前に共有DBの控えを取ります。よろしいですか？',
+    { ok: '入れ替える', cancel: 'やめる', danger: true }))) return;
   const creds = await askPassword('共有DBの表の中身を入れ替えます。');
   if (!creds) return;
   const btn = document.getElementById('rf-run');
@@ -2244,7 +2216,8 @@ async function deleteRow(v, row) {
   const warnLine = busy.length
     ? `\n\n※この看板はいま「${busy.join('・')}」です。消すと倉庫からも見えなくなります。`
     : '';
-  if (!window.confirm(`${v.table} から ${what} を消します。\n元に戻せません。${warnLine}`)) return;
+  if (!(await ask(`${v.table} から ${what} を消します。\n元に戻せません。${warnLine}`,
+    { ok: '消す', cancel: 'やめる', danger: true }))) return;
 
   const creds = await askPassword(`${v.table} から ${what} を消します。`);
   if (!creds) return;

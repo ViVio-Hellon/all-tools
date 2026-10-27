@@ -174,7 +174,9 @@ class FlowCase(ScreenBrowserCase):
         page.wait_for_function("([id, v]) => document.getElementById(id)?.value === v",
                                arg=[field, value], timeout=timeout)
 
-    def wait_filled(self, page, field: str, timeout: int = 10000) -> None:
+    def wait_filled(self, page, field: str, timeout: int = 30000) -> None:
+        # ロットを引いて材・調質が入るまで。Windows の CI では10秒で間に合わないことがあった
+        # (状態を待つので、間に合えばすぐ進む)
         page.wait_for_function("(id) => (document.getElementById(id)?.value || '') !== ''",
                                arg=field, timeout=timeout)
 

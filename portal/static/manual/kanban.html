@@ -26,7 +26,7 @@
   </nav></div></header>
 <main class="page">
   <div class="head">
-    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.16</span></div>
+    <div class="head__row"><span class="head__mark">看</span><h1>資材発注看板システム</h1><span class="ver">VER3.5.17</span></div>
     <p class="lead">資材の看板を画面で見て、ラインは「欲しい」を出し、倉庫は「発送した」を付けます。届いたらラインが確認して、看板を元に戻します。</p>
   </div>
 
@@ -157,7 +157,7 @@
     <ol class="steps">
       <li><div><p>物が届いているのを確かめます。</p></div></li>
       <li><div><p>赤と緑が付いている看板の<b>サイズのボタン(赤)</b>を押します。</p></div></li>
-      <li><div><p>「<b>この資材は届いていますか？</b> [OK]を選択すると、発注状態と発送状態の両方がクリアされます。」と出ます。<span class="btnname">OK</span>を押します。</p></div></li>
+      <li><div><p>「<b>この資材は届いていますか？</b> [届いた]を押すと、発注状態と発送状態の両方がクリアされます。」と出ます。<span class="btnname">届いた</span>を押します。</p></div></li>
       <li><div><p>赤と緑が消えて、灰色に戻ります。</p>
         <figure class="shot shot--small">
           <div class="shot__img"><img src="img/kanban-arrive.jpg" loading="lazy" width="758" height="169"
@@ -167,14 +167,14 @@
           <figcaption>左: 赤と緑(発送された)→ 右: 届いた確認のあと(元に戻った)</figcaption>
         </figure></div></li>
     </ol>
-    <div class="warn"><b>気をつけること</b>物が届く前に<span class="btnname">OK</span>を押さないでください。押すと「届いた」として記録されます。
-      まだ届いていないときは<span class="btnname">キャンセル</span>を押せば、何も変わりません。</div>
+    <div class="warn"><b>気をつけること</b>物が届く前に<span class="btnname">届いた</span>を押さないでください。押すと「届いた」として記録されます。
+      まだ届いていないときは<span class="btnname">やめる</span>を押せば、何も変わりません。</div>
 
     <h3>5-4. 届いたものをまとめて確認する</h3>
     <ol class="steps">
       <li><div><p>赤と緑が付いている物が<b>全部届いている</b>ことを確かめます。</p></div></li>
       <li><div><p>上の<span class="btnname">届いた資材を一括確認</span>を押します(数字は対象の枚数。0 のときは押せません)。</p></div></li>
-      <li><div><p>「<b>○ 件の資材到着を確認し、表示を元に戻しますか？</b>」と出ます。<span class="btnname">OK</span>を押します。</p></div></li>
+      <li><div><p>「<b>○ 件の資材到着を確認し、表示を元に戻しますか？</b>」と出ます。<span class="btnname">元に戻す</span>を押します。</p></div></li>
       <li><div><p>右下に「○ 件をリセットしました」と出て、赤と緑が両方付いていた看板が全部、灰色に戻ります。</p></div></li>
     </ol>
 
@@ -240,7 +240,7 @@
           <figcaption>左: 押す前 → 右: <span class="btnname">発送</span>を押した後(緑になった)</figcaption>
         </figure></div></li>
       <li><div><p>選んだラインの「欲しい」を全部出したときは、1つずつ押す代わりに<span class="btnname">表示中のラインを全て発送済みに</span>を押してもかまいません。
-        「<b>このラインの未発送品 ○ 件を、まとめて発送済みにしますか？</b>」と出るので<span class="btnname">OK</span>を押します。</p></div></li>
+        「<b>このラインの未発送品 ○ 件を、まとめて発送済みにしますか？</b>」と出るので<span class="btnname">発送済みにする</span>を押します。</p></div></li>
       <li><div><p>必要なら<span class="btnname">🖨 発送明細</span>を押して印刷し、資材と一緒に渡します(<a href="#insatsu">7-1</a>)。</p></div></li>
     </ol>
     <div class="tip"><b>こつ</b>間違えて<span class="btnname">発送</span>を押したときは、緑の<span class="btnname">発送</span>をもう1回押すと外れます。
@@ -334,19 +334,19 @@
         <tr><td>取り込みの状態</td><td><span class="btnname">↻ いま取り込む</span>・まだ送れていない操作を見る</td><td>片付けるときは要る</td></tr>
         <tr><td>記録</td><td>エラーの記録を探す・なぜなぜ分析シートを作る。ログと記録は、置き場所の中の <b><code>kanban</code> フォルダ</b>に、名前が <code>kanban_</code> で始まるファイルで書きます(<code>kanban\ライン名\kanban_DebugLog_日時.txt</code>・<code>kanban\記録\年月\kanban_記録_PC名_年月日.jsonl</code>。ほかのツールのログと混ざりません)。前の版の <code>KanbanSystem</code> フォルダの記録もそのまま探せます</td><td>要らない</td></tr>
         <tr><td>ファイルの場所</td><td>使っているファイルの置き場所を見る(問い合わせのとき)</td><td>要らない</td></tr>
-        <tr><td>パスワード認証</td><td>管理者パスワードで認証する・決める・変える</td><td>—</td></tr>
+        <tr><td>パスワード認証</td><td>管理者パスワードで認証する・変える</td><td>—</td></tr>
         <tr><td>配布設定</td><td>1台で決めた設定をほかのパソコンへ配る<br>日報複合ツールでは、大設定の「4ツールの分もまとめて書き出す」で、このツールの配布設定が大設定の <code>配布設定\日報複合ツール.json</code> にも入ります。このツールのフォルダの配布設定と両方あるときは、<b>作った時刻が新しいほう</b>を使います(同じならこのツールのフォルダのほう)。中身は大設定の「配布設定」の一覧で確かめられます。</td><td>要る</td></tr>
       </tbody>
     </table></div>
     <h3>モードを変えるとき</h3>
     <ol class="steps">
       <li><div><p><span class="btnname">設定</span> → <span class="btnname">この端末</span> の「モード」で、使うモードを選びます。</p></div></li>
-      <li><div><p>「○○モードに切り替えます。…いま切り替えますか？」と出たら<span class="btnname">OK</span>を押します。書き戻しを済ませてから、看板のタブがそのモードで開き直します。
-        (<span class="btnname">キャンセル</span>なら、次に開いたときから切り替わります。)</p></div></li>
+      <li><div><p>「○○モードに切り替えます。…いま切り替えますか？」と出たら<span class="btnname">いま切り替える</span>を押します。書き戻しを済ませてから、看板のタブがそのモードで開き直します。
+        (<span class="btnname">次に開いたときから</span>なら、次に開いたときから切り替わります。)</p></div></li>
     </ol>
     <div class="tip"><b>こつ</b>「パスワード認証」で一度認証すると、しばらく(<span class="btnname">認証を解除する</span>を押す・30分さわらない・閉じる まで)パスワードを訊かれません。
       離れるときは<span class="btnname">認証を解除する</span>を押してください。</div>
-    <div class="ng"><b>してはいけないこと</b>管理者パスワードを決めないまま置いておかないでください。最初に設定を変えようとした人がパスワードを決められてしまいます。</div>
+    <div class="ng"><b>してはいけないこと</b>管理者パスワードを既定の値のまま配らないでください。1台で変えてから、配布設定で書き出して配ります。</div>
   </section>
 
   <section id="komatta">
@@ -388,7 +388,7 @@
     <div class="warn"><b>気をつけること</b>電源を切る前に、必ず<span class="btnname">終了</span>で閉じてください。いきなり電源を切ると、押した操作が送られずに残ったり、ほかのパソコンの「開いている端末」に <b>?</b> 付きで残ったりします。</div>
   </section>
 
-  <p class="foot">資材発注看板システム VER3.5.16 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
+  <p class="foot">資材発注看板システム VER3.5.17 の操作説明書です。日報複合ツールの「説明書」ボタン(<kbd>F1</kbd>)から、いま開いているタブの説明書を開けます。
     写真の名前・ライン・資材・コメントは説明のための例です。</p>
 </main>
 </body>

@@ -1104,13 +1104,13 @@ function holdSpin(btn) {
   const step = Number(btn.dataset.spin);
   if (!input || input.disabled) return () => {};
   stepSpin(input, step, { settle: false });
-  const began = Date.now();
+  const began = performance.now();          // 壁の時計は合わせ直しで飛ぶので使わない
   let timer = 0;
   let stopped = false;
   const tick = () => {
     if (stopped) return;
     if (!stepSpin(input, step, { settle: false })) return;   // 下限・上限に着いた
-    const fast = Date.now() - began > SPIN_FAST_AFTER_MS;
+    const fast = performance.now() - began > SPIN_FAST_AFTER_MS;
     timer = setTimeout(tick, fast ? SPIN_FAST_MS : SPIN_SLOW_MS);
   };
   timer = setTimeout(tick, SPIN_DELAY_MS);

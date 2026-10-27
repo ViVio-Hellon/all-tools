@@ -33,6 +33,14 @@
 表に戻るか閉じるまでは空けません。閉じた合図が届かずに残ったときは、
 2枚目の「この画面で使う」で取って代われます。
 
+【スリープを数えない】
+時刻は**起きていた時間だけを数える時計**(``awake_clock``)で持ちます。
+Windows の ``time.monotonic()`` はスリープ中も進むので、以前は蓋を開けた
+瞬間に持ち主の画面が「45秒 心拍が無い」扱いになり、持ち主の心拍が届く
+までのあいだにもう一度起動すると、新しいタブが黙って持ち主になって
+前の画面に「別の画面で開かれました」が出ていました。眠っていたのは
+ブラウザも同じで、誰も居なくなっていません。
+
 【画面の見分け方】
 画面ごとの ID はブラウザの ``sessionStorage`` に持ちます ──
 **タブごとに別で、画面遷移(カレンダー↔設定)では変わらない**ため、
@@ -44,8 +52,9 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
+from . import awake_clock
 from .logging_utils import get_logger
 
 log = get_logger("screen_lock")
@@ -63,18 +72,17 @@ class Screen:
     """いま使っている画面1つ。"""
 
     id: str
-    since: float                      # 使い始めた時刻 (単調時計)
-    seen: float                       # 最後の心拍 (単調時計)
+    since: float                      # 使い始めた時刻 (``awake_clock``)
+    seen: float                       # 最後の心拍 (``awake_clock``)
     #: 画面に出すための実時刻。``since`` は単調時計なので日時にできない
     since_wall: float = 0.0
     #: 裏に回っているか。**裏の画面は心拍が途切れても居なくならない**
     hidden: bool = False
 
-    def idle_sec(self, now: Optional[float] = None) -> float:
-        return (now if now is not None else time.monotonic()) - self.seen
+    def idle_sec(self, now: float) -> float:
+        return now - self.seen
 
-    def stale(self, now: Optional[float] = None,
-              limit: float = SCREEN_STALE_SEC) -> bool:
+    def stale(self, now: float, limit: float = SCREEN_STALE_SEC) -> bool:
         if self.hidden:
             return False                  # 裏の画面の心拍は当てにしない
         return self.idle_sec(now) >= limit
@@ -96,10 +104,16 @@ class ClaimResult:
 class ScreenLock:
     """使ってよい画面を1つだけ通す。**プロセスに1つ**。"""
 
-    def __init__(self, stale_sec: float = SCREEN_STALE_SEC) -> None:
+    def __init__(self, stale_sec: float = SCREEN_STALE_SEC, *,
+                 clock: Optional[Callable[[], float]] = None) -> None:
+        """
+        :param clock: 時計。既定は**スリープを数えない時計**(``awake_clock``)。
+                      試験は自分の時計を渡せる
+        """
         self._lock = threading.Lock()
         self._active: Optional[Screen] = None
         self.stale_sec = stale_sec
+        self._clock = clock or awake_clock.now
 
     # ------------------------------------------------------------------
     def claim(self, screen_id: str, *, force: bool = False) -> ClaimResult:
@@ -117,7 +131,7 @@ class ScreenLock:
             return ClaimResult(False, reason="bad_id",
                                message="画面を識別できませんでした。")
 
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             current = self._active
             if current is not None and current.id != screen_id \
@@ -157,7 +171,7 @@ class ScreenLock:
                 return True                       # まだ誰も名乗っていない
             if current.id != screen_id:
                 return False
-            current.seen = time.monotonic()
+            current.seen = self._clock()
             current.hidden = hidden
             return True
 
@@ -183,14 +197,14 @@ class ScreenLock:
             current = self._active
             if current is None:
                 return True
-            if current.stale(limit=self.stale_sec):
+            if current.stale(self._clock(), self.stale_sec):
                 return True                       # もう居ない相手に譲らない
             return current.id == screen_id
 
     def active(self) -> Optional[Screen]:
         with self._lock:
             current = self._active
-            if current is not None and current.stale(limit=self.stale_sec):
+            if current is not None and current.stale(self._clock(), self.stale_sec):
                 return None
             return current
 

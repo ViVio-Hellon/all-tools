@@ -411,6 +411,32 @@ class ExportAllTests(unittest.TestCase):
         self.assertFalse(outcome["ok"])
         self.assertIn("書き出した 2・既定のままで要らない 1・書き出せなかった 2", outcome["message"])
 
+    def test_残した音声ファイルとラインを結果の1行に添える(self) -> None:
+        """まとめて書き出しても、前に設定画面で入れていた音声ファイルとラインは残す。残したことを1行で言う。"""
+        from unittest import mock
+
+        replies = {
+            "nippou": self.answer({"ok": True, "message": "書き出しました", "reason": "",
+                                   "applied": ["共有の日報管理のパス", "この端末のライン(端末ごとに違う)"],
+                                   "kept": ["音声ファイル 2 個", "ライン(L-1)"]}),
+            "kanban": self.answer({"ok": True, "message": "書き出しました", "reason": "",
+                                   "applied": ["接続先(共有DB)"], "kept": []}),
+            # 前の版の入口(kept を返さない)
+            "calendar": self.answer({"ok": True, "message": "書き出しました", "reason": "", "applied": ["x"]}),
+            "inspection": self.answer({"ok": False, "message": "書き出せる設定がありません", "reason": "nothing"}),
+        }
+        with mock.patch.object(distribution.subprocess, "run",
+                               side_effect=lambda args, **kw: replies[Path(kw["cwd"]).name]):
+            outcome = distribution.export_all()
+        found = {r["id"]: r for r in outcome["results"]}
+        self.assertEqual(found["nippou"]["line"],
+                         "書き出しました(2項目: 共有の日報管理のパス・この端末のライン(端末ごとに違う))。"
+                         "音声ファイル 2 個・ライン(L-1)はそのまま残しました")
+        self.assertEqual(found["nippou"]["kept"], ["音声ファイル 2 個", "ライン(L-1)"])
+        self.assertNotIn("残しました", found["kanban"]["line"], "残したものが無ければ添えない")
+        self.assertNotIn("残しました", found["calendar"]["line"])
+        self.assertEqual(found["calendar"]["kept"], [])
+
     def test_大設定も既定のままなら要らないと出す(self) -> None:
         from unittest import mock
 

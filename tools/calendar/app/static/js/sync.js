@@ -11,6 +11,11 @@
 
   間隔は状態で変える ── 送れていないとき・送信待ちがあるときは短く、
   落ち着いているときは長く。共有フォルダを無駄に叩かない。
+
+  **取りに行けなかったときも、必ず次を予約する。** 以前は失敗すると次を
+  予約しなかったので、1回つまずいただけで帯の更新が止まったまま戻らず
+  (裏に回して戻すまで)、送信待ちの件数や「送れません」が古いまま残った。
+  スリープ明けや取り込みの重い瞬間は、1回くらい失敗するのがふつう。
 */
 
 import { api } from "./api.js";
@@ -18,6 +23,8 @@ import { inform } from "./modal.js";
 
 const FAST_MS = window.APP.syncPollMs || 1000;
 const SLOW_MS = 15000;
+// 取りに行けなかったときの次まで。サーバが起き直す途中などに叩き続けない
+const RETRY_MS = 5000;
 
 const listeners = new Set();
 let latest = null;
@@ -38,7 +45,9 @@ export async function refresh() {
   try {
     apply(await api.get("/api/sync"));
   } catch (_err) {
-    // 取れないことは `health.js` の見張りが出す。ここでは黙る
+    // 取れないことは `health.js` の見張りが出す。ここでは黙る。
+    // **ただし次は必ず予約する**(予約しないと、帯がそのまま止まる)
+    schedule(RETRY_MS);
   }
   return latest;
 }
@@ -47,14 +56,15 @@ export async function refresh() {
 export function apply(status) {
   if (!status) return;
   latest = status;
-  listeners.forEach((fn) => fn(status));
+  // **先に次を予約する。** 受け取る側が転んでも、見張りは止めない
   schedule();
+  listeners.forEach((fn) => fn(status));
 }
 
-function schedule() {
+function schedule(ms) {
   clearTimeout(timer);
   const busy = latest && (latest.busy || latest.pending > 0 || latest.offline);
-  timer = setTimeout(refresh, busy ? FAST_MS : SLOW_MS);
+  timer = setTimeout(refresh, ms || (busy ? FAST_MS : SLOW_MS));
 }
 
 export function start() {

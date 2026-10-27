@@ -72,10 +72,16 @@ def index():
     # 既定は月初〜当日。VBA の集計シートが常にその範囲を描いていた
     end = ctx.business_date(calc)
     start = end.replace(day=1)
+    # 最初に描く表も、選ぶ欄で選び直したときと同じ所から読む(`line_view.repo_for`。ラインを
+    # 持たない Administrator の PC は控えから)。控えが無ければ手元(空の表)
+    try:
+        with line_view.repo_for(ctx.line, ctx.line, get_repo()) as repo:
+            first = agg_admin.build(repo, line=ctx.line, start=start, end=end).as_dict()
+    except line_view.NoBackup:
+        first = agg_admin.build(get_repo(), line=ctx.line, start=start, end=end).as_dict()
     return render_template(
         "agg.html",
-        agg=agg_admin.build(get_repo(), line=ctx.line, start=start,
-                            end=end).as_dict(),
+        agg=first,
         # 「表示」の隣のライン(Administrator の PC だけ)
         line_pick=line_view.choices(ctx.line).as_dict(),
         # 共有保存の履歴の期間は、上の表とは別に選べる(既定は同じ月初〜当日)

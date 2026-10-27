@@ -69,6 +69,9 @@ class Result:
     reason: str = ""
     applied: list[str] = field(default_factory=list)
     kept: list[str] = field(default_factory=list)      # すでにあったので読まなかったもの
+    #: まとめて書き出すとき、そのツールが前の配布設定から**そのまま残したもの**
+    #: (「音声ファイル 3 個」「ライン(L-1)」。各ツールの入口の答えの ``kept``)
+    carried: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"ok": self.ok, "message": self.message, "reason": self.reason,
@@ -340,6 +343,15 @@ def export(tools: Optional[dict[str, Any]] = None) -> Result:
 # ここからは読み込まない。そのツールのフォルダで、書き出すだけの入口(`export_distribution.py`)を
 # 子として起こし、標準出力の JSON 1行を受け取る。書き出すものは、各ツールの設定画面の既定の
 # 選び方と同じ(端末ごとに違うライン・表示などは入れない)。
+#
+# ただし、**前に各ツールの設定画面で入れていたライン(値も前のまま)と、日報の音声ファイル
+# (`tools\\nippou\\配布設定\\音`)は消さずに残す**(各ツールの `export(keep_previous=True)`):
+#
+#     まとめて書き出したら、日報の設定画面で入れていた音声ファイルとラインが消えた
+#     →「音声ファイルとラインは残して書き出す」
+#
+# 残したラインは、ツールのフォルダの 設定.json に入るので、まとめたファイルの tools にも同じく入る。
+# 音声ファイルは今までどおり、まとめたファイルには入らない(日報のフォルダの 音 のまま配る)。
 # ------------------------------------------------------------------
 #: 各ツールの、配布設定を書き出すだけの入口(そのツールのフォルダの直下)
 TOOL_EXPORTER = "export_distribution.py"
@@ -380,8 +392,10 @@ def export_tool(tool: Any) -> Result:
         return Result(False, f"書き出す処理の答えが読めませんでした(終了コード {done.returncode})。"
                              + (" " + " / ".join(tail) if tail else ""), STATE_FAILED)
     applied = reply.get("applied")
+    kept = reply.get("kept")
     return Result(bool(reply.get("ok")), str(reply.get("message") or ""), str(reply.get("reason") or ""),
-                  applied=[str(a) for a in applied] if isinstance(applied, list) else [])
+                  applied=[str(a) for a in applied] if isinstance(applied, list) else [],
+                  carried=[str(k) for k in kept] if isinstance(kept, list) else [])
 
 
 def _reply_of(stdout: bytes) -> Optional[dict]:
@@ -403,6 +417,9 @@ def _outcome(tool_id: str, title: str, result: Result) -> dict[str, Any]:
         state = STATE_DONE
         line = (f"書き出しました({len(result.applied)}項目: {'・'.join(result.applied)})"
                 if result.applied else "書き出しました")
+        if result.carried:
+            # 前に設定画面で入れていたもの(既定では入らない)を消さずに残した
+            line += f"。{'・'.join(result.carried)}はそのまま残しました"
     elif result.reason == "nothing":
         state = STATE_NOT_NEEDED
         line = "既定のままなので要りません(この端末で変えた設定がありません。配った先も既定で動きます)"
@@ -410,7 +427,8 @@ def _outcome(tool_id: str, title: str, result: Result) -> dict[str, Any]:
         state = STATE_FAILED
         line = f"書き出せませんでした: {result.message}"
     return {"id": tool_id, "title": title, "state": state, "line": line,
-            "message": result.message, "reason": result.reason, "applied": result.applied}
+            "message": result.message, "reason": result.reason, "applied": result.applied,
+            "kept": result.carried}
 
 
 def export_all() -> dict[str, Any]:

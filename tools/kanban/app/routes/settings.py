@@ -35,7 +35,7 @@
 ``POST /api/sync/retry-failed``             必要(あきらめた操作をもう一度送る)
 ``POST /api/fs/list``                       必要(この PC のフォルダを返す)
 ``POST /api/behavior``                      必要(取り込み・書き戻し間隔、自動印刷)
-``POST /api/admin/password``                必要(今のパスワード。未設定なら不要)
+``POST /api/admin/password``                必要(今のパスワード。決めていなければ既定の値)
 ``POST /api/admin/unlock``                  (パスワードを確かめて認証する)
 ``POST /api/admin/lock``                    不要(認証を解除するだけ)
 ``GET  /api/admin/state``                   不要(認証済みか)
@@ -58,9 +58,10 @@
 そこは管理者パスワードで守る(python-web-tools と同じ復旧経路)。
 
 平文は保存せず、``config.json`` にはソルト付きハッシュだけを置く
-(:func:`kanban.config.hash_password`)。まだパスワードが設定されていない
-端末では、**最初の1回だけ登録を求める**(tkinter 版の
-``admin_auth.authenticate`` と同じ流れ)。
+(:func:`kanban.config.hash_password`)。**決めていない端末は既定の値で開く**
+(日報・カレンダー・点検表と同じ値。:func:`kanban.config.verify_admin_password`)。
+以前は既定の値が無く、最初に鍵を開けようとした人がその場で新しいパスワードを
+決められた(配布設定にパスワードを入れずに配った先でも)。
 
 【認証する】(:mod:`kanban.admin_lock`)
 押すたびに訊いていたころは、マスタを 5 マス直せば 5 回打つことになり、
@@ -156,7 +157,7 @@ def _state(cfg: config.Config, store) -> dict:
         "app_config_error": app_config.load_error(),
         "local_root": str(app_config.local_root()),
         "monitor_level": app_config.monitor_level(),
-        "has_admin_password": bool(cfg.admin_password_hash),
+        **_admin_password_state(cfg),
         **_lock_state(),
         "imported_lines": store.imported_lines(),
         "pending": store.pending_count(),
@@ -355,12 +356,10 @@ def table_refresh_upload():
 
     upload = request.files.get("file")
     if upload is not None and upload.filename:
-        creds = {"password": request.form.get("password", ""),
-                 "password_confirm": request.form.get("password_confirm", "")}
+        creds = {"password": request.form.get("password", "")}
         name, stream, size = upload.filename, upload.stream, request.form.get("size", "")
     else:
-        creds = {"password": _header_text("X-Admin-Password"),
-                 "password_confirm": _header_text("X-Admin-Password-Confirm")}
+        creds = {"password": _header_text("X-Admin-Password")}
         name, stream, size = request.args.get("name", ""), request.stream, request.args.get("size", "")
     ok, problem = _check_admin(creds)
     if not ok:
@@ -750,33 +749,16 @@ def _check_admin(body: dict) -> tuple[bool, object]:
     """管理者パスワードを確かめる。
 
     戻り値は ``(通ったか, 通らなかったときの応答)``。
+
+    **決めていない端末は既定の値で開く**(日報・カレンダー・点検表と同じ。
+    ``config.verify_admin_password``)。以前は既定の値が無く、最初に鍵を開けようと
+    した人がその場で新しいパスワードを決められた。
     """
     cfg = _cfg()
     supplied = str(body.get("password", ""))
 
     # **認証済みなら訊かない**(開いているあいだに使えば、閉まるまでを延ばす)
-    if cfg.admin_password_hash and not supplied and admin_lock.get().is_unlocked(touch=True):
-        return True, None
-
-    if not cfg.admin_password_hash:
-        # まだ登録されていない。**最初の1回だけ**ここで登録する
-        confirm = str(body.get("password_confirm", ""))
-        if not supplied.strip():
-            return False, (
-                jsonify(
-                    _err("need_password_setup", "管理者パスワードが未設定です。新しく設定してください。")
-                ),
-                401,
-            )
-        if supplied != confirm:
-            return False, (
-                jsonify(_err("password_mismatch", "確認用のパスワードが一致しません", "password_confirm")),
-                400,
-            )
-        cfg.admin_password_hash = config.hash_password(supplied)
-        config.save_config(cfg)
-        admin_lock.get().unlock()
-        log.info("管理者パスワードを新しく設定しました")
+    if not supplied and admin_lock.get().is_unlocked(touch=True):
         return True, None
 
     if not supplied:
@@ -785,13 +767,30 @@ def _check_admin(body: dict) -> tuple[bool, object]:
             jsonify(_err("locked", "認証が切れています。管理者パスワードを入れてください", "password")),
             401,
         )
-    if not config.verify_password(supplied, cfg.admin_password_hash):
+    if not config.verify_admin_password(supplied, cfg.admin_password_hash):
         log.warning("管理者パスワードが違います")
-        return False, (jsonify(_err("bad_password", "パスワードが違います", "password")), 401)
+        return False, (jsonify(_err("bad_password", "パスワードが違います" + _password_hint(cfg),
+                                    "password")), 401)
     # **確認画面でパスワードを入れたら、認証済みになる。** 続けて操作するたびに
     # 打たせない(閉めるのは「認証を解除する」か、使わない時間が続いたとき)
     admin_lock.get().unlock()
     return True, None
+
+
+def _admin_password_state(cfg) -> dict:
+    """画面に出す、管理者パスワードの状態(**値そのものは出さない**)。
+
+    ``has_admin_password`` は前の版の画面のために残す(いまは既定の値があるので、いつも真)。
+    """
+    return {"has_admin_password": True, "admin_password_custom": bool(cfg.admin_password_hash)}
+
+
+def _password_hint(cfg) -> str:
+    """**行き止まりを作らない。** 違ったときに、どの値が効いているかを添える(値は出さない)。"""
+    if cfg.admin_password_hash:
+        return ("(この端末で決めたパスワードか、配布設定のパスワードです。"
+                "分からなければ配った人に確かめてください)")
+    return "(この端末は既定のパスワードのままです。日報・カレンダー・点検表と同じ値です)"
 
 
 def _lock_state() -> dict:
@@ -807,7 +806,7 @@ def _lock_state() -> dict:
 @bp.get("/api/admin/state")
 def admin_state():
     """認証済みか。画面は、訊く前にこれで確かめる。"""
-    return jsonify({"has_admin_password": bool(_cfg().admin_password_hash), **_lock_state()})
+    return jsonify({**_admin_password_state(_cfg()), **_lock_state()})
 
 
 @bp.post("/api/admin/unlock")
@@ -818,19 +817,13 @@ def admin_unlock():
     確認画面でしか入れられなかった。
     """
     body = request.get_json(silent=True) or {}
-    cfg = _cfg()
-    if not cfg.admin_password_hash:
-        return jsonify(_err(
-            "need_password_setup",
-            "管理者パスワードがまだありません。「パスワード認証」で決めてください。",
-        )), 400
     if not str(body.get("password", "")):
         return jsonify(_err("bad_password", "パスワードを入れてください", "password")), 400
     ok, refused = _check_admin({"password": body.get("password")})
     if not ok:
         return refused
     log.info("管理者パスワードで認証しました")
-    return jsonify({"ok": True, "message": "認証しました。", "has_admin_password": True,
+    return jsonify({"ok": True, "message": "認証しました。", **_admin_password_state(_cfg()),
                     **_lock_state()})
 
 
@@ -865,15 +858,14 @@ def _new_password_problem(new: str, confirm: str, *, field: str, confirm_field: 
 
 @bp.post("/api/admin/password")
 def change_password():
-    """この端末の管理者パスワードを設定する・変える。
+    """この端末の管理者パスワードを変える。
 
     **パスワードを入れる場所が、操作のときに出る確認画面しか無かった。**
-    そのため 1 度決めたパスワードを変える手段が無く、未設定の端末では
-    「最初に保護された操作をした人」が決めるしかなかった。ここはそれ専用の口。
+    そのため 1 度決めたパスワードを変える手段が無かった。ここはそれ専用の口。
 
-    * まだ無ければ: 新しいパスワード + 確認 で設定する
-    * もうあれば: **今のパスワード**を確かめてから変える(配布設定から来た
-      パスワードでも同じ)
+    **いつも今のパスワードを確かめてから変える**(決めていない端末では既定の値。
+    配布設定から来たパスワードでも同じ)。ほかのツールと同じく、肩越しに見ていた
+    人が勝手に変えられる、を作らない
 
     **配布設定に入れたパスワードは変わりません。** 配布先も変えるときは
     配布設定を保存し直す必要がある ── 画面にもそう出す。
@@ -889,9 +881,7 @@ def change_password():
 
     cfg = _cfg()
     had = bool(cfg.admin_password_hash)
-    if had and not config.verify_password(
-        str(body.get("current_password", "")), cfg.admin_password_hash
-    ):
+    if not config.verify_admin_password(str(body.get("current_password", "")), cfg.admin_password_hash):
         log.warning("管理者パスワードの変更: 今のパスワードが違います")
         return jsonify(_err("bad_password", "今のパスワードが違います", "current_password")), 401
 
@@ -901,10 +891,10 @@ def change_password():
     except OSError as exc:
         return jsonify(_err("not_writable", f"設定を書けませんでした: {exc}")), 500
     admin_lock.get().unlock()
-    log.info("管理者パスワードを%sしました", "変更" if had else "設定")
+    log.info("管理者パスワードを変更しました(%s)", "前もこの端末で決めた値" if had else "前は既定の値")
 
     message = (
-        f"管理者パスワードを{'変更' if had else '設定'}しました。"
+        "管理者パスワードを変更しました。"
         "配った先も同じパスワードにしたいときは、「配布設定」で書き出してください。"
     )
     return jsonify({"ok": True, "changed": had, "message": message})

@@ -53,6 +53,13 @@ def bind_db(case: unittest.TestCase, conn: Optional[sqlite3.Connection] = None,
     """
     from app import routes
 
+    # **ルートのモジュールは、差し替える前に読み込んでおく。** 初めての読み込みが
+    # 差し替えたあとだと、``from . import get_db`` が差し替えた関数を取り込み、
+    # 「元に戻す」がその関数に戻してしまう(この試験の閉じた接続を掴んだまま残る。
+    # 次に本物のサーバを立てた試験が別のスレッドからそれを使って落ちた)
+    for name in ("calendar", "history", "settings", "master"):
+        __import__(f"app.routes.{name}")
+
     conn = conn if conn is not None else memory_db()
     case.addCleanup(conn.close)
     original = routes.get_db

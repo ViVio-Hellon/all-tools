@@ -102,6 +102,11 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
 )
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
 ITEM_LABELS = {key: label for key, label, _ in ITEMS}
+#: 大設定の「4ツールの分もまとめて書き出す」で、**前に入れていれば値のまま残す**項目
+#: (既定では入らないが、設定画面で選んで入れていたもの ── ``export`` の ``keep_previous``)
+KEEP_ON_COMBINED: tuple[str, ...] = (user_settings.KEY_MY_LINE,)
+#: 残したときの結果の一言の名前
+CARRIED_NAMES = {user_settings.KEY_MY_LINE: "ライン"}
 
 #: 置き場所の項目(ドライブ文字で書かれていたら、書き出すときに注意する)
 PATH_KEYS = (user_settings.KEY_DATA_DB_DIR, user_settings.KEY_MASTER_DB_DIR,
@@ -127,6 +132,9 @@ class Result:
     reason: str = ""
     applied: list[str] = field(default_factory=list)
     kept: list[str] = field(default_factory=list)   # すでにあったので読まなかったもの
+    #: 書き出すとき、前の配布設定から**そのまま残したもの**(「ライン(L-1)」。
+    #: 大設定の「まとめて書き出す」= ``keep_previous``)
+    carried: list[str] = field(default_factory=list)
 
 
 def _now() -> str:
@@ -302,7 +310,8 @@ def _show(value: Any) -> str:
 # ------------------------------------------------------------------
 # 書き出す(配る側)
 # ------------------------------------------------------------------
-def export(password: str, items: list[str], *, admin: bool = False) -> Result:
+def export(password: str, items: list[str], *, admin: bool = False,
+           keep_previous: bool = False) -> Result:
     """**この端末のいまの設定**を ``配布設定\\`` に書き出す(前の中身は置き換える)。
 
     この端末で一度も変えていない項目は入れない ── 配った先も同じ既定で
@@ -310,6 +319,13 @@ def export(password: str, items: list[str], *, admin: bool = False) -> Result:
 
     ``admin=True`` は、管理者パスワードを呼ぶ側がもう確かめたとき
     (日報複合ツールの大設定の「まとめて書き出す」。``export_distribution.py``)。
+
+    ``keep_previous`` も大設定の「まとめて書き出す」。項目は既定の選び方のまま書き直すが、
+    **前に設定画面で入れていたライン**(``KEEP_ON_COMBINED``)は、前の 設定.json の値のまま残す
+    (この端末のいまの値ではない)。前に入れていなければ入れない。設定画面から書き出すとき
+    (``False``)は選んだとおり(外せば消える)::
+
+        まとめて書き出したら、設定画面で入れていたラインが消えた →「ラインは残して書き出す」
     """
     if not admin:
         blocked = _guard(password, "書き出す")
@@ -325,6 +341,13 @@ def export(password: str, items: list[str], *, admin: bool = False) -> Result:
     current = user_settings.load()
     settings = {k: current[k] for k in items if _present(current.get(k))}
     defaults = [ITEM_LABELS[k] for k in items if not _present(current.get(k))]
+    carried: list[str] = []
+    if keep_previous:
+        before = read_own()
+        for key in KEEP_ON_COMBINED:
+            if key not in items and before is not None and key in before.settings:
+                settings[key] = before.settings[key]
+                carried.append(f"{CARRIED_NAMES.get(key, ITEM_LABELS[key])}({_show(before.settings[key])})")
     if not settings:
         return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
                       + " はこの端末で変えていないため既定のままです)。",
@@ -357,6 +380,7 @@ def export(password: str, items: list[str], *, admin: bool = False) -> Result:
 
     names = [ITEM_LABELS[k] for k in settings]
     message = (f"配布設定を書き出しました({len(names)}項目)。"
+               + (f"前に入れていた{'・'.join(carried)}はそのまま残しました。" if carried else "")
                + (integrated_where(DIR)
                   or (f"ツールの直下の「{DIR.name}」フォルダに入っています({DIR})。"
                       "配るときは tools\\make_dist.bat で配布用フォルダを作ってください(このフォルダも入ります)。")))
@@ -371,8 +395,9 @@ def export(password: str, items: list[str], *, admin: bool = False) -> Result:
                     "書かれています。ドライブ文字は PC ごとに割り当てが違うことが"
                     r"あるので、配った先で見つからないときは \\サーバ名\共有 の形で"
                     "決め直してから書き出してください。")
-    log.info("配布設定を書き出しました: %s", ", ".join(names))
-    return Result(True, message, applied=names)
+    log.info("配布設定を書き出しました: %s%s", ", ".join(names),
+             f"(そのまま残したもの: {'・'.join(carried)})" if carried else "")
+    return Result(True, message, applied=names, carried=carried)
 
 
 def _is_drive_path(text: str) -> bool:

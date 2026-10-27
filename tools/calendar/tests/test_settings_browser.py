@@ -27,7 +27,7 @@ def _entry_items() -> list[str]:
     spec.loader.exec_module(entry)
     seen: list[list[str]] = []
 
-    def export(password, items, *, admin=False):
+    def export(password, items, *, admin=False, keep_previous=False):
         seen.append(list(items))
         return distribution.Result(False, "試験", distribution.REFUSE_NOTHING)
 

@@ -5,7 +5,9 @@
     - **答えを試験が決める**(``answers`` に道の頭 → ``(番号, 本文)`` か、要求を受けてそれを返す関数)
     - **試験が自分で返す画面**(``pages`` に ``{道: HTML}``)。埋め込む親の画面・起動待機画面など
     - **答えを止められる**(``hold`` に道の頭 → ``held`` に溜まる → ``release`` で返す)
-    - 画面が出した確かめの窓(confirm・alert)の文言は ``dialogs``(窓は「はい」で閉じる)
+    - 画面が出した確かめの窓(画面の中の窓。``js/dialog.js``)の文言は ``dialogs``
+      (``accept_dialogs`` が True なら決める・False ならやめる・None なら答えずに置く)。
+      **ブラウザ標準の窓(confirm・alert)が出たら落とす**(``tests/_dialogs.py``)
     - 流れて消える知らせ(トースト)も覚えておく(``toasts``)。見る前に消えても取りこぼさない
 
 看板の画面は決まった間隔で盤・心拍・接続を読み直すので、決まった時間では待たず、
@@ -19,6 +21,7 @@ import json
 import time
 from typing import Callable, Union
 
+from tests._dialogs import answer_dialogs, native_guard
 from tests.test_web_app import RouteTestBase
 
 ORIGIN = "http://kanban.test"
@@ -41,6 +44,9 @@ Answer = Union[tuple, Callable[[object], tuple]]
 
 class KanbanBrowserCase(RouteTestBase):
     """`RouteTestBase`(手元の SQLite・Flask のアプリ)に本物のブラウザを足したもの。"""
+
+    #: 確かめの窓に「決める」と答えるか。False なら「やめる」、None なら答えずに置く
+    accept_dialogs: "bool | None" = True
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -76,7 +82,15 @@ class KanbanBrowserCase(RouteTestBase):
         self.hold: tuple[str, ...] = ()
         self.held: list = []
         self.dialogs: list[str] = []
+        self.native_dialogs: list[str] = []
+        answer_dialogs(self.ctx, self._answer_dialog)
+        self.addCleanup(lambda: self.assertEqual(
+            self.native_dialogs, [], "ブラウザ標準の確かめの窓が出た(出しているあいだ心拍が止まる)"))
         self.addCleanup(self._drain)
+
+    def _answer_dialog(self, text: str):
+        self.dialogs.append(text)
+        return self.accept_dialogs
 
     # -- 要求の取り次ぎ --------------------------------------------------
     def _route(self, route) -> None:
@@ -153,12 +167,7 @@ class KanbanBrowserCase(RouteTestBase):
     # -- 画面 ------------------------------------------------------------
     def watch(self, page):
         page.on("pageerror", lambda e: self.errors.append(str(e)))
-
-        def answer(dialog) -> None:
-            self.dialogs.append(dialog.message)
-            dialog.accept()
-
-        page.on("dialog", answer)
+        native_guard(page, self.native_dialogs)
         return page
 
     def open(self, path: str, page=None):
@@ -197,11 +206,9 @@ class KanbanBrowserCase(RouteTestBase):
     def text(page, selector: str) -> str:
         return page.locator(selector).inner_text()
 
-    def answer_password(self, page, password: str = "秘密", confirm: str = "") -> None:
-        """「管理者パスワード」の覆いが出たら入れて実行する(未設定の端末では確認欄も)。"""
+    def answer_password(self, page, password: str = "秘密") -> None:
+        """「管理者パスワード」の覆いが出たら入れて実行する(決めていない端末は既定の値で開く)。"""
         page.wait_for_selector("#pw:not([hidden])")
         page.fill("#pw-input", password)
-        if self.visible(page, "#pw-confirm"):
-            page.fill("#pw-confirm", confirm or password)
         page.click("#pw-ok")
         page.wait_for_selector("#pw", state="hidden")

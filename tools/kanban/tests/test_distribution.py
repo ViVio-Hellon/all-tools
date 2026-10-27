@@ -138,7 +138,7 @@ class ApplyTest(DistributionTestBase):
         self.assertEqual(cfg.import_interval_sec, 45)
         self.assertTrue(
             config.verify_password("secret", cfg.admin_password_hash),
-            "配った先が未設定のパスワードで始まっている(最初に押した人が決められる)",
+            "配った先が配ったパスワードで始まっていない(既定の値のまま)",
         )
         self.assertEqual(cfg.line, "", "担当ラインまで入った")
 

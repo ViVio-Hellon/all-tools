@@ -5,6 +5,7 @@
 
 import { api, SCREEN } from './api.js';
 import * as desktop from './desktop.js';
+import { ask } from './dialog.js';
 import { startHealthWatch } from './health.js';
 import { quietReload } from './leave.js';
 import { wireThemeToggle } from './theme.js';
@@ -278,7 +279,9 @@ function wireQuit() {
       if (e.status === 409) {
         // 処理中。何が動いているかを見せてから訊く
         const reason = (e.body && e.body.busy) || e.message;
-        if (confirm(`${reason}\n\nそれでも終了しますか？`)) {
+        // 途中で終えると、どこまで送れたか分からなくなる。「終了しない」を既定にする
+        if (await ask(`${reason}\n\nそれでも終了しますか？`,
+          { ok: 'それでも終了する', cancel: '終了しない', danger: true })) {
           try {
             await api.post('/api/shutdown', { force: true });
             showStopped();

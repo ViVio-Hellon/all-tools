@@ -60,8 +60,9 @@ ON = config.MARK_ON
 
 #: 子プロセスが立ち上がるのを待つ上限(秒)。Windows の CI は遅い
 BOOT_SEC = 90.0
-#: 状態を待つ上限(秒)。送り直しの見張りは 5 秒ごと
-WAIT_SEC = 60.0
+#: 状態を待つ上限(秒)。送り直しの見張りは 5 秒ごと。Windows の CI では60秒で間に合わない
+#: ことがあった(状態を待つので、そろえばすぐ進む)
+WAIT_SEC = 120.0
 
 L1, HVC = "L1", "HVC"
 TABLE = {L1: config.table_name_for(L1), HVC: config.table_name_for(HVC)}
@@ -1146,10 +1147,16 @@ class BrowserFlowTest(_Flow):
         self.w = self.warehouse()
 
     def open(self, t: Terminal, line: str = L1):
+        try:
+            from _dialogs import answer_dialogs, native_guard
+        except ImportError:                          # python -m unittest tests.test_flow_multi_terminal
+            from tests._dialogs import answer_dialogs, native_guard
         page = self.browser.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("dialog", lambda d: d.accept())
+        # 確かめの窓(画面の中の窓)は「はい」で閉じる。ブラウザ標準の窓が出たら誤りにする
+        answer_dialogs(page, lambda _text: True)
+        native_guard(page, errors)
         page.goto(f"http://127.0.0.1:{t.port}/board?t={TOKEN}&line={line}", wait_until="load")
         page.wait_for_selector('#board .row[data-no="1"]', timeout=30000)
         self.addCleanup(lambda: self.assertEqual(errors, [], f"{t.name} の画面のエラー"))

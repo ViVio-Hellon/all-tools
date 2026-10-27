@@ -175,6 +175,11 @@ ITEMS: tuple[Item, ...] = (
 )
 ITEM_KEYS = frozenset(item.key for item in ITEMS)
 ITEM_BY_KEY = {item.key: item for item in ITEMS}
+#: 大設定の「4ツールの分もまとめて書き出す」で、**前に入れていれば値のまま残す**項目
+#: (既定では入らないが、設定画面で選んで入れていたもの。音声ファイルも残す ── `export(keep_previous=True)`)
+KEEP_ON_COMBINED: tuple[str, ...] = (ITEM_LINE,)
+#: 残したときの結果の一言の名前
+CARRIED_NAMES = {ITEM_LINE: "ライン"}
 #: 設定.json に書いてよい鍵(知らない鍵は読まない)
 SETTING_KEYS = frozenset(k for item in ITEMS for k in item.setting_keys)
 
@@ -587,6 +592,9 @@ class Result:
     reason: str = ""
     applied: list[str] = field(default_factory=list)
     kept: list[str] = field(default_factory=list)   # すでにあったので読まなかったもの
+    #: 書き出すとき、前の配布設定から**そのまま残したもの**(「音声ファイル 3 個」「ライン(L-1)」。
+    #: 大設定の「まとめて書き出す」= ``keep_previous``)
+    carried: list[str] = field(default_factory=list)
     #: 読まなかったものの、この端末の値(ログに出す。パスワードは伏せる)
     kept_values: dict[str, str] = field(default_factory=dict)
     error: str = ""
@@ -620,7 +628,7 @@ def _now() -> str:
 
 
 def export(password: str, items: list[str], files: list[str], *,
-           admin: bool = False) -> Result:
+           admin: bool = False, keep_previous: bool = False) -> Result:
     """**この端末のいまの設定**を `配布設定\\` に書き出す(前の中身は置き換える)。
 
     この端末で一度も変えていない項目は入れない ── 配った先も同じ既定で
@@ -630,6 +638,18 @@ def export(password: str, items: list[str], files: list[str], *,
     もの)を `音\\` へ写し、**音の置き場所の項目は入れません**(配った先は
     写した音を使う ── 共有の音の置き場所と2つあると、どちらで鳴るのか
     分からなくなるので)。
+
+    ``keep_previous`` は大設定の「4ツールの分もまとめて書き出す」(`export_distribution.py`)。
+    項目は既定の選び方のまま書き直すが、**前に設定画面で入れていたもののうち既定では入らないもの**
+    (`KEEP_ON_COMBINED` のライン・`音\\` の音声ファイル)は消さずに残す:
+
+        まとめて書き出したら、設定画面で入れていた音声ファイルとラインが消えた
+        →「音声ファイルとラインは残して書き出す」
+
+    ラインは前の 設定.json の値のまま(この端末のいまのラインではない)。音声ファイルは前の
+    `音\\` のものをそのまま(この端末の音で入れ替えない)。音を入れて書き出したときと同じく、
+    音の名前は前のもの・音の置き場所の項目は入れない。設定画面から書き出すとき(``False``)は
+    選んだとおり(外せば消える)。
     """
     if not _authorized(password, admin):
         return Result(False, "配布設定を書き出すには管理者パスワードが要ります。",
@@ -646,21 +666,39 @@ def export(password: str, items: list[str], files: list[str], *,
 
     current = user_settings.load_all()
     with_sounds = FILE_SOUNDS in files
+    # まとめて書き出すとき: 前の配布設定(このフォルダの 設定.json・音\\)から残すもの
+    before, kept_sounds = (_previous() if keep_previous else ({}, []))
+    if with_sounds:
+        kept_sounds = []                               # 音を選んだ = この端末の音で入れ替える
     chosen = [ITEM_BY_KEY[k] for k in items]
-    if with_sounds and ITEM_BY_KEY[ITEM_SOUND_NAMES] not in chosen:
+    if (with_sounds or kept_sounds) and ITEM_BY_KEY[ITEM_SOUND_NAMES] not in chosen:
         chosen.append(ITEM_BY_KEY[ITEM_SOUND_NAMES])   # 写した音と名前を揃える
     settings: dict[str, Any] = {}
     defaults: list[str] = []
     for item in chosen:
-        if with_sounds and item.key == config.KEY_SOUND_DIR:
+        if (with_sounds or kept_sounds) and item.key == config.KEY_SOUND_DIR:
             continue                                   # 写した音を使う
+        if kept_sounds and item.key == ITEM_SOUND_NAMES and any(k in before for k in item.setting_keys):
+            # 残した音と名前を揃える(前の名前のまま)
+            settings.update({k: before[k] for k in item.setting_keys if k in before})
+            continue
         found = {k: _mine(current, k) for k in item.setting_keys if _is_set(_mine(current, k))}
         if found:
             settings.update(found)
         elif item.key != ITEM_SOUND_NAMES:
             defaults.append(item.label)
+    carried: list[str] = []
+    if kept_sounds:
+        carried.append(f"音声ファイル {len(kept_sounds)} 個")
+    for key in KEEP_ON_COMBINED:
+        item = ITEM_BY_KEY[key]
+        found = {k: before[k] for k in item.setting_keys if k in before}
+        if item not in chosen and found:
+            chosen.append(item)
+            settings.update(found)
+            carried.append(f"{CARRIED_NAMES.get(key, item.label)}({' '.join(str(v) for v in found.values())})")
 
-    sound_sources: list[Path] = []
+    sound_sources: list[Path] = list(kept_sounds)
     missing: list[str] = []
     if with_sounds:
         sound_sources, missing = _terminal_sounds()
@@ -705,6 +743,7 @@ def export(password: str, items: list[str], files: list[str], *,
     if sound_sources:
         names.append(f"音声ファイル{len(sound_sources)}件")
     message = (f"配布設定を書き出しました({len(names)}項目)。"
+               + (f"前に入れていた{'・'.join(carried)}はそのまま残しました。" if carried else "")
                + (integrated_where(target)
                   or (f"起動用の Start.vbs と同じフォルダの「{target.name}」に入っています({target})。"
                       "配るときは scripts\\make_dist.bat で配布用フォルダを作ってください"
@@ -715,8 +754,24 @@ def export(password: str, items: list[str], files: list[str], *,
     if missing:
         message += (" この端末に無かった音: " + "・".join(missing)
                     + "(配った先では文言だけ出ます)。")
-    log.info("配布設定を書き出しました: %s", ", ".join(names))
-    return Result(True, message, applied=names)
+    log.info("配布設定を書き出しました: %s%s", ", ".join(names),
+             f"(そのまま残したもの: {'・'.join(carried)})" if carried else "")
+    return Result(True, message, applied=names, carried=carried)
+
+
+def _previous() -> tuple[dict[str, Any], list[Path]]:
+    """いまの `配布設定\\` の中身(設定 = 知らない鍵と空を捨てたもの, 音声ファイル)。無ければ空。
+
+    まとめて書き出すとき(`export(keep_previous=True)`)に、前に設定画面で入れていたものを残すため。
+    読めない・形が違う 設定.json は「無い」と数える(残すものが無いだけで、書き出しは止めない)。
+    """
+    base = folder()
+    data, error = _read_json(settings_path(base))
+    if error or data is None or data.get("format") != FORMAT:
+        settings: dict[str, Any] = {}
+    else:
+        settings = _clean(data.get("settings"))
+    return settings, _sound_files(base)
 
 
 def _terminal_sounds() -> tuple[list[Path], list[str]]:

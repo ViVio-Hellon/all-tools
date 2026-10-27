@@ -30,8 +30,10 @@ class _Box:
     def __init__(self, **kwargs) -> None:
         self.stopped = 0
         self.retried = 0
+        self.clock = 1000.0
         self.watch = idle_exit.IdleWatch(self._stop, lambda: False,
-                                         lambda: 0, self._retry, **kwargs)
+                                         lambda: 0, self._retry,
+                                         clock=lambda: self.clock, **kwargs)
 
     def _stop(self) -> None:
         self.stopped += 1
@@ -40,8 +42,8 @@ class _Box:
         self.retried += 1
 
     def long_ago(self, sec: float = idle_exit.IDLE_SEC + 1) -> None:
-        """最後の心拍を過去にずらす = 心拍が途切れた。"""
-        self.watch._seen = time.monotonic() - sec
+        """心拍が無いまま時間を進める = 心拍が途切れた。"""
+        self.clock += sec
 
 
 class IdleTests(unittest.TestCase):

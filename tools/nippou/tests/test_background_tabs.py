@@ -339,8 +339,14 @@ class AwakeClockTests(unittest.TestCase):
         self.assertLessEqual(self.clock.now() - before, awake_clock.TICK_SEC + 0.01)
 
     def test_打てるタブの見切りより長く眠れば必ず差し引く(self) -> None:
-        self.assertLessEqual(awake_clock.JUMP_SEC, tab_lock.LOST_AFTER_SEC)
+        """見切りは**最後の心拍から**数える。心拍の間隔のぶんを引いても、差し引かない
+        止まりのほうが短くないといけない(前は見切りと同じ15秒で、12秒の眠りで外れた)。"""
+        self.assertLess(awake_clock.JUMP_SEC + tab_lock.HEARTBEAT_SEC,
+                        tab_lock.LOST_AFTER_SEC - 2,
+                        "差し引かない止まり+心拍の間隔が、打てるタブの見切りに近すぎます")
         self.assertLess(awake_clock.JUMP_SEC, idle_exit.IDLE_SEC)
+        # 1回や2回の遅れでは眠ったことにしない
+        self.assertGreater(awake_clock.JUMP_SEC, 2 * awake_clock.TICK_SEC)
 
 
 class SleepWatchTests(unittest.TestCase):
@@ -382,6 +388,64 @@ class SleepWatchTests(unittest.TestCase):
         self.assertFalse(desk.ping("B", now=self.clock.now()).may_edit,
                          "スリープ明けに、押してもいないのに権利が移りました")
         self.assertTrue(desk.ping("A", now=self.clock.now()).may_edit)
+
+    def test_短いスリープでも押していないのに権利が移らない(self) -> None:
+        """10〜15秒の眠り(短いスリープ・仮想機械の一時停止)。2画面で並べた A(打てる)と
+        B(見るだけ)が一緒に眠り、起きて B の心拍が先に着く ── 前は15秒より短い止まりを
+        差し引かなかったので、「最後の心拍(最大5秒前)+12秒」で A が外れて B に移った。
+
+        眠り始め(心拍のあと何秒)・見張りの刻み・A が遅れて起きる秒を振って、どの組でも
+        A が打てるままであることを見ます(0.5秒刻み。本物の時間は待たない)。"""
+        for stop in [x / 2 for x in range(2, 81)]:              # 1〜40秒
+            for before in [x / 2 for x in range(1, 10)]:        # 心拍のあと 0.5〜4.5秒で眠る
+                for tick_at in (0, 1, 2, 3):                    # 見張りの刻み(半秒)
+                    for lag in (1, 2, 3):                       # A が B より遅れて起きる秒
+                        moved = self._sleep_two_windows(stop, before, tick_at, lag)
+                        if moved:
+                            self.fail(f"{stop}秒眠った(心拍のあと{before}秒で眠り、A が{lag}秒"
+                                      f"遅れて起きた)だけで、押していないのに権利が {moved}")
+
+    def _sleep_two_windows(self, stop: float, before: float, tick_at: int, lag: int) -> str:
+        """A と B を並べて眠らせる。権利が移ったら、どこで移ったかを返す(移らなければ "")。"""
+        t = FakeTime()
+        clock = awake_clock.AwakeClock(lambda: t.mono, lambda: t.wall)
+        clock.start(thread=False)
+        desk = tab_lock.TabDesk()
+        desk.claim("A", now=clock.now())
+        desk.claim("B", now=clock.now())
+        half = [0]                                      # いま何個めの半秒か
+        beat = int(tab_lock.HEARTBEAT_SEC * 2)          # 心拍の間隔(半秒)
+        tick = int(awake_clock.TICK_SEC * 2)
+
+        def run(halves: int, *, a: bool = True) -> str:
+            for _ in range(halves):
+                t.tick(0.5)
+                half[0] += 1
+                n = half[0]
+                if (n - tick_at) % tick == 0:
+                    clock.check()
+                if a and n % beat == 0:
+                    desk.ping("A", now=clock.now())
+                if (n - beat // 2) % beat == 0:         # B は A と半周ずれて送る
+                    desk.ping("B", now=clock.now())
+                if desk.editor != "A":
+                    return f"{desk.editor or '誰も持たない'}へ"
+            return ""
+
+        moved = run(40)                                 # 20秒ふつうに動く(A の心拍の直後で止まる)
+        moved = moved or run(int(before * 2))
+        if moved:
+            return "眠る前に" + moved
+        t.tick(stop)                                    # サーバも両方のブラウザも止まっていた
+        # 起きた。B の心拍が先に着く(表に戻った合図ですぐ送る)
+        desk.ping("B", now=clock.now())
+        if desk.editor != "A":
+            return f"起きた瞬間に {desk.editor or '誰も持たない'}へ"
+        moved = run(lag * 2, a=False)                   # A のブラウザはまだ眠っている
+        if moved:
+            return "A が起きる前に" + moved
+        desk.ping("A", now=clock.now())
+        return "" if desk.editor == "A" else f"A が起きたあとで {desk.editor}へ"
 
 
 # ------------------------------------------------------------------

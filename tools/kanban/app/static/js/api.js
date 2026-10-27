@@ -114,7 +114,6 @@ export const api = {
     method: 'POST', bytes,
     headers: {
       'X-Admin-Password': encodeURIComponent(creds.password || ''),
-      'X-Admin-Password-Confirm': encodeURIComponent(creds.password_confirm || ''),
     },
   }),
 };

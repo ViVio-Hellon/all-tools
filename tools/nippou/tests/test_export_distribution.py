@@ -3,6 +3,7 @@
 日報複合ツールの大設定の「4ツールの分もまとめて書き出す」が、このフォルダで子として起こす。
 
 - 設定画面の既定の選び方のまま書き出す(この端末のラインは入れない・音声ファイルも入れない)
+- ただし**前に設定画面で入れていたラインと音声ファイル(`配布設定\\音`)は残す**(ラインは前の値のまま)
 - パスワードは聞かない(呼ぶ側の大設定が確かめる)
 - 答えは標準出力に JSON 1行。書き出せる設定が無いときは ok=false・reason="nothing"(失敗と分ける)
 """
@@ -65,13 +66,78 @@ class ExportEntryTests(unittest.TestCase):
         self.assertFalse((self.folder / distribution.SOUNDS_DIRNAME).exists(),
                          "音声ファイルは既定で入れない(画面と同じ)")
 
+    def screen_export(self, items: list[str], files: list[str]) -> None:
+        """設定画面の「配布設定を書き出す」で項目を選んで書き出したのと同じ(この端末・この配布設定)。"""
+        code = ("import json, sys; from nippou import distribution as d; "
+                "r = d.export('', json.loads(sys.argv[1]), json.loads(sys.argv[2]), admin=True); "
+                "sys.exit(0 if r.ok else r.message)")
+        subprocess.run([sys.executable, "-c", code, json.dumps(items), json.dumps(files)], cwd=ROOT,
+                       env=self.env, check=True, capture_output=True, timeout=60)
+
+    def configure_line_and_sounds(self) -> bytes:
+        """共有の日報管理のパス・この端末のライン・鳴らしている音声ファイル1つ。音の中身を返す。"""
+        from nippou.logic.sound import SOUNDS
+
+        sounds = self.tmp / "共有の音"
+        sounds.mkdir()
+        spec = next(s for s in SOUNDS if s.default_file)
+        body = b"RIFF" + spec.key.encode()
+        (sounds / spec.default_file).write_bytes(body)
+        self.configure(**{config.KEY_ACCESS_DIR: r"\\srv\日報", config.KEY_TERMINAL_LINE: "L-1",
+                          config.KEY_SOUND_DIR: str(sounds)})
+        return body
+
+    def test_前に入れていたラインと音声ファイルは残す_ほかは既定の選び方(self) -> None:
+        """大設定の「まとめて書き出す」で、設定画面で入れていた音とラインが消えた(既定の選び方で丸ごと書き直していた)。"""
+        body = self.configure_line_and_sounds()
+        default = [i.key for i in distribution.ITEMS if i.default]
+        self.screen_export(default + [distribution.ITEM_LINE], [distribution.FILE_SOUNDS])
+        before = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))["settings"]
+        self.assertEqual(before[config.KEY_TERMINAL_LINE], "L-1")
+        # そのあと、この端末(配る元)のラインを変えた。残すのは**前に入れていた値**
+        self.configure(**{config.KEY_ACCESS_DIR: r"\\srv\日報2", config.KEY_TERMINAL_LINE: "L-9",
+                          config.KEY_SOUND_DIR: str(self.tmp / "共有の音")})
+
+        reply = self.run_entry()
+        self.assertTrue(reply["ok"], reply)
+        data = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(data["settings"][config.KEY_ACCESS_DIR], r"\\srv\日報2", "ほかは既定の選び方でいまの値")
+        self.assertEqual(data["settings"][config.KEY_TERMINAL_LINE], "L-1", "前に入れていたラインは値もそのまま")
+        self.assertNotIn(config.KEY_SOUND_DIR, data["settings"],
+                         "音声ファイルを残すので、音の置き場所は入れない(画面で音を入れたときと同じ)")
+        self.assertIn(config.KEY_TERMINAL_LINE, data["labels"], "大設定の一覧に名前で出す")
+        sounds = sorted((self.folder / distribution.SOUNDS_DIRNAME).iterdir())
+        self.assertEqual([p.read_bytes() for p in sounds], [body], "音声ファイルは消さずに残す")
+        self.assertEqual(reply["kept"], ["音声ファイル 1 個", "ライン(L-1)"])
+        self.assertIn("そのまま残しました", reply["message"])
+
+    def test_前に入れていなければラインも音も入れない(self) -> None:
+        self.configure_line_and_sounds()
+        self.screen_export([i.key for i in distribution.ITEMS if i.default], [])
+        reply = self.run_entry()
+        self.assertTrue(reply["ok"], reply)
+        data = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))
+        self.assertNotIn(config.KEY_TERMINAL_LINE, data["settings"])
+        self.assertIn(config.KEY_SOUND_DIR, data["settings"], "音を入れていなければ、音の置き場所は今までどおり入る")
+        self.assertFalse((self.folder / distribution.SOUNDS_DIRNAME).exists())
+        self.assertEqual(reply["kept"], [])
+
+    def test_設定画面から書き出すと選んだとおり_音とラインを外せる(self) -> None:
+        self.configure_line_and_sounds()
+        default = [i.key for i in distribution.ITEMS if i.default]
+        self.screen_export(default + [distribution.ITEM_LINE], [distribution.FILE_SOUNDS])
+        self.screen_export(default, [])
+        data = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))
+        self.assertNotIn(config.KEY_TERMINAL_LINE, data["settings"])
+        self.assertFalse((self.folder / distribution.SOUNDS_DIRNAME).exists())
+
     def test_書き出す項目は画面の既定のチェックと同じ(self) -> None:
         html = (ROOT / "app" / "templates" / "settings.html").read_text(encoding="utf-8")
         self.assertIn('data-dist-item="{{ it.key }}" {% if it.default %}checked{% endif %}', html)
         self.assertIn('<input type="checkbox" data-dist-file="{{ f.key }}">', html, "音声ファイルは既定で外れている")
         script = (ROOT / "export_distribution.py").read_text(encoding="utf-8")
         self.assertIn("if item.default", script)
-        self.assertIn('distribution.export("", items, [], admin=True)', script)
+        self.assertIn('distribution.export("", items, [], admin=True, keep_previous=True)', script)
 
     def test_配布用フォルダに入る(self) -> None:
         import importlib.util

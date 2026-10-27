@@ -31,7 +31,6 @@
 """
 from __future__ import annotations
 
-import socket
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -40,7 +39,7 @@ from typing import Iterable, Optional
 
 from ..db.connection import connect_readonly
 from ..db.models import PackingDetail, PackingReport
-from ..db.repository import NippouRepository
+from ..db.repository import NippouRepository, this_pc
 from ..logging_setup import get_logger
 from .. import constants
 from ..logic import break_time
@@ -327,7 +326,8 @@ def flush(repo: NippouRepository, db_path: Path) -> Outcome:
     if not pending:
         return out
     teams = load_teams()
-    terminal = socket.gethostname()
+    # 端末の名前はほかの記録と同じ PC 名(`this_pc`: COMPUTERNAME が先)
+    terminal = this_pc()
     now = datetime.now().isoformat(timespec="seconds")
     try:
         conn = _connect(db_path)

@@ -80,7 +80,6 @@ T_共有保存履歴 へ写すのも手で押したときと同じ `share`(送�
 """
 from __future__ import annotations
 
-import socket
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -88,7 +87,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..db.repository import NippouRepository
+from ..db.repository import NippouRepository, this_pc
 from ..logging_setup import get_logger
 
 log = get_logger("services.push_history")
@@ -143,10 +142,14 @@ def is_auto(row: dict) -> bool:
 
 
 def terminal_name() -> str:
-    try:
-        return socket.gethostname()
-    except OSError:                                # pragma: no cover - 名前が引けない端末
-        return ""
+    """この端末の名前。**アクセス権限の表・「ほかの端末」の知らせと同じ PC 名**(`this_pc`)。
+
+    前は `socket.gethostname()`(ネットワークの名前)だけを見ていました。ほかの所
+    (アクセス権限の当て方・ページを保存した端末)は Windows の `COMPUTERNAME` が先なので、
+    名前が違う PC(15文字を超える名前など)では、共有保存の履歴の「端末」・ログのファイル名
+    (`nippou_動作記録_<端末>.log` など)と、知らせに出る PC 名が食い違っていました。
+    """
+    return this_pc()
 
 
 @dataclass

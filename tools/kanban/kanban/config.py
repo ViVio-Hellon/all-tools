@@ -174,6 +174,38 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return secrets.compare_digest(candidate, digest_hex)
 
 
+#: 起動するときに既定の管理者パスワードを決める環境変数(ほかのツールと同じ持ち方。
+#: カレンダーは ``CALENDAR_ADMIN_PASSWORD``、点検表は ``INSPECTION_ADMIN_PASSWORD``)
+ADMIN_PASSWORD_ENV = "KANBAN_ADMIN_PASSWORD"
+
+#: **端末で決めていないとき(``admin_password_hash`` が空)に通る管理者パスワード。**
+#:
+#: 日報・カレンダー・点検表と同じ値。以前の看板には既定の値が無く、
+#: **最初に鍵を開けようとした人が、その場で新しいパスワードを決められました**
+#: (配布設定にパスワードを入れずに配った先でも同じ)。ほかのツールと同じく、
+#: 決めていない端末は既定の値で開くようにします。
+#:
+#: 値そのものはコードに書かず、``hash_password`` で撹拌した形で持ちます
+#: (平文で置く理由が無い。``admin_password_hash`` と同じ形)。値はほかのツールの
+#: README に書いてあるので、**配るなら1台で変えてから「配布設定」で書き出すのがふつう**です。
+DEFAULT_ADMIN_PASSWORD_HASH = "6a4559b5f49daaf60dba50fb48401cc3$3734c2bb9eb3d527c5a49e8bb60280b9736a23e124e1d9caaebf24bf071b009c"
+
+
+def verify_admin_password(password: str, stored_hash: str) -> bool:
+    """管理者パスワードが合っているか。**照合はここでしかしない。**
+
+    この端末で決めてある(配布設定から来た値も含む)ならその値、無ければ既定の値
+    (環境変数 :data:`ADMIN_PASSWORD_ENV` → :data:`DEFAULT_ADMIN_PASSWORD_HASH` の順)。
+    """
+    password = str(password or "")
+    if stored_hash:
+        return verify_password(password, stored_hash)
+    from_env = os.environ.get(ADMIN_PASSWORD_ENV, "")
+    if from_env:
+        return secrets.compare_digest(password.encode("utf-8"), from_env.encode("utf-8"))
+    return verify_password(password, DEFAULT_ADMIN_PASSWORD_HASH)
+
+
 @dataclass(frozen=True)
 class LineInfo:
     """1 ラインの定義。VBA の ``GetLineMaster`` の 1 行に対応する。"""
@@ -305,8 +337,8 @@ class Config:
     """モード変更・接続パス変更を保護する管理者パスワードのハッシュ。
 
     平文は保存しない(``config.hash_password``/``verify_password`` 参照)。
-    未設定(空文字)の場合、設定画面で保護された操作を初めて行おうとした
-    ときにその場でパスワードを設定させる。
+    空文字なら既定の値で開く(日報・カレンダー・点検表と同じ。
+    ``verify_admin_password`` / ``DEFAULT_ADMIN_PASSWORD_HASH``)。
     """
 
     log_dir: str = ""
@@ -446,8 +478,8 @@ _KNOWN_KEYS = set(Config().to_dict())
 #:
 #: 配布設定より前の版は、端末の設定ファイルへ全項目を書き出していました
 #: (未設定の接続先・パスワードも空欄のまま)。その空欄が配布設定を覆うと、
-#: 配った接続先が効かず、**パスワードが未設定に戻って最初に押した人が決め
-#: られる**状態になります。空欄は「無い」として読みます。
+#: 配った接続先が効かず、**配ったパスワードが効かずに既定の値に戻る**状態に
+#: なります。空欄は「無い」として読みます。
 _BLANK_MEANS_UNSET = frozenset({
     "shared_db_path", "access_db_path", "history_db_path", "csv_dir", "accdb_path", "sqlite_path", "log_dir",
     "manual_path", "admin_password_hash", "line",

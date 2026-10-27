@@ -167,6 +167,41 @@ class ExportAllTests(SettingsCase):
         self.assertEqual(page.inner_text("#dist-export-all"), "4ツールの分もまとめて書き出す")
 
 
+    def test_前に入れていたラインと音声ファイルは残すと訊き_残したことを1行で出す(self) -> None:
+        """まとめて書き出したら、日報の設定画面で入れていた音声ファイルとラインが消えた
+        →「音声ファイルとラインは残して書き出す」。確かめの窓で「外れます」と言わず、結果に残したと出す。"""
+        from portal import distribution
+
+        real = distribution.summary
+
+        def summary():
+            out = real()
+            out["tools"] = [{**t, "exists": t["id"] == "nippou"} for t in out["tools"]]
+            return out
+
+        # 1行は本物の組み立て(各ツールの入口の答えの kept)で作る
+        nippou = distribution._outcome("nippou", "日報", distribution.Result(
+            True, "書き出しました", applied=["共有の日報管理のパス"], carried=["音声ファイル 2 個", "ライン(L-1)"]))
+        outcome = {"ok": True, "message": "書き出した 1", "results": [nippou]}
+        patches = [mock.patch.object(distribution, "summary", summary),
+                   mock.patch.object(distribution, "export_all", return_value=outcome)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        page = self.open_settings()
+        self.unlock_in_page(page)
+        page.click("#dist-export-all")
+        page.wait_for_function("document.querySelectorAll('#dist-all-results li').length === 1")
+        self.assertEqual(len(self.dialogs), 1)
+        self.assertIn("前に入れていたラインと日報の音声ファイルは、そのまま残します", self.dialogs[0])
+        self.assertNotIn("ライン・日報の音声ファイルなど", self.dialogs[0], "残すものを「外れます」と言っている")
+        self.assertEqual(page.inner_text("#dist-all-results li"),
+                         "日報: 書き出しました(1項目: 共有の日報管理のパス)。音声ファイル 2 個・ライン(L-1)はそのまま残しました")
+        steps = page.inner_text(".dist-steps")
+        self.assertIn("前に各ツールの設定画面で入れていたライン(値もそのまま)と日報の音声ファイルは、消さずに残します", steps)
+        self.assertNotIn("まとめて書き出すと、既定の選び方で書き直します", steps)
+
+
 class ToolDistributionListTests(SettingsCase):
     """大設定の「配布設定」に、4ツールの配布設定の**中身**が出る(配る前に確かめるため。読むだけ)。
 

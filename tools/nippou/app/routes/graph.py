@@ -176,9 +176,15 @@ def index():
     start = end.replace(day=1)
     report_date = format_business_date(end)
 
+    # 最初に描くタイルも、選ぶ欄で選び直したときと同じ所から(`line_view.repo_for`)
+    try:
+        with line_view.repo_for(ctx.line, ctx.line, get_repo()) as repo:
+            first = _dashboard(start, end, report_date, ctx.line, repo=repo).as_dict()
+    except line_view.NoBackup:
+        first = _dashboard(start, end, report_date, ctx.line).as_dict()
     return render_template(
         "graph.html",
-        dashboard=_dashboard(start, end, report_date, ctx.line).as_dict(),
+        dashboard=first,
         # 「表示」の隣のライン(Administrator の PC だけ)
         line_pick=line_view.choices(ctx.line).as_dict(),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)

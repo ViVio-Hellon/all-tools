@@ -157,5 +157,71 @@ class LineViewWebTests(WebTestCase):
         self.assertEqual(body["line"], "L-1")
 
 
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class NoLineAdministratorTests(WebTestCase):
+    """**ラインを持たない Administrator の PC**(アクセス権限の表で Administrator だけ)。
+
+    この端末のラインを決めていないので、「この端末のライン」は仮の L-1 です。前は選ぶ欄で
+    L-1 を選ぶと**手元の空の表**を出していました(HVC は控えから出るのに、L-1 だけ空)。
+    混在の通しの試験(`test_flow_mixed_launch`)の Administrator の PC で見つかったもの。
+    """
+
+    terminal_line = None
+    administrator = LineViewWebTests.administrator
+    backup_of = LineViewWebTests.backup_of
+
+    def setUp(self) -> None:
+        super().setUp()
+        from nippou import user_settings
+        self.share = self.tmp / "共有"
+        self.share.mkdir()
+        user_settings.save_many({config.KEY_ACCESS_DIR: str(self.share)})
+        lb.reset()
+        self.addCleanup(lb.reset)
+        # 手元に何かあっても(呼び出して直したページなど)、L-1 を選んだら控えから読む
+        save(self.repo(), line="L-1", lot="OWNLOT1")
+        self.administrator()
+        # L-1 の PC が2つの直を控えへ写した(手元の1直ぶんと、量で見分けられるように)
+        other = NippouRepository(connect(self.tmp / "L-1-pc.sqlite3"))
+        self.addCleanup(other.conn.close)
+        save(other, line="L-1", lot="L1LOT1")
+        save(other, line="L-1", lot="L1LOT2", shift="2直")
+        lb.flush(other, force=True)
+        self.backup_of("HVC", "HVCLOT1")
+
+    def test_L1も控えから読む_手元の行は混ぜない(self) -> None:
+        for line, lot, other in (("L-1", "L1LOT1", "HVCLOT1"), ("HVC", "HVCLOT1", "L1LOT1")):
+            with self.subTest(line=line):
+                body = self.post("/api/agg/tables", {**SPAN, "line": line}).get_json()
+                self.assertEqual(body["line"], line, body)
+                self.assertIn(lot, lots_of(body), f"{line} を選んだのに控えの行が出ない")
+                self.assertNotIn(other, lots_of(body))
+                self.assertNotIn("OWNLOT1", lots_of(body), "手元の行が混ざった")
+        hist = self.post("/api/graph/history", {**SPAN, "line": "L-1"}).get_json()
+        self.assertEqual((hist["line"], len(hist["labels"])), ("L-1", 1), hist)
+
+    def test_最初に描く表も同じ所から(self) -> None:
+        from datetime import date
+
+        from nippou import work_context
+        with patch.object(work_context.WorkContext, "business_date",
+                          lambda self, calc=None: date(2026, 10, 1)):
+            html = self.get("/agg").get_data(as_text=True)
+            self.assertIn("L1LOT2", html, "集計の最初の表が控えから描かれていない")
+            self.assertNotIn("OWNLOT1", html, "集計の最初の表が手元から描かれた")
+            # グラフの最初のタイル: 控えの2直ぶん(0.20t)。手元から描くと1直ぶん(0.10t)
+            html = self.get("/graph").get_data(as_text=True)
+            weight = html[html.index('data-tile="today_weight"'):]
+            weight = weight[weight.index("tile__value"):][:80]
+            self.assertIn("0.20", weight, weight)
+
+    def test_一般の端末はラインを決めていなくても控えを読まない(self) -> None:
+        from nippou.services import access_rights
+        with patch.object(access_rights, "is_administrator", return_value=False):
+            body = self.post("/api/agg/tables", {**SPAN, "line": "L-1"}).get_json()
+        self.assertNotIn("L1LOT1", lots_of(body))
+
+
 if __name__ == "__main__":
     unittest.main()

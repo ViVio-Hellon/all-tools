@@ -673,8 +673,13 @@ def _watch_for_idle(srv) -> None:
     件数の数え方も送り直しの頼み方も同期側が持っているので、
     見張りには渡すだけにする ── 基盤側が業務の事情を知らないでいられる。
     """
-    from calendar_app import idle_exit, sync_service
+    from calendar_app import awake_clock, idle_exit, sync_service
 
+    # **スリープしていた時間を「心拍が無い」に数えない時計**を先に立てる。
+    # 見張りも画面の錠(``screen_lock``)もこの時計で時刻を持つ ── 立てないと
+    # ただの monotonic で、Windows では蓋を開けた瞬間に「閉じた合図から
+    # 8秒すぎた」「粘りの上限をすぎた」と読んで終わる(``awake_clock``)
+    awake_clock.start()
     idle_exit.install(srv.stop, sync_service.get_service().is_busy,
                       sync_service.unsent_count,
                       sync_service.request_send,

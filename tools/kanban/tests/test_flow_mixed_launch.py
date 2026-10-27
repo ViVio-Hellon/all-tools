@@ -84,10 +84,11 @@ ON = config.MARK_ON
 ADMIN_PASSWORD = "mix-admin"
 #: 子が立ち上がるのを待つ上限(秒)。Windows の CI は遅い
 BOOT_SEC = 120.0
-#: 状態を待つ上限(秒)
-WAIT_SEC = 60.0
+#: 状態を待つ上限(秒)。Windows の CI では、PC 3台ぶんのプロセスとブラウザが重なって60秒で
+#: 間に合わないことがあった(状態を待つので、そろえばすぐ進む)
+WAIT_SEC = 120.0
 #: 画面の状態を待つ上限(ミリ秒。取り込みの周期 + 画面の読み直しの周期より十分長く)
-SCREEN_MS = 60_000
+SCREEN_MS = 120_000
 
 #: 子の頭。台ごとの PC 名(``socket.gethostname``)・pythonw(標準出力・標準エラーが無い)・
 #: ブラウザを開いた宛先の書き留め。そのあと本物の入口(``bridge.py`` / ``start_app.py``)を
@@ -773,14 +774,21 @@ class ScreenCase(MixedCase):
         super().tearDownClass()
 
     def screen(self, term: Terminal):
-        """その端末の画面を 1 枚開く(PC ごとに別のブラウザ = 別の文脈)。確かめの窓は「はい」で閉じる。"""
+        """その端末の画面を 1 枚開く(PC ごとに別のブラウザ = 別の文脈)。確かめの窓は「はい」で閉じる。
+
+        確かめの窓は画面の中に出る(``js/dialog.js``)。**開く前に**答える用意をする。
+        ブラウザ標準の窓が出たら誤りにする(出しているあいだ心拍が止まる)
+        """
+        from tests._dialogs import answer_dialogs, native_guard
+
         ctx = self.browser.new_context(viewport={"width": 1400, "height": 900})
         self.addCleanup(ctx.close)
         ctx.set_default_timeout(SCREEN_MS)
+        answer_dialogs(ctx, lambda text: (self.dialogs.append(text), True)[1])
         errors: list[str] = []
+        ctx.on("page", lambda p: native_guard(p, errors))
         page = term.open_page(ctx)
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("dialog", lambda d: (self.dialogs.append(d.message), d.accept()))
         self.addCleanup(lambda: self.assertEqual(errors, [], f"{term.name} の画面の誤り"))
         return page
 

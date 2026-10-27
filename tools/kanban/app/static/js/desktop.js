@@ -11,6 +11,8 @@
 //
 // どちらで動いているかは `window.__TAURI__` があるかで分かる。
 
+import { tell } from './dialog.js';
+
 const tauri = window.__TAURI__;
 
 /** デスクトップ版で動いているか。 */
@@ -113,7 +115,9 @@ function watchDownloads() {
 
 /** 画面のお知らせ(toast.js)を、読み込みの順番に縛られずに出す */
 function notify(kind, message) {
-  import('./toast.js').then((t) => (t[kind] || t.ok)(message)).catch(() => alert(message));
+  // 知らせを読み込めなかったときは、画面の中の窓で言う(ブラウザ標準の alert は
+  // 出しているあいだ心拍が止まり、サーバが終わってしまう。dialog.js)
+  import('./toast.js').then((t) => (t[kind] || t.ok)(message)).catch(() => tell(message));
 }
 
 // ------------------------------------------------------------------

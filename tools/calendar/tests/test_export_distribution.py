@@ -3,6 +3,7 @@
 日報複合ツールの大設定の「4ツールの分もまとめて書き出す」が、このフォルダで子として起こす。
 
 - 設定画面の既定の選び方のまま書き出す(ラインは入れない)
+- ただし**前に設定画面で入れていたラインは残す**(値も前のまま)。前に入れていなければ入れない
 - パスワードは聞かない(呼ぶ側の大設定が確かめる。``distribution.export(admin=True)``)
 - 答えは標準出力に JSON 1行。書き出せる設定が無いときは ok=false・reason="nothing"(失敗と分ける)
 """
@@ -65,6 +66,46 @@ class ExportEntryTests(unittest.TestCase):
         self.assertEqual(settings[user_settings.KEY_DATA_DB_DIR], r"\\srv\カレンダー")
         self.assertIn(admin_password.KEY, settings)
         self.assertNotIn(user_settings.KEY_MY_LINE, settings, "ラインは既定で外す(画面と同じ)")
+
+    def screen_export(self, items: list[str]) -> None:
+        """設定画面の「配布設定を書き出す」で項目を選んで書き出したのと同じ(この端末・この配布設定)。"""
+        code = ("import json, sys; from calendar_app import distribution as d; "
+                "r = d.export('', json.loads(sys.argv[1]), admin=True); sys.exit(0 if r.ok else r.message)")
+        subprocess.run([sys.executable, "-c", code, json.dumps(items)], cwd=_ROOT, env=self.env,
+                       check=True, capture_output=True, timeout=60)
+
+    def test_前に入れていたラインは値もそのまま残す(self) -> None:
+        """大設定の「まとめて書き出す」で、設定画面で入れていたラインが消えた(既定の選び方で丸ごと書き直していた)。"""
+        self.configure(**{user_settings.KEY_DATA_DB_DIR: r"\\srv\カレンダー", user_settings.KEY_MY_LINE: "L-1"})
+        default = [k for k, _, d in distribution.ITEMS if d]
+        self.screen_export(default + [user_settings.KEY_MY_LINE])
+        # そのあと、この端末(配る元)のラインと置き場所を変えた。残すのは**前に入れていた値**
+        self.configure(**{user_settings.KEY_DATA_DB_DIR: r"\\srv\カレンダー2", user_settings.KEY_MY_LINE: "L-9"})
+        reply = self.run_entry()
+        self.assertTrue(reply["ok"], reply)
+        data = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(data["settings"][user_settings.KEY_DATA_DB_DIR], r"\\srv\カレンダー2", "ほかはいまの値")
+        self.assertEqual(data["settings"][user_settings.KEY_MY_LINE], "L-1", "前に入れていたラインは値もそのまま")
+        self.assertIn(user_settings.KEY_MY_LINE, data["labels"])
+        self.assertEqual(reply["kept"], ["ライン(L-1)"])
+        self.assertIn("そのまま残しました", reply["message"])
+
+    def test_前に入れていなければラインは入れない(self) -> None:
+        self.configure(**{user_settings.KEY_DATA_DB_DIR: r"\\srv\カレンダー", user_settings.KEY_MY_LINE: "L-1"})
+        self.screen_export([k for k, _, d in distribution.ITEMS if d])
+        reply = self.run_entry()
+        self.assertTrue(reply["ok"], reply)
+        settings = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))["settings"]
+        self.assertNotIn(user_settings.KEY_MY_LINE, settings)
+        self.assertEqual(reply["kept"], [])
+
+    def test_設定画面から書き出すと選んだとおり_ラインを外せる(self) -> None:
+        self.configure(**{user_settings.KEY_DATA_DB_DIR: r"\\srv\カレンダー", user_settings.KEY_MY_LINE: "L-1"})
+        default = [k for k, _, d in distribution.ITEMS if d]
+        self.screen_export(default + [user_settings.KEY_MY_LINE])
+        self.screen_export(default)
+        settings = json.loads((self.folder / distribution.SETTINGS_NAME).read_text(encoding="utf-8"))["settings"]
+        self.assertNotIn(user_settings.KEY_MY_LINE, settings)
 
     def test_設定画面からはパスワードが要るまま(self) -> None:
         result = distribution.export("", [user_settings.KEY_DATA_DB_DIR])

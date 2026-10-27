@@ -36,6 +36,9 @@ except Exception as exc:  # pragma: no cover
 
 HAS_FLASK = not _FLASK_ERROR
 
+#: 試験の中で既定の管理者パスワードにする値(``RouteTestBase``)。本物の既定の値ではない
+TEST_ADMIN_PASSWORD = "秘密"
+
 
 def sample_rows() -> list[dict[str, str]]:
     data = [
@@ -218,6 +221,12 @@ class RouteTestBase(StoreFixture):
         # 鍵はプロセスに 1 つ。前の試験で開けた鍵を持ち越さない
         admin_lock.reset()
         self.addCleanup(admin_lock.reset)
+        # 決めていない端末で通る既定の管理者パスワードを、試験では「秘密」にする
+        # (環境変数で上書きできる。ほかのツールと同じ持ち方。本物の既定の値で開く
+        # ことは ``test_admin_password_default`` が確かめる)
+        env = mock.patch.dict(os.environ, {config.ADMIN_PASSWORD_ENV: TEST_ADMIN_PASSWORD})
+        env.start()
+        self.addCleanup(env.stop)
         self.app = create_app(
             self.MODE, token="test-token", port=8741, store=self.store, line=self.LINE
         )
@@ -558,17 +567,19 @@ class SettingsTest(RouteTestBase):
         self.assertEqual(res.json["running_mode"], config.MODE_SITE)
         self.assertIn("次にアプリを開いたとき", res.json["message"])
 
-    def test_password_setup_requires_matching_confirmation(self):
-        res = self.post(
-            "/api/line",
-            {"line": "LS", "password": "あ", "password_confirm": "い"},
-        )
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json["error"]["code"], "password_mismatch")
+    def test_the_first_password_is_not_registered(self):
+        """**決めていない端末で、最初に入れた値を登録しない**(既定の値で開く)。
 
-    def test_first_password_is_registered_then_required(self):
-        """未設定の端末では最初の1回だけ登録する(tkinter 版と同じ流れ)。"""
-        res = self.post("/api/line", {"line": "LS", "password": "秘密", "password_confirm": "秘密"})
+        以前は tkinter 版と同じく、最初の 1 回に入れた値(と確認)でその場で決めていた。
+        """
+        res = self.post("/api/line", {"line": "LS", "password": "あ", "password_confirm": "あ"})
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json["error"]["code"], "bad_password")
+        self.assertFalse(config.load_config(self.dir / "config.json").admin_password_hash)
+
+    def test_the_default_password_opens_then_is_asked_again(self):
+        """決めていない端末は既定の値で開く(試験では「秘密」。``RouteTestBase``)。"""
+        res = self.post("/api/line", {"line": "LS", "password": "秘密"})
         self.assertEqual(res.status_code, 200)
         from kanban import admin_lock
 
@@ -766,10 +777,9 @@ class UnlockRouteTest(RouteTestBase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.post("/api/admin/password", {"new_password": "秘密", "new_password_confirm": "秘密"})
         from kanban import admin_lock
 
-        admin_lock.get().lock()   # 設定したときに開いた鍵を閉めてから始める
+        admin_lock.get().lock()   # 閉めてから始める(決めていない端末は既定の値「秘密」で開く)
 
     def state(self):
         return self.get("/api/admin/state").json
@@ -806,13 +816,17 @@ class UnlockRouteTest(RouteTestBase):
         res = self.post("/api/admin/password", {"new_password": "x", "new_password_confirm": "x"})
         self.assertEqual(res.status_code, 401)
 
-    def test_unlocking_is_refused_before_a_password_is_set(self):
-        import os
+    def test_an_unset_terminal_is_not_taken_by_the_first_password(self):
+        """**決めていない端末で、最初に入れた値がパスワードにならない**(既定の値で開く)。
 
-        os.remove(self.dir / "config.json")
+        以前は既定の値が無く、最初に鍵を開けようとした人がその場で決められた。
+        """
         res = self.post("/api/admin/unlock", {"password": "なんでも"})
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json["error"]["code"], "need_password_setup")
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json["error"]["code"], "bad_password")
+        self.assertFalse(config.load_config(self.dir / "config.json").admin_password_hash,
+                         "最初に入れた値で決まった")
+        self.assertEqual(self.post("/api/admin/unlock", {"password": "秘密"}).status_code, 200)
 
     # 設定画面「パスワード認証」で開けて帯で閉めることは、**本物のブラウザで打って確かめます**
     # (`test_settings_auth_browser.UnlockTest`。守りを外すと落ちる)。
@@ -822,8 +836,8 @@ class AdminPasswordTest(RouteTestBase):
     """**パスワードだけを入れる場所。**
 
     以前は操作のときに出る確認画面しか無く、1 度決めたパスワードを変える
-    手段が無かった。未設定の端末では「最初に保護された操作をした人」が
-    決めるしかなかった。
+    手段が無かった。**いまは決めていない端末も既定の値で開き、変えるときは
+    いつも今のパスワードを訊く**(日報・カレンダー・点検表と同じ)。
     """
 
     def change(self, new, confirm=None, current=None):
@@ -835,15 +849,19 @@ class AdminPasswordTest(RouteTestBase):
     def hash(self):
         return config.load_config(self.dir / "config.json").admin_password_hash
 
-    def test_it_can_be_set_when_there_is_none(self):
-        self.assertFalse(self.get("/api/settings").json["has_admin_password"])
-        res = self.change("はじめて")
+    def test_an_unset_terminal_changes_from_the_default(self):
+        self.assertFalse(self.get("/api/settings").json["admin_password_custom"])
+        self.assertEqual(self.change("はじめて").status_code, 401, "今のパスワード(既定)無しで決められた")
+        self.assertFalse(self.hash())
+        res = self.change("はじめて", current="秘密")
         self.assertEqual(res.status_code, 200, res.json)
         self.assertTrue(config.verify_password("はじめて", self.hash()))
-        self.assertTrue(self.get("/api/settings").json["has_admin_password"])
+        self.assertTrue(self.get("/api/settings").json["admin_password_custom"])
+        # 変えたあとは既定の値では開かない
+        self.assertEqual(self.post("/api/admin/verify", {"password": "秘密"}).status_code, 401)
 
     def test_changing_needs_the_current_password(self):
-        self.change("もと")
+        self.change("もと", current="秘密")
         res = self.change("あたらしい", current="ちがう")
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.json["error"]["field"], "current_password")
@@ -855,26 +873,25 @@ class AdminPasswordTest(RouteTestBase):
         self.assertFalse(config.verify_password("もと", self.hash()))
 
     def test_changing_without_a_current_password_is_refused(self):
-        self.change("もと")
+        self.change("もと", current="秘密")
         self.assertEqual(self.change("あたらしい").status_code, 401)
 
     def test_empty_or_mismatched_is_refused(self):
-        self.assertEqual(self.change("").status_code, 400)
-        res = self.change("あ", confirm="い")
+        self.assertEqual(self.change("", current="秘密").status_code, 400)
+        res = self.change("あ", confirm="い", current="秘密")
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json["error"]["field"], "new_password_confirm")
         self.assertFalse(self.hash(), "断ったのに設定された")
 
     def test_the_new_password_opens_protected_operations(self):
         """変えたあとは、確認画面でも新しいパスワードが通ること。"""
-        self.change("もと")
+        self.change("もと", current="秘密")
         self.change("あたらしい", current="もと")
         self.assertEqual(self.post("/api/admin/verify", {"password": "あたらしい"}).status_code, 200)
         self.assertEqual(self.post("/api/admin/verify", {"password": "もと"}).status_code, 401)
 
-    # **未設定なら、その場で決められること**(以前は別の欄へ回していて、何をすればよいのか
-    # 分からなかった)と、「パスワード認証」の面でパスワードを変えられることは、**本物のブラウザで
-    # 打って確かめます**(`test_settings_auth_browser.SetupHereTest` / `UnlockTest`。守りを外すと落ちる)。
+    # 「パスワード認証」の面でパスワードを変えられること・決めさせる欄が無いことは、
+    # **本物のブラウザで打って確かめます**(`test_settings_auth_browser`)。
 
 
 class SettingsAdminRouteTest(RouteTestBase):
@@ -891,7 +908,7 @@ class SettingsAdminRouteTest(RouteTestBase):
         """この PC のフォルダ構成を返す口。**マスタの読み取り以外は守る。**"""
         res = self.post("/api/fs/list", {"path": ""})
         self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json["error"]["code"], "need_password_setup")
+        self.assertEqual(res.json["error"]["code"], "locked")
 
     def test_fs_list_returns_roots_with_the_password(self):
         data = self.post(
@@ -919,7 +936,7 @@ class SettingsAdminRouteTest(RouteTestBase):
         res = self.post(
             "/api/master/update",
             {"table": "看板_LVC", "key": 1, "column": "資材", "value": "x",
-             "password": "p", "password_confirm": "p"},
+             "password": "秘密"},
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json["error"]["code"], "no_path")
@@ -931,7 +948,7 @@ class SettingsAdminRouteTest(RouteTestBase):
             {"table": "看板_LVC", "key": 1, "column": "資材", "value": "x"},
         )
         self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json["error"]["code"], "need_password_setup")
+        self.assertEqual(res.json["error"]["code"], "locked")
 
     def test_master_update_rejects_missing_target(self):
         res = self.post("/api/master/update", {"table": "", "column": ""})
@@ -943,12 +960,12 @@ class SettingsAdminRouteTest(RouteTestBase):
             "/api/master/insert", {"table": "看板_LVC", "values": {"管理番号": "9"}}
         )
         self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json["error"]["code"], "need_password_setup")
+        self.assertEqual(res.json["error"]["code"], "locked")
 
     def test_master_delete_needs_the_admin_password(self):
         res = self.post("/api/master/delete", {"table": "看板_LVC", "row_key": 1})
         self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json["error"]["code"], "need_password_setup")
+        self.assertEqual(res.json["error"]["code"], "locked")
 
     def test_master_insert_rejects_missing_target(self):
         self.assertEqual(

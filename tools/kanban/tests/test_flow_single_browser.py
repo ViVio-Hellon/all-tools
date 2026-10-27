@@ -313,21 +313,10 @@ class FlowCase(KanbanBrowserCase):
             return
         self.console.append(f"{m.text} @ {url}")
 
-    #: 確かめの窓(confirm)に「はい」と答えるか。False なら「キャンセル」
-    accept_dialogs = True
-
     def watch(self, page):
-        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        # 確かめの窓への答え(``accept_dialogs``)と、標準の窓が出たら落とすのは土台が持つ
+        super().watch(page)
         page.on("console", self._on_console)
-
-        def answer(dialog) -> None:
-            self.dialogs.append(dialog.message)
-            if self.accept_dialogs:
-                dialog.accept()
-            else:
-                dialog.dismiss()
-
-        page.on("dialog", answer)
         return page
 
     def assert_quiet(self) -> None:
@@ -434,10 +423,11 @@ class FirstRunFlowTest(FlowCase):
             page.wait_for_function("(document.getElementById('trace-from') || {}).value")
             self.assertTrue(page.url.split("?")[0].endswith("/settings"), page.url)
 
-        with self.subTest("設定: パスワードが未設定なことを帯で言う"):
-            self.assertIn("未設定", self.text(page, "#lockbar-text"))
+        with self.subTest("設定: まっさらでも「未設定」とは言わない(既定のパスワードで開く)"):
+            self.assertIn("未認証", self.text(page, "#lockbar-text"))
+            self.assertNotIn("未設定", self.text(page, "#lockbar-text"))
 
-        with self.subTest("接続先: まだ決めていない → 欄に入れて変更 → パスワードをその場で決める"):
+        with self.subTest("接続先: まだ決めていない → 欄に入れて変更 → 既定のパスワードで通る"):
             page.click("#tab-source")
             page.wait_for_function(
                 "document.getElementById('source-now-state').textContent.indexOf('確かめています') < 0")
@@ -448,13 +438,14 @@ class FirstRunFlowTest(FlowCase):
             self.mark(page)
             page.click("#save-accdb")
             page.wait_for_selector("#pw:not([hidden])")
-            self.assertTrue(self.visible(page, "#pw-confirm"), "未設定なのに確認欄が無い")
+            self.assertEqual(page.locator("#pw input[type=password]").count(), 1,
+                             "決めさせる確認の欄が残っている")
             self.answer_password(page, PASSWORD)
             page.wait_for_function(
                 "document.getElementById('source-result').textContent.includes('接続先を変えました')")
             self.assertIn("取り込みました", self.text(page, "#source-result"))
             self.assertEqual(self.cfg().shared_db_path, str(self.shared))
-            self.assertTrue(config.verify_password(PASSWORD, self.cfg().admin_password_hash))
+            self.assertEqual(self.cfg().admin_password_hash, "", "入れた値でパスワードが決まった")
             self.wait_reloaded(page)
             # 読み直したあとも結果が残り、いまの接続先として出る
             self.assertIn("接続先を変えました", self.text(page, "#source-result"))
@@ -507,10 +498,10 @@ class FirstRunFlowTest(FlowCase):
 
     def test_接続先は参照で辿って選べる(self) -> None:
         page = self.open_settings("source")
-        with self.subTest("参照...: パスワードが未設定ならその場で決めて、この PC のフォルダを一覧する"):
+        with self.subTest("参照...: 決めていない端末は既定のパスワードで通り、この PC のフォルダを一覧する"):
             page.click("#browse")
             page.wait_for_selector("#pw:not([hidden])")
-            self.assertIn("ここで新しく設定します", self.text(page, "#pw-note"))
+            self.assertNotIn("新しく設定", self.text(page, "#pw-note"), "その場で決めさせている")
             self.answer_password(page, PASSWORD)
             page.wait_for_selector("#fs:not([hidden])")
             page.fill("#fs-path", str(self.shared_dir))
@@ -522,14 +513,14 @@ class FirstRunFlowTest(FlowCase):
             self.assertEqual(page.input_value("#accdb"), str(self.shared))
             self.assertIn("まだ切り替わっていません", self.text(page, "#source-edit"))
             self.assertEqual(self.cfg().shared_db_path, "", "選んだだけで保存した")
-        with self.subTest("変更: 決めたばかりのパスワードで通る"):
+        with self.subTest("変更: 同じ既定のパスワードで通る"):
             self.mark(page)
             self.guarded(page, "#save-accdb", "/api/shared-db-path")
             page.wait_for_function(
                 "document.getElementById('source-result').textContent.includes('接続先を変えました')")
             self.wait_reloaded(page)
             self.assertEqual(self.cfg().shared_db_path, str(self.shared))
-            self.assertTrue(config.verify_password(PASSWORD, self.cfg().admin_password_hash))
+            self.assertTrue(config.verify_admin_password(PASSWORD, self.cfg().admin_password_hash))
         self.assert_quiet()
 
 
@@ -594,7 +585,7 @@ class SiteFlowTest(FlowCase):
             self.assertFalse(page.locator("#batch-reset").is_disabled(), "届いた看板があるのに一括確認を押せない")
             self.assertEqual(self.text(page, "#c-reset"), "1")
 
-            self.accept_dialogs = False      # 「キャンセル」なら何も変えない
+            self.accept_dialogs = False      # 「やめる」なら何も変えない
             self.cell(page, 2, "size").click()
             self.wait_until(page, lambda: any("届いていますか" in d for d in self.dialogs), "届いたかを訊いた状態")
             page.wait_for_timeout(300)

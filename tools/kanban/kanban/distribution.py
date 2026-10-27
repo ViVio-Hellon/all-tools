@@ -7,8 +7,10 @@ python-web-tools(梱包資材総合ツール)の ``packaging_tool/distribution.p
 設定(接続先・取り込み/書き戻し間隔・自動印刷・管理者パスワード)は端末ごとの
 ``%APPDATA%\\KanbanSystem\\config.json`` に入ります。配った先で 1 台ずつ設定画面を開いて打ち直すのは
 手間で、打ち間違えると**別のファイルを読み書きする**端末ができてしまいます
-(接続先は取り込みと書き戻しの相手そのもの)。しかも管理者パスワードが空の
-まま配ると、**最初に押した人がパスワードを決められます。**
+(接続先は取り込みと書き戻しの相手そのもの)。管理者パスワードを入れずに配ると、
+配った先は**既定の値**(日報・カレンダー・点検表と同じ)で開きます ── 既定の値は
+ほかのツールの README に書いてあるので、配るなら 1 台で変えてから書き出すのがふつう。
+読む順は「その端末で決めた値・配布設定の値 → 既定の値」(``config.verify_admin_password``)。
 
 【流れ】
     1. 1 台で起動して設定し、設定画面の「配布設定」で書き出す
@@ -96,6 +98,11 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
 )
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
 ITEM_LABELS = {key: label for key, label, _ in ITEMS}
+#: 大設定の「4ツールの分もまとめて書き出す」で、**前に入れていれば値のまま残す**項目
+#: (既定では入らないが、設定画面で選んで入れていたもの ── :func:`export` の ``keep_previous``)
+KEEP_ON_COMBINED: tuple[str, ...] = ("line", "csv_dir", "log_dir")
+#: 残したときの結果の一言の名前
+CARRIED_NAMES = {"line": "担当ライン", "csv_dir": "CSV の書き出し先", "log_dir": "記録(ログ)の置き場所"}
 
 #: 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
 #: 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
@@ -152,6 +159,9 @@ class Result:
     """すでにあったので読まなかったもの。"""
     checks: list[dict[str, Any]] = field(default_factory=list)
     """書き出した直後の確認(配った先と同じ読み方で読み戻す)。"""
+    carried: list[str] = field(default_factory=list)
+    """書き出すとき、前の配布設定から**そのまま残したもの**(「担当ライン(L-1)」。
+    大設定の「まとめて書き出す」= ``keep_previous``)。"""
 
 
 # ------------------------------------------------------------------
@@ -347,7 +357,8 @@ def summary() -> dict[str, Any]:
                 "here": _show(key, here[key]) if key in here else "",
                 "builtin": (
                     "" if key in here
-                    else "未設定" if key in ("admin_password_hash", "line")
+                    else "既定の値" if key == "admin_password_hash"
+                    else "未設定" if key == "line"
                     else _show(key, builtin.resolved_shared_db_path()
                                if key == "shared_db_path"
                                else "共有DBと同じフォルダ" if key in ("access_db_path", "history_db_path")
@@ -384,13 +395,20 @@ def _applied_at() -> str:
 # ------------------------------------------------------------------
 # 書き出す(配る側)
 # ------------------------------------------------------------------
-def export(items: list[str]) -> Result:
+def export(items: list[str], *, keep_previous: bool = False) -> Result:
     """**この端末のいまの設定**を ``配布設定\\`` に書き出す(前の中身は置き換える)。
 
     この端末で一度も変えていない項目は入れない ── 配った先も同じ既定で動くので
     要らない(空で上書きしないためにも入れない)。
 
     管理者パスワードは呼ぶ側(設定画面の経路)が確かめる。
+
+    ``keep_previous`` は大設定の「4ツールの分もまとめて書き出す」(``export_distribution.py``)。
+    項目は既定の選び方のまま書き直すが、**前に設定画面で入れていた担当ライン・CSV の書き出し先・
+    記録(ログ)の置き場所**(:data:`KEEP_ON_COMBINED`。「CSVの書き出し先と記録の置き場所も残してください」)は、前の 設定.json の値のまま残す(この端末のいまの値ではない)。
+    前に入れていなければ入れない。設定画面から書き出すとき(``False``)は選んだとおり(外せば消える)::
+
+        まとめて書き出したら、設定画面で入れていたラインが消えた →「ラインは残して書き出す」
     """
     unknown = [k for k in items if k not in ITEM_KEYS]
     if unknown:
@@ -401,6 +419,13 @@ def export(items: list[str]) -> Result:
     here = terminal_values()
     settings = {k: here[k] for k in items if k in here}
     defaults = [ITEM_LABELS[k] for k in items if k not in here]
+    carried: list[str] = []
+    if keep_previous:
+        before = _read_folder(directory())
+        for key in KEEP_ON_COMBINED:
+            if key not in items and before is not None and key in before.settings:
+                settings[key] = before.settings[key]
+                carried.append(f"{CARRIED_NAMES.get(key, ITEM_LABELS[key])}({before.settings[key]})")
     if not settings:
         return Result(
             False,
@@ -449,14 +474,16 @@ def export(items: list[str]) -> Result:
 
     message = (
         f"配布設定を書き出しました({len(names)} 項目)。"
+        + (f"前に入れていた{'・'.join(carried)}はそのまま残しました。" if carried else "")
         + (integrated_where(folder)
            or f"アプリのフォルダの直下の「{folder.name}」フォルダに入っています({folder})。")
     )
     if defaults:
         message += (" 既定のままなので入れていないもの(配った先も既定で動きます): "
                     + "・".join(defaults) + "。")
-    log.info("配布設定を書き出しました: %s", ", ".join(names))
-    return Result(True, message, applied=names, checks=checks)
+    log.info("配布設定を書き出しました: %s%s", ", ".join(names),
+             f"(そのまま残したもの: {'・'.join(carried)})" if carried else "")
+    return Result(True, message, applied=names, checks=checks, carried=carried)
 
 
 def verify(expected: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -487,7 +514,7 @@ def verify(expected: dict[str, Any] | None = None) -> list[dict[str, Any]]:
             f"違う: {'・'.join(wrong)}" if wrong else "・".join(ITEM_LABELS[k] for k in expected))
     add("管理者パスワードが入っている", "admin_password_hash" in bundle.settings,
         "" if "admin_password_hash" in bundle.settings
-        else "入れずに配ると、配った先では最初に押した人がパスワードを決められます")
+        else "入れずに配ると、配った先は既定のパスワード(日報・カレンダー・点検表と同じ値)のままです")
     add(f"{README_NAME} がある", (folder / README_NAME).is_file())
     return checks
 

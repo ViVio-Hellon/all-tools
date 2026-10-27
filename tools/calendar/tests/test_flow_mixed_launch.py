@@ -104,6 +104,19 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def _rename_when_free(src: Path, dst: Path, timeout: float = 30.0) -> bool:
+    """フォルダの名前を変える。Windows で中のファイルがまだつかまれていれば、放されるまで繰り返す。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            src.rename(dst)
+            return True
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
 def wait_for(ok: Callable[[], Any], what: str, timeout: float = WAIT) -> Any:
     """``ok()`` が真になるまで待つ(状態を待つ。時間で決め打ちしない)。"""
     deadline = time.monotonic() + timeout
@@ -961,12 +974,21 @@ class SamePcSwitchTests(_MixedCase):
         self.pc = Pc(self.base, "X", line="L-1", shared=self.shared)
         self.hidden = self.shared.with_name("共有_見えない")
 
-    def share_down(self) -> None:
-        self.shared.rename(self.hidden)
-        self.addCleanup(lambda: self.hidden.exists() and self.hidden.rename(self.shared))
+    def share_down(self, run=None) -> None:
+        """共有フォルダが見えなくなる(フォルダの名前を変えてまねる)。
+
+        **裏の同期が終わって共有のファイルを放してから**名前を変えます(`test_flow_multi_terminal` の
+        `OfflineTests.down` と同じ)。Windows では、開いているファイルのあるフォルダは名前を変えられず
+        「アクセスが拒否されました」になります(Windows の CI で実際に落ちた)。放した直後でも一瞬
+        つかまれていることがあるので、しばらく繰り返します。
+        """
+        if run is not None:
+            wait_for(lambda: not run.get("/api/sync").get("busy"), f"{run.edition} の同期が止まる")
+        _rename_when_free(self.shared, self.hidden)
+        self.addCleanup(lambda: self.hidden.exists() and _rename_when_free(self.hidden, self.shared))
 
     def share_up(self) -> None:
-        self.hidden.rename(self.shared)
+        _rename_when_free(self.hidden, self.shared)
 
     def register_offline(self, run, day: _dt.date, code: str) -> None:
         screen = uuid.uuid4().hex
@@ -1000,7 +1022,7 @@ class SamePcSwitchTests(_MixedCase):
         day = future_workday(7)
         exe = self.pc.exe(self)
         wait_members(exe)
-        self.share_down()
+        self.share_down(exe)
         self.register_offline(exe, day, "102")
         exe.stop()                                   # 窓を閉じた(送れずに 1 件残る)
         self.share_up()
@@ -1013,7 +1035,7 @@ class SamePcSwitchTests(_MixedCase):
         vbs = self.pc.vbs(self)
         vbs.wait_ready()
         wait_members(vbs)
-        self.share_down()
+        self.share_down(vbs)
         self.register_offline(vbs, day, "103")
         # 画面の「終了」(stop.bat も同じ道)
         status, body = vbs.call("POST", "/api/shutdown", {"force": False})

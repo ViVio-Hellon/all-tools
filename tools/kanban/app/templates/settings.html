@@ -60,11 +60,9 @@
   認証の状態。**どの面を開いていても見えるように**タブの下に置く。
   認証済みのあいだは、守られた操作でパスワードを訊かない(kanban/admin_lock.py)
 #}
-<div class="lockbar{{ ' is-open' if state.admin_unlocked else '' }}{{ ' is-unset' if not state.has_admin_password else '' }}" id="lockbar">
+<div class="lockbar{{ ' is-open' if state.admin_unlocked else '' }}" id="lockbar">
   <span id="lockbar-text">
-    {%- if not state.has_admin_password -%}
-      管理者パスワードが未設定です ── 「パスワード認証」で決めてください
-    {%- elif state.admin_unlocked -%}
+    {%- if state.admin_unlocked -%}
       認証済み ── 設定を変えるときにパスワードを訊きません
     {%- else -%}
       未認証 ── 設定を変えるときにパスワードを訊きます
@@ -942,36 +940,16 @@
   ときに出る確認画面しか無く、「先にまとめて開けておく」ことができなかった
   (python-web-tools の「マスタ編集の認証」と同じ形)。
 #}
-{% set has_pw = state.has_admin_password %}
 <div class="panel" id="panel-auth" role="tabpanel" aria-labelledby="tab-auth" hidden>
 <section class="card" id="auth-card">
   <h2>パスワード認証
     <span class="dist-state{{ ' is-ok' if state.admin_unlocked else '' }}" id="auth-state">
-      {{- '未設定' if not has_pw else '認証済み' if state.admin_unlocked else '未認証' -}}
+      {{- '認証済み' if state.admin_unlocked else '未認証' -}}
     </span>
   </h2>
 
-  {# 未設定: ここで決める(決めたらそのまま認証済みになる) #}
-  <form id="setup-form" autocomplete="off"{% if has_pw %} hidden{% endif %}>
-    <p class="card__note">
-      管理者パスワードがまだありません。<b>ここで決めてください</b>
-      (決めるまでは、最初に設定を変えようとした人が決めることになります)。
-    </p>
-    <div class="rowline">
-      <div class="field">
-        <label for="setup-pw">新しいパスワード</label>
-        <input id="setup-pw" name="new_password" type="password" autocomplete="new-password">
-      </div>
-      <div class="field">
-        <label for="setup-pw-confirm">新しいパスワード(確認)</label>
-        <input id="setup-pw-confirm" name="new_password_confirm" type="password" autocomplete="new-password">
-      </div>
-      <button class="btn btn--primary" type="submit" id="setup-save">決める</button>
-    </div>
-  </form>
-
   {# 未認証: パスワードを入れて認証する #}
-  <form id="unlock-form" autocomplete="off"{% if not has_pw or state.admin_unlocked %} hidden{% endif %}>
+  <form id="unlock-form" autocomplete="off"{% if state.admin_unlocked %} hidden{% endif %}>
     <div class="rowline">
       <div class="field">
         <label for="unlock-pw">管理者パスワード</label>
@@ -982,7 +960,7 @@
   </form>
 
   {# 認証済み #}
-  <div id="auth-ok"{% if not (has_pw and state.admin_unlocked) %} hidden{% endif %}>
+  <div id="auth-ok"{% if not state.admin_unlocked %} hidden{% endif %}>
     <p class="card__note" id="unlock-status">
       認証済みです。設定を変えるときにパスワードを訊きません
       (あと {{ (state.admin_unlock_remaining_sec // 60) + 1 }} 分ほど。操作するたびに延びます)。
@@ -996,11 +974,19 @@
   </small></p>
 </section>
 
-<section class="card" id="password-card"{% if not has_pw %} hidden{% endif %}>
+<section class="card" id="password-card">
   <h2>管理者パスワードを変える</h2>
   <p class="card__note">
     認証済みでも、変えるときは今のパスワードを訊きます。配った先も同じパスワードに
     したいときは、変えたあとで「配布設定」を書き出し直してください。
+  </p>
+  {# 決めていない端末は既定の値(日報・カレンダー・点検表と同じ)で開く。値そのものは出さない #}
+  <p class="card__note" id="password-source">
+    {%- if state.admin_password_custom -%}
+      この端末のパスワードは、この端末で変えた値か、配布設定から来た値です。
+    {%- else -%}
+      この端末はまだ既定のパスワードのままです(日報・カレンダー・点検表と同じ値)。
+    {%- endif -%}
   </p>
   <form id="password-form" autocomplete="off">
     <div class="rowline">
@@ -1115,10 +1101,6 @@
     <div class="field">
       <label for="pw-input">パスワード</label>
       <input type="password" id="pw-input" autocomplete="current-password">
-    </div>
-    <div class="field" id="pw-confirm-field" hidden>
-      <label for="pw-confirm">パスワード(確認)</label>
-      <input type="password" id="pw-confirm" autocomplete="new-password">
     </div>
     <div class="banner banner--bad" id="pw-error" hidden></div>
     <div class="modal__actions">

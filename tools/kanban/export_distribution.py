@@ -8,9 +8,11 @@
 
 書き出すのは、設定画面の「配布設定を書き出す」を**画面の既定の選び方のまま**押したのと同じもの
 (既定でチェックの入る項目 ── 担当ラインは外す)。書き出した直後の読み戻し(``verify``)も同じ。
-結果は標準出力に JSON 1行で返します:
+ただし、**前に設定画面で入れていた担当ラインは、値も前のまま残す**
+(``distribution.export(keep_previous=True)``。まとめて書き出したらラインが消えた、を直した)。
+結果は標準出力に JSON 1行で返します(``kept`` はそのまま残したもの。「担当ライン(L-1)」):
 
-    {"ok": true, "message": "...", "reason": "", "applied": [...], "path": "..."}
+    {"ok": true, "message": "...", "reason": "", "applied": [...], "kept": [...], "path": "..."}
 
 書き出せる設定が無い(この端末で変えていない = 既定のまま)ときは ok=false・reason="nothing"。
 大設定はそれを失敗とは分けて「既定のままなので要りません」と出します。
@@ -36,9 +38,9 @@ def run() -> dict[str, Any]:
     from kanban import distribution
 
     items = [key for key, _, default in distribution.ITEMS if default]
-    result = distribution.export(items)
+    result = distribution.export(items, keep_previous=True)
     return {"ok": result.ok, "message": result.message, "reason": result.reason,
-            "applied": result.applied, "path": str(distribution.directory())}
+            "applied": result.applied, "kept": result.carried, "path": str(distribution.directory())}
 
 
 def main() -> int:

@@ -9,7 +9,8 @@
 - 表のまま蓋を閉じた(スリープ明け)は時計の飛びで気づく。ふつうに時間が経っただけでは何もしない
 - 心拍の間隔は**サーバから受け取る**(見張る側と送る側で別々に持たない)
 - 閉じた合図(pagehide)のあとは何も送らない
-- 心拍には見え方(state)と画面の名前を添える
+- 心拍には見え方(state)と画面の名前、**読み込みごとのページ番号**(page)を添える。戻る/進むの
+  キャッシュから戻ったら番号を改める(閉じた合図を送った番号は、サーバがもう受け付けない)
 """
 from __future__ import annotations
 
@@ -69,14 +70,16 @@ class BackgroundSignalTests(PageBrowserCase):
         self.assertEqual(first["state"], "visible")
         self.assertTrue(first["screen_id"])
         screen_id = first["screen_id"]
+        page_no = first["page"]
+        self.assertTrue(page_no, "心拍にページ番号が無い")
 
         # 裏に回る瞬間・凍らされる直前は sendBeacon(fetch では送らない)
         self.show(page, "hidden")
         page.evaluate("document.dispatchEvent(new Event('freeze'))")
         beacons = self.beacons(page)
         self.assertEqual([b["body"] for b in beacons], [
-            {"leaving": False, "state": "hidden", "screen_id": screen_id},
-            {"leaving": False, "state": "frozen", "screen_id": screen_id}])
+            {"leaving": False, "state": "hidden", "screen_id": screen_id, "page": page_no},
+            {"leaving": False, "state": "frozen", "screen_id": screen_id, "page": page_no}])
         self.assertTrue(all("/api/alive" in b["url"] for b in beacons))
         self.assertEqual(len(self.alive()), 1, "隠れる合図を fetch で送った")
 
@@ -89,11 +92,16 @@ class BackgroundSignalTests(PageBrowserCase):
         self.expect_resume(page, "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))",
                            "pageshow")
         self.assertEqual(len(self.posts_to("/api/screen/claim")), claims + 1, "戻ったら名乗り直す")
+        # 戻る/進むのキャッシュから戻ったページは、閉じた合図を送ったあと。**番号を改める**
+        new_page = self.alive()[-1]["page"]
+        self.assertTrue(new_page)
+        self.assertNotEqual(new_page, page_no, "閉じた合図を送ったページ番号のまま")
 
         # 閉じた合図。そのあとは見え方が変わっても、心拍の時が来ても送らない
         page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))")
         self.assertEqual(self.beacons(page)[-1]["body"],
-                         {"leaving": True, "state": "visible", "screen_id": screen_id})
+                         {"leaving": True, "state": "visible", "screen_id": screen_id,
+                          "page": new_page})
         sent_beacons, beats = len(self.beacons(page)), len(self.alive())
         self.show(page, "hidden")
         page.clock.run_for(idle_exit.HEARTBEAT_MS + 1000)

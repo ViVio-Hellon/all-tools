@@ -8,9 +8,11 @@
 
 書き出すのは、設定画面の「配布設定を書き出す」を**画面の既定の選び方のまま**押したのと同じもの
 (既定でチェックの入る項目 ── この端末のラインは外す。音声ファイルも入れない ── 画面でも既定では外れている)。
-結果は標準出力に JSON 1行で返します:
+ただし、**前に設定画面で入れていたライン(値も前のまま)と音声ファイル(`配布設定\\音`)は消さずに残す**
+(`distribution.export(keep_previous=True)`。まとめて書き出したら音とラインが消えた、を直した)。
+結果は標準出力に JSON 1行で返します(``kept`` はそのまま残したもの。「音声ファイル 3 個」「ライン(L-1)」):
 
-    {"ok": true, "message": "...", "reason": "", "applied": [...], "path": "..."}
+    {"ok": true, "message": "...", "reason": "", "applied": [...], "kept": [...], "path": "..."}
 
 書き出せる設定が無い(この端末で変えていない = 既定のまま)ときは ok=false・reason="nothing"。
 大設定はそれを失敗とは分けて「既定のままなので要りません」と出します。
@@ -35,9 +37,9 @@ def run() -> dict[str, Any]:
     from nippou import distribution
 
     items = [item.key for item in distribution.ITEMS if item.default]
-    result = distribution.export("", items, [], admin=True)
+    result = distribution.export("", items, [], admin=True, keep_previous=True)
     return {"ok": result.ok, "message": result.message, "reason": result.reason,
-            "applied": result.applied, "path": str(distribution.folder())}
+            "applied": result.applied, "kept": result.carried, "path": str(distribution.folder())}
 
 
 def main() -> int:

@@ -134,12 +134,16 @@ function alive() {
   send(JSON.stringify({ tab: tabId, page, state: visibility() }));
 }
 
-let lastWake = 0;
+// 最後に戻った合図を出した時刻。**壁の時計(`Date.now()`)では数えない** ──
+// PC の時計を合わせ直して後ろへ飛ぶと「前に戻ったのは未来」になり、時計が
+// 追いつくまで(1時間戻れば1時間)表に戻っても心拍も確かめも送らなかった。
+// `performance.now()` は時計を合わせ直しても後ろへ飛ばない
+let lastWake = -Infinity;
 
 /** 戻ってきた。すぐ心拍を送り、確かめ、ほかの見張りへ知らせる。 */
 function wake(why, gapMs = 0) {
   left = false;
-  const now = Date.now();
+  const now = performance.now();
   // 表に戻る・凍結が解ける・フォーカスが重なって来ることがある。1回に束ねる
   if (now - lastWake < 1000) return;
   lastWake = now;
@@ -185,12 +189,19 @@ function startAlive() {
   // 回線が戻った(アダプタの切り替え・スリープ明け)
   window.addEventListener("online", () => wake("online"));
 
-  // スリープに気づく。**見えているあいだだけ**タイマーの空きで見る
+  // スリープに気づく。**見えているあいだだけ**タイマーの空きで見る。
+  // 空きは**2つの時計の大きいほう**で見る: 壁の時計(`Date.now()`)は眠って
+  // いるあいだも進むが、合わせ直すと前後に飛ぶ。`performance.now()` は飛ばないが、
+  // OS によっては眠っているあいだ止まる。後ろへ飛んだぶんは負になるだけで、
+  // 前へ飛んだときに1回余分に確かめを送るのは害が無い
   let last = Date.now();
+  let lastTick = performance.now();
   setInterval(() => {
     const now = Date.now();
-    const gap = now - last;
+    const tick = performance.now();
+    const gap = Math.max(now - last, tick - lastTick);
     last = now;
+    lastTick = tick;
     if (gap > WAKE_GAP_MS && document.visibilityState === "visible") {
       wake("sleep", gap);
     }
