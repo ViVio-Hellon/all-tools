@@ -62,8 +62,24 @@ _DROP = ("INSPECTION_LOCAL_DIR", "INSPECTION_DISTRIBUTION_DIR", "INSPECTION_APP_
          "INSPECTION_BUSINESS_CONFIG", "ALLTOOLS_DISTRIBUTION_DIR", "PYTHONUTF8", "INSPECTION_TOKEN",
          "INSPECTION_DEMO", "XDG_DATA_HOME")
 
-_VBS_CHILD = r"""
-import os, runpy, sys, webbrowser
+#: **1台の機械で別々の PC をまねる**ための差し替え(vbs と exe の両方で使う)。
+#:
+#: 点検表の同時起動の錠は、Windows では名前付きミューテックス(`Local\\` = その利用者のログオンに1つ)
+#: です。本物の別々の PC なら錠もそれぞれですが、試験は1台の機械で PC をまねるので、そのままだと
+#: **違う PC のはずの2つがぶつかって**「ブラウザ版が動いています」と断られます(Windows の CI で
+#: 実際に落ちた。Linux は手元の領域のファイルの錠なので、もともと PC ごと)。そこで、錠の名前の頭に
+#: まねた PC の名前を足します ── 同じ PC の2つは同じ名前なので、今までどおりぶつかります。
+_ONE_PC = r"""
+import os
+suffix = os.environ.get("FLOW_LOCK_SUFFIX")
+if suffix:
+    from core import instance_guard
+    _base = instance_guard.base_name
+    instance_guard.base_name = lambda: _base() + "." + suffix
+"""
+
+_VBS_CHILD = _ONE_PC + r"""
+import runpy, sys, webbrowser
 
 def _opened(url, *args, **kwargs):
     with open(os.environ["FLOW_OPENED"], "a", encoding="utf-8") as fh:
@@ -71,9 +87,28 @@ def _opened(url, *args, **kwargs):
     return True
 
 webbrowser.open = _opened
+# Windows では起動できないとき標準の窓(MessageBox)で知らせる。試験の機械には押す人が居ないので、
+# 窓を出したことだけ書き留めて、押されたことにする(出さないと、窓が閉じずにいつまでも終わらない)
+if os.name == "nt":
+    import ctypes
+
+    def _box(hwnd, text, title, flags):
+        with open(os.environ["FLOW_OPENED"] + ".dialog", "a", encoding="utf-8") as fh:
+            fh.write(str(text) + "\n")
+        return 1
+
+    ctypes.windll.user32.MessageBoxW = _box
 sys.stdout = None          # pythonw.exe にはコンソールが無い
 sys.stderr = None
 script = os.path.join(os.getcwd(), "start_app.py")
+sys.argv = [script]
+runpy.run_path(script, run_name="__main__")
+"""
+
+#: exe(外枠が起こす bridge.py)も、錠の名前だけ同じように差し替えて起こす
+_EXE_CHILD = _ONE_PC + r"""
+import runpy, sys
+script = os.path.join(os.getcwd(), "bridge.py")
 sys.argv = [script]
 runpy.run_path(script, run_name="__main__")
 """
@@ -158,6 +193,8 @@ class Pc:
             "INSPECTION_APP_CONFIG": str(self.app_json),
             "INSPECTION_BUSINESS_CONFIG": str(self.business_json),
             "PYTHONIOENCODING": "utf-8",
+            # 錠の名前を PC ごとに(上の `_ONE_PC`)
+            "FLOW_LOCK_SUFFIX": self.pc_name,
         })
         if distribution is not None:
             env["INSPECTION_DISTRIBUTION_DIR"] = str(distribution)
@@ -297,7 +334,7 @@ class ExeRun(_Run):
         env = pc.env(distribution)
         env.update({"INSPECTION_TOKEN": self.token, "INSPECTION_DEMO": "0", "ALLTOOLS_SHELL": "1",
                     "ALLTOOLS_TOOL": "inspection", "ALLTOOLS_ROOT": str(pc.tool_dir.parents[1])})
-        self.proc = subprocess.Popen([sys.executable, str(pc.tool_dir / "bridge.py")], cwd=str(pc.tool_dir),
+        self.proc = subprocess.Popen([sys.executable, "-c", _EXE_CHILD], cwd=str(pc.tool_dir),
                                      env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE)
         self.events: list[dict] = []
