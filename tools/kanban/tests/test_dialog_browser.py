@@ -287,3 +287,53 @@ class NoNativeDialogsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaveWithDraftTests(_ShippedRowCase):
+    """書きかけのコメントがあるのに窓・タブを閉じる・読み直すとき。
+
+        「このページを離れますか？」(ブラウザが出す窓)は画面の中に出せず、出しているあいだは
+        心拍が止まる → 「下書きを残せるときは訊かないにしてください」
+
+    この端末に下書きとして置けたら訊かない(次に開いたときに戻る)。置けないとき(この端末の
+    保存場所が使えない)だけ、今までどおり止めて訊く。ブラウザの窓そのものは試験の道具では
+    出し分けを見にくいので、`beforeunload` を起こして止めたか(``defaultPrevented``)を見る。
+    """
+
+    LEAVE_JS = """() => {
+      const ev = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    }"""
+
+    def write_draft(self, page, text: str) -> None:
+        """1 番を提出して(提出した看板にだけ書ける)、コメントの窓に書きかけを打つ。"""
+        page.click('#board .row[data-no="1"] .cell[data-kind="size"]')
+        page.wait_for_selector('#board .row[data-no="1"] .cell[data-kind="size"][data-state="ordered"]')
+        self.open_comment(page)
+        page.fill("#cm-body", text)
+
+    @staticmethod
+    def open_comment(page) -> None:
+        page.click('#board .row[data-no="1"] .cell--comment')
+        page.wait_for_selector("#comment-modal:not([hidden])")
+
+    def test_下書きを置ければ離れるときに訊かない(self) -> None:
+        page = self.open_board()
+        self.write_draft(page, "急ぎでお願いします")
+        self.assertFalse(page.evaluate(self.LEAVE_JS), "下書きを置けたのに「このページを離れますか？」で止めた")
+        # 置いた下書き(次に開いたときに戻すもの。戻すことは test_flow_single_browser で見ている)
+        drafts = page.evaluate("JSON.parse(localStorage.getItem('kanban.comments.drafts') || '{}')")
+        self.assertIn("急ぎでお願いします", drafts.values())
+
+    def test_下書きを置けないときだけ止めて訊く(self) -> None:
+        # この端末の保存場所が使えない(いっぱい・使えない設定)
+        self.ctx.add_init_script(
+            "Storage.prototype.setItem = function () { throw new Error('この端末に置けません'); };")
+        page = self.open_board()
+        self.write_draft(page, "急ぎでお願いします")
+        self.assertTrue(page.evaluate(self.LEAVE_JS), "置けない書きかけがあるのに止めずに離れる(消える)")
+
+    def test_書きかけが無ければ訊かない(self) -> None:
+        page = self.open_board()
+        self.assertFalse(page.evaluate(self.LEAVE_JS))

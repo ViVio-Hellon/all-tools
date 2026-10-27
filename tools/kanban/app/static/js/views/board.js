@@ -456,10 +456,17 @@ function wireLeaving() {
     saveOpenDraft();
     if (draftCount() && !draftsSaved) ev.preventDefault();
   });
-  // 窓・タブを閉じる・再読込。書きかけがあれば止めて訊く(ブラウザの決まった文言)
+  // 窓・タブを閉じる・再読込。書きかけを**この端末に下書きとして置けなかったときだけ**止めて訊く
+  // (ブラウザの決まった文言「このページを離れますか？」)。
+  //
+  //     下書きを残せるときは訊かないにしてください
+  //
+  // 置けていれば、次に開いたときに戻せるので訊かない。この窓はブラウザが出すもので画面の中には
+  // 出せず、出しているあいだは画面のタイマーが止まる ── 心拍が途切れ、置いたまま約110秒で
+  // ブラウザ版のサーバが終わっていた(「確かめの窓を出したまま約90秒で終わる」と同じ形)
   window.addEventListener('beforeunload', (ev) => {
     saveOpenDraft();
-    if (isQuietLeave() || !draftCount()) return;
+    if (isQuietLeave() || !draftCount() || draftsSaved) return;
     ev.preventDefault();
     ev.returnValue = '';
   });
