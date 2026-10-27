@@ -1303,6 +1303,19 @@ LEVEL_ALERT, LEVEL_WARN, LEVEL_INFO = "alert", "warn", "info"
 _DRIVE = __import__("re").compile(r"^([A-Za-z]):[\\/]")
 
 
+#: **ファイル名だけを入れる欄**(置き場所は別の欄)。名前だけなら置き場所の確かめはしない
+NAME_ONLY_KEYS = frozenset({
+    config.KEY_ACCESS_DB_FILE, config.KEY_COIL_FILE, config.KEY_WIP2_LOT_FILE,
+    config.KEY_WIP2_HIKI_FILE, config.KEY_WIP2_ORDER_FILE, config.KEY_WIP2_COIL_FILE,
+})
+
+
+def _bare_name(text: str) -> bool:
+    """フォルダを含まない、ファイル名だけか(「\\」「/」・ドライブ文字が無い)。"""
+    value = text.strip().strip('"')
+    return bool(value) and not any(sep in value for sep in ("\\", "/")) and not _DRIVE.match(value + "\\")
+
+
 def distribution_warnings(values: dict[str, Any]) -> list[dict[str, str]]:
     """このまま配ると困ること。**配る前に言う。**"""
     out: list[dict[str, str]] = []
@@ -1323,6 +1336,12 @@ def distribution_warnings(values: dict[str, Any]) -> list[dict[str, str]]:
     for key, _label, _note in PATH_FIELDS:
         text = values.get(key)
         if not user_settings._is_set(text) or not isinstance(text, str):
+            continue
+        if key in NAME_ONLY_KEYS and _bare_name(text):
+            # **ファイル名だけの欄は、上の置き場所と組み合わせて使います**(例: 「コイル割り数の
+            # ファイル名」= 実績_LS4.sqlite3 → \\サーバ\…\実績_LS4.sqlite3)。前はこの名前だけを
+            # 日報のフォルダの中とみなして解き、「利用者フォルダの下を指しています」と言っていた
+            #     そんな設定していないのにローカル保存していてそれを配ると言っている
             continue
         label = setting_label(key)
         try:
@@ -1514,7 +1533,10 @@ def stop_reason_view() -> dict[str, Any]:
             "table": stop_master.CATEGORY_TABLES[category],
             "kind": stop_csv.CHAR_TYPE_WORDS.get(stop_csv.kind_of(category), ""),
             "origin": origin,
-            "reasons": [{"code": r.code, "label": r.label}
+            # `shown` は一覧に出す名前。**名前の無い 99 は「(名前なし)」**
+            # (`stop_csv.BLANK_LABEL_OK`。label は空のまま)
+            "reasons": [{"code": r.code, "label": r.label,
+                         "shown": r.label or stop_csv.BLANK_LABEL_TEXT}
                         for r in effective if r.code],
             "csv_count": len(csv_rows),
             "master_count": sum(1 for r in master_rows if r.code),

@@ -751,7 +751,7 @@ LVC,119
                   {% endif %}
                 </td>
                 <td>
-                  {% for r in g.reasons %}<div><code>{{ r.code }}</code> {{ r.label }}</div>
+                  {% for r in g.reasons %}<div><code>{{ r.code }}</code> {% if r.label %}{{ r.label }}{% else %}<span class="lead">{{ r.shown }}</span>{% endif %}</div>
                   {% else %}<span class="lead">ありません(この分類は選べません)</span>{% endfor %}
                 </td>
               </tr>

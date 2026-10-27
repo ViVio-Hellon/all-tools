@@ -703,7 +703,10 @@ function paintStopReasons(view) {
         const div = document.createElement("div");
         div.innerHTML = "<code></code> <span></span>";
         div.querySelector("code").textContent = r.code;
-        div.querySelector("span").textContent = r.label;
+        // 名前の無い 99 は「(名前なし)」(`stop_csv.BLANK_LABEL_OK`。サーバが shown に入れる)
+        const name = div.querySelector("span");
+        name.textContent = r.label || r.shown || "";
+        if (!r.label) name.className = "lead";
         list.appendChild(div);
       }
       if (!(g.reasons || []).length) {
@@ -771,12 +774,15 @@ function paintStopPreview(body) {
   }
   box.appendChild(groups);
 
+  // 名前の無い理由(1 の 99 だけ。`stop_csv.BLANK_LABEL_OK`)は「(名前なし)」と出す。
+  // 空のまま出すと「99 → 」のように、何が変わるのか読めない
+  const named = (label) => label || "(名前なし)";
   const sections = [
-    ["増える理由", diff.added, (d) => `${d.code} ${d.label}(${d.category})`],
+    ["増える理由", diff.added, (d) => `${d.code} ${named(d.label)}(${d.category})`],
     ["消える理由(昔の日報にこの記号があれば「内訳にない記号」になります)",
-     removed, (d) => `${d.code} ${d.label}(${d.category})`],
-    ["名前が変わる理由", diff.renamed, (d) => `${d.code} ${d.before} → ${d.label}`],
-    ["分類が変わる理由", diff.moved, (d) => `${d.code} ${d.label}: ${d.before} → ${d.category}`],
+     removed, (d) => `${d.code} ${named(d.label)}(${d.category})`],
+    ["名前が変わる理由", diff.renamed, (d) => `${d.code} ${named(d.before)} → ${named(d.label)}`],
+    ["分類が変わる理由", diff.moved, (d) => `${d.code} ${named(d.label)}: ${d.before} → ${d.category}`],
   ];
   let changed = false;
   for (const [title, items, text] of sections) {

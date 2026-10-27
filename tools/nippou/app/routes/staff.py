@@ -21,7 +21,7 @@ from nippou.access_bridge import staff_master, stop_master
 from nippou.logging_setup import get_logger, log_button_click
 from nippou.logic import pages
 from nippou.logic import staff as staff_logic
-from nippou.logic import stop_reason
+from nippou.logic import stop_csv, stop_reason
 from nippou.presenters import entry as presenter
 
 from .. import error_body, get_repo
@@ -108,7 +108,11 @@ def reasons():
     return jsonify({
         "categories": [
             {"category": category,
-             "reasons": [{"label": r.label, "code": r.code} for r in items]}
+             # `shown` は窓に出す名前。名前の無い 99 は「99(名前なし)」
+             # (`stop_csv.BLANK_LABEL_OK`)── 空のままだと選ぶ字が無い
+             "reasons": [{"label": r.label, "code": r.code,
+                          "shown": r.label or stop_csv.shown_text(r.code, r.label)}
+                         for r in items]}
             for category, items in by_category.items()
         ],
         "message": "" if total else
@@ -197,7 +201,8 @@ def execute():
     # 「停止内訳にない記号です」で断り、そのページは以後保存できなくなります
     # (消した形を保存するところで同じ断りに当たるため)
     code = str(payload.get("code", "")).strip()
-    if not label:
+    # 名前の無い理由(1 の 99。`stop_csv.BLANK_LABEL_OK`)は記号だけで来ます
+    if not label and not code:
         return jsonify(error_body("empty", "停止理由を選んでください")), 422
 
     # **作業者を決める前には押させない。**

@@ -186,7 +186,7 @@ SETTING_KEYS = frozenset(k for item in ITEMS for k in item.setting_keys)
 #: 一緒に配るファイル: (鍵, 画面の名前)。python-web-tools の「配置図」に当たる
 FILE_SOUNDS = "sounds"
 FILES: tuple[tuple[str, str], ...] = (
-    (FILE_SOUNDS, "音声ファイル(この端末で鳴らしているもの)"),
+    (FILE_SOUNDS, "音声ファイル(「音声ファイルの参照パス」のフォルダの音を写して一緒に配る)"),
 )
 FILE_KEYS = frozenset(key for key, _ in FILES)
 FILE_LABELS = dict(FILES)

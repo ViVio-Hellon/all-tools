@@ -166,19 +166,21 @@ function paintCategories(categories) {
       // 排他になる(tkinter版も1件だけ選ぶ作りだった)
       input.name = "formstop-reason";
       input.value = reason.code || reason.label;
+      // 名前の無い 99 は「99(名前なし)」(サーバが shown に入れる。`stop_csv.BLANK_LABEL_OK`)
+      const shown = reason.label || reason.shown || reason.code || "";
       input.addEventListener("change", () => {
-        picked = reason.label;
+        picked = shown;
         // **記号を捨てない。** 作業停止①の欄が持つのは内訳番号で、
         // 名前を入れると保存前チェックが断り、そのページは保存できなく
         // なります(消した形も同じ断りに当たるので、やり直しもできない)
         pickedCode = reason.code || "";
         const out = document.getElementById("formstop-selected");
         if (out) {
-          out.textContent = `${category} / ${reason.label}`
+          out.textContent = `${category} / ${shown}`
                           + (pickedCode ? `（記号 ${pickedCode}）` : "");
         }
       });
-      label.append(input, document.createTextNode(reason.label));
+      label.append(input, document.createTextNode(shown));
       box.appendChild(label);
     }
     host.appendChild(box);

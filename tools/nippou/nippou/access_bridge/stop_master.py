@@ -59,10 +59,14 @@ def _read_master(category: str, master_path: Optional[Path],
 
     reasons: list[StopReason] = []
     for row in result.rows:
-        label = row.get("内訳", "").strip()
-        if not label:
+        label = (row.get("内訳") or "").strip()
+        code = (row.get("内訳番号") or "").strip()
+        # 名前の無い行は捨てます。**ただし設備停止(_1)の 99 だけは残す**
+        # (`stop_csv.BLANK_LABEL_OK`。CSVと同じ決まり)── 捨てると、表で
+        # 名前を空にした 99 が「停止内訳にない記号」になり保存が止まります
+        if not label and not stop_csv.blank_label_ok(category, code):
             continue
-        reasons.append(StopReason(label=label, code=row.get("内訳番号", "").strip()))
+        reasons.append(StopReason(label=label, code=code))
     return reasons, ""
 
 

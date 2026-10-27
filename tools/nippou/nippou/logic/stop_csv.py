@@ -34,6 +34,8 @@ CSV の書き方(`as_csv` が書く形。寛容に読みます):
   ── 日報に残っている記号と1文字でも違うと、昔の日報の停止が
   「内訳にない記号」になるので
 - 区切りは「,」(Excel で保存したもの)でもタブでもよい
+- 内訳(名前)は要ります。**ただし `1` の `99` だけは空でよい**
+  (`BLANK_LABEL_OK`)── `1,99,,` / `1,99` と書けます
 
 **読めない行は黙って捨てません。** 捨てると一覧から理由がひっそり
 消えます。`problems` に行番号ごと入れて、設定画面に出します。
@@ -103,6 +105,52 @@ _NUMBER_OF = {name: no for no, name, *_ in CATEGORIES}
 _TABLE_OF = {name: table for _, name, table, *_ in CATEGORIES}
 _CALL_OF = {name: call for _, name, _, call, _kind in CATEGORIES}
 _KIND_OF = {name: kind for _, name, _, _, kind in CATEGORIES}
+
+
+#: **名前(内訳)が空でもよい理由。** (分類の番号, 記号) の組。
+#:
+#: 利用者の言葉:「分類1 内訳番号99 で登録したものに限り空白を許してください。
+#: かつそれに伴い 分類1 内訳番号99 の停止集計も空白で計上してください」。
+#: ほかの分類・ほかの記号は今までどおり「内訳(理由の名前)がありません」で
+#: 断ります ── 名前の無い理由が増えると、選ぶ人にも集計を読む人にも
+#: 何の停止か分からなくなるので、**決まった1つだけ**にしておきます。
+#:
+#: 集計では名前の欄が空のまま入ります(記号・分・回数・管理ロス/突発/
+#: ハンドリングの分け方は記号で決まるので、ほかの理由と変わりません)。
+#:
+#: 記号は `_fold` で見比べます(全角の「９９」も 99 とみなす)。メモ帳で
+#: 日本語入力のまま打つと全角になるので、それだけで同じ断りが出ると
+#: 「99 なのに通らない」になります。**記号そのものは書いたとおりに残します**
+#: (モジュールの説明の決まり)── ここで見ているのは「名前を空にしてよいか」
+#: だけです。
+BLANK_LABEL_OK: frozenset[tuple[str, str]] = frozenset({("1", "99")})
+
+#: 名前の無い理由を**画面に出すとき**の書き方。集計・CSV・日報には入れません
+#: (名前の欄は空のまま)。「99(マスタに無い)」と同じ並べ方です
+BLANK_LABEL_TEXT = "(名前なし)"
+
+
+def blank_label_ok(category: str, code: str) -> bool:
+    """その分類・記号の理由は、名前(内訳)が空でもよいか(`BLANK_LABEL_OK`)。
+
+    `category` は画面の分類名(「設備停止」)でも、CSVの書き方(「1」「管理ロス」)
+    でもよい。
+    """
+    name = category_of(category)
+    if name is None or not str(code or "").strip():
+        return False
+    return (number_of(name), _fold(code)) in BLANK_LABEL_OK
+
+
+def shown_text(code: str, label: str) -> str:
+    """選ぶ欄・一覧に出す「記号 名前」。**名前が空なら `99(名前なし)`**。
+
+    名前が空のまま「99 」と出すと、マスタに無い記号を開いたときの
+    「99(マスタに無い)」と並んだときに、選べる理由なのか分かりません。
+    """
+    if not label:
+        return f"{code}{BLANK_LABEL_TEXT}" if code else ""
+    return f"{code} {label}" if code else label
 
 
 def category_of(text: str) -> Optional[str]:
@@ -204,6 +252,8 @@ def parse(text: str, *, source: str = "") -> Parsed:
             continue
         if not any(cells):                       # 「,,,」だけの行(Excel の空行)
             continue
+        if len(cells) == 2 and blank_label_ok(cells[0], cells[1]):
+            cells.append("")                     # 「1,99」だけの行(名前の欄ごと省いた)
         if len(cells) < 3:
             found.problems.append(Problem(
                 line_no, stripped,
@@ -221,7 +271,8 @@ def parse(text: str, *, source: str = "") -> Parsed:
             found.problems.append(Problem(
                 line_no, stripped, "内訳番号(記号)がありません。記号の無い理由は選べません"))
             continue
-        if not label:
+        if not label and not blank_label_ok(category, code):
+            # 空でよいのは `BLANK_LABEL_OK` の1つだけ(1 の 99)
             found.problems.append(Problem(
                 line_no, stripped, "内訳(理由の名前)がありません"))
             continue
@@ -297,6 +348,7 @@ NOTE = (
     "分類 … 1=管理ロス(記号は数字) 2=突発・待ち(記号は片仮名) 3=ハンドリング(記号は英字)",
     "内訳番号 … 日報に残る記号。昔の日報と同じ記号を使ってください"
     "(変えると昔の日報の停止が「内訳にない記号」になります)",
+    "内訳 … 理由の名前。空にできるのは 1 の 99 だけです(集計の内訳の欄も空のまま入ります)",
     "分類ごとに、ここに行があればここを使い、1行も無い分類は伝送用ファイルの表を使います。",
 )
 

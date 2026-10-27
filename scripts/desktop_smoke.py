@@ -339,6 +339,10 @@ def main() -> int:
             print("--- 日報複合ツールの exe の窓(窓, 題名, 持ち主がいるか, 見えているか):",
                   desktop_window.exe_windows(instance_guard.DESKTOP_EXES), flush=True)
         others = [pid for pid in tree if pid != app.pid]
+        # 止める前の名前を覚えておく。**終わったプロセスの番号は、Windows がすぐ別のプロセスに
+        # 使い回す**(Windows の CI で、私たちの子が終わったあとの番号を svchost.exe が使っていて
+        # 「残った」と言った)。最後に名前が変わっていれば、それは別のプロセス
+        names_then = {pid: image_name(pid) for pid in others}
         began = time.monotonic()
         stopped = entry("--launcher")
         try:
@@ -370,6 +374,12 @@ def main() -> int:
         # もう一覧に居なければ、名前を調べるあいだに終わったもの(残っていない)
         named = {p: (image_name(p), command_line(p)) for p in left}
         named = {p: v for p, v in named.items() if v[0] or v[1] or alive(p)}
+        reused = {p: v for p, v in named.items()
+                  if names_then.get(p) and v[0] and v[0].lower() != names_then[p].lower()}
+        for p, (name, _cmd) in reused.items():
+            print(f"  pid={p} は別のプロセス({names_then[p]} → {name})に使い回されました(残っていません)",
+                  flush=True)
+        named = {p: v for p, v in named.items() if p not in reused}
         webview = [p for p, (name, cmd) in named.items() if is_webview(name, cmd)]
         ours = [p for p in named if p not in webview]
         for p, (name, cmd) in named.items():

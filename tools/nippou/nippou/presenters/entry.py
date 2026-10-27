@@ -49,6 +49,7 @@ def stop_choices() -> list[dict[str, Any]]:
     落ちる(テンプレートがそう描く)。
     """
     from ..access_bridge import stop_master
+    from ..logic import stop_csv
 
     try:
         by_category = stop_master.load_all_categories()
@@ -57,8 +58,9 @@ def stop_choices() -> list[dict[str, Any]]:
     out = []
     for category, items in by_category.items():
         rows = [{"code": r.code, "label": r.label,
-                 # 選ぶときは記号だけだと分からない。並べて出す
-                 "text": f"{r.code} {r.label}" if r.code else r.label}
+                 # 選ぶときは記号だけだと分からない。並べて出す。
+                 # **名前の無い 99 は「99(名前なし)」**(`stop_csv.BLANK_LABEL_OK`)
+                 "text": stop_csv.shown_text(r.code, r.label)}
                 for r in items if r.code]
         if rows:
             out.append({"category": category, "reasons": rows})
