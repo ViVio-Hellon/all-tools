@@ -76,8 +76,8 @@ from ..logic.numeric import format_fixed
 from ..logic.packing_agg import LotRow, stop_rollup
 from ..logic.shift import parse_business_date
 
-#: 直ごとの合計。**停止は3分類に分けたまま、合計も添えます** ──
-#: グラフにするとき、積み上げ棒(3分類)と折れ線(停止合計)のどちらにも
+#: 直ごとの合計。**停止は3分類(とその他)に分けたまま、合計も添えます** ──
+#: グラフにするとき、積み上げ棒(分類)と折れ線(停止合計)のどちらにも
 #: そのまま使えるようにするためで、足し算をExcelでやり直させないため。
 #:
 #: 名前は現場の呼び名(`aggregation.STOP_KIND_LABELS`)です ──
@@ -87,12 +87,22 @@ from ..logic.shift import parse_business_date
 LOSS_COLUMN = f"{stop_kind_label('管理ロス停止')}(分)"
 SUDDEN_COLUMN = f"{stop_kind_label('突発停止')}(分)"
 HANDLING_COLUMN = f"{stop_kind_label('ハンドリング停止')}(分)"
+#: その他停止(分類1・内訳番号99。`aggregation.OTHER_STOP_CODES`)の列(v4.44.14)。
+#:
+#:     集計 CSV に『その他(分)』の欄を足します。集計 CSV と停止内訳の CSV で
+#:     違いがあってはおかしいです
+#:
+#: 99 は管理ロスの欄に入れず、ここに入れます(停止内訳_ CSV の分類「その他停止」と
+#: 同じ数え方)。並びは3分類の次・停止合計の前 ── 4つの欄の和が停止合計になる
+#: ように隣へ置きます。**列が1つ増えたので、列の位置で読んでいる Excel は、
+#: 停止合計から右が1つずれます**(`csv_legend` にも書いてあります)
+OTHER_COLUMN = "その他(分)"
 
 FIELDNAMES = [
     "日付", "ライン", "直",
     "合計枚数", "合計重量(t)",
     "作業時間合計(分)", "稼働時間合計(分)", "操業時間(分)",
-    LOSS_COLUMN, SUDDEN_COLUMN, HANDLING_COLUMN, "停止合計(分)",
+    LOSS_COLUMN, SUDDEN_COLUMN, HANDLING_COLUMN, OTHER_COLUMN, "停止合計(分)",
     "稼働率(%)", "生産性(t/h)",
 ]
 
@@ -227,12 +237,14 @@ def aggregate_row_dict(agg: ShiftAggregate) -> dict[str, str]:
         "合計重量(t)": format_fixed(agg.weight_ton, 2),
         "作業時間合計(分)": format_fixed(agg.work_minutes, 0),
         "稼働時間合計(分)": format_fixed(agg.operating_minutes, 0),
-        # 1440分 − 管理ロスだけ(VBA `Opetional`)。稼働時間とは引くものが
-        # 違うので、**並べて置かないと取り違えます**
+        # 1440分 − 管理ロス − その他(VBA `Opetional`。99 も前と同じく引く)。
+        # 稼働時間とは引くものが違うので、**並べて置かないと取り違えます**
         "操業時間(分)": format_fixed(agg.operational_minutes, 0),
+        # 99(その他停止)は管理ロスに入れず「その他(分)」へ。4つの和 = 停止合計
         LOSS_COLUMN: format_fixed(agg.management_loss_minutes, 0),
         SUDDEN_COLUMN: format_fixed(agg.unplanned_stop_minutes, 0),
         HANDLING_COLUMN: format_fixed(agg.handling_stop_minutes, 0),
+        OTHER_COLUMN: format_fixed(agg.other_stop_minutes, 0),
         "停止合計(分)": format_fixed(agg.total_stop_minutes, 0),
         "稼働率(%)": format_fixed(agg.operating_rate_pct, 1),
         "生産性(t/h)": format_fixed(agg.productivity_t_per_h, 2),
@@ -846,7 +858,11 @@ def power_output_path(base_dir: Path, today, line: str, group_label: str) -> Pat
 def agg_output_path(base_dir: Path, key: str, start, end, line: str) -> Path:
     """例: ``集計_ロット別_2026-08-01_2026-08-31_L1.csv``"""
     names = {"days": "日別", "shifts": "直別", "by_key": "ロット別",
-             "lots": "ロット一覧", "push_log": "共有保存の履歴"}
+             "lots": "ロット一覧", "push_log": "共有保存の履歴",
+             # 内訳番号99 の時間(管理者だけの面。`presenters/code99`)
+             "code99_lines": "内訳番号99_ライン別", "code99_shifts": "内訳番号99_直別",
+             "code99_workers": "内訳番号99_作業者別",
+             "code99_months": "内訳番号99_月ごと"}
     safe_line = safe_name(line)
     return base_dir / (f"集計_{names.get(key, key)}_{start}_{end}"
                        f"_{safe_line}.csv")

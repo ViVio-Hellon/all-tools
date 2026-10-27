@@ -111,20 +111,27 @@ def _weight_ton(agg: ShiftAggregate) -> Step:
 
 
 def _stop_total(agg: ShiftAggregate) -> Step:
+    """停止合計。**その他停止(分類1・内訳番号99)は、あるときだけ式に出します** ──
+    無い直の式は前と1文字も変えない(`aggregation.OTHER_STOP_CODES`)。"""
+    other = agg.other_stop_minutes != 0
     return Step(
         key="stop_total", name="停止合計(分)",
-        formula="管理ロス + 突発 + ハンドリング",
+        formula="管理ロス + 突発 + ハンドリング" + (" + その他" if other else ""),
         substituted=(f"{_num(agg.management_loss_minutes)}"
                      f" + {_num(agg.unplanned_stop_minutes)}"
-                     f" + {_num(agg.handling_stop_minutes)}"),
+                     f" + {_num(agg.handling_stop_minutes)}"
+                     + (f" + {_num(agg.other_stop_minutes)}" if other else "")),
         result=f"{_num(agg.total_stop_minutes)} 分",
         terms=[
             Term("管理ロス停止", agg.management_loss_minutes, "分", 0, "明細の合計"),
             Term("突発停止", agg.unplanned_stop_minutes, "分", 0, "明細の合計"),
             Term("ハンドリング停止", agg.handling_stop_minutes, "分", 0, "明細の合計"),
+            *([Term("その他停止", agg.other_stop_minutes, "分", 0, "明細の合計")]
+              if other else []),
         ],
         note="分類は停止理由の記号の「文字種」で決まります"
-             "(数字=管理ロス / カタカナ=突発 / 英字=ハンドリング)")
+             "(数字=管理ロス / カタカナ=突発 / 英字=ハンドリング)"
+             + ("。分類1・内訳番号99 だけは数字でも「その他」に数えます" if other else ""))
 
 
 def _operating(agg: ShiftAggregate) -> Step:
@@ -139,17 +146,24 @@ def _operating(agg: ShiftAggregate) -> Step:
 
 
 def _operational(agg: ShiftAggregate) -> Step:
+    """操業時間。その他停止(99)は前と同じく引く(あるときだけ式に出す)。"""
+    other = agg.other_stop_minutes != 0
     return Step(
         key="operational_minutes", name="操業時間(分)",
-        formula="1440分 − 管理ロス停止",
+        formula="1440分 − 管理ロス停止" + (" − その他停止" if other else ""),
         substituted=(f"{_num(MINUTES_PER_DAY)}"
-                     f" − {_num(agg.management_loss_minutes)}"),
+                     f" − {_num(agg.management_loss_minutes)}"
+                     + (f" − {_num(agg.other_stop_minutes)}" if other else "")),
         result=f"{_num(agg.operational_minutes)} 分",
         terms=[Term("1440", MINUTES_PER_DAY, "分", 0, "定数(1日)"),
                Term("管理ロス停止", agg.management_loss_minutes, "分", 0,
-                    "明細の合計")],
+                    "明細の合計"),
+               *([Term("その他停止", agg.other_stop_minutes, "分", 0, "明細の合計")]
+                 if other else [])],
         note="引くのは管理ロスだけです(VBA Opetional)。"
-             "突発とハンドリングは操業していた時間の中の出来事なので引きません")
+             "突発とハンドリングは操業していた時間の中の出来事なので引きません"
+             + ("。分類1・内訳番号99(その他停止)は、管理ロスから分ける前と同じく"
+                "引きます" if other else ""))
 
 
 def _rate(agg: ShiftAggregate) -> Step:

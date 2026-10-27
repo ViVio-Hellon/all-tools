@@ -48,7 +48,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
-from .aggregation import classify_stop_code
+from .aggregation import OTHER_STOP_CODES, classify_stop_code, is_other_stop_code
 
 #: 分類。**並びは作業停止時間内訳_1 → _2 → _3**(紙とマスタの並び)。
 #:
@@ -115,15 +115,19 @@ _KIND_OF = {name: kind for _, name, _, _, kind in CATEGORIES}
 #: 断ります ── 名前の無い理由が増えると、選ぶ人にも集計を読む人にも
 #: 何の停止か分からなくなるので、**決まった1つだけ**にしておきます。
 #:
-#: 集計では名前の欄が空のまま入ります(記号・分・回数・管理ロス/突発/
-#: ハンドリングの分け方は記号で決まるので、ほかの理由と変わりません)。
+#: 集計では名前の欄が空のまま入ります。**種類は管理ロスではなく「その他停止」**
+#: です(超えた休憩を打つ記号なので、設備の止まった時間に数えない ──
+#: `aggregation.OTHER_STOP_CODES`)。止まっていた時間には入ります。
+#:
+#: **記号はあちらの1か所から作ります**(名前を空にしてよい記号と、その他停止に
+#: 数える記号は同じもの。片方だけ足して食い違わないように)。分類は 1(数字の記号)。
 #:
 #: 記号は `_fold` で見比べます(全角の「９９」も 99 とみなす)。メモ帳で
 #: 日本語入力のまま打つと全角になるので、それだけで同じ断りが出ると
 #: 「99 なのに通らない」になります。**記号そのものは書いたとおりに残します**
 #: (モジュールの説明の決まり)── ここで見ているのは「名前を空にしてよいか」
 #: だけです。
-BLANK_LABEL_OK: frozenset[tuple[str, str]] = frozenset({("1", "99")})
+BLANK_LABEL_OK: frozenset[tuple[str, str]] = frozenset(("1", code) for code in OTHER_STOP_CODES)
 
 #: 名前の無い理由を**画面に出すとき**の書き方。集計・CSV・日報には入れません
 #: (名前の欄は空のまま)。「99(マスタに無い)」と同じ並べ方です
@@ -292,10 +296,12 @@ def parse(text: str, *, source: str = "") -> Parsed:
             # (VBA `CheckCharType`)── 数字の記号を 2 に書くと、選ぶときは
             # 突発・待ちの中にあるのに、集計では管理ロスに数えられます
             want = CHAR_TYPE_WORDS.get(expected, expected)
+            # 99 は数字でも管理ロスでなく「その他停止」に数えます(`is_other_stop_code`)
+            counted = "その他停止" if is_other_stop_code(code) else _counted_as(actual)
             found.problems.append(Problem(
                 line_no, stripped,
                 f"{call_of(category)}の記号は{want}です。「{code}」は集計で"
-                f"{_counted_as(actual)}に数えられます", WARN))
+                f"{counted}に数えられます", WARN))
         found.values.setdefault(category, []).append(Reason(code, label, note))
     return found
 
@@ -349,6 +355,7 @@ NOTE = (
     "内訳番号 … 日報に残る記号。昔の日報と同じ記号を使ってください"
     "(変えると昔の日報の停止が「内訳にない記号」になります)",
     "内訳 … 理由の名前。空にできるのは 1 の 99 だけです(集計の内訳の欄も空のまま入ります)",
+    "1 の 99 は集計で管理ロスに数えず「その他停止」に数えます(止まっていた時間には入ります)",
     "分類ごとに、ここに行があればここを使い、1行も無い分類は伝送用ファイルの表を使います。",
 )
 

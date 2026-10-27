@@ -87,6 +87,8 @@
             <tr><th>直</th><th class="num">枚数</th><th class="num">重量(t)</th>
                 <th class="num">実働(分)</th><th class="num">管理ロス</th>
                 <th class="num">突発</th><th class="num">ハンドリング</th>
+                {# 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`) #}
+                <th class="num">その他</th>
                 <th class="num">稼働率(%)</th><th class="num">生産性(t/h)</th></tr>
           </thead>
           <tbody>
@@ -99,11 +101,12 @@
               <td class="num">{{ r.loss }}</td>
               <td class="num">{{ r.sudden }}</td>
               <td class="num">{{ r.handling }}</td>
+              <td class="num">{{ r.other }}</td>
               <td class="num">{{ r.rate }}</td>
               <td class="num">{{ r.productivity }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="9" class="empty">この日の保存データがありません。</td></tr>
+            <tr><td colspan="10" class="empty">この日の保存データがありません。</td></tr>
             {% endfor %}
           </tbody>
         </table>

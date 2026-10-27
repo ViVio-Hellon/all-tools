@@ -12,9 +12,16 @@
 
 空欄や、どの文字種にも当てはまらない(数字とカタカナが混在する等の)
 コードはVBA同様に集計から除外する。
+
+【例外: 分類1・内訳番号99 は「その他停止」】
+記号の文字では数字(管理ロス)ですが、**管理ロスに数えず「その他停止」に
+分けます**(`OTHER_STOP_CODES` の1か所)。止まっていた時間(停止合計・稼働
+時間・稼働率)には今までどおり入り、作業時間には回しません。理由は
+`OTHER_STOP_CODES` の説明に。
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 
@@ -65,6 +72,70 @@ def _minutes(value: str) -> float:
     return to_float(value) if is_numeric(value) else 0.0
 
 
+# ======================================================================
+# 管理ロスに数えない数字の記号 ── 分類1・内訳番号99
+# ======================================================================
+#: **数字の記号でも、管理ロスに数えない記号。** いまは 99 だけです。
+#:
+#: 利用者の事情: 休憩は本来60分ですが、超えた分をほかの停止や作業時間に
+#: 足して打つのが日常になっていました(それでは日報の意味がなくなる)。
+#: そこで超えた分は「分類1・内訳番号99(名前は空白)」で打ってもらうことに
+#: しました(v4.44.13 で名前が空でも読めるように ── `stop_csv.BLANK_LABEL_OK`
+#: はこの集まりから作っています)。
+#:
+#: ところが 99 は数字なので、そのままでは**管理ロス(設備停止)**に数えられ、
+#: 設備の止まった時間として集計・グラフに足されます。設備の改善を考える人が
+#: 読み違えるので、99 は管理ロスから外し、**「その他停止」**(`OTHER_STOP_KIND`)
+#: に分けて数えます:
+#:
+#:     ・止まっていた時間(停止合計)・稼働時間・稼働率・操業時間・作業時間は変えない
+#:       (99 の分が作業時間に回ったり、どこからも消えたりしない)
+#:     ・変わるのは「管理ロス」から 99 の分が抜け、「その他停止」に入ることだけ
+#:
+#: **共有へ送る集計の表**(管理ロス/突発/ハンドリングの3つしか欄が無く、VBA・
+#: Access・ほかの人の Excel が読む)は、今の形(99 は管理ロス)のまま出します
+#: (`FIXED_COLUMN_KINDS`。利用者の決定「共有へ送る表は管理ロス」)。集計 CSV は
+#: 「その他(分)」の欄を足して分けます(`csv_export.OTHER_COLUMN`)。
+#:
+#: 操業時間(1440 − 管理ロス)からは、99 も今までどおり引きます
+#: (利用者の決定「操業時間から引くで良いです」)。
+#:
+#: 記号は `_fold` で見比べます(全角の「９９」も 99)── メモ帳で日本語入力の
+#: まま打つと全角になるので。
+OTHER_STOP_CODES: frozenset[str] = frozenset({"99"})
+
+#: 「その他停止」の溜める文字(`packing_stop_detail.stop_kind` にも入る)。
+#: 見せる名前は `STOP_KIND_LABELS`
+OTHER_STOP_KIND = "その他停止"
+
+#: どの種類にも入らない記号(数字と片仮名が混ざった等)の溜める文字。
+#: **停止合計にも入りません**(VBA と同じ)。「その他停止」とは別物です
+UNCOUNTED_KIND = "その他"
+
+
+def _fold(code: str) -> str:
+    """記号を見比べる形(全角半角・前後の空白を吸収)。記号そのものは変えない。"""
+    return unicodedata.normalize("NFKC", str(code or "")).strip()
+
+
+def other_stop_spellings() -> frozenset[str]:
+    """`OTHER_STOP_CODES` を**表の中で探す**ときの書き方(半角と全角)。
+
+    表(`packing_stop_detail.stop_code`)には打った字がそのまま入っているので、
+    「９９」と打った行も拾えるように両方で探します。
+    """
+    out: set[str] = set()
+    for code in OTHER_STOP_CODES:
+        out.add(code)
+        out.add("".join(chr(ord(ch) + 0xFEE0) if "!" <= ch <= "~" else ch for ch in code))
+    return frozenset(out)
+
+
+def is_other_stop_code(code: str) -> bool:
+    """その記号は「その他停止」か(分類1・内訳番号99。`OTHER_STOP_CODES`)。"""
+    return _fold(code) in OTHER_STOP_CODES and classify_stop_code(code) == "数値"
+
+
 @dataclass
 class ShiftAggregate:
     """port of ``DayShift_Agg``/``Aggre_Calcul`` が集計シート1行分として
@@ -76,9 +147,12 @@ class ShiftAggregate:
     sheet_count: float = 0.0             # 合計（枚）
     weight_kg: float = 0.0               # 合計（重量, kg）
     work_minutes: float = 0.0            # 作業時間合計（分）
-    management_loss_minutes: float = 0.0     # 管理ロス停止（分）: 数値コード
+    management_loss_minutes: float = 0.0     # 管理ロス停止（分）: 数値コード(99 を除く)
     unplanned_stop_minutes: float = 0.0      # 突発停止/不稼働（分）: カタカナコード
     handling_stop_minutes: float = 0.0       # ハンドリング停止（分）: アルファベットコード
+    #: その他停止(分): 分類1・内訳番号99(`OTHER_STOP_CODES`)。
+    #: **止まっていた時間には入ります**(停止合計・稼働時間・稼働率)
+    other_stop_minutes: float = 0.0
 
     @property
     def weight_ton(self) -> float:
@@ -86,7 +160,8 @@ class ShiftAggregate:
 
     @property
     def total_stop_minutes(self) -> float:
-        return self.management_loss_minutes + self.unplanned_stop_minutes + self.handling_stop_minutes
+        return (self.management_loss_minutes + self.unplanned_stop_minutes
+                + self.handling_stop_minutes + self.other_stop_minutes)
 
     @property
     def operating_minutes(self) -> float:
@@ -96,8 +171,13 @@ class ShiftAggregate:
 
     @property
     def operational_minutes(self) -> float:
-        """操業時間(分) = 1440分 - 管理ロス停止のみ。port of ``Opetional``。"""
-        return MINUTES_PER_DAY - self.management_loss_minutes
+        """操業時間(分) = 1440分 - 管理ロス停止のみ。port of ``Opetional``。
+
+        **その他停止(99)も引きます。** 99 を管理ロスから外したのは見せ方の
+        話で、操業時間の数は変えない約束です ── 前は 99 も
+        管理ロスとして引かれていました。
+        """
+        return MINUTES_PER_DAY - self.management_loss_minutes - self.other_stop_minutes
 
     @property
     def operating_rate_pct(self) -> float:
@@ -150,13 +230,15 @@ def aggregate_shift(header: HeaderRecord, details: list[DetailRecord]) -> ShiftA
             minutes = _minutes(getattr(d, minutes_field))
             if minutes == 0:
                 continue
-            kind = classify_stop_code(code)
-            if kind == "数値":
+            kind = stop_kind_of(code)
+            if kind == "管理ロス停止":
                 agg.management_loss_minutes += minutes
-            elif kind == "カタカナ":
+            elif kind == "突発停止":
                 agg.unplanned_stop_minutes += minutes
-            elif kind == "アルファベット":
+            elif kind == "ハンドリング停止":
                 agg.handling_stop_minutes += minutes
+            elif kind == OTHER_STOP_KIND:
+                agg.other_stop_minutes += minutes
             # "空"/"その他" は VBA と同じく集計対象外
     return agg
 
@@ -194,6 +276,7 @@ def _accumulate(existing: ShiftAggregate, addition: ShiftAggregate) -> None:
     existing.management_loss_minutes += addition.management_loss_minutes
     existing.unplanned_stop_minutes += addition.unplanned_stop_minutes
     existing.handling_stop_minutes += addition.handling_stop_minutes
+    existing.other_stop_minutes += addition.other_stop_minutes
 
 
 def aggregate_day(records: list[tuple[HeaderRecord, list[DetailRecord]]]) -> list[ShiftAggregate]:
@@ -237,13 +320,40 @@ STOP_KIND_LABELS: dict[str, str] = {
     "管理ロス停止": "管理ロス設備停止",      # VBA StopM。数字の記号
     "突発停止": "段取り・突発停止",          # VBA StopH。カタカナの記号
     "ハンドリング停止": "ハンドリング停止",  # 英字の記号
-    "その他": "その他",
+    OTHER_STOP_KIND: "その他停止",           # 分類1・内訳番号99
+    UNCOUNTED_KIND: "その他",
 }
 
 #: 出す順。**重い順でも五十音でもなく、紙とマスタの並び**
-#: (作業停止時間内訳_1 → _2 → _3)
+#: (作業停止時間内訳_1 → _2 → _3)。その他停止(99)は3つの後ろ
 STOP_KIND_ORDER: tuple[str, ...] = (
-    "管理ロス停止", "突発停止", "ハンドリング停止", "その他")
+    "管理ロス停止", "突発停止", "ハンドリング停止", OTHER_STOP_KIND, UNCOUNTED_KIND)
+
+#: **共有へ送る集計の表**で、種類をどの欄に入れるか。
+#:
+#: 共有の `T_日報集計_<ライン>`(管理ロス停止分 / 突発停止分 / ハンドリング停止分)と
+#: `T_日報停止明細_<ライン>` の「分類」は、読む側(VBA・Access・ほかの人の Excel)が
+#: いて、「その他停止」の欄がありません。利用者の決定(「共有へ送る表は管理ロス」)で、
+#: そこへは**今の形(99 は管理ロス)のまま**出します ── 欄を足したり形を変えたりは
+#: しません(`packing_agg.fixed_columns`。使うのは共有へ送る道と、その指紋だけ)。
+FIXED_COLUMN_KINDS: dict[str, str] = {OTHER_STOP_KIND: "管理ロス停止"}
+
+
+def stop_kind_of(code: str) -> str:
+    """記号1つ → 集計の種類(溜める文字)。**分け方はここ1か所**です。
+
+    ふつうは記号の文字の種類(VBA `CheckCharType`)で決まり、分類1・内訳番号99
+    だけは「その他停止」(`OTHER_STOP_CODES`)。どれにも当たらなければ
+    「その他」(停止合計にも入らない)。
+    """
+    if is_other_stop_code(code):
+        return OTHER_STOP_KIND
+    return STOP_KINDS.get(classify_stop_code(code), UNCOUNTED_KIND)
+
+
+def fixed_column_kind(kind: str) -> str:
+    """共有へ送る表に出す種類(その他停止 → 管理ロス停止)。"""
+    return FIXED_COLUMN_KINDS.get(kind, kind)
 
 
 def stop_kind_label(kind: str) -> str:
@@ -298,7 +408,7 @@ def stop_items(records: list[tuple[HeaderRecord, list[DetailRecord]]],
                 code = (getattr(d, code_field) or "").strip()
                 if not code:
                     continue
-                kind = STOP_KINDS.get(classify_stop_code(code), "その他")
+                kind = stop_kind_of(code)
                 item = found.get(code)
                 if item is None:
                     item = StopItem(code=code, label=names.get(code, ""), kind=kind)

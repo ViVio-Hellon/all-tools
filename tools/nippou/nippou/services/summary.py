@@ -47,7 +47,8 @@ from ..db.models import (
 from ..db.repository import NippouRepository
 from ..logging_setup import get_logger
 from ..logic import packing_agg
-from ..logic.aggregation import ShiftAggregate, day_rate_pct, shift_sort_key
+from ..logic.aggregation import (ShiftAggregate, day_rate_pct, other_stop_spellings,
+                                 shift_sort_key)
 from ..logic.packing_agg import DayPoint, KeyTotals, LotRow, StopRow
 from ..logic.shift import parse_business_date
 
@@ -104,6 +105,7 @@ def build(pages: list[tuple[HeaderRecord, list[DetailRecord]]],
         equipment_stop_total=agg.management_loss_minutes,
         setup_stop_total=agg.unplanned_stop_minutes,
         handling_stop_total=agg.handling_stop_minutes,
+        other_stop_total=agg.other_stop_minutes,
         total_lot_count=packing_agg.lot_count(rows),
         coefficient_lot_count=packing_agg.coefficient_lot_count(rows),
         total_quantity=agg.sheet_count,
@@ -195,14 +197,24 @@ def fill_missing(repo: NippouRepository, start: date, end: date,
     保存のたびに作っているので、ふつうは0件です。0件でないのは、
     この仕組みが入る前に保存されたぶんと、表を直に書き換えたぶん。
 
+    **分類1・内訳番号99 を管理ロスのまま残している直も作り直します。** 99 を
+    「その他停止」に分ける前に作った集計です(`aggregation.OTHER_STOP_CODES`)。
+    集計は「そのときの分類で固定して残す」のが決まりですが、これは利用者が
+    分け方そのものを変えると決めたもの ── 作り直さないと、集計管理の「その他」は
+    0 のまま、管理者だけの「内訳番号99 の時間」(打った日報から数える)とは
+    食い違います。共有へ出る形は変わらないので、作り直しても送り直しには
+    なりません(`packing_agg.fixed_columns`)。
+
     **0件のときは明細を1行も読みません。** グラフを開くたびに通る道
     なので、「無いものを探す」だけで済ませます。
     """
     have = set(repo.packing_report_keys())
+    # 99 を「管理ロス停止」のまま残している直(分ける前に作った集計)
+    stale = set(repo.packing_stop_report_keys("管理ロス停止", other_stop_spellings()))
     made = 0
     labels: Optional[dict[str, str]] = None
     for key in repo.shift_keys_between(start, end, line=line):
-        if key in have:
+        if key in have and key not in stale:
             continue
         if labels is None:                        # 要るときだけマスタを読む
             labels = stop_labels()
@@ -235,7 +247,7 @@ def as_aggregate(report: PackingReport) -> ShiftAggregate:
     """残した集計1行を `ShiftAggregate` に戻す。
 
     稼働時間・稼働率・生産性は `ShiftAggregate` が停止時間から出し直す
-    ので、ここでは**元になる4つの時間**だけ戻します。保存してある
+    ので、ここでは**元になる時間**(作業と停止の4種類)だけ戻します。保存してある
     `operating_rate` などと食い違うことはありません(同じ式で出した値を
     書いてあるだけなので)。
     """
@@ -246,7 +258,8 @@ def as_aggregate(report: PackingReport) -> ShiftAggregate:
         work_minutes=report.work_time,
         management_loss_minutes=report.equipment_stop_total,
         unplanned_stop_minutes=report.setup_stop_total,
-        handling_stop_minutes=report.handling_stop_total)
+        handling_stop_minutes=report.handling_stop_total,
+        other_stop_minutes=report.other_stop_total)
 
 
 def day_rows(repo: NippouRepository, work_date: str, line: str
@@ -281,6 +294,7 @@ def period_rows(repo: NippouRepository, start: date, end: date,
         acc.management_loss_minutes += row.management_loss_minutes
         acc.unplanned_stop_minutes += row.unplanned_stop_minutes
         acc.handling_stop_minutes += row.handling_stop_minutes
+        acc.other_stop_minutes += row.other_stop_minutes
     # `for_period` が日付順に返すので、出てきた順がそのまま日付順
     return [totals[d] for d in order]
 
@@ -391,6 +405,7 @@ def by_shift(rows: list[ShiftAggregate]) -> list[ShiftAggregate]:
         acc.management_loss_minutes += row.management_loss_minutes
         acc.unplanned_stop_minutes += row.unplanned_stop_minutes
         acc.handling_stop_minutes += row.handling_stop_minutes
+        acc.other_stop_minutes += row.other_stop_minutes
     return sorted(totals.values(), key=lambda r: shift_sort_key(r.shift))
 
 
@@ -428,6 +443,7 @@ def day_total(rows: list[ShiftAggregate]) -> ShiftAggregate:
         total.management_loss_minutes += row.management_loss_minutes
         total.unplanned_stop_minutes += row.unplanned_stop_minutes
         total.handling_stop_minutes += row.handling_stop_minutes
+        total.other_stop_minutes += row.other_stop_minutes
     return total
 
 

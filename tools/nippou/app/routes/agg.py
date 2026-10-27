@@ -5,6 +5,8 @@
     POST /api/agg/csv      画面に出ている表をCSVにする(4本)
     POST /api/agg/push-log      共有保存の履歴(表とグラフ)
     POST /api/agg/push-log/csv  共有保存の履歴をCSVにする
+    POST /api/agg/code99        内訳番号99 の時間(**管理者だけ**。ほかは 403)
+    POST /api/agg/code99/csv    同じものをCSVにする(4本。管理者だけ)
 
 【Administrator はラインを選べる(v4.29.0)】
 アクセス権限の表で Administrator の PC には「表示」の隣に「ライン」を出し、選んだ
@@ -37,7 +39,7 @@ from flask import Blueprint, jsonify, render_template, request
 from nippou import work_context
 from nippou.config import SETTINGS
 from nippou.logging_setup import get_logger, log_button_click
-from nippou.presenters import agg_admin, push_log
+from nippou.presenters import agg_admin, code99, push_log
 from nippou.presenters import settings as settings_view
 from nippou.reporting import csv_export
 from nippou.services import line_view
@@ -88,6 +90,8 @@ def index():
         push_presets=push_log.period_presets(end),
         # 押す前に「どこへ出るか」を出す(設定・参照パスで変えられる)
         out_dir=settings_view.output_dir_view(),
+        # 内訳番号99 の時間の面。**管理者だけ**(`ctx.editor`)── ほかの端末には面ごと出さない
+        code99_shown=ctx.editor, code99_title=code99.TITLE,
         **shell.shell_context("agg", ribbon=_ribbon(ctx, calc)))
 
 
@@ -190,6 +194,93 @@ def push_log_csv():
     log_button_click("push_log_csv", line=line or "全ライン", extra=f"{start}~{end}")
     return jsonify({"file": str(out),
                     "message": f"{view.table.title} {count}行\n{out}"})
+
+
+# ----------------------------------------------------------------------
+# 内訳番号99 の時間 (管理者だけ。`presenters/code99`)
+# ----------------------------------------------------------------------
+def _code99_refusal():
+    """管理者でなければ断る(面を出していない端末から叩かれても答えない)。"""
+    if work_context.get_context().editor:
+        return None
+    return jsonify(error_body(
+        "not_admin", "この表は管理者だけが見られます(管理者モードか、アクセス権限の表で"
+                     " Administrator の PC)")), 403
+
+
+def _code99_view(payload: dict):
+    """面1つぶん。**期間の始まりが空なら、使い始めた月の1日から**(`code99.default_start`)。
+
+    ライン別は読めるラインぜんぶ(集計管理のラインの欄と同じ ── Administrator の PC は
+    控えのあるライン、ほかはこの端末のライン)。直別・作業者別・月ごとは選んだライン。
+    """
+    ctx = work_context.get_context()
+    from ..current import current_calculator
+    today = ctx.business_date(current_calculator())
+    try:
+        end = date.fromisoformat(str(payload.get("end") or today.isoformat()))
+        start_text = str(payload.get("start") or "").strip()
+        start = date.fromisoformat(start_text) if start_text else None
+    except ValueError:
+        return None, (jsonify(error_body(
+            "bad_date", "日付は yyyy-mm-dd の形式で入れてください")), 400)
+    if start is not None and start > end:
+        return None, (jsonify(error_body(
+            "bad_range", "開始日は終了日以前にしてください", field="start")), 422)
+
+    line = line_view.resolve(payload.get("line"), ctx.line)
+    pick = line_view.choices(ctx.line)
+    lines = list(pick.lines) if pick.shown else [ctx.line]
+    if line not in lines:
+        lines.append(line)
+    read: list[code99.LineData] = []
+    unread: list[str] = []
+    for ln in lines:
+        try:
+            with line_view.repo_for(ln, ctx.line, get_repo()) as repo:
+                read.append(code99.read_line(repo, ln, end))
+        except line_view.NoBackup as exc:
+            unread.append(str(exc))
+    return code99.build(read, line=line, start=start, end=end, today=today,
+                        unread=unread), None
+
+
+@bp.post("/api/agg/code99")
+def code99_view():
+    """内訳番号99 の時間(4つの表)。**管理者だけ。**"""
+    refused = _code99_refusal()
+    if refused:
+        return refused
+    payload = request.get_json(silent=True) or {}
+    view, err = _code99_view(payload)
+    if err:
+        return err
+    log_button_click("agg_code99", line=view.line, extra=f"{view.start}~{view.end}")
+    return jsonify(view.as_dict())
+
+
+@bp.post("/api/agg/code99/csv")
+def code99_csv():
+    """内訳番号99 の時間を、**画面の表そのまま**CSVにする(4本。BOM付きUTF-8)。"""
+    refused = _code99_refusal()
+    if refused:
+        return refused
+    payload = request.get_json(silent=True) or {}
+    view, err = _code99_view(payload)
+    if err:
+        return err
+    written: list[str] = []
+    try:
+        for table in view.tables:
+            out = csv_export.agg_output_path(SETTINGS.report_output_dir, table.key,
+                                             view.start, view.end, view.line)
+            count = csv_export.write_table(table, out)
+            written.append(f"{table.title} {count}行\n{out}")
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log.exception("内訳番号99 の時間のCSVを書けませんでした")
+        return jsonify(error_body("write_failed", f"出力に失敗しました: {exc}")), 500
+    log_button_click("agg_code99_csv", line=view.line, extra=f"{view.start}~{view.end}")
+    return jsonify({"files": written, "message": "\n".join(written)})
 
 
 def _ribbon(ctx, calc):

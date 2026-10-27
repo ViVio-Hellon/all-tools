@@ -37,6 +37,7 @@ from dbkit.sqlite_toolkit import (
 
 from ..logic.aggregation import SHIFT_ORDER
 from ..logic.fingerprint import page_fingerprint, summary_fingerprint
+from ..logic.packing_agg import fixed_columns
 from ..logic.month_roll import next_month
 from ..logic.shift import parse_business_date
 from .connection import transaction
@@ -518,7 +519,10 @@ class NippouRepository:
         # **日報と同じ決まり。** 中身が共有と同じなら、送り直しません
         # (`logic/fingerprint`)。集計は保存のたびに作り直されるので、
         # これが無いと「打ち直していないのに毎回送る」ことになります
-        content_hash = summary_fingerprint(report, details)
+        # 指紋は**共有へ出る形**で取ります(99 は管理ロスに足した形。
+        # `packing_agg.fixed_columns`)── 99 を「その他停止」に分けただけで、
+        # 送り済みの直が「未送信」に戻らないように
+        content_hash = summary_fingerprint(*fixed_columns(report, details))
         with transaction(self.conn):
             # 外部キーは接続ごとの設定。ここで確かめておく
             # (`connection.py` が入れているが、渡された接続でも効くように)
@@ -617,6 +621,8 @@ class NippouRepository:
             equipment_stop_total=float(row["equipment_stop_total"] or 0.0),
             setup_stop_total=float(row["setup_stop_total"] or 0.0),
             handling_stop_total=float(row["handling_stop_total"] or 0.0),
+            other_stop_total=float((row["other_stop_total"]
+                                    if "other_stop_total" in row.keys() else 0.0) or 0.0),
             total_lot_count=int(row["total_lot_count"] or 0),
             coefficient_lot_count=float(row["coefficient_lot_count"] or 0.0),
             total_quantity=float(row["total_quantity"] or 0.0),
@@ -725,6 +731,25 @@ class NippouRepository:
         return [(r["work_date"], r["line_name"], r["shift"]) for r in
                 self.conn.execute(
                     "SELECT work_date, line_name, shift FROM packing_report")]
+
+    def packing_stop_report_keys(self, kind: str, codes: Iterable[str]
+                                 ) -> list[tuple[str, str, str]]:
+        """停止の表に、記号 `codes` のどれかを種類 `kind` で残している直。
+
+        分類1・内訳番号99 を「その他停止」に分ける前に作った集計(99 が管理ロスの
+        まま残っている直)を探すのに使います(`summary.fill_missing`)。
+        """
+        codes = sorted(set(codes))
+        if not codes:
+            return []
+        marks = ",".join("?" * len(codes))
+        return [(r["work_date"], r["line_name"], r["shift"]) for r in self.conn.execute(
+            "SELECT DISTINCT r.work_date, r.line_name, r.shift"
+            " FROM packing_stop_detail s"
+            " JOIN packing_report_detail d ON s.detail_id = d.id"
+            " JOIN packing_report r ON d.report_id = r.id"
+            f" WHERE s.stop_kind = ? AND TRIM(s.stop_code) IN ({marks})",
+            (kind, *codes))]
 
     def pending_packing_reports(self) -> list[PackingReport]:
         """まだ共有へ送っていない集計。"""

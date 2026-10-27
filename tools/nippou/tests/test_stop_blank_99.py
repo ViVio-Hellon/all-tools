@@ -15,6 +15,7 @@
     ・99 は「停止内訳にない記号」にならない(選択欄に「99(名前なし)」・保存の確かめを通る・全停入力)
     ・集計: 99 は内訳の名前を空で計上。**分・回数・管理ロスなどの数字は、名前があるときと1つも
       変わらない**(集計管理・グラフ・日々のCSV・共有へ送る集計・月の書き出し)
+    ・99 を管理ロスでなく「その他停止」に数えることは `tests/test_stop_other_99.py`
 """
 from __future__ import annotations
 
@@ -344,18 +345,21 @@ class WebTests(WebTestCase):
         self.assertNotIn(save_checks.UNKNOWN_STOP, [f.code for f in found.findings],
                          [f.message for f in found.findings])
 
-        # 停止内訳CSV: 99 は記号「99」・内訳は空・管理ロス・2回 45分
+        # 停止内訳CSV: 99 は記号「99」・内訳は空・2回 45分。種類は管理ロスでなく
+        # 「その他停止」(`aggregation.OTHER_STOP_CODES` ──
+        # 詳しくは tests/test_stop_other_99.py)
         from nippou.reporting import csv_export
         row99 = next(r for r in blank["day_stop"]
                      if r["記号"] == "99" and r["区分"] == csv_export.STOP_KIND_TOTAL)
         self.assertEqual((row99["内訳"], row99["分類"], row99["回数"], row99["停止時間(分)"]),
-                         ("", "管理ロス設備停止", "2", "45"))
-        # 管理ロスの合計に入っている(休憩 45 + 99 の 45)
-        self.assertEqual(blank["day_agg"][0]["management_loss_minutes"], 90)
-        # 共有の停止の表も、99 は内訳の欄が空・分類は管理ロス
+                         ("", "その他停止", "2", "45"))
+        # 管理ロスには休憩の 45 だけ。99 の 45 は「その他停止」
+        self.assertEqual(blank["day_agg"][0]["management_loss_minutes"], 45)
+        self.assertEqual(blank["day_agg"][0]["other_stop_minutes"], 45)
+        # 共有の停止の表は欄の形が決まっているので、99 は内訳の欄が空・分類は今までどおり管理ロス
         stop99 = [r for r in blank["shared"]["T_停止"] if r["記号"] == "99"]
         self.assertEqual([(r["内訳"], r["時間分"]) for r in stop99], [("", 30), ("", 15)])
-        self.assertEqual({r["分類"] for r in stop99}, {blank["shared"]["T_停止"][0]["分類"]})
+        self.assertEqual({r["分類"] for r in stop99}, {"管理ロス停止"})
 
         # 名前を付けて作り直す → **名前を消せば全部同じ**(数字は1つも変わらない)
         self.write_csv(f"1,99,{NAMED},")

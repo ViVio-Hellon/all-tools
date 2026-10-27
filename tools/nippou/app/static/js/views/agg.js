@@ -164,6 +164,65 @@ export function start() {
   loadPushLog();
 
 
+  /*
+    内訳番号99 の時間(管理者だけ。面が無い端末では何もしない)。
+    **開いたときに初めて読みます** ── 読めるラインの控えをぜんぶ読むので、
+    開かない人を待たせない。表を組み立てるのはサーバ(`presenters/code99.py`)。
+  */
+  const code99 = document.getElementById("code99");
+  const code99Start = document.getElementById("code99-start");
+  const code99End = document.getElementById("code99-end");
+  const code99Span = () => ({
+    start: code99Start?.value || "", end: code99End?.value || "",
+    ...(lineSelect ? { line: lineSelect.value } : {}),
+  });
+  const code99Note = (text, kind = "info") => {
+    const box = document.getElementById("code99-msg");
+    if (!box) return;
+    box.hidden = !text;
+    box.textContent = text;
+    box.className = `msg msg--${kind}`;
+  };
+  let code99Loaded = false;
+  async function loadCode99() {
+    if (!code99) return;
+    code99Loaded = true;
+    try {
+      const body = await api.post("/api/agg/code99", code99Span());
+      // 始まりを空で引いたときは、サーバが決めた始まり(使い始めた月の1日)を欄へ戻す
+      if (code99Start) code99Start.value = body.start;
+      if (code99End) code99End.value = body.end;
+      for (const table of body.tables || []) paintTable(table);
+      const first = document.getElementById("code99-first");
+      if (first) first.textContent = body.first_text || "";
+      const warning = document.getElementById("code99-warning");
+      if (warning) {
+        warning.hidden = !(body.unread || []).length;
+        warning.textContent = (body.unread || []).join(" / ");
+      }
+      code99Note("");
+    } catch (err) {
+      code99Note(err.message, "error");
+      toastError(err.message);
+    }
+  }
+  code99?.addEventListener("toggle", () => {
+    if (code99.open && !code99Loaded) loadCode99();
+  });
+  document.getElementById("code99-reload")?.addEventListener("click", loadCode99);
+  // 上のラインの欄を選び直したら、開いていればこちらも引き直す(表とラインを食い違わせない)
+  lineSelect?.addEventListener("change", () => { if (code99?.open) loadCode99(); });
+  document.getElementById("code99-csv")?.addEventListener("click", async () => {
+    try {
+      const body = await api.post("/api/agg/code99/csv", code99Span());
+      code99Note(body.message, "ok");
+      toast("内訳番号99 の時間をCSVに書き出しました");
+    } catch (err) {
+      code99Note(err.message, "error");
+      toastError(err.message);
+    }
+  });
+
   document.getElementById("csv")?.addEventListener("click", async () => {
     try {
       const body = await api.post("/api/agg/csv", span());

@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 from ..db.repository import NippouRepository
 from ..logic import line_target
-from ..logic.aggregation import (MINUTES_PER_DAY, ShiftAggregate,
+from ..logic.aggregation import (MINUTES_PER_DAY, OTHER_STOP_KIND, ShiftAggregate,
                                  day_rate_pct, stop_kind_label)
 from ..logic.numeric import format_fixed
 from ..logic.shift import SHIFT_NAMES
@@ -505,6 +505,8 @@ STOP_KIND_MARKS = {
     "管理ロス停止": "stop-loss",
     "突発停止": "stop-sudden",
     "ハンドリング停止": "stop-handling",
+    # その他停止(分類1・内訳番号99)は3分類のどれでもないので、まとめ色(灰)で
+    OTHER_STOP_KIND: CAT_REST,
 }
 
 
@@ -520,6 +522,9 @@ def stop_kind_tile(rows: list[ShiftAggregate], scope: str = "本日") -> Tile:
         (stop_kind_label("突発停止"), _sum(rows, "unplanned_stop_minutes")),
         (stop_kind_label("ハンドリング停止"),
          _sum(rows, "handling_stop_minutes")),
+        # 分類1・内訳番号99。**管理ロスに入れない**(`aggregation.OTHER_STOP_CODES`)。
+        # 0分なら扇は出ません(`_donut_slices` が落とす)
+        (stop_kind_label(OTHER_STOP_KIND), _sum(rows, "other_stop_minutes")),
     ], {stop_kind_label(k): v for k, v in STOP_KIND_MARKS.items()})
     return Tile(key="stop_kinds", title="停止の内訳(分類)", kind=KIND_DONUT,
                 note=scope, unit="分", slices=slices,
@@ -583,7 +588,7 @@ def shift_table_tile(rows: list[ShiftAggregate], scope: str = "本日") -> Tile:
         key="shift_table", title=f"{scope}の直別集計", kind=KIND_TABLE,
         note=scope,
         columns=["直", "枚数", "重量(t)", "作業(分)", "管理ロス", "突発",
-                 "ﾊﾝﾄﾞﾘﾝｸﾞ", "稼働率(%)", "生産性(t/h)"],
+                 "ﾊﾝﾄﾞﾘﾝｸﾞ", "その他", "稼働率(%)", "生産性(t/h)"],
         rows=[[r.shift,
                format_fixed(r.sheet_count, 0),
                format_fixed(r.weight_ton, 2),
@@ -591,6 +596,8 @@ def shift_table_tile(rows: list[ShiftAggregate], scope: str = "本日") -> Tile:
                format_fixed(r.management_loss_minutes, 0),
                format_fixed(r.unplanned_stop_minutes, 0),
                format_fixed(r.handling_stop_minutes, 0),
+               # 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`)
+               format_fixed(r.other_stop_minutes, 0),
                format_fixed(r.operating_rate_pct, 1),
                format_fixed(r.productivity_t_per_h, 2)] for r in rows],
         empty=f"{scope}の保存データはまだありません")

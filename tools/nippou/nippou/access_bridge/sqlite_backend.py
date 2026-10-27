@@ -444,7 +444,16 @@ def _agg_detail_values(key: tuple[str, str, str], d: PackingDetail,
 def _write_summary(conn: sqlite3.Connection, report: PackingReport,
                    details: list[PackingDetail], summary_table: str,
                    detail_table: str, stop_table: str, saved_at: str) -> int:
-    """直1つぶんの3つの表を入れ替える(確定は呼ぶ側)。入れた停止の数を返す。"""
+    """直1つぶんの3つの表を入れ替える(確定は呼ぶ側)。入れた停止の数を返す。
+
+    **欄の形は今のまま**です。分類1・内訳番号99(その他停止)は、手元の画面では
+    管理ロスから分けていますが、ここの表には「その他」の欄が無く、読む側
+    (VBA・Access・ほかの人の Excel)がいます。管理ロス停止分に足し、停止の表の
+    「分類」も「管理ロス停止」で書きます(`packing_agg.fixed_columns`)。
+    """
+    from ..logic.packing_agg import fixed_columns
+
+    report, details = fixed_columns(report, details)
     key = report.key()
     key_where = " AND ".join(f"{quote(c)}=?" for c in SUMMARY_KEY)
     for table in (stop_table, detail_table, summary_table):

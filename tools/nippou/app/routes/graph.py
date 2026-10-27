@@ -113,6 +113,8 @@ def _today_shifts(report_date: str, line: str) -> dict:
              "loss": round(r.management_loss_minutes, 1),
              "sudden": round(r.unplanned_stop_minutes, 1),
              "handling": round(r.handling_stop_minutes, 1),
+             # 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`)
+             "other": round(r.other_stop_minutes, 1),
              "rate": round(r.operating_rate_pct, 1),
              "productivity": round(r.productivity_t_per_h, 2)}
             for r in rows

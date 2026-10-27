@@ -257,6 +257,10 @@ def _summary_html(summary: Optional[PackingReport],
         ("管理ロス(分)", format_fixed(summary.equipment_stop_total, 0)),
         ("突発(分)", format_fixed(summary.setup_stop_total, 0)),
         ("ﾊﾝﾄﾞﾘﾝｸﾞ(分)", format_fixed(summary.handling_stop_total, 0)),
+        # 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`)。
+        # **あるときだけ**出す ── 無い直の紙は前と同じ
+        *([("その他(分)", format_fixed(summary.other_stop_total, 0))]
+          if summary.other_stop_total else []),
         ("稼働(分)", format_fixed(summary.operating_time, 0)),
         ("稼働率(%)", format_fixed(summary.operating_rate, 1)),
         ("生産性(t/h)", format_fixed(summary.productivity, 2)),

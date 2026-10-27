@@ -52,6 +52,8 @@ REPORT_FIELDS: tuple[str, ...] = (
     "equipment_stop_total", "setup_stop_total", "handling_stop_total",
     "total_lot_count", "coefficient_lot_count",
     "total_quantity", "total_weight", "productivity",
+    # その他停止(分類1・内訳番号99)。**あとから足した列**(`schema.ADDED_COLUMNS`)
+    "other_stop_total",
 )
 
 
@@ -77,9 +79,13 @@ class PackingReport:
     work_time: float = 0.0
     operating_time: float = 0.0          # 稼働時間 = 1440 - 停止ぜんぶ
     operating_rate: float = 0.0
-    equipment_stop_total: float = 0.0    # 管理ロス設備停止
+    equipment_stop_total: float = 0.0    # 管理ロス設備停止(99 を除く)
     setup_stop_total: float = 0.0        # 段取り・突発停止
     handling_stop_total: float = 0.0
+    #: その他停止(分類1・内訳番号99。`aggregation.OTHER_STOP_CODES`)。
+    #: **共有へは管理ロスに足して送ります**(欄が決まっているので。
+    #: `packing_agg.fixed_columns`)
+    other_stop_total: float = 0.0
     total_lot_count: int = 0
     coefficient_lot_count: float = 0.0
     total_quantity: float = 0.0
@@ -100,7 +106,7 @@ class PackingReport:
     @property
     def stop_total(self) -> float:
         return (self.equipment_stop_total + self.setup_stop_total
-                + self.handling_stop_total)
+                + self.handling_stop_total + self.other_stop_total)
 
 
 @dataclass

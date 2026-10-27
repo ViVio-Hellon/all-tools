@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS packing_report (
     equipment_stop_total    REAL,               -- 管理ロス設備停止 (StopM)
     setup_stop_total        REAL,               -- 段取り・突発停止 (StopH)
     handling_stop_total     REAL,               -- ハンドリング停止
+    other_stop_total        REAL,               -- その他停止(分類1・内訳番号99。管理ロスに入れない)
     total_lot_count         INTEGER,            -- ﾛｯﾄ数(重複を除く)
     coefficient_lot_count   REAL,               -- 係数処理ﾛｯﾄ数
     total_quantity          REAL,               -- 合計枚数
@@ -199,8 +200,8 @@ CREATE TABLE IF NOT EXISTS packing_stop_detail (
     stop_no       INTEGER NOT NULL,     -- 1〜3(紙の①②③)
     stop_code     TEXT,                 -- 停止記号
     stop_reason   TEXT,                 -- 内訳名(マスタが読めたとき)
-    -- 管理ロス停止 / 突発停止 / ハンドリング停止。**そのときの分類で
-    -- 固定して残す** ── 記号の付け替えで去年のグラフが書き換わらない
+    -- 管理ロス停止 / 突発停止 / ハンドリング停止 / その他停止(分類1・99)。
+    -- **そのときの分類で固定して残す** ── 記号の付け替えで去年のグラフが書き換わらない
     stop_kind     TEXT,
     stop_minutes  REAL,
     break_range   TEXT,                 -- 休憩(記号 0)の時刻「11:30〜12:30」(v4.37.0)
@@ -390,6 +391,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("daily_detail", "reason", "TEXT"),
     ("daily_detail", "break_range", "TEXT"),      # v4.37.0 休憩の時刻
     ("packing_stop_detail", "break_range", "TEXT"),
+    # その他停止(分類1・内訳番号99)。空のまま足します ── 足す前に作った直の集計は
+    # 99 が管理ロスに入ったままなので、作り直せば分かれます(`summary.rebuild`)
+    ("packing_report", "other_stop_total", "REAL"),
     # 作業停止④⑤(v4.24.0)
     ("daily_detail", "s4", "TEXT"),
     ("daily_detail", "th4", "TEXT"),

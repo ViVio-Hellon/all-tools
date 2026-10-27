@@ -109,7 +109,11 @@ _SUMMARY_SKIP = frozenset({"id", "report_id", "dirty", "synced_at",
                            "created_at", "updated_at",
                            # 休憩の時刻はこの端末の中と CSV だけ(共有へ出る中身ではない)。数えると
                            # 足しただけで全部の直が「未送信」に戻る(v4.37.0)
-                           "break_range"})
+                           "break_range",
+                           # その他停止(99)。共有へは管理ロスに足して出る(欄が無い)ので、
+                           # 指紋は足した形で取る(`packing_agg.fixed_columns`)。この欄を
+                           # 数えると、足しただけで全部の直が「未送信」に戻る
+                           "other_stop_total"})
 
 
 def _record_values(record: Any) -> list[str]:

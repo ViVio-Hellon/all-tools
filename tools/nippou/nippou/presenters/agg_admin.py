@@ -149,15 +149,20 @@ def key_table(totals: list[KeyTotals], note: str) -> Table:
 
 
 def shift_table(reports, note: str) -> Table:
-    """直別(`Aggre_Calcul` が帯に出していたもの)。"""
+    """直別(`Aggre_Calcul` が帯に出していたもの)。
+
+    「その他」は分類1・内訳番号99 の停止です(`aggregation.OTHER_STOP_CODES`)。
+    管理ロスには入れず、止まっていた時間(稼働・稼働率)には入ります ──
+    管理ロス + 突発 + ﾊﾝﾄﾞﾘﾝｸﾞ + その他 = 1440 − 稼働。
+    """
     return Table(
         key="shifts", title="直別の集計", note=note,
         columns=["作業日", "直", "作業者", "昼稼働", "ページ", "ﾛｯﾄ数",
                  "係数ﾛｯﾄ数", "枚数", "重量(t)", "作業(分)", "管理ロス",
-                 "突発", "ﾊﾝﾄﾞﾘﾝｸﾞ", "稼働(分)", "操業(分)", "稼働率(%)",
+                 "突発", "ﾊﾝﾄﾞﾘﾝｸﾞ", "その他", "稼働(分)", "操業(分)", "稼働率(%)",
                  "生産性(t/h)"],
         numeric=[False, False, False, False, True, True, True, True, True,
-                 True, True, True, True, True, True, True, True],
+                 True, True, True, True, True, True, True, True, True],
         rows=[[r.work_date, r.shift, r.worker_name, r.daytime_operation or "無",
                str(r.pages), str(r.total_lot_count),
                format_fixed(r.coefficient_lot_count, 2),
@@ -167,6 +172,7 @@ def shift_table(reports, note: str) -> Table:
                format_fixed(r.equipment_stop_total, 0),
                format_fixed(r.setup_stop_total, 0),
                format_fixed(r.handling_stop_total, 0),
+               format_fixed(r.other_stop_total, 0),
                format_fixed(r.operating_time, 0),
                format_fixed(r.operation_time, 0),
                format_fixed(r.operating_rate, 1),

@@ -127,6 +127,55 @@
 </div>
 
 {# ================================================================
+   内訳番号99 の時間 ── **管理者だけ**(`ctx.editor`。ほかの端末には面ごと出さない。
+   サーバの口も断る ── `routes/agg.py` の `_code99_refusal`)
+
+   作業者の目に触れる所に「休憩」の字を大きく出さないよう、面の名前は中立に
+   (`presenters/code99.TITLE`)。**開いたときに読みます** ── 読めるラインの控えを
+   ぜんぶ読むので、開かない人を待たせない
+   ================================================================ #}
+{% if code99_shown %}
+<details class="card" id="code99" style="margin-top:var(--sp-3)">
+  <summary class="card__head">
+    <h2 style="display:inline">{{ code99_title }}</h2>
+    <span class="lead">管理者だけに出ています(開くと読みます)</span>
+  </summary>
+  <p class="lead">
+    分類1・内訳番号99(名前は空白)で打たれた停止の時間です。超えた休憩を打つ記号と
+    して使っています。集計では<b>管理ロスに入れず「その他」</b>に数えています
+    (止まっていた時間には入り、作業時間には入りません)。
+    ライン別は読めるラインごと、直別・作業者別・月ごとは上で選んでいるラインです。
+    作業者は日報の作業者の欄からで、<b>複数人の直はその全員に同じ分を数えます</b>
+    (作業者別の合計はライン全体より多くなることがあります)。
+    始まりを空にして「表示」を押すと、使い始めた月の1日からになります。
+  </p>
+  <div class="row">
+    <div class="field">
+      <label for="code99-start">開始日</label>
+      <input id="code99-start" type="date" value="">
+    </div>
+    <div class="field">
+      <label for="code99-end">終了日</label>
+      <input id="code99-end" type="date" value="{{ agg.end }}">
+    </div>
+    <button class="btn" type="button" id="code99-reload">表示</button>
+    <button class="btn" type="button" id="code99-csv">4本ともCSVに出す</button>
+  </div>
+  <p class="lead" id="code99-first" style="margin-top:var(--sp-2)"></p>
+  <div class="msg msg--info" id="code99-msg" hidden style="margin-top:var(--sp-2)"></div>
+  <div class="msg msg--warn" id="code99-warning" hidden style="margin-top:var(--sp-2)"></div>
+  {% for key, title in (("code99_lines", "ライン別"), ("code99_shifts", "直別"),
+                        ("code99_workers", "作業者別"), ("code99_months", "月ごとの移り変わり")) %}
+  <div data-table="{{ key }}" style="margin-top:var(--sp-3)">
+    <h3>{{ title }}</h3>
+    <span class="lead" data-table-note></span>
+    <div class="scroll-x" data-table-body data-nowrap></div>
+  </div>
+  {% endfor %}
+</details>
+{% endif %}
+
+{# ================================================================
    共有保存の履歴 ── **各直で「共有へ保存」を押した時刻と担当者**
 
    組み立てはサーバ(`presenters/push_log.py`)。**画面を出してから取りに

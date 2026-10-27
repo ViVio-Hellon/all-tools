@@ -30,18 +30,19 @@ VBA が「集計シートへ並べてから、その表を読んで合計した�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Iterable, Optional
 
 from ..constants import STOP_FIELD_PAIRS
-from ..db.models import DetailRecord, HeaderRecord
+from ..db.models import DetailRecord, HeaderRecord, PackingDetail, PackingReport
 from .aggregation import (
     MINUTES_PER_DAY,
+    OTHER_STOP_KIND,
     SHIFT_ORDER,
-    STOP_KINDS,
     ShiftAggregate,
-    classify_stop_code,
+    fixed_column_kind,
+    stop_kind_of,
 )
 from . import break_time, empty_pages
 from .numeric import is_numeric, to_float
@@ -92,7 +93,8 @@ class StopRow:
     stop_code: str = ""
     stop_reason: str = ""        # 内訳名(マスタが読めたとき)
     stop_minutes: float = 0.0
-    #: 管理ロス停止 / 突発停止 / ハンドリング停止 / その他。
+    #: 管理ロス停止 / 突発停止 / ハンドリング停止 / その他停止(分類1・99)/ その他。
+    #: 分け方は `aggregation.stop_kind_of` の1か所。
     #: **そのときの分類で固定して残します** ── VBA `Stop_Distr` は
     #: 記号の文字種で振り分けており、記号の付け替えで過去の分類が
     #: 変わってしまうと、去年のグラフが今年書き換わります
@@ -199,7 +201,7 @@ def build_stops(d: DetailRecord,
             stop_no=index, stop_code=code,
             stop_reason=names.get(code, ""),
             stop_minutes=num(getattr(d, minutes_field, "")),
-            stop_kind=STOP_KINDS.get(classify_stop_code(code), "その他"),
+            stop_kind=stop_kind_of(code),
             # 休憩の時刻は行に1つ(休憩を2つの欄に分けて打っても、時刻はその行の休憩ぜんぶ)
             break_range=(break_time.normalize(getattr(d, "break_range", "") or "")
                          if break_time.is_rest_code(code) else "")))
@@ -293,7 +295,35 @@ def totals(rows: Iterable[LotRow], *, work_date: str = "", line: str = "",
         agg.management_loss_minutes += row.minutes_of("管理ロス停止")
         agg.unplanned_stop_minutes += row.minutes_of("突発停止")
         agg.handling_stop_minutes += row.minutes_of("ハンドリング停止")
+        agg.other_stop_minutes += row.minutes_of(OTHER_STOP_KIND)
     return agg
+
+
+def fixed_columns(report: PackingReport, details: Iterable[PackingDetail]
+                  ) -> tuple[PackingReport, list[PackingDetail]]:
+    """**共有へ送る形**(その他停止 → 管理ロス)。写しを返す。
+
+    **使うのは共有へ送る道(`sqlite_backend._write_summary`)と、その指紋
+    (`repository.save_packing_report`)だけ**です。集計 CSV は通しません ──
+    あちらは「その他(分)」の欄を足して分けます(`csv_export.OTHER_COLUMN`)。
+
+    共有へ送る集計の表は 管理ロス停止分/突発停止分/ハンドリング停止分 の3つで、
+    停止の表の「分類」も3つ(と、どれにも入らない「その他」)を読む側(VBA・Access・
+    ほかの人の Excel)がいます。そこへは**今の形(99 は管理ロス)のまま**出します
+    (`aggregation.FIXED_COLUMN_KINDS`)── 欄を足したり形を変えたりはしません。
+
+    共有へ出た中身が同じなら送り直さない指紋(`fingerprint.summary_fingerprint`)も
+    この形で取ります。99 を分けたことで、送り済みの直が一斉に「未送信」に
+    戻らないように。
+    """
+    out_report = replace(
+        report,
+        equipment_stop_total=report.equipment_stop_total + report.other_stop_total,
+        other_stop_total=0.0)
+    out_details = [replace(d, stops=[replace(s, stop_kind=fixed_column_kind(s.stop_kind))
+                                     for s in d.stops])
+                   for d in details]
+    return out_report, out_details
 
 
 def lot_count(rows: Iterable[LotRow]) -> int:
