@@ -957,9 +957,15 @@ class GuardTests(_MixedCase):
         # 錠は PC ごとの手元の領域(runtime)
         self.assertTrue((pc_x.local_root / "runtime" / "instance.lock").is_file())
         self.assertTrue((pc_y.local_root / "runtime" / "desktop.lock").is_file())
-        # 共有フォルダに錠・ログ・作業用の物を置かない(SQLite のジャーナルの消え残りも無い)
-        after = sorted(p.relative_to(self.shared) for p in self.shared.rglob("*"))
-        self.assertEqual(after, before)
+        # 共有フォルダに錠・ログ・作業用の物を置かない(SQLite のジャーナルの消え残りも無い)。
+        # 裏の同期が書いている最中は、SQLite が一時的に「-journal」を作る(書き終われば消える。
+        # Windows の CI でその瞬間に当たった)ので、**元の中身に戻るのを待って**比べる。
+        # 消え残っていれば戻らないので、今までどおり落ちる
+        listing = lambda: sorted(p.relative_to(self.shared) for p in self.shared.rglob("*"))  # noqa: E731
+        try:
+            wait_for(lambda: listing() == before, "共有フォルダの中身が元のまま")
+        except AssertionError:
+            self.assertEqual(listing(), before)
 
 
 # ===========================================================================
