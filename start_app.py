@@ -156,6 +156,10 @@ class IdleWatch:
 
     見張りの1回(1秒のはず)が `WAKE_GAP_SEC` より空いたら眠っていたとみなし、
     そこから数え直す(起きたブラウザが心拍を送る間を与える)。
+
+    渡す時刻は `portal.awake_clock`(止まっていた分を差し引く時計。日報と同じ)。
+    差し引いた時計では見張りの1回は空かない(起きた直後の心拍の無かった秒数は、
+    眠る前の続き)。ここでの数え直しは、ただの monotonic を渡されたときの備え。
     """
 
     def __init__(self, started: float, *, idle_sec: float = IDLE_SEC,
@@ -265,15 +269,18 @@ def start(*, open_browser: bool = True) -> int:
         print(f"起動しました: {url}")
 
     # --- 画面が居なくなったら終わる(心拍)---
-    from portal import user_settings
+    # 時刻は**スリープを数えない時計**(日報と同じ `awake_clock`)。起きた瞬間に壁の時計が
+    # まだ進んでいなくても、止まっていた分を差し引く
+    from portal import awake_clock, user_settings
+    clock = awake_clock.start()
     wait_min = user_settings.first_contact_min()
     log.info("最初の画面を最大 %d 分待ちます(大設定で変えられます)", wait_min)
-    watch = IdleWatch(time.monotonic(), first_contact_sec=wait_min * 60)
+    watch = IdleWatch(clock.now(), first_contact_sec=wait_min * 60)
     try:
         while thread.is_alive() and not stopped.is_set():
             time.sleep(1)
             slept = watch.slept
-            now = time.monotonic()
+            now = clock.now()
             # 裏に回った画面があるあいだは、心拍が途切れても生きているものとして数える
             idle = watch.tick(now, now if web.in_background() else web.last_beat())
             if watch.slept != slept:

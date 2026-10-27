@@ -55,9 +55,7 @@ class FlowCase(ShellBrowserCase):
                 user_settings.KEY_DISTRIBUTION_APPLIED, distribution.KEY_FROM_DIST)})
             shutil.rmtree(distribution.directory(), ignore_errors=True)
             store.sync(force=True)
-            with web._beat_lock:
-                web._background.clear()
-                web._left.clear()
+            web.forget_screens()
 
         restore()
         self.addCleanup(restore)
@@ -741,6 +739,58 @@ class SwitchFlowTests(FlowCase):
         self.assertFalse(web.in_background())
         # 閉じた画面から遅れて届いた「隠れます」で裏に戻さない
         self.post("/api/alive", {"page": page_id, "hidden": True})
+        self.assertFalse(web.in_background())
+
+    def test_ブラウザ版の心拍_裏のあいだの心拍も裏と言う_凍結から戻ればすぐ送る(self) -> None:
+        """裏のタブでも最初の5分は20秒ごとのタイマーが動く。以前の心拍は見え方を言わず、
+        入口は「表に戻った」と受け取っていた ── そのあとタブが黙って止まる(メモリセーバーの
+        破棄など)と、90秒で入口が終わり、日報・点検表も止めていた。
+
+        凍結から戻った合図(`resume`)は document に届く。以前は window で待っていて、来なかった。
+        """
+        from portal import web
+
+        # 20秒ごとの心拍を、試験が呼べるように控える(20秒は待たない)
+        self.ctx.add_init_script(f"""(() => {{
+          if (location.origin !== "{ORIGIN}") return;
+          const real = window.setInterval;
+          window.setInterval = function (fn, ms, ...rest) {{
+            if (ms === 20000) window.__periodicBeat = fn;
+            return real.call(this, fn, ms, ...rest);
+          }};
+        }})();""")
+        page = self.open_shell(first="kanban")
+        self.wait_until(page, lambda: self.posts("/api/alive"), "最初の心拍")
+        self.assertTrue(page.evaluate("typeof window.__periodicBeat === 'function'"), "20秒ごとの心拍が無い")
+        self.assertIs(self.posts("/api/alive")[0].get("hidden"), False, "表の心拍が見え方を言わない")
+
+        page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});"
+                      "document.dispatchEvent(new Event('visibilitychange'))")
+        self.wait_until(page, lambda: self.kinds("beacon"), "裏に回る合図")
+        hidden = [json.loads(b["parts"]) for b in self.kinds("beacon") if b["url"] == "/api/alive"][-1]
+        self.assertEqual(self.post("/api/alive", hidden).status_code, 200)   # 合図は取り次ぎを通らない
+        self.assertTrue(web.in_background())
+
+        # 裏のまま、20秒ごとの心拍が回る(間引かれる前の最初の5分)
+        beats = len(self.posts("/api/alive"))
+        page.evaluate("window.__periodicBeat()")
+        self.wait_until(page, lambda: len(self.posts("/api/alive")) > beats, "裏のあいだの心拍")
+        self.assertIs(self.posts("/api/alive")[-1].get("hidden"), True, "裏のあいだの心拍が「裏」と言わない")
+        self.assertTrue(web.in_background(), "裏のタブの心拍で「表に戻った」と取り違えた")
+
+        # 凍結から戻った(まだ裏のまま)。すぐ心拍を送る
+        beats = len(self.posts("/api/alive"))
+        page.evaluate("document.dispatchEvent(new Event('resume'))")
+        self.wait_until(page, lambda: len(self.posts("/api/alive")) > beats, "凍結から戻ったときの心拍")
+        self.assertIs(self.posts("/api/alive")[-1].get("hidden"), True)
+        self.assertTrue(web.in_background())
+
+        # 表に戻れば見張りを再開する
+        beats = len(self.posts("/api/alive"))
+        page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'});"
+                      "document.dispatchEvent(new Event('visibilitychange'))")
+        self.wait_until(page, lambda: len(self.posts("/api/alive")) > beats, "表に戻ってすぐの心拍")
+        self.assertIs(self.posts("/api/alive")[-1].get("hidden"), False)
         self.assertFalse(web.in_background())
 
 

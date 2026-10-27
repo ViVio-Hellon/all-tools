@@ -22,6 +22,8 @@ python-web-tools の `packaging_tool/idle_exit.py` と同じもの。
    印刷されず、Excel も途中で止まります(`/api/shutdown` と同じ判断を使う)
 3. **1度も繋がっていなければ落とさない。** `--no-browser` で立てて
    おく使い方(検証・並行運用)を巻き添えにしません
+
+**時刻はスリープを数えません**(`awake_clock`。日報と同じ作り)。
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from . import awake_clock
 from .logging_utils import get_logger
 
 log = get_logger("idle_exit")
@@ -48,15 +51,23 @@ HEARTBEAT_MS = 20_000
 # 見張る間隔(秒)
 TICK_SEC = 2.0
 
-# 見張りの間隔が壁時計でこれ以上空いたら、PCがスリープしていたとみなす(秒)
+# 見張りの間隔がこれ以上空いたら、PCがスリープしていたとみなす(秒)。
+# 壁の時計と monotonic の**空きの大きいほう**で見る
 SLEEP_GAP_SEC = 30.0
+
+# 裏に回った画面を、心拍が無くても居るものとみなす長さ(秒・起きていた時間)。
+# **ブラウザが止めたタブからは何も来ない**ので、ここは「待つ」ではなく
+# 「置き去りの後始末」の長さ。7日 ── 窓を最小化したまま週末を越えても
+# 落とさない。閉じれば「閉じました」がその場で届くので、これを待つことは
+# まず無い(日報と同じ決まり)
+HIDDEN_KEEP_SEC = 7 * 24 * 3600.0
 
 
 @dataclass
 class _Screen:
     """開いている画面(タブ)1つ。"""
 
-    seen: float                              # 最後に何か届いた時刻(monotonic)
+    seen: float                              # 最後に何か届いた時刻(`awake_clock`)
     hidden: bool = False                     # 裏に回っている(別のタブ・最小化)
     leaving_at: Optional[float] = None       # 閉じた合図を受けた時刻
 
@@ -80,8 +91,18 @@ class IdleWatch:
     PCがスリープしているあいだは、画面もこのプロセスも止まります。
     Windows では `time.monotonic()` がスリープ中も進むので、戻った瞬間に
     「90秒 心拍が無い」が成り立ち、画面の最初の心拍より先に落ちていました。
-    見張りの間隔が壁時計で大きく空いたら**スリープから戻った**とみなし、
+    見張りの間隔が大きく空いたら**スリープから戻った**とみなし、
     そこから `idle_sec` は待ちます。
+
+    空きは**壁の時計と monotonic の大きいほう**で見ます。以前は壁の時計だけを
+    見ていたので、起きた瞬間に壁の時計がまだ進んでいない(Windows は起きてから
+    時刻を合わせ直すことがある)と気づかず、戻った直後に「90秒 心拍がありません」で
+    終わっていました。数える時計そのものも、止まっていた分を差し引きます
+    (`awake_clock`)。
+
+    【裏に回ったまま7日 音沙汰が無ければ後始末】
+    閉じた合図を取りこぼすと、裏に回った画面をいつまでも居るものとみなし、
+    終わらなくなる。日報と同じく `hidden_sec`(7日)で外す。
     """
 
     def __init__(self, stop: Callable[[], None],
@@ -89,13 +110,24 @@ class IdleWatch:
                  *, idle_sec: float = IDLE_SEC,
                  grace_sec: float = GRACE_SEC,
                  tick_sec: float = TICK_SEC,
-                 sleep_gap_sec: float = SLEEP_GAP_SEC) -> None:
+                 sleep_gap_sec: float = SLEEP_GAP_SEC,
+                 hidden_sec: float = HIDDEN_KEEP_SEC,
+                 clock: Optional[Callable[[], float]] = None,
+                 mono: Callable[[], float] = time.monotonic,
+                 wall: Callable[[], float] = time.time) -> None:
         self._stop = stop
         self._busy = busy
         self.idle_sec = idle_sec
         self.grace_sec = grace_sec
         self.tick_sec = tick_sec
         self.sleep_gap_sec = sleep_gap_sec
+        self.hidden_sec = hidden_sec
+        # **スリープを数えない時計**(差を取るのに使う)。試験は自分の時計を渡せる
+        self._clock = clock or awake_clock.now
+        # 見張りの間隔の空きを見る生の時計(スリープに気づくため)
+        self._mono = mono
+        self._wall = wall
+        self._last_tick: Optional[tuple[float, float]] = None
 
         self._lock = threading.Lock()
         self._screens: dict[str, _Screen] = {}
@@ -113,7 +145,7 @@ class IdleWatch:
         (業務の要求は表か裏かを言わないので、前の状態のまま)。
         `keep_leaving` は「裏に回った」のとき(下の `hidden`)。
         """
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             self._ever = True
             s = self._screens.get(screen)
@@ -155,9 +187,10 @@ class IdleWatch:
             if not self._ever:
                 return                          # 1度も繋がっていない
             s = self._screens.get(screen)
+            now = self._clock()
             if s is None:
-                s = self._screens[screen] = _Screen(seen=time.monotonic())
-            s.leaving_at = time.monotonic()
+                s = self._screens[screen] = _Screen(seen=now)
+            s.leaving_at = now
             others = sum(1 for k, v in self._screens.items()
                          if k and k != screen and v.leaving_at is None)
         if others:
@@ -173,48 +206,58 @@ class IdleWatch:
                                         daemon=True)
         self._thread.start()
         log.info("自動終了の見張りを始めました(無通信 %.0f秒 / 閉じたら %.0f秒 / "
-                 "裏に回った画面は落とさない)", self.idle_sec, self.grace_sec)
+                 "裏に回った画面は %.0f日 落とさない)", self.idle_sec, self.grace_sec,
+                 self.hidden_sec / 86400)
 
     def cancel(self) -> None:
         self._done.set()
 
     def _loop(self) -> None:
-        last_wall = time.time()
+        self._last_tick = (self._mono(), self._wall())
         while not self._done.wait(self.tick_sec):
-            now_wall = time.time()
-            self.check_sleep(now_wall - last_wall)
-            last_wall = now_wall
-            why = self.overdue()
-            if why is None:
-                continue
-            if self._busy():
-                # **処理中は落とさない。** 印刷の途中で終わると、
-                # 残りが印刷されない。終わればまた見に来る
-                log.info("誰も見ていませんが、処理中なので待ちます")
-                continue
-            log.info("誰も見ていないので終了します(%s)", why)
-            try:
-                from . import event_log
-                event_log.record("shutdown.request", event_log.INFO, by="自動終了(誰も見ていない)", why_text=why)
-            except Exception:                         # noqa: BLE001 - 記録の失敗で止め損ねない
-                pass
-            self._done.set()
-            self._stop()
-            return
+            if self.step():
+                return
 
-    def check_sleep(self, elapsed_wall: float) -> bool:
-        """見張りの間隔が壁時計で大きく空いた = スリープから戻った。待ち直す。"""
-        if elapsed_wall < self.tick_sec + self.sleep_gap_sec:
+    def step(self) -> bool:
+        """見張りの1回。止めたら真。"""
+        mono, wall = self._mono(), self._wall()
+        if self._last_tick is not None:
+            last_mono, last_wall = self._last_tick
+            # 壁の時計だけが進む(Linux のスリープ)・monotonic だけが先に進む(Windows の
+            # スリープで、起きた瞬間に壁の時計がまだ追いついていない)、どちらでも気づく
+            self.check_sleep(max(wall - last_wall, mono - last_mono))
+        self._last_tick = (mono, wall)
+        why = self.overdue()
+        if why is None:
+            return False
+        if self._busy():
+            # **処理中は落とさない。** 印刷の途中で終わると、
+            # 残りが印刷されない。終わればまた見に来る
+            log.info("誰も見ていませんが、処理中なので待ちます")
+            return False
+        log.info("誰も見ていないので終了します(%s)", why)
+        try:
+            from . import event_log
+            event_log.record("shutdown.request", event_log.INFO, by="自動終了(誰も見ていない)", why_text=why)
+        except Exception:                         # noqa: BLE001 - 記録の失敗で止め損ねない
+            pass
+        self._done.set()
+        self._stop()
+        return True
+
+    def check_sleep(self, elapsed: float) -> bool:
+        """見張りの間隔が大きく空いた = スリープから戻った。待ち直す。"""
+        if elapsed < self.tick_sec + self.sleep_gap_sec:
             return False
         with self._lock:
-            self._resumed_at = time.monotonic()
+            self._resumed_at = self._clock()
         log.info("スリープから戻ったようです(%.0f秒 止まっていた)。画面が戻るのを"
-                 " %.0f秒 待ちます", elapsed_wall, self.idle_sec)
+                 " %.0f秒 待ちます", elapsed, self.idle_sec)
         return True
 
     def overdue(self) -> Optional[str]:
         """終わってよいか。よければ理由、まだなら `None`。"""
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             if not self._ever:
                 # 1度も繋がっていない。`--no-browser` で立てておく使い方を
@@ -223,6 +266,7 @@ class IdleWatch:
             if self._resumed_at is not None and now - self._resumed_at < self.idle_sec:
                 return None                     # スリープから戻ったばかり
             closed = False
+            hidden_gone = False
             # 番号の付いた画面が居るなら、番号の無い要求はその読み込みの橋渡し
             keyed = any(self._screens)
             for key, s in list(self._screens.items()):
@@ -233,7 +277,11 @@ class IdleWatch:
                     del self._screens[key]      # 閉じた画面はもう数えない
                     continue
                 if s.hidden:
-                    return None                 # 裏に回っている。心拍が止まっても待つ
+                    if now - s.seen < self.hidden_sec:
+                        return None             # 裏に回っている。心拍が止まっても待つ
+                    hidden_gone = True          # 置き去り(閉じた合図を取りこぼした)
+                    del self._screens[key]
+                    continue
                 # 番号の無い要求(画面そのもの・静的ファイル)は、番号の付いた画面が
                 # 居るなら、ページを読み込むあいだの橋渡しだけ。閉じたあとの猶予と
                 # 同じ長さで切れる(でないと、全部閉じても 90秒 残る)
@@ -243,6 +291,8 @@ class IdleWatch:
                     return None                 # 表で心拍がある
         if closed:
             return "画面が閉じられました"
+        if hidden_gone:
+            return f"裏に回ったまま {self.hidden_sec / 86400:.0f}日 音沙汰がありません"
         return f"{self.idle_sec:.0f}秒 心拍がありません"
 
 

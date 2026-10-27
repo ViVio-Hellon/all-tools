@@ -1,0 +1,194 @@
+"""起きていた時間だけを数える時計 ── **スリープのあいだを「無通信」に数えない**
+
+日報の `nippou/awake_clock.py` と同じ作り(入口は別の Python なので、ここにも置く)。
+
+【何が起きるか】
+ブラウザ版の入口(`start_app.py`)は、大きなタブの画面の心拍が途絶えたら各ツールを
+止めて終わります。「最後の合図から何秒たったか」で決めますが、PC がスリープすると
+その間に時計がどう進むかは OS しだいです。
+
+    Windows   `time.monotonic()` はスリープ中も進む
+              → 起きた瞬間「90秒 心拍がありません」と判定し、
+                ブラウザが心拍を送るより先に入口が全ツールを止める
+              → 裏に回った画面の「置き去りの後始末」(7日)も、眠っていた分だけ早まる
+    Linux     スリープ中は止まる(こちらは困らない)
+
+【どう数えるか】
+2秒ごとに時計を見に行く見張りを1本立てます。**2秒のはずが15秒以上
+空いていたら、そのあいだプロセスごと止まっていた**(スリープ・休止・
+仮想機械の一時停止)とみなし、その分を差し引いた時刻を `now()` で返します。
+
+    起きていた時間 = monotonic − 止まっていた時間の合計
+
+**起きた瞬間に壁の時計(`time.time()`)がまだ進んでいなくても**、monotonic の
+空きで気づきます(壁の時計だけを見ると、ここで見落とす)。
+
+**見張りを立てていないあいだは、ただの `time.monotonic()` です。**
+デスクトップ版(`bridge.py`)は心拍で見張らないので立てません(試験もこちら)。
+"""
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+from .logging_utils import get_logger
+
+log = get_logger("awake_clock")
+
+#: 見に行く間隔(秒)
+TICK_SEC = 2.0
+
+#: これより空いたら「止まっていた」とみなす(秒)。見張りは2秒ごとに
+#: 起きるので、15秒はその7回ぶん ── 重い処理で少し遅れた程度では
+#: 眠っていたことにしない。打てるタブの見切り(`tab_lock.LOST_AFTER_SEC`)
+#: と同じ長さにして、**それより長く眠ったら必ず差し引く**
+JUMP_SEC = 15.0
+
+
+@dataclass(frozen=True)
+class Resume:
+    """止まっていたところから戻った1回。"""
+
+    #: 止まっていた長さ(秒・だいたい)
+    seconds: float
+    #: 戻ったことに気づいた時刻(`time.time()`)
+    at: float
+    #: monotonic も一緒に進んでいたか(True = Windows 型。差し引いた)
+    counted: bool
+
+    def as_dict(self) -> dict:
+        return {"seconds": round(self.seconds, 1), "at": self.at,
+                "counted": self.counted}
+
+
+class AwakeClock:
+    """起きていた時間だけを数える。"""
+
+    def __init__(self, mono: Callable[[], float] = time.monotonic,
+                 wall: Callable[[], float] = time.time, *,
+                 tick_sec: float = TICK_SEC, jump_sec: float = JUMP_SEC) -> None:
+        self._mono = mono
+        self._wall = wall
+        self.tick_sec = tick_sec
+        self.jump_sec = jump_sec
+        self._lock = threading.Lock()
+        self._slept = 0.0
+        # 最後に見た時刻。None = まだ見張っていない
+        self._last: Optional[tuple[float, float]] = None
+        self._resume: Optional[Resume] = None
+        self._done = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    # -- 時刻 ----------------------------------------------------------
+    def now(self) -> float:
+        """起きていた時間(秒)。**差を取るためだけに使う**(値そのものに意味は無い)。"""
+        with self._lock:
+            found = self._observe()
+            value = self._mono() - self._slept
+        if found is not None:
+            self._tell(found)
+        return value
+
+    def check(self) -> Optional[Resume]:
+        """見張り1回ぶん。止まっていたところから戻ったならそれを返す。"""
+        with self._lock:
+            found = self._observe()
+        if found is not None:
+            self._tell(found)
+        return found
+
+    @property
+    def watching(self) -> bool:
+        with self._lock:
+            return self._last is not None
+
+    @property
+    def last_resume(self) -> Optional[Resume]:
+        """最後に戻ったとき(無ければ None)。"""
+        with self._lock:
+            return self._resume
+
+    @property
+    def slept(self) -> float:
+        """これまでに差し引いた長さの合計(秒)。"""
+        with self._lock:
+            return self._slept
+
+    # -- 見張り --------------------------------------------------------
+    def start(self, *, thread: bool = True) -> None:
+        """見張りを始める。`thread=False` は試験用(`check()` を自分で回す)。"""
+        with self._lock:
+            if self._last is not None:
+                return
+            self._last = (self._mono(), self._wall())
+            if not thread:
+                return
+            self._thread = threading.Thread(target=self._loop, name="awake-clock",
+                                            daemon=True)
+        self._thread.start()
+
+    def cancel(self) -> None:
+        self._done.set()
+
+    def _loop(self) -> None:
+        while not self._done.wait(self.tick_sec):
+            self.check()
+
+    # -- 中で使うもの --------------------------------------------------
+    def _observe(self) -> Optional[Resume]:
+        """前に見たときから、止まっていたか。**錠の中で呼ぶ。**"""
+        if self._last is None:
+            return None
+        mono, wall = self._mono(), self._wall()
+        last_mono, last_wall = self._last
+        self._last = (mono, wall)
+        gap = mono - last_mono
+        if gap > self.jump_sec:
+            # monotonic ごと進んでいた(Windows)。**見張りの1回ぶんを
+            # 残して差し引く** ── その1回ぶんは本当に起きていた
+            lost = gap - self.tick_sec
+            self._slept += lost
+            self._resume = Resume(seconds=lost, at=wall, counted=True)
+            return self._resume
+        drift = (wall - last_wall) - gap
+        if drift > self.jump_sec:
+            # 壁の時計だけ進んでいた(Linux のスリープ)。monotonic は
+            # 止まっていたので差し引くものは無い ── 戻ったことだけ記す
+            self._resume = Resume(seconds=drift, at=wall, counted=False)
+            return self._resume
+        return None
+
+    @staticmethod
+    def _tell(found: Resume) -> None:
+        log.info("スリープ(または一時停止)から戻りました: 約%.0f秒 止まっていました%s",
+                 found.seconds,
+                 "(その間は無通信に数えません)" if found.counted else "")
+
+
+# ------------------------------------------------------------------
+# プロセスに1つ
+# ------------------------------------------------------------------
+_clock = AwakeClock()
+
+
+def now() -> float:
+    return _clock.now()
+
+
+def start() -> AwakeClock:
+    """見張りを立てる(`start_app` が1度)。2度呼んでも1本。"""
+    _clock.start()
+    return _clock
+
+
+def get() -> AwakeClock:
+    return _clock
+
+
+def reset() -> None:
+    """試験用。見張りを止めて、ただの monotonic に戻す。"""
+    global _clock
+    _clock.cancel()
+    _clock = AwakeClock()

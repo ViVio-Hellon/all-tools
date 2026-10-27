@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::bridge::{self, Bridge, Phase, Spec};
 use crate::catalog::{Catalog, Tool};
+use crate::waiting::{self, Deadline, SharedClock};
 
 /// 外枠の exe の名前(案内に出す)
 pub const EXE_LABEL: &str = "日報複合ツール.exe(AllTools.exe)";
@@ -47,17 +48,25 @@ pub enum Prepared {
 /// 以前は「受けた」が来ても 15 秒で見切って閉じていた ── 日報が「置けませんでした。
 /// 続けますか?」と訊いて本人が読んでいるあいだに、窓が閉じた。打った行が消えることが
 /// ありました。
+///
+/// **待ちのあいだに PC が眠っても、眠っていたあいだは数えない**(`waiting::Deadline`)。
+/// 「続けますか?」を出したまま蓋を閉じ、起きた直後に「済まない」とみなして閉じるのを
+/// やめる(または返事を待たずに閉じる)ことがない。
 pub fn wait_prepared(rx: &Receiver<Prepared>, limit: Duration, after_ack: Duration) -> bool {
-    let mut deadline = Instant::now() + limit;
+    wait_prepared_with(rx, limit, after_ack, waiting::system_clock())
+}
+
+/// 時計を指定して待つ(試験は止まっていた時間を差し込める時計を渡す)
+pub(crate) fn wait_prepared_with(rx: &Receiver<Prepared>, limit: Duration, after_ack: Duration, clock: SharedClock) -> bool {
+    let mut deadline = Deadline::new(limit, clock);
     let mut acked = false;
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
+        match waiting::recv_until(rx, &mut deadline) {
             Ok(Prepared::Done(ok)) => return ok,
             Ok(Prepared::Waiting) => {
                 if !acked {
                     acked = true;
-                    deadline = Instant::now() + after_ack;
+                    deadline.restart(after_ack);
                 }
             }
             Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return !acked,
@@ -386,5 +395,40 @@ mod tests {
         tx.send(Prepared::Waiting).unwrap();
         drop(tx);
         assert!(!wait_prepared(&rx, SHORT, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn 返事を待つあいだに眠っても_起きてから届いた返事を使う() {
+        use crate::waiting::testing::FakeClock;
+
+        // 「待っています」のあと(本人が「続けますか?」を読んでいる)に蓋を閉じた
+        let clock = FakeClock::new();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Prepared::Waiting).unwrap();
+        let watcher = clock.clone();
+        let answer = thread::spawn(move || {
+            watcher.wait_looked(2);
+            watcher.sleep(Duration::from_secs(3600));
+            watcher.wait_looked(2); // 待っている側が、起きたことに気づいた
+            tx.send(Prepared::Done(true)).unwrap();
+        });
+        assert!(
+            wait_prepared_with(&rx, SHORT, Duration::from_secs(3), clock),
+            "起きた直後に「済まない」とみなした(本人の「閉じる」を待たずにやめた)"
+        );
+        answer.join().unwrap();
+
+        // 「待っています」の前に眠っても、起きた直後に「返事が無い」で閉じない
+        let clock = FakeClock::new();
+        let (tx, rx) = mpsc::channel();
+        let watcher = clock.clone();
+        let answer = thread::spawn(move || {
+            watcher.wait_looked(2);
+            watcher.sleep(Duration::from_secs(3600));
+            watcher.wait_looked(2);
+            tx.send(Prepared::Done(false)).unwrap();
+        });
+        assert!(!wait_prepared_with(&rx, Duration::from_secs(3), SHORT, clock), "画面の「閉じない」を待たずに閉じた");
+        answer.join().unwrap();
     }
 }

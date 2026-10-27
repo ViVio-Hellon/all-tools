@@ -32,6 +32,7 @@
     inspection.launch_guard  多重起動の判定
     inspection.server        Webサーバ(待ち受け・停止)
     inspection.idle_exit     自動終了の見張り(表/裏・スリープ・閉じた)
+    inspection.awake_clock   スリープ(一時停止)から戻ったこと
     inspection.app.*         業務(フォルダ検索・プレビュー・印刷・Excel)
     inspection.event         なぜなぜ分析用の出来事(`core/event_log.py` の写し)
 

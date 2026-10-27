@@ -1016,7 +1016,11 @@ document.getElementById("who").addEventListener("click", async () => {
 const PAGE_ID = (crypto.randomUUID && crypto.randomUUID()) || `p${Date.now()}${Math.random().toString(36).slice(2)}`;
 function heartbeat() {
   if (desktop) return;
-  const beat = () => api.post("/api/alive", { page: PAGE_ID }).catch(() => {});
+  // 心拍のたびに**いまの見え方**を言い添える。言わないと入口は「表」と受け取る ──
+  // 裏のタブでも最初の5分は20秒ごとのタイマーが動くので、裏に回った20秒後に「表に戻った」と
+  // 取り違え、そのあとタブが黙って止まる(メモリセーバーの破棄など)と90秒で入口が終わっていた
+  const beat = () => api.post("/api/alive", { page: PAGE_ID, hidden: document.visibilityState === "hidden" })
+    .catch(() => {});
   beat();
   every(beat, 20000);
   // 裏に回る瞬間に「隠れます」と言う(`sendBeacon` は凍らされる直前でも届く)。裏のあいだは
@@ -1028,7 +1032,8 @@ function heartbeat() {
       api.post("/api/alive", { page: PAGE_ID, hidden: true }).catch(() => {});
     }
   });
-  window.addEventListener("resume", beat);
+  // 凍らされたタブが戻った(`resume` は document に届く。window で待っても来ない)
+  document.addEventListener("resume", beat);
   // タブごと凍らされる直前(Chrome・Edge)。裏に回ったときと同じ合図を送る
   document.addEventListener("freeze", () => {
     if (navigator.sendBeacon) {

@@ -532,9 +532,13 @@ def _initialize(srv, progress, *, check_excel: bool = False, watch_idle: bool = 
 
 
 def _watch_for_idle(srv, business) -> None:
-    """画面が居なくなったら止める見張り。止め方は `/api/shutdown` と同じ道(`srv.stop`)。"""
-    from core import idle_exit
+    """画面が居なくなったら止める見張り。止め方は `/api/shutdown` と同じ道(`srv.stop`)。
 
+    数える時計は**スリープを数えない**(`awake_clock`。日報と同じ)。見張りより先に立てる。
+    """
+    from core import awake_clock, idle_exit
+
+    awake_clock.start()
     idle_exit.install(srv.stop, lambda: bool(business.busy_labels()))
 
 

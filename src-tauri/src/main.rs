@@ -32,6 +32,7 @@ mod relay;
 mod services;
 mod shell;
 mod statics;
+mod waiting;
 
 use std::sync::Arc;
 use std::thread;

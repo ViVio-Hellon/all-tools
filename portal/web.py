@@ -20,12 +20,13 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from flask import Flask, jsonify, render_template, request
 
-from . import admin_password, app_config, catalog as catalog_mod, distribution, identity as identity_mod
+from . import admin_password, app_config, awake_clock, catalog as catalog_mod, distribution, identity as identity_mod
 from . import shared_db, tab_rights
 from .logging_utils import get_logger, log_dir
 from .rights_store import store
@@ -40,16 +41,63 @@ TOKEN_EXEMPT = frozenset({"/api/health", "/api/alive"})
 _shutdown_hook: Optional[Callable[[], None]] = None
 # ブラウザ版の各ツール(ブラウザ版のときだけサーバが差し込む)
 _browser_tools = None
-# 心拍(ブラウザ版の自動終了に使う)
-_last_beat = time.monotonic()
+# 心拍(ブラウザ版の自動終了に使う)。時刻は**スリープを数えない時計**(`awake_clock`)。
+# ブラウザ版の起動で見張りを立てる。立てていなければ(デスクトップ版・試験)ただの monotonic
+_last_beat = awake_clock.now()
 _beat_lock = threading.Lock()
-#: 裏に回った画面(「隠れます」と言ってきて、まだ表に戻っていない・閉じていない)。
+
+#: 裏に回った画面を、心拍が無くても居るものとみなす長さ(秒・起きていた時間)。
+#: **ブラウザが止めたタブからは何も来ない**ので、ここは「待つ」ではなく「置き去りの
+#: 後始末」の長さ。7日 ── 窓を最小化したまま週末を越えても終わらない。閉じれば
+#: 「閉じました」がその場で届くので、これを待つことはまず無い(日報と同じ決まり)
+HIDDEN_KEEP_SEC = 7 * 24 * 3600.0
+#: 閉じた画面を覚えておく長さ(秒)。遅れた合図は長くても数秒で着くので、十分に長く、
+#: しかし増え続けない長さ(日報と同じ)
+GONE_KEEP_SEC = 600.0
+#: 表の画面を覚えておく長さ(秒)。表の画面は裏かどうかの判断に使わないので、
+#: 声が途絶えたものは片付けるだけ(読み込みのたびにページ番号が変わり、増え続けないように)
+VISIBLE_KEEP_SEC = 600.0
+
+
+@dataclass
+class _Screen:
+    """開いている画面(大きなタブのページ1枚)の様子。"""
+
+    seen: float                 # 最後に合図が来た時刻(`awake_clock`)
+    hidden: bool = False        # 最後の合図で「裏に回っている」と言ったか
+
+
+#: 開いている画面。鍵は読み込みごとのページ番号(`shell.js` の PAGE_ID)。
 #: ブラウザは裏のタブのタイマーを間引き、Edge の「スリープ中のタブ」などはタブごと凍らせて
-#: 心拍が止まる ── そのあいだは心拍が途切れても終わらない(カレンダー・点検表と同じ決まり)
-_background: set[str] = set()
-#: 閉じた画面。閉じるときにも見え方が変わって「隠れます」が遅れて届くことがあり、
+#: 心拍が止まる ── 裏に回った画面があるあいだは、心拍が途切れても終わらない
+#: (日報・カレンダー・点検表と同じ決まり)。**画面は心拍のたびに見え方を言い添える**ので、
+#: 裏のタブの間引かれた心拍で「表に戻った」と取り違えない
+_screens: dict[str, _Screen] = {}
+#: 閉じた画面と、閉じた時刻。閉じるときにも見え方が変わって「隠れます」が遅れて届くことがあり、
 #: それで裏に戻すと、閉じたのにいつまでも終わらない
-_left: set[str] = set()
+_left: dict[str, float] = {}
+
+
+def _prune(now: float) -> None:
+    """もう居ないとみなす画面・覚えておかなくてよい閉じた画面を外す。**`_beat_lock` の中で呼ぶ。**"""
+    for page in [p for p, s in _screens.items()
+                 if now - s.seen >= (HIDDEN_KEEP_SEC if s.hidden else VISIBLE_KEEP_SEC)]:
+        del _screens[page]
+    for page in [p for p, at in _left.items() if now - at >= GONE_KEEP_SEC]:
+        del _left[page]
+
+
+def _background_now(now: float) -> bool:
+    """裏に回っている画面があるか。**`_beat_lock` の中で呼ぶ。**"""
+    _prune(now)
+    return any(s.hidden for s in _screens.values())
+
+
+def forget_screens() -> None:
+    """試験用。覚えている画面を全部忘れる。"""
+    with _beat_lock:
+        _screens.clear()
+        _left.clear()
 
 
 class CloseAsk:
@@ -196,9 +244,13 @@ def last_beat() -> float:
 
 
 def in_background() -> bool:
-    """裏に回っている画面があるか(あれば心拍が途切れても終わらない)。"""
+    """裏に回っている画面があるか(あれば心拍が途切れても終わらない)。
+
+    裏に回ったまま `HIDDEN_KEEP_SEC`(7日)音沙汰の無い画面は数えない ── 閉じた合図を
+    取りこぼしても、いつまでも終わらなくはならない。
+    """
     with _beat_lock:
-        return bool(_background)
+        return _background_now(awake_clock.now())
 
 
 def _error(code: str, message: str, status: int):
@@ -291,28 +343,28 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         global _last_beat
         body = request.get_json(silent=True, force=True) or {}
         page = str(body.get("page") or "") if isinstance(body, dict) else ""
+        page = page[:64]
         if page and body.get("leaving"):
             log.info("画面が閉じられました")
             close_ask.gone(page)          # 画面を閉じた(sendBeacon)。もう頼まない
             with _beat_lock:
-                _background.discard(page)
-                if len(_left) > 200:
-                    _left.clear()
-                _left.add(page[:64])
+                at = awake_clock.now()
+                _screens.pop(page, None)
+                _left[page] = at
+                _prune(at)
             return jsonify({"ok": True})
+        # 見え方(画面は心拍のたびに言い添える。言わない古い画面は「表」)
         hidden = bool(body.get("hidden")) if isinstance(body, dict) else False
         with _beat_lock:
-            if hidden and page[:64] in _left:
+            at = awake_clock.now()
+            if hidden and page in _left:
                 return jsonify({"ok": True})   # 閉じた画面から遅れて届いた「隠れます」
-            was = bool(_background)
+            was = _background_now(at)
             if page:
-                _left.discard(page[:64])
-                if hidden:
-                    _background.add(page)
-                else:
-                    _background.discard(page)
-            _last_beat = time.monotonic()
-            now = bool(_background)
+                _left.pop(page, None)
+                _screens[page] = _Screen(seen=at, hidden=hidden)
+            _last_beat = at
+            now = _background_now(at)
         if now != was:
             log.info("画面が裏に回りました。心拍が途切れても終了しません" if now
                      else "画面が表に戻りました。心拍の見張りを再開します")

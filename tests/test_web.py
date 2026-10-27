@@ -546,10 +546,8 @@ class BackgroundPageTests(Base):
 
     def setUp(self) -> None:
         super().setUp()
-        web._background.clear()
-        web._left.clear()
-        self.addCleanup(web._background.clear)
-        self.addCleanup(web._left.clear)
+        web.forget_screens()
+        self.addCleanup(web.forget_screens)
 
     def test_隠れますと言った画面があるあいだは裏にいる_表に戻れば見張りを再開(self) -> None:
         self.post("/api/alive", {"page": "A"}, token=False)
@@ -565,6 +563,83 @@ class BackgroundPageTests(Base):
         self.assertFalse(web.in_background(), "×で閉じたら終わる")
         self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
         self.assertFalse(web.in_background(), "閉じる間際の「隠れます」で終わらなくならない")
+
+    def test_裏のあいだの心拍は裏のまま(self) -> None:
+        """裏のタブでも最初の5分は20秒ごとの心拍が動く。画面は見え方を言い添える。"""
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)   # 間引かれた心拍
+        self.assertTrue(web.in_background(), "裏のタブの心拍で「表に戻った」と取り違えた")
+
+    def test_2枚のうち1枚が表に戻っても_もう1枚が裏なら裏に居る(self) -> None:
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.post("/api/alive", {"page": "B", "hidden": True}, token=False)
+        self.post("/api/alive", {"page": "B"}, token=False)
+        self.assertTrue(web.in_background())
+        self.post("/api/alive", {"page": "A", "leaving": True}, token=False)
+        self.assertFalse(web.in_background())
+
+
+class ScreensClockTests(Base):
+    """画面ごとに最後の合図の時刻と見え方を持ち、裏は7日で後始末(日報と同じ決まり)。
+
+    時計(`awake_clock`)を差し替えて進める。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from unittest import mock
+
+        from portal import awake_clock
+
+        web.forget_screens()
+        self.addCleanup(web.forget_screens)
+        self.mono = 1000.0
+        self.wall = 1_700_000_000.0
+        clock = awake_clock.AwakeClock(lambda: self.mono, lambda: self.wall)
+        clock.start(thread=False)
+        patcher = mock.patch.object(awake_clock, "_clock", clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.clock = clock
+
+    def run_for(self, sec: float) -> None:
+        """起きたまま `sec` 秒たつ(時計の見張りが2秒ごとに回る)。"""
+        from portal import awake_clock
+
+        for _ in range(int(sec / awake_clock.TICK_SEC)):
+            self.mono += awake_clock.TICK_SEC
+            self.wall += awake_clock.TICK_SEC
+            self.clock.check()
+
+    def test_閉じた合図を取りこぼしても7日で後始末(self) -> None:
+        """以前は裏の印に上限が無く、閉じた合図を取りこぼすといつまでも終わらなかった。"""
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.run_for(web.HIDDEN_KEEP_SEC - 60)
+        self.assertTrue(web.in_background(), "7日より前に裏の画面を見切った")
+        self.run_for(120)
+        self.assertFalse(web.in_background(), "裏に回った画面を上限なしに居るとみなしている")
+
+    def test_裏の7日はスリープを数えない(self) -> None:
+        """Windows はスリープ中も monotonic が進む。眠っていたあいだは差し引く。"""
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.run_for(10)
+        self.mono += 8 * 24 * 3600.0              # 週末を越えてフタを閉じていた(壁の時計はまだ)
+        self.assertTrue(web.in_background())
+
+    def test_心拍の時刻もスリープを数えない(self) -> None:
+        self.post("/api/alive", {"page": "A"}, token=False)
+        beat = web.last_beat()
+        self.run_for(10)
+        self.mono += 2 * 3600.0
+        self.assertLess(self.clock.now() - beat, 20, "起きた瞬間に心拍が2時間途切れたように見える")
+
+    def test_閉じた画面を覚えておくのは10分(self) -> None:
+        self.post("/api/alive", {"page": "A", "leaving": True}, token=False)
+        self.post("/api/alive", {"page": "A", "hidden": True}, token=False)
+        self.assertFalse(web.in_background(), "閉じたあとに着いた「隠れます」で裏に戻した")
+        self.run_for(web.GONE_KEEP_SEC + 2)
+        web.in_background()                       # 見張り(毎秒)が訊くたびに片付ける
+        self.assertNotIn("A", web._left, "閉じた画面の記憶が増え続ける")
 
 
 class ClientLogTests(Base):

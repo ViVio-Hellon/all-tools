@@ -115,17 +115,22 @@ function alive(body) {
 }
 
 let lastTick = Date.now();
-let lastResume = 0;
+// 「戻りました」を束ねる(表に出る・フォーカス・resume は続けて起きる)のは
+// `performance.now()` で数える。画面の時計(Date.now)は時刻合わせで後ろへ飛ぶことがあり、
+// 飛ぶと「さっき送ったばかり」と思い込んで、時計が追いつくまで戻ったことを言わなかった
+let lastResume = -Infinity;
 let stopped = false;
 
 function isVisible() { return document.visibilityState === "visible"; }
 
 function comeBack(gapMs) {
   if (stopped) return;
-  const now = Date.now();
+  const now = performance.now();
   if (now - lastResume < 1000 && !gapMs) return;
   lastResume = now;
-  lastTick = now;
+  // 眠っていたかの見分け(下の setInterval)は壁の時計で数える。眠っているあいだも進むのは
+  // 壁の時計だけ(performance.now は OS によって止まる)
+  lastTick = Date.now();
   alive({ resumed: true, visible: isVisible(), gap_ms: gapMs || 0 });
   misses = 0;
   beat();

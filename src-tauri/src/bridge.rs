@@ -28,11 +28,17 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::waiting::{self, Deadline, SharedClock};
+
 /// 標準エラーの末尾を何行覚えておくか(起動に失敗したとき画面に出す)
 const STDERR_LINES: usize = 60;
 
 /// 1件の応答を待つ上限。取り込みなどの長い処理は背景で走るので、
 /// 1件がこれほど掛かることは無い。止まったまま待たせきりにしないための上限
+///
+/// **ここの待ちは全部、PC が眠っていたあいだを数えない**(`waiting::Deadline`)。
+/// 起動の途中・× で閉じている途中・要求の途中に蓋を閉じても、起きた瞬間に
+/// 「起動を終えません」「応答がありません」にしない・Python を孫ごと止めない
 const REPLY_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Python が1行目(started / fatal)を言うまで待つ上限。読み込みが詰まって
@@ -120,10 +126,19 @@ pub struct Bridge {
     stderr: Arc<Mutex<VecDeque<String>>>,
     on_quit: Hook,
     on_lost: Hook,
+    /// 待ちの締め切りを測る時計(試験は止まっていた時間を差し込める時計を渡す)
+    clock: SharedClock,
+    /// 1行目を待つ上限(`FIRST_WORD_LIMIT`。試験は短くする)
+    first_word_limit: Duration,
 }
 
 impl Bridge {
     pub fn new(spec: Spec, token: String) -> Arc<Self> {
+        Self::with_clock(spec, token, waiting::system_clock(), FIRST_WORD_LIMIT)
+    }
+
+    /// 時計と1行目を待つ上限を指定して作る(試験用)
+    pub(crate) fn with_clock(spec: Spec, token: String, clock: SharedClock, first_word_limit: Duration) -> Arc<Self> {
         Arc::new(Self {
             spec,
             token,
@@ -143,7 +158,14 @@ impl Bridge {
             stderr: Arc::new(Mutex::new(VecDeque::new())),
             on_quit: Mutex::new(None),
             on_lost: Mutex::new(None),
+            clock,
+            first_word_limit,
         })
+    }
+
+    /// 起きていた時間で数える締め切り
+    fn deadline(&self, limit: Duration) -> Deadline {
+        Deadline::new(limit, self.clock.clone())
     }
 
     pub fn exit_grace(&self) -> Duration {
@@ -205,45 +227,25 @@ impl Bridge {
 
     /// 受け付けが始まるか、終わるまで待つ。始まっていれば `true`
     pub fn wait_started(&self, limit: Duration) -> bool {
-        let deadline = Instant::now() + limit;
-        let mut state = self.state.lock().unwrap();
-        while state.phase == Phase::Starting {
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            state = self.changed.wait_timeout(state, deadline - now).unwrap().0;
-        }
+        let mut deadline = self.deadline(limit);
+        let (state, _) = waiting::wait_while(&self.changed, self.state.lock().unwrap(), &mut deadline, |s| s.phase == Phase::Starting);
         state.phase == Phase::Started
     }
 
     /// 終わるまで待つ(終了の知らせを待つとき)。終わっていれば `true`
     #[allow(dead_code)]
     pub fn wait_ended(&self, limit: Duration) -> bool {
-        let deadline = Instant::now() + limit;
-        let mut state = self.state.lock().unwrap();
-        while state.phase != Phase::Ended {
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            state = self.changed.wait_timeout(state, deadline - now).unwrap().0;
-        }
-        true
+        let mut deadline = self.deadline(limit);
+        waiting::wait_while(&self.changed, self.state.lock().unwrap(), &mut deadline, |s| s.phase != Phase::Ended).1
     }
 
     /// 「終了してよい」が届くか、終わるまで待つ(終わり方の途中で)。届いていれば `true`
     pub fn wait_quit(&self, limit: Duration) -> bool {
-        let deadline = Instant::now() + limit;
-        let mut state = self.state.lock().unwrap();
-        while !state.said_quit && state.phase != Phase::Ended {
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            state = self.changed.wait_timeout(state, deadline - now).unwrap().0;
-        }
-        true
+        let mut deadline = self.deadline(limit);
+        waiting::wait_while(&self.changed, self.state.lock().unwrap(), &mut deadline, |s| {
+            !s.said_quit && s.phase != Phase::Ended
+        })
+        .1
     }
 
     fn set_phase(&self, phase: Phase, failure: Option<Failure>) {
@@ -290,18 +292,16 @@ impl Bridge {
             if self.spawn(&program, &args, &script).is_err() {
                 continue; // 見つからない
             }
-            // 1行目(started / fatal)か、何も言わずに終わるのを待つ
-            let deadline = Instant::now() + FIRST_WORD_LIMIT;
-            let mut state = self.state.lock().unwrap();
-            while state.phase == Phase::Starting && Instant::now() < deadline {
-                state = self.changed.wait_timeout(state, Duration::from_millis(500)).unwrap().0;
-            }
+            // 1行目(started / fatal)か、何も言わずに終わるのを待つ。**起動の途中で蓋を
+            // 閉じても、眠っていたあいだは数えない**(起きた直後に Python を止めない)
+            let mut deadline = self.deadline(self.first_word_limit);
+            let (state, _) = waiting::wait_while(&self.changed, self.state.lock().unwrap(), &mut deadline, |s| s.phase == Phase::Starting);
             if state.phase == Phase::Starting {
                 drop(state);
                 self.kill_child();
                 self.fail(
                     "Python が起動を終えません".into(),
-                    format!("{} 秒待っても「受け付けを始めた」が届きませんでした。もう一度開いてください。", FIRST_WORD_LIMIT.as_secs()),
+                    format!("{} 秒待っても「受け付けを始めた」が届きませんでした。もう一度開いてください。", self.first_word_limit.as_secs()),
                 );
                 return;
             }
@@ -541,7 +541,8 @@ impl Bridge {
                 return Err(format!("Python へ渡せませんでした: {e}"));
             }
         }
-        receiver.recv_timeout(limit).map_err(|_| {
+        // 1回の長い待ちにしない(短い待ちの繰り返しで、眠っていたあいだを数えない)
+        waiting::recv_until(&receiver, &mut self.deadline(limit)).map_err(|_| {
             self.pending.lock().unwrap().remove(&id);
             "Python から応答がありません".to_string()
         })
@@ -607,8 +608,10 @@ impl Bridge {
         self.stdin.lock().unwrap().take(); // 閉じる = 「もう要求は来ない」
         let mut child = self.child.lock().unwrap();
         if let Some(child) = child.as_mut() {
-            let deadline = Instant::now() + grace;
-            while Instant::now() < deadline {
+            // 書き戻しを済ませて自分で終わるのを待つ。**× で閉じている途中に蓋を閉じても、
+            // 眠っていたあいだは数えない**(起きた直後に孫ごと止めると、最後の書き戻しが切れる)
+            let mut deadline = self.deadline(grace);
+            while !deadline.passed() {
                 if let Ok(Some(_)) = child.try_wait() {
                     break;
                 }
@@ -708,20 +711,32 @@ mod tests {
 
     /// 外枠から見た Python の代わり(`bridge.py` と同じやりとりをする小さな台本)
     pub(super) const FAKE_BRIDGE: &str = r#"
-import json, os, sys
+import json, os, sys, time
 out = sys.stdout.buffer
+def gate(name):
+    # 試験が置く札(ファイル)が現れるまで待つ(起動に手間取る・書き戻しに手間取る、のまね)
+    path = os.environ.get(name)
+    while path and not os.path.exists(path):
+        time.sleep(0.02)
 if os.environ.get("FAKE_FATAL"):
     out.write(json.dumps({"event": "fatal", "message": "ブラウザ版が動いています", "hint": "閉じてから"}).encode() + b"\n"); out.flush()
     sys.exit(1)
+gate("FAKE_START_GATE")
 out.write(b'{"event": "started"}\n'); out.flush()
 inp = sys.stdin.buffer
 while True:
     line = inp.readline()
     if not line:
+        # 標準入力が閉じた = 終わってよい。最後の書き戻しを済ませてから終わる
+        gate("FAKE_EXIT_GATE")
+        if os.environ.get("FAKE_EXIT_MARK"):
+            open(os.environ["FAKE_EXIT_MARK"], "w").close()
         break
     head = json.loads(line)
     n = head.get("len", 0)
     body = inp.read(n) if n else b""
+    if head["path"] == "/api/slow":
+        gate("FAKE_SLOW_GATE")
     if head["path"] == "/api/shutdown":
         out.write(json.dumps({"id": head["id"], "status": 200, "headers": [], "len": 2}).encode() + b"\n{}")
         out.write(b'{"event": "quit"}\n'); out.flush()
@@ -798,6 +813,116 @@ while True:
         assert!(!lost.load(Ordering::SeqCst));
         assert!(bridge.call("GET", "/", "", vec![], b"").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 眠っても数えない待ちの試験の土台: 止まっていた時間を差し込める時計と、札(ファイル)の置き場
+    struct Sleepy {
+        dir: PathBuf,
+        clock: Arc<crate::waiting::testing::FakeClock>,
+    }
+
+    impl Sleepy {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("alltools_sleepy_{name}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("bridge.py"), FAKE_BRIDGE).unwrap();
+            Self { dir, clock: crate::waiting::testing::FakeClock::new() }
+        }
+
+        fn bridge(&self, id: &str, env: &[(&str, &str)], first_word: Duration) -> Arc<Bridge> {
+            let mut s = spec(&self.dir, id);
+            for (k, v) in env {
+                s.env.push((k.to_string(), self.dir.join(v).display().to_string()));
+            }
+            s.exit_grace = Duration::from_secs(3);
+            Bridge::with_clock(s, "x".into(), self.clock.clone(), first_word)
+        }
+
+        fn put(&self, name: &str) {
+            std::fs::write(self.dir.join(name), b"").unwrap();
+        }
+
+        fn has(&self, name: &str) -> bool {
+            self.dir.join(name).exists()
+        }
+
+        /// 待っている側が時計を見ているのを確かめてから蓋を閉じ、起きたことに気づくまで待つ
+        fn sleep_while_waiting(&self) {
+            self.clock.wait_looked(2);
+            self.clock.sleep(Duration::from_secs(3600));
+            self.clock.wait_looked(2);
+        }
+    }
+
+    impl Drop for Sleepy {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn 起動の途中で眠っても_起きてから受け付けが始まれば動く() {
+        let t = Sleepy::new("start");
+        let bridge = t.bridge("sleepstart", &[("FAKE_START_GATE", "go")], Duration::from_secs(3));
+        let me = bridge.clone();
+        let starting = thread::spawn(move || me.start());
+        t.sleep_while_waiting();
+        assert_eq!(bridge.phase(), Phase::Starting, "起きた直後に「Python が起動を終えません」にした: {:?}", bridge.failure());
+        t.put("go");
+        starting.join().unwrap();
+        assert_eq!(bridge.phase(), Phase::Started, "{:?}", bridge.failure());
+        // 受け付けの開始を待つ側(画面の要求)も同じ
+        assert!(bridge.wait_started(Duration::from_secs(1)));
+        bridge.shutdown(Duration::from_secs(5));
+    }
+
+    #[test]
+    fn 起動を待つのはふつうは上限まで() {
+        let t = Sleepy::new("startlimit");
+        let bridge = t.bridge("sleeplimit", &[("FAKE_START_GATE", "never")], Duration::from_millis(600));
+        bridge.start();
+        assert_eq!(bridge.phase(), Phase::Ended);
+        assert_eq!(bridge.failure().map(|f| f.message).as_deref(), Some("Python が起動を終えません"));
+    }
+
+    #[test]
+    fn 閉じている途中で眠っても_書き戻しを済ませるまで止めない() {
+        let t = Sleepy::new("close");
+        let bridge = t.bridge("sleepclose", &[("FAKE_EXIT_GATE", "written"), ("FAKE_EXIT_MARK", "finished")], FIRST_WORD_LIMIT);
+        bridge.start();
+        assert_eq!(bridge.phase(), Phase::Started, "{:?}", bridge.stderr_tail());
+        let me = bridge.clone();
+        let closing = thread::spawn(move || me.shutdown(me.exit_grace()));
+        t.sleep_while_waiting();
+        t.put("written"); // 最後の書き戻しが済んだ
+        closing.join().unwrap();
+        assert!(t.has("finished"), "起きた直後に Python を孫ごと止めた(最後の書き戻しが切れる)");
+    }
+
+    #[test]
+    fn 閉じるのを待つのはふつうは上限まで() {
+        let t = Sleepy::new("closelimit");
+        let bridge = t.bridge("sleepcloselimit", &[("FAKE_EXIT_GATE", "never"), ("FAKE_EXIT_MARK", "finished")], FIRST_WORD_LIMIT);
+        bridge.start();
+        let started = Instant::now();
+        bridge.shutdown(Duration::from_millis(600));
+        assert!(started.elapsed() < Duration::from_secs(20), "上限で止めない");
+        assert!(!t.has("finished"), "上限を過ぎたら止める");
+    }
+
+    #[test]
+    fn 要求の途中で眠っても_起きてから届いた応答を返す() {
+        let t = Sleepy::new("call");
+        let bridge = t.bridge("sleepcall", &[("FAKE_SLOW_GATE", "answered")], FIRST_WORD_LIMIT);
+        bridge.start();
+        let me = bridge.clone();
+        let calling = thread::spawn(move || me.call_with("GET", "/api/slow", "", vec![], b"", Duration::from_secs(3)));
+        t.sleep_while_waiting();
+        t.put("answered");
+        let reply = calling.join().unwrap();
+        assert_eq!(reply.map(|r| r.status), Ok(200), "起きた直後に「応答がありません」にした");
+        bridge.shutdown(Duration::from_secs(5));
     }
 
     #[test]
