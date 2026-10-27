@@ -47,7 +47,7 @@ from .. import error_body, get_repo, shell
 # どの画面からも使う「いまの直」の組み立て(段階2: 画面の道どうしで借りないよう `app/current.py` へ)。
 # 日報入力の道の中では、これまでどおりの名前で使う
 from ..current import (build_service, build_shift_calculator, current_calculator,  # noqa: F401
-                       current_flow, ribbon_now, time_split_enabled,
+                       current_flow, ribbon_now, time_split_button, time_split_enabled,
                        time_split_factors, time_split_stop_kinds)
 from ..current import current_target as _target  # noqa: F401
 
@@ -1079,8 +1079,10 @@ def index():
         # ── グラフ画面と同じ `_out_dir.html` を使います
         out_dir=settings_view.output_dir_view(),
         maru_sub=ctx.maru_sub,
-        # 「時間を割り振る」のボタン(設定でオンにした端末だけ。v4.30.0)
-        time_split=time_split_enabled(),
+        # 「時間を割り振る」「LOTで時間を割り振る」のボタン(設定・管理者でそれぞれ使うにした端末だけ。
+        # 配布設定でも配れる)
+        time_split_shift=time_split_button("shift"),
+        time_split_lot=time_split_button("lot"),
         tab_loaded_at=f"{tab_loaded_at:.3f}",
         **shell.shell_context("entry", ribbon=ctx.ribbon(calc, page)))
 
@@ -1262,7 +1264,8 @@ def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, to
         began_from = f"前のロットの続き({where(first - 1)}の終了)"
 
     note = ""
-    rest = None if day_work else time_split.break_window(shift, shift_start, total)
+    # 休憩の時刻(12:00・18:00・02:00 のうち、直がまたぐもの)。いまが休憩の中なら、休憩の始まりまで
+    breaks = [] if day_work else time_split.break_slots(shift_start, total)
     finish = clock_of(target_rows[last], "SZ", "SH")
     if finish is not None:
         until = f"{where(last)}の終了"
@@ -1282,8 +1285,9 @@ def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, to
         if at_now > total:
             return {"refuse": f"いま({hh}:{mm})は{shift}の時間の外なので割り振れません。"
                               f"{where(last)}に終了の時刻を打つか、「時間を割り振る」を使ってください"}
-        if rest is not None and rest[0] < at_now < rest[0] + rest[1]:
-            finish = (shift_start + rest[0]) % (24 * 60)
+        inside = [b for b in breaks if b.at < at_now < b.at + b.length]
+        if inside:
+            finish = (shift_start + inside[0].at) % (24 * 60)
             b_h, b_m = time_split.clock(finish, 0)
             note = f"いまは休憩の中なので、休憩の始まり {b_h}:{b_m} までを割り振ります"
     at_begin = (begin - shift_start) % (24 * 60)
@@ -1320,10 +1324,12 @@ def _distribute(*, lot: bool):
     from nippou.logic import time_split
     from nippou.services import page_writer, shift_check
 
-    if not time_split_enabled():
+    # 画面を通さずに呼ばれても、使わない設定のボタンは動かさない(ボタンを出さないのは画面の親切)
+    if not time_split_button("lot" if lot else "shift"):
+        name = "LOTで時間を割り振る" if lot else "時間を割り振る"
         return jsonify(error_body(
-            "time_split_off", "「時間を割り振る」はこの端末では使わない設定です"
-                              "(設定・管理者の「この端末と配布」の面でオンにできます。管理者パスワードが要ります)")), 403
+            "time_split_off", f"「{name}」はこの端末では使わない設定です"
+                              "(設定・管理者の「この端末と配布」の面の「時間を割り振る」で変えられます。管理者パスワードが要ります)")), 403
     refused = line_refusal()
     if refused:
         return refused
@@ -1362,13 +1368,18 @@ def _distribute(*, lot: bool):
     # 割り振る時間(直の始めから何分目・長さ)。LOTで時間を割り振るは、選んでいる行のロットだけを
     # その始まりから終わりまで(終わりの決め方は `_pick_lot`。v4.43.1)
     span_start, span_total, span_texts, lot_info = start, total, (start_text, end_text), None
+    # 休憩をもう打ってあるかは**直ぜんぶ**の行で見る(LOTで割り振るときも、ほかのロットの行に打ってあれば
+    # その時刻は足さない)ので、ロットの行に絞る前の並びを取っておく
+    all_targets, all_rows = list(targets), list(target_rows)
+    chosen = range(len(targets))
     if lot:
         focus = _focus_row(payload, page)
         picked = _pick_lot(ctx, targets, target_rows, kinds, shift, start, total, day_work, focus)
         if "refuse" in picked:
             return jsonify(error_body("cannot_split", picked["refuse"])), 422
-        chosen = slice(picked["first"], picked["last"] + 1)
-        targets, target_rows, kinds = targets[chosen], target_rows[chosen], kinds[chosen]
+        chosen = range(picked["first"], picked["last"] + 1)
+        part = slice(chosen.start, chosen.stop)
+        targets, target_rows, kinds = targets[part], target_rows[part], kinds[part]
         span_start, span_total, lot_info = picked["start"], picked["total"], picked["info"]
         span_texts = (lot_info["start"], lot_info["end"])
     stops = [time_split.row_stop_minutes(values) for values in target_rows]
@@ -1380,32 +1391,31 @@ def _distribute(*, lot: bool):
                                                       time_split_stop_kinds())
     # 区切りは時計の5分刻み。直の始めから割り振るときはこれまでどおり始めから数える(v4.43.0)
     origin = span_start if lot else 0
-    # 休憩の時間は飛ばす(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)
-    rest = None if day_work else time_split.break_window(shift, span_start, span_total, from_start=lot)
-    # **休憩は飛ばした時間そのもの**(v4.38.1)。打ってある休憩「0」の分は割り振りに数えず、
-    # 休憩をまたぐ行へ 0/60 として入れ直す(ほかの行の「0」はそこへ移す)。前は打ってある
-    # 「0」も停止として数えたうえで休憩の時間も飛ばしていたので、休憩が2回数えられ、
-    # またぐ行の作業時間が60分のびていた。
-    # 決まった休憩と重ならない時刻を書いた「0」(9:00〜9:10 など)は別の休憩なので、そのまま
-    # 停止として数える(v4.38.2)
+    # 休憩(v4.31.0)。**昼稼働(有)の直は飛ばさない**(休憩の確かめと同じ)。
+    # **休憩の時刻ごとに、もう打ってあれば足さない・無ければ足す**(`time_split.plan_breaks`)。
+    # 打ってある休憩「0」はその行の停止として先に渡し(消さない・動かさない)、その時刻は飛ばさない。
+    # 飛ばすのは足す時刻だけなので、休憩を二重に引かない。時刻を書いた休憩の行は、その時刻を
+    # またぐように合わせる(`time_split.split_pinned`)。前(v4.38.1〜)は打ってある休憩をまたぐ行へ
+    # 移して 60分 1つにまとめていた
     rest_info = None
-    if rest is not None:
+    breaks_info: dict = {}
+    if day_work:
+        plan = time_split.split(stops, span_total, weights=weights, origin=origin)
+        if time_split.break_slots(span_start, span_total, from_start=lot):
+            rest_info = {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"}
+    else:
         from nippou.logic import break_time
 
-        window = break_time.shift_window(start_text, end_text)
-        parts = {(n, row): time_split.rest_parts(pages[n].rows[row], shift, window) for n, row in targets}
-        plan = time_split.split(
-            [time_split.row_stop_minutes(pages[n].rows[row], minus=parts[(n, row)].lunch_minutes)
-             for n, row in targets],
-            span_total, rest=rest, weights=weights, origin=origin)
-        if plan.ok and plan.break_index is not None:
-            rest_info = _gather_rest(shift, rest, plan, targets, pages, span_start, parts)
-            if rest_info.get("refuse"):
-                return jsonify(error_body("cannot_split", rest_info["refuse"])), 422
-    else:
-        plan = time_split.split(stops, span_total, weights=weights, origin=origin)
-        if day_work and shift in time_split.BREAKS:
-            rest_info = {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"}
+        bplan = time_split.plan_breaks(all_rows, chosen, shift_start=start, shift_total=total,
+                                       span_start=span_start, span_total=span_total, from_start=lot,
+                                       shift_window=break_time.shift_window(start_text, end_text))
+        plan = time_split.split_pinned(stops, span_total, pins=[pin[:3] for pin in bplan.pins],
+                                       rests=bplan.skip, weights=weights, origin=origin)
+        if plan.ok:
+            breaks_info = _add_breaks(bplan, plan, targets, all_targets, pages, span_start)
+            if breaks_info.get("refuse"):
+                return jsonify(error_body("cannot_split", breaks_info["refuse"])), 422
+            rest_info = breaks_info["rest"]
     if not plan.ok:
         return jsonify(error_body("cannot_split", plan.message)), 422
 
@@ -1427,7 +1437,11 @@ def _distribute(*, lot: bool):
         "overwrite": overwrite,
         "first": rows[0]["start"], "last": rows[-1]["end"],
         "rows": [{k: r[k] for k in ("page", "row", "start", "end")} for r in rows],
+        # 足した最初の休憩(前の版と同じ形。昼稼働なら `{"skipped": ...}`)。足さなければ None
         "rest": rest_info,
+        # 休憩の時刻ごと(足したか・もう入っていたか)と、確かめの窓に出す文(文言はここで決める)
+        "breaks": breaks_info.get("breaks", []),
+        "break_notes": breaks_info.get("notes", []),
         # 確かめの窓に出す、割り振り方の一言(梱包数に合わせたか・均等か)
         "by_packs": by_packs, "weight_note": time_split.WEIGHT_NOTES[by_packs],
         # EX・段取り・VC交換で長めにした所(v4.42.0)。無ければ空
@@ -1443,12 +1457,12 @@ def _distribute(*, lot: bool):
         target.set(r["row"], "KH", kh)
         target.set(r["row"], "SZ", sz)
         target.set(r["row"], "SH", sh)
-    # 休憩にかかった行に休憩(停止の記号「0」)を入れ、ほかの行の決まった休憩はそこへ移す
-    # (`_gather_rest` が決めた欄の書き換え。休憩の時刻も一緒に)
-    if rest_info:
+    # 足す休憩の時刻をまたいだ行に休憩(停止の記号「0」)を入れる(`_add_breaks` が決めた欄の
+    # 書き換え。休憩の時刻も一緒に)。打ってある休憩の行は触らない
+    if breaks_info.get("writes"):
         from nippou.logic import break_time
 
-        for w in rest_info.get("writes") or []:
+        for w in breaks_info["writes"]:
             target = pages[w["page"]]
             for family, value in w["set"]:
                 target.set(w["row"], family, value)
@@ -1477,9 +1491,10 @@ def _distribute(*, lot: bool):
     else:
         body["message"] = (f"{shift} {start_text}〜{end_text}({total}分)を "
                            f"{len(summary['pages'])}ページ {len(rows)}行に割り振りました")
-    # 昼稼働(有)の直は `{"skipped": ...}` だけ(時刻が無い)。前はここで落ちていた(v4.34.0 で直す)
-    if rest_info and rest_info.get("start"):
-        body["message"] += f"(休憩 {rest_info['start']}〜{rest_info['end']} は飛ばしました)"
+    # 休憩の時刻ごとに、足したか・もう入っていたので足さなかったか(「12:00 の休憩はもう入っているので
+    # 足しませんでした」)。昼稼働(有)の直は何も添えない
+    if breaks_info.get("toast"):
+        body["message"] += "(" + "・".join(breaks_info["toast"]) + ")"
     return jsonify(body)
 
 
@@ -1511,127 +1526,119 @@ def _last_lot_before(report_date: str, line: str, shift: str) -> Optional[tuple[
         return None
 
 
-def _gather_rest(shift, rest, plan, targets, pages, shift_start, parts) -> dict:
-    """休憩をまたぐ行へ、決まった休憩を休憩「0」60分として1つにまとめる(v4.38.1)。
+def _add_breaks(bplan, plan, targets, all_targets, pages, span_start) -> dict:
+    """休憩の時刻ごとに、足す・足さないを決めて、足す時刻をまたぐ行へ休憩「0」を入れる。
 
-        休憩時間は 1直12:00-13:00 / 2直18:00-19:00 / 3直02:00-03:00 となっているので
-        この時間に割り振る時は自動で0-60が入るようにする
+        休憩がすでに入っている場合は、12:00, 18:00, 02:00 に時間がまたいでいるところに休憩は
+        足さないようにしてください。無い場合だけ自動で休憩を追加にしてください
 
-    行ごとの休憩「0」は `time_split.rest_parts` で、決まった休憩を打ったもの(時刻が無い・決まった
-    休憩と重なる・直の外)と、別の休憩(直の中で決まった休憩と重ならない時刻。9:00〜9:10 など)に
-    分けてあります。割り振りは決まった休憩の分を数えずに済ませてあるので、ここでは:
+    決めるのは `time_split.plan_breaks`(どの休憩がどの時刻のものか ── `time_split.match_rests`)。ここは
+    書き換える欄と、確かめの窓・知らせに出す文:
 
-    - ほかの行の決まった休憩は消して、またぐ行へ移す(別の休憩はその行に残す)
-    - またぐ行は「別の休憩(あれば)+ 決まった休憩 60分」にし、休憩の時刻を「9:00〜9:10、12:00〜13:00」と並べる
-    - 別の休憩が、割り振ったあとの行の時間からはみ出すなら、確かめの窓で先に言う
-    - またぐ行に休憩を入れる欄が無ければ、割り振らずに断る(`refuse`)。前は入れずに割り振り、
-      その行の作業時間が60分のびていた(v4.38.2)
+    - もう入っている時刻 → 何も書かない。「12:00 の休憩はもう入っているので足しません(3行目の休憩「0」60分)」
+    - 足す時刻 → またぐ行の空いた停止の欄に「0」と休憩の長さ(60分)、休憩の時刻の欄に「12:00〜13:00」
+      (その行に別の休憩の時刻があれば「9:00〜9:10、12:00〜13:00」と並べる)。その行に打ちかけの短い
+      「0」(時刻なし。どの時刻にも当てなかったもの)があれば、それを足す休憩の長さにする(同じ行の中だけ。
+      ほかの行の休憩は動かさない)。入れる欄が無ければ割り振らずに断る(`refuse`。前は入れずに割り振り、
+      その行の作業時間が60分のびていた ── v4.38.2)
+    - 時刻を書いた休憩の行を、その時刻をまたぐように合わせたとき・合わせられなかったとき(割り振った
+      あとの行の外になる)も一言
 
-    `writes` は書き換える欄((欄, 値) の並び)と休憩の時刻。`note` は確かめの窓に出す文。
+    `rest` は足した最初の休憩を前の版と同じ形で(画面・試験が読む)。足さなければ None。
+    `toast` は割り振ったあとの知らせに添える一言。
     """
     from nippou.logic import break_time, time_split
 
-    _at, length = rest
-    begin, end = time_split.BREAKS[shift]
-    page, row = targets[plan.break_index]
     many = len(pages) > 1
-    window = break_time.normalize(f"{begin}〜{end}")
-    slots_of = dict(zip(targets, plan.slots))
 
     def where(p_no, r_no) -> str:
         return f"{p_no}ページ {r_no}行目" if many else f"{r_no}行目"
 
-    def blank(values, family) -> bool:
-        return not str(values.get(family, "") or "").strip()
+    def told(rest) -> str:
+        at = all_targets[rest.index]
+        text = f"{where(*at)}の休憩「0」{time_split_minutes(rest.minutes)}分"
+        return text + (f" {rest.clock.text()}" if rest.clock else "")
 
-    def rewrite(p_no, r_no, entries) -> list | None:
-        """その行の休憩「0」の欄を空けて、entries(分の並び)を入れ直す。欄が足りなければ None。"""
-        values = pages[p_no].rows[r_no]
-        rests = [(c, m) for c, m in time_split.STOP_SLOTS if time_split.is_rest(values, c)]
-        usable = [(c, m) for c, m in time_split.STOP_SLOTS
-                  if (c, m) in rests or (blank(values, c) and blank(values, m))]
-        if len(usable) < len(entries):
-            return None
-        out = [[f, ""] for c, m in rests for f in (c, m)]
-        for (c, m), minutes in zip(usable, entries):
-            out += [[c, time_split.REST_CODE], [m, str(minutes)]]
-        return out
-
-    def outside(p_no, r_no, ranges) -> str:
-        got = slots_of.get((p_no, r_no))
-        if got is None:
-            return ""
-        span = (shift_start + got[0], shift_start + got[1])
-        if all(break_time.inside(r, span) for r in ranges):
-            return ""
-        a_h, a_m = time_split.clock(shift_start, got[0])
-        b_h, b_m = time_split.clock(shift_start, got[1])
-        return (f"。ただし割り振ったあとのその行の時間({a_h}:{a_m}〜{b_h}:{b_m})の外になるので、"
-                "割り振ったあとで休憩の時刻を直してください")
-
-    def texts(ranges) -> str:
-        return break_time.JOINER.join(r.text() for r in ranges)
-
-    info: dict = {"start": begin, "end": end, "minutes": length, "page": page, "row": row,
-                  "slot": None, "note": "", "gathered": True, "clear": [], "writes": []}
-    moved: list[str] = []
-    kept: list[str] = []
-    resized = ""
-
-    # またぐ行
-    crossing = pages[page].rows[row]
-    mine = parts.get((page, row)) or time_split.rest_parts(crossing, shift)
-    if mine.only_separate:
-        free = time_split.free_slot(crossing)
-        sets = [[free[0], time_split.REST_CODE], [free[1], str(length)]] if free else None
-        own = break_time.normalize(str(crossing.get(break_time.ROW_FAMILY, "") or ""))
-        rng = f"{own}{break_time.JOINER}{window}"
-        kept.append(f"その行の休憩「0」({texts(mine.separate)})は、決まった休憩とは別なのでそのままにします"
-                    + outside(page, row, mine.separate))
-    else:
-        entries = ([mine.separate_minutes] if mine.separate else []) + [length]
-        sets = rewrite(page, row, entries)
-        rng = break_time.JOINER.join([r.text() for r in mine.separate] + [window])
-        if mine.lunch_minutes and mine.lunch_minutes != length:
-            resized = f"その行の休憩「0」({time_split_minutes(mine.lunch_minutes)}分)は {length}分にします"
-        if mine.separate:
-            kept.append(f"その行の別の休憩({texts(mine.separate)})はそのままにします"
-                        + outside(page, row, mine.separate))
-    if sets is None:
-        return {"refuse": f"{where(page, row)}が休憩 {begin}〜{end} をまたぎますが、その行の停止①〜⑤が"
-                          f"埋まっていて休憩「0」{length}分を入れられません。停止をまとめて欄を1つ空けてから"
-                          "押してください"}
-    info["slot"] = [sets[-2][0], sets[-1][0]]
-    info["writes"].append({"page": page, "row": row, "set": sets, "range": rng})
-
-    # ほかの行
-    for (p_no, r_no), got in parts.items():
-        if (p_no, r_no) == (page, row) or got.total <= 0:
+    out: dict = {"breaks": [], "notes": [], "toast": [], "writes": [], "rest": None}
+    work: dict = {}
+    crossing_iter = iter(plan.break_indexes)
+    absorbed: set = set()
+    for slot in bplan.slots:
+        if slot.present:
+            out["notes"].append(f"{slot.begin} の休憩はもう入っているので足しません"
+                                f"({'・'.join(told(r) for r in slot.present)})")
+            out["toast"].append(f"{slot.begin} の休憩はもう入っているので足しませんでした")
+            out["breaks"].append({"time": slot.begin, "start": slot.begin, "end": slot.end,
+                                  "minutes": slot.length, "added": False})
             continue
-        if got.only_separate:
-            kept.append(f"{where(p_no, r_no)}の休憩「0」({texts(got.separate)})は、決まった休憩とは別なので"
-                        "そのままにします" + outside(p_no, r_no, got.separate))
+        index = next(crossing_iter, None)
+        if index is None:
             continue
-        sets = rewrite(p_no, r_no, [got.separate_minutes] if got.separate else [])
-        info["writes"].append({"page": p_no, "row": r_no, "set": sets or [], "range": texts(got.separate)})
-        info["clear"].append([p_no, r_no])
-        line = f"{where(p_no, r_no)}の休憩「0」({time_split_minutes(got.lunch_minutes)}分)"
-        if got.separate:
-            line += f"(別の休憩 {texts(got.separate)} は残します)"
-        moved.append(line)
-        if got.separate:
-            extra = outside(p_no, r_no, got.separate)
-            if extra:
-                kept.append(f"{where(p_no, r_no)}の別の休憩({texts(got.separate)})は残します{extra}")
-    notes: list[str] = []
-    if moved:
-        notes.append(f"{'・'.join(moved)}は、休憩 {begin}〜{end} をまたぐ {where(page, row)}へ移して、"
-                     f"休憩「0」{length}分 1つにまとめます(休憩を2回数えないため)")
-    if resized:
-        notes.append(resized)
-    notes.extend(kept)
-    info["note"] = "。".join(notes)
-    return info
+        page, row = targets[index]
+        values = work.setdefault((page, row), dict(pages[page].rows[row]))
+        mine = [r for r in bplan.rests if all_targets[r.index] == (page, row)]
+        window = break_time.normalize(slot.text())
+        resized = ""
+        short = [r for r in mine if r.clock is None and not r.slot and r.index not in absorbed]
+        if short:
+            # 打ちかけの短い「0」(時刻なし)は、足す休憩にまとめる(同じ行の中だけ)
+            rests = [(c, m) for c, m in time_split.STOP_SLOTS if time_split.is_rest(values, c)]
+            sets = [[f, ""] for c, m in rests for f in (c, m)]
+            sets += [[rests[0][0], time_split.REST_CODE], [rests[0][1], str(slot.length)]]
+            rng = window
+            absorbed.add(short[0].index)
+            if short[0].minutes != slot.length:
+                resized = (f"その行の休憩「0」({time_split_minutes(short[0].minutes)}分)は"
+                           f" {slot.length}分にします")
+        else:
+            free = time_split.free_slot(values)
+            if free is None:
+                return {"refuse": f"{where(page, row)}が休憩 {slot.begin}〜{slot.end} をまたぎますが、その行の"
+                                  f"停止①〜⑤が埋まっていて休憩「0」{slot.length}分を入れられません。停止をまとめて"
+                                  "欄を1つ空けてから押してください"}
+            sets = [[free[0], time_split.REST_CODE], [free[1], str(slot.length)]]
+            own = break_time.normalize(str(values.get(break_time.ROW_FAMILY, "") or ""))
+            if any(r.clock is None for r in mine):
+                rng = own           # 時刻を書いていない休憩が同じ行にある(時刻は窓で入れてもらう)
+            else:
+                rng = f"{own}{break_time.JOINER}{window}" if own else window
+        for family, value in sets:
+            values[family] = value
+        values[break_time.ROW_FAMILY] = rng
+        out["writes"].append({"page": page, "row": row, "set": sets, "range": rng})
+        line = (f"休憩 {slot.begin}〜{slot.end}({slot.length}分)は飛ばします。{page}ページ {row}行目が"
+                f"休憩をまたぎます。その行に休憩(停止の記号「0」{slot.length}分)を入れます。")
+        out["notes"].append(line + (f"{resized}。" if resized else ""))
+        out["toast"].append(f"{slot.begin} の休憩を足しました({where(page, row)})")
+        info = {"start": slot.begin, "end": slot.end, "minutes": slot.length, "page": page, "row": row,
+                "slot": [sets[-2][0], sets[-1][0]]}
+        out["breaks"].append({**info, "time": slot.begin, "added": True})
+        if out["rest"] is None:
+            out["rest"] = {**info, "note": resized, "clear": []}
+
+    # 時刻を書いた休憩の行(割り振る行)。その時刻をまたぐように合わせたか・合わせられなかったか
+    said: set = set()
+    for i, w0, w1, rest in bplan.pins:
+        a, b = plan.slots[i]
+        page, row = targets[i]
+        if a <= w0 and w1 <= b:
+            if i in plan.pinned and i not in said:
+                said.add(i)
+                out["notes"].append(f"{where(page, row)}は、打ってある休憩 {rest.clock.text()} を"
+                                    "またぐように割り振ります")
+            continue
+        a_h, a_m = time_split.clock(span_start, a)
+        b_h, b_m = time_split.clock(span_start, b)
+        out["notes"].append(f"{where(page, row)}の休憩 {rest.clock.text()} は、割り振ったあとのその行の時間"
+                            f"({a_h}:{a_m}〜{b_h}:{b_m})の外になります。割り振ったあとで休憩の時刻を直してください")
+    # 休憩の時刻に当てなかった短い休憩(10分休憩・打ちかけの 1分 など)は、そのまま残すと言う
+    if bplan.slots:
+        in_span = set(targets)
+        for rest in bplan.rests:
+            if rest.slot or rest.index in absorbed or all_targets[rest.index] not in in_span:
+                continue
+            out["notes"].append(f"{told(rest)}は短いので、休憩の時刻の休憩には数えません(そのまま残します)")
+    return out
 
 
 def time_split_minutes(value) -> str:

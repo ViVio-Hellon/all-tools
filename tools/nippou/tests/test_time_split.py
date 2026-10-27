@@ -400,49 +400,71 @@ class DistributeWebTests(WebTestCase):
         entry = next(e for e in body["break_entries"] if e["row"] == rest["row"])
         self.assertEqual(entry["problems"], [], "割り振った時刻と休憩の時刻が合っている")
 
-    def test_ほかの行の休憩0はまたぐ行へ移して二重に数えない(self) -> None:
-        """v4.38.1: 打ってある休憩「0」60分と、飛ばす休憩の時間で、休憩を2回数えていた。
+    def test_もう打ってある休憩は動かさず足さない(self) -> None:
+        """休憩がすでに入っている場合は、時間がまたいでいるところに休憩は足さない。
 
-            時間割り振り時にすでに停止が入力されていればその時間を加味して割り振りする
-            休憩時間は 1直12:00-13:00 ... この時間に割り振る時は自動で0-60が入るようにする
+            時間を割り振る / LOTで時間を割り振る: 共に休憩がすでに入っている場合は、12:00, 18:00, 02:00 に
+            時間がまたいでいるところに休憩は足さないようにしてください。無い場合だけ自動で休憩を追加に
+
+        前(v4.38.1〜)は打ってある休憩「0」をまたぐ行へ移して 60分 1つにまとめていた。いまは打った行に
+        残し、その時刻には足さない。休憩は1回だけ数える(作業時間の合計 = 直の長さ − 60)。
         """
         self.enable()
         _day, _line, shift = self.key()
         if shift not in ts.BREAKS:
             self.skipTest(f"{shift} には休憩の決まりが無い")
-        # 1行目は休憩をまたがない(4行なら、またぐのは 2 か 3 行目)
-        screen = {"rows": {"1": row("A", S="0", TH="60", break_range="〜".join(ts.BREAKS[shift])), "2": row("B"),
-                           "3": row("C"), "4": row("D")},
+        lunch = "〜".join(ts.BREAKS[shift])
+        screen = {"rows": {"1": row("A"), "2": row("B"), "3": row("C", S="0", TH="60", break_range=lunch),
+                           "4": row("D")},
                   "header": {"worker": "山田"}}
-        rest = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()["rest"]
-        self.assertTrue(rest["slot"], rest)
-        self.assertIn("1行目の休憩「0」(60分)", rest["note"])
-        self.assertIn("1つにまとめます", rest["note"])
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertIsNone(plan["rest"], "足す休憩は無い")
+        self.assertEqual([(b["time"], b["added"]) for b in plan["breaks"]], [(ts.BREAKS[shift][0], False)])
+        self.assertIn(f"{ts.BREAKS[shift][0]} の休憩はもう入っているので足しません(3行目の休憩「0」60分",
+                      "\n".join(plan["break_notes"]))
         body = self.post("/api/entry/distribute-times", screen).get_json()
+        self.assertIn(f"{ts.BREAKS[shift][0]} の休憩はもう入っているので足しませんでした", body["message"])
         rows = body["rows"]
-        crossing = rows[str(rest["row"])]
-        code, minutes = rest["slot"]
-        self.assertEqual((crossing[code], crossing[minutes]), ("0", "60"))
         from nippou.logic import break_time
-        self.assertEqual(crossing["break_range"], break_time.normalize("〜".join(ts.BREAKS[shift])))
-        self.assertNotEqual(rest["row"], 1)
-        self.assertEqual((rows["1"]["S"], rows["1"]["TH"], rows["1"]["break_range"]), ("", "", ""),
-                         "移した行の休憩は消える")
-        # 休憩は1回だけ: 作業時間の合計は 直の長さ − 60、どの行の作業時間も大きく偏らない
+        self.assertEqual((rows["3"]["S"], rows["3"]["TH"], break_time.normalize(rows["3"]["break_range"])),
+                         ("0", "60", break_time.normalize(lunch)), "打った行に残る")
+        rest_total = sum(Decimal(rows[str(n)][m] or 0) for n in range(1, 5)
+                         for c, m in ts.STOP_SLOTS if rows[str(n)][c] == "0")
+        self.assertEqual(rest_total, 60, "足していない")
         start, end = self.bounds(shift)
         total = (ts.parse_hhmm(end) - ts.parse_hhmm(start)) % 1440
         tims = [Decimal(rows[str(n)]["TIM"] or 0) for n in range(1, 5)]
-        self.assertEqual(sum(tims), total - 60, tims)
-        self.assertLessEqual(max(tims) - min(tims), 10, f"休憩を2回数えると1行だけ60分のびる: {tims}")
-        rest_total = sum(Decimal(rows[str(n)][m] or 0) for n in range(1, 5)
-                         for c, m in ts.STOP_SLOTS if rows[str(n)][c] == "0")
-        self.assertEqual(rest_total, 60)
-        entry = next(e for e in body["break_entries"] if e["row"] == rest["row"])
-        self.assertEqual(entry["problems"], [])
+        self.assertEqual(sum(tims), total - 60, f"休憩は1回だけ引く: {tims}")
+        self.assertEqual([e["problems"] for e in body["break_entries"] if e["problems"]], [],
+                         "打った休憩の時刻は、割り振ったあとの行の中")
+
+    def test_ずらして打った休憩もその時刻の休憩と見て行を合わせる(self) -> None:
+        """手で打った休憩が決まった時刻ちょうどでなく 11:45〜12:45 のようにずらしてあっても、その時刻の
+        休憩と見て足さない。打った行は、その時刻をまたぐように割り振る(保存で「行の外」にしない)。"""
+        self.enable()
+        _day, _line, shift = self.key()
+        if shift not in ts.BREAKS:
+            self.skipTest(f"{shift} には休憩の決まりが無い")
+        begin = ts.parse_hhmm(ts.BREAKS[shift][0])
+        typed = "".join(ts.clock(begin, -15)) + "-" + "".join(ts.clock(begin, 45))
+        screen = {"rows": {"1": row("A", S="0", TH="60", break_range=typed), "2": row("B"), "3": row("C"),
+                           "4": row("D")},
+                  "header": {"worker": "山田"}}
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        self.assertEqual([b["added"] for b in plan["breaks"]], [False])
+        self.assertIn("1行目は、打ってある休憩", "\n".join(plan["break_notes"]))
+        body = self.post("/api/entry/distribute-times", screen).get_json()
+        rows = body["rows"]
+        self.assertEqual((rows["1"]["S"], rows["1"]["TH"]), ("0", "60"))
+        self.assertEqual(f'{rows["1"]["SZ"]}:{rows["1"]["SH"]}', ":".join(ts.clock(begin, 45)),
+                         "1行目は打った休憩の終わりまで")
+        self.assertEqual([e["problems"] for e in body["break_entries"] if e["problems"]], [])
 
     def test_休憩0が1分でも足りなければ60分を入れる(self) -> None:
-        """休憩が1分でもはいっていると、60分で打ってくれない(v4.32.0)。v4.38.1 からは、
-        その1分もまたぐ行へ移して 60分 1つにまとめる。"""
+        """休憩が1分でもはいっていると、60分で打ってくれない(v4.32.0)。
+
+        打ちかけの短い「0」(時刻なし。休憩の長さの半分より短い)は、その時刻の休憩とは見ない ──
+        60分を足す。1分の「0」は打った行に残す(動かさない)。"""
         self.enable()
         _day, _line, shift = self.key()
         if shift not in ts.BREAKS:
@@ -453,12 +475,14 @@ class DistributeWebTests(WebTestCase):
         plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
         rest = plan["rest"]
         self.assertIsNotNone(rest["slot"], rest)
-        self.assertIn("1行目の休憩「0」(1分)", rest["note"])
+        self.assertNotEqual(rest["row"], 1)
+        self.assertIn("1行目の休憩「0」1分は短いので", "\n".join(plan["break_notes"]))
         body = self.post("/api/entry/distribute-times", screen).get_json()
         crossing = body["rows"][str(rest["row"])]
         code, minutes = rest["slot"]
         self.assertEqual((crossing[code], crossing[minutes]), ("0", "60"))
-        self.assertEqual(body["rows"]["1"]["S"], "")
+        self.assertEqual((body["rows"]["1"]["S"], body["rows"]["1"]["TH"]), ("0", "1"), "打った行に残る")
+        self.assertIn(f"{ts.BREAKS[shift][0]} の休憩を足しました", body["message"])
 
     def test_またぐ行の停止が埋まっていれば割り振らずに断る(self) -> None:
         """v4.38.2: 停止①〜⑤が埋まっていて休憩を入れられない行がまたぐときは、割り振らない。
@@ -489,8 +513,9 @@ class DistributeWebTests(WebTestCase):
         screen = {"rows": {"1": row("A", S="0", TH="10", break_range=early), "2": row("B"),
                            "3": row("C"), "4": row("D")},
                   "header": {"worker": "山田"}}
-        rest = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()["rest"]
-        self.assertIn("決まった休憩とは別なのでそのままにします", rest["note"])
+        plan = self.post("/api/entry/distribute-times", {**screen, "dry_run": True}).get_json()
+        rest = plan["rest"]
+        self.assertIn("は短いので、休憩の時刻の休憩には数えません(そのまま残します)", "\n".join(plan["break_notes"]))
         self.assertEqual(rest.get("clear"), [])
         body = self.post("/api/entry/distribute-times", screen).get_json()
         rows = body["rows"]

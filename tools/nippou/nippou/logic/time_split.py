@@ -37,6 +37,24 @@
 `app/routes/entry.distribute_times`。直の中にもう「0」の停止があれば入れない)。
 昼稼働(有)の直は、休憩を飛ばしません(休憩の確かめと同じ)。日勤は 1直と同じ 12:00〜13:00。
 
+【休憩をもう打ってあれば足さない】
+
+    時間を割り振る / LOTで時間を割り振る: 共に休憩がすでに入っている場合は、12:00, 18:00, 02:00 に
+    時間がまたいでいるところに休憩は足さないようにしてください。無い場合だけ自動で休憩を追加にしてください
+
+休憩は**時刻ごとに**見ます(`plan_breaks`)。割り振る時間がまたぐ休憩の時刻(12:00・18:00・02:00 ──
+`BREAK_TIMES`。直の名前では決めないので、2つまたぐ直なら2つとも)のそれぞれについて、この直
+(全ページ)にもう休憩「0」を打ってあればその時刻は足さず、無い時刻にだけ足します。例: 12:00 の休憩を
+手で打ってあり、直が 18:00 もまたぐなら、12:00 は足さずに 18:00 だけ足す。
+
+    ・打ってある休憩をどの時刻のものと見るかは `match_rests`(ずらして 11:45〜12:45 と打ってあれば
+      12:00 のもの。重ならなければいちばん近い時刻。10分休憩・打ちかけの 1分 のような短いものは数えない)
+    ・打ってある休憩の行は**消さない・動かさない**。その分はその行の停止として先に渡し、その時刻は
+      飛ばさない(飛ばすのは足す時刻だけ ── 二重に引かない・二重に足さない)。時刻を書いた休憩の
+      行は、その時刻をまたぐように合わせて割り振る(`split_pinned`)
+    ・前(v4.38.1〜)は、打ってある休憩をまたぐ行へ移して 60分 1つにまとめていました。現場から見ると
+      「打った休憩が消えて、別の行に休憩が足された」ことになっていたので、やめました
+
 【梱包数に合わせる(v4.34.0)】
 
     時間を割り振る:梱包数に数値がある場合はそこを加味した時間振りにしてください
@@ -121,13 +139,19 @@ STOP_SLOTS: tuple[tuple[str, str], ...] = constants.STOP_SLOTS
 #: 休憩を入れる停止の記号(`作業停止時間内訳_1` の「休憩食事」。`break_time.REST_STOP_CODE` の1か所)
 REST_CODE = break_time.REST_STOP_CODE
 
-#: 直ごとの休憩(始まり, 終わり)。割り振りではこの時間を飛ばす
+#: 直ごとの休憩(始まり, 終わり)。直の名前から休憩を引く所(試験・前の版の `break_window`)が使う。
+#: **割り振りは直の名前ではなく、またぐ時刻で見る**(`BREAK_TIMES`・`break_slots`)
 BREAKS: dict[str, tuple[str, str]] = {
     "1直": ("12:00", "13:00"),
     "2直": ("18:00", "19:00"),
     "3直": ("02:00", "03:00"),
     "日勤": ("12:00", "13:00"),
 }
+
+#: 休憩の時刻(始まり, 終わり)。割り振る時間が**またぐ時刻ごとに**休憩を見る(`break_slots`)。
+#: ふつうの直はまたぐのが1つ(1直 12:00・2直 18:00・3直 02:00)。直の時間を長くした日(日勤を 20:00
+#: まで など)は2つまたぐこともあり、そのときは両方を見る
+BREAK_TIMES: tuple[tuple[str, str], ...] = (("12:00", "13:00"), ("18:00", "19:00"), ("02:00", "03:00"))
 
 
 def break_window(shift: str, start: int, total: int, *,
@@ -160,65 +184,23 @@ def is_rest(values: dict[str, str], code_family: str) -> bool:
     return break_time.is_rest_code(values.get(code_family, ""))
 
 
-def row_stop_minutes(values: dict[str, str], *, minus: Decimal = Decimal(0)) -> Decimal:
-    """その行の停止の分の合計(①〜⑤)。
+def row_stop_minutes(values: dict[str, str]) -> Decimal:
+    """その行の停止の分の合計(①〜⑤)。**打ってある休憩「0」もここに入る**。
 
-    `minus` はそこから引く分(v4.38.1)。休憩の時間を飛ばす直では、決まった休憩を打った分
-    (`RestParts.lunch_minutes`)を引く ── 休憩は飛ばした時間そのものなので、打ってある「0」まで
-    数えると休憩を2回数えてしまう。
+    もう打ってある休憩は、その行に先に渡す停止の分として数えます(その時刻の休憩は足さないので、
+    休憩の時間を飛ばすのは足す時刻だけ ── 二重に引かない。`plan_breaks`)。
     """
     from .work_time import stop_minutes
 
-    total = sum((stop_minutes(str(values.get(f, "") or "")) for f in STOP_MINUTE_FAMILIES), Decimal(0))
-    return max(total - minus, Decimal(0))
+    return sum((stop_minutes(str(values.get(f, "") or "")) for f in STOP_MINUTE_FAMILIES), Decimal(0))
 
 
-@dataclass
-class RestParts:
-    """その行の休憩「0」の中身(v4.38.2)。"""
-
-    #: 休憩「0」の分の合計(①〜⑤)
-    total: Decimal
-    #: 決まった休憩とは**別の休憩**の時刻(直の中で、決まった休憩と重ならないもの。9:00〜9:10 など)
-    separate: list = field(default_factory=list)
-    #: 書いてある時刻が全部、別の休憩か(この行の「0」は決まった休憩を含まない)
-    only_separate: bool = False
-
-    @property
-    def separate_minutes(self) -> int:
-        return sum(r.minutes for r in self.separate)
-
-    @property
-    def lunch_minutes(self) -> Decimal:
-        """決まった休憩を打ったものとみなす分(割り振りでは数えず、またぐ行へまとめる)。"""
-        if self.only_separate:
-            return Decimal(0)
-        return max(self.total - self.separate_minutes, Decimal(0))
-
-
-def rest_parts(values: dict[str, str], shift: str,
-               shift_window: Optional[tuple[int, int]] = None) -> RestParts:
-    """その行の休憩「0」を、決まった休憩(`BREAKS`)と別の休憩に分ける(v4.38.2)。
-
-    時刻が無い・読めない・決まった休憩と重なる・直の外(ありえない時刻)のものは、決まった
-    休憩を打ったものとみなします。直の中で決まった休憩と重ならない時刻だけが、別の休憩です。
-    ``shift_window`` は直の時間(0 時からの分。`break_time.shift_window`)。
-    """
-    from . import break_time
+def rest_minutes(values: dict[str, str]) -> Decimal:
+    """その行の休憩「0」の分の合計(①〜⑤)。"""
     from .work_time import stop_minutes
 
-    total = sum((stop_minutes(str(values.get(minutes, "") or "")) for code, minutes in STOP_SLOTS
-                 if is_rest(values, code)), Decimal(0))
-    found = BREAKS.get(shift)
-    if total <= 0 or not found:
-        return RestParts(total)
-    ranges = break_time.parse_all(str(values.get(break_time.ROW_FAMILY, "") or ""))
-    window = break_time.parse(f"{found[0]}〜{found[1]}")
-    if not ranges or window is None:
-        return RestParts(total)
-    separate = [r for r in ranges if not break_time.overlaps(r, window)
-                and (shift_window is None or break_time.inside(r, shift_window))]
-    return RestParts(total, separate, only_separate=len(separate) == len(ranges))
+    return sum((stop_minutes(str(values.get(minutes, "") or "")) for code, minutes in STOP_SLOTS
+                if is_rest(values, code)), Decimal(0))
 
 
 def free_slot(values: dict[str, str]) -> Optional[tuple[str, str]]:
@@ -227,6 +209,193 @@ def free_slot(values: dict[str, str]) -> Optional[tuple[str, str]]:
         if not str(values.get(code, "") or "").strip() and not str(values.get(minutes, "") or "").strip():
             return code, minutes
     return None
+
+
+# ------------------------------------------------------------------
+# 休憩をもう打ってあれば足さない(「時間を割り振る」「LOTで時間を割り振る」の両方がここを通る)
+# ------------------------------------------------------------------
+#: 時刻の無い休憩・どの休憩の時刻とも重ならない休憩を、休憩の時刻に当てるのは、休憩の長さの
+#: この割合より長いとき(60分の休憩なら 30分以上)。10分休憩や、打ちかけの 1分 で昼の休憩を
+#: 「もう入っている」としないため
+MATCH_SHARE = Decimal("0.5")
+
+DAY = 24 * 60
+
+
+@dataclass
+class BreakSlot:
+    """割り振る時間がまたぐ休憩の時刻1つ(`break_slots`)。"""
+
+    #: "12:00" / "13:00"
+    begin: str
+    end: str
+    #: 割り振りの始めから何分目か・長さ(分)
+    at: int
+    length: int
+    #: もう打ってある休憩(`TypedRest`)。空ならこの時刻の休憩を足す
+    present: list = field(default_factory=list)
+
+    @property
+    def added(self) -> bool:
+        return not self.present
+
+    def text(self) -> str:
+        return f"{self.begin}〜{self.end}"
+
+
+def break_slots(start: int, total: int, *, from_start: bool = False) -> list[BreakSlot]:
+    """割り振る時間(始まり `start` は 0 時からの分、長さ `total` 分)がまたぐ休憩の時刻(早い順)。
+
+    またぐ = 休憩がまるごと時間の中にある。休憩がちょうど始まりからなら ``from_start`` のときだけ数え、
+    ちょうど終わりで終わるものは数えない(`break_window` と同じ)。日をまたぐ直(3直の 02:00)も同じ。
+    """
+    out: list[BreakSlot] = []
+    for begin, end in BREAK_TIMES:
+        b_start, b_end = parse_hhmm(begin), parse_hhmm(end)
+        if b_start is None or b_end is None:
+            continue
+        offset = (b_start - start) % DAY
+        length = (b_end - b_start) % DAY
+        if length <= 0 or (offset <= 0 and not from_start) or offset + length >= total:
+            continue
+        out.append(BreakSlot(begin, end, offset, length))
+    return sorted(out, key=lambda s: s.at)
+
+
+@dataclass
+class TypedRest:
+    """もう打ってある休憩「0」1つ(`typed_rests`)。"""
+
+    #: 行の並び(全ページ通し・打った行だけ)の何番目か
+    index: int
+    #: 分
+    minutes: Decimal
+    #: 書いてある時刻(直の中で読めたもの)。書いていない・読めない・直の外なら None
+    clock: Optional[break_time.BreakRange] = None
+    #: 当てた休憩の時刻(`BreakSlot.begin` の "12:00")。当てていなければ ""
+    slot: str = ""
+
+
+def typed_rests(rows: Sequence[dict[str, str]],
+                shift_window: Optional[tuple[int, int]] = None) -> list[TypedRest]:
+    """打ってある休憩「0」を、行ごと(時刻を書いてあれば時刻ごと)に。
+
+    休憩の時刻の欄(「11:45〜12:45」「10:00〜10:10、12:00〜12:50」)が読めて、どれも直の中
+    (``shift_window``。0 時からの分)なら時刻ごとに1つ。書いていない・1つでも読めない・直の外の
+    時刻がある(ありえない時刻)なら、その行の休憩「0」の分をまとめて「時刻の無い休憩」1つ。
+    """
+    out: list[TypedRest] = []
+    for index, values in enumerate(rows):
+        minutes = rest_minutes(values)
+        if minutes <= 0:
+            continue
+        ranges = break_time.parse_all(str(values.get(break_time.ROW_FAMILY, "") or ""))
+        if ranges and all(shift_window is None or break_time.inside(r, shift_window) for r in ranges):
+            out.extend(TypedRest(index, Decimal(r.minutes), r) for r in ranges)
+        else:
+            out.append(TypedRest(index, minutes))
+    return out
+
+
+def match_rests(rests: Sequence[TypedRest], slots: Sequence[BreakSlot], shift_start: int) -> None:
+    """打ってある休憩を、休憩の時刻(``slots``。直がまたぐもの)へ当てる(`TypedRest.slot` に書く)。
+
+    **当て方の決まり**(当たった時刻には休憩を足さない):
+
+        1. 時刻を書いた休憩が、休憩の時刻の時間(12:00〜13:00 など)に少しでも重なる
+           → その時刻(ずらして 11:45〜12:45 と打ってあっても 12:00 の休憩)
+        2. 時刻を書いた休憩が、どの時刻とも重ならない → **いちばん近い時刻**(時間どうしの隔たり。
+           同じなら早いほう)。ただし休憩の長さの半分(`MATCH_SHARE`。60分なら 30分)より短いもの
+           (9:00〜9:10 の 10分休憩など)は**別の休憩**で、どの時刻にも当てない
+        3. 時刻の無い休憩 → 行の順に、まだ当たっていない時刻のうち**早いほう**へ。半分より短いもの
+           (打ちかけの「0」1分など)は当てない
+
+    1つの時刻に2つ当たってもよい(どちらも残す)。当てなかった休憩も消さない(停止として数える)。
+    """
+    if not slots:
+        return
+
+    def offset(minute: int) -> int:
+        return (minute - shift_start) % DAY
+
+    def window(s: BreakSlot) -> break_time.BreakRange:
+        return break_time.BreakRange(parse_hhmm(s.begin), parse_hhmm(s.end))
+
+    def long_enough(rest: TypedRest, s: BreakSlot) -> bool:
+        return rest.minutes >= Decimal(s.length) * MATCH_SHARE
+
+    for rest in rests:
+        if rest.clock is None:
+            continue
+        hit = [s for s in slots if break_time.overlaps(rest.clock, window(s))]
+        if hit:
+            rest.slot = hit[0].begin
+            continue
+        r0 = offset(rest.clock.start)
+        r1 = r0 + rest.clock.minutes
+
+        def gap(s: BreakSlot) -> tuple[int, int]:
+            s0 = offset(parse_hhmm(s.begin))
+            return max(s0 - r1, r0 - (s0 + s.length), 0), s0
+
+        near = min(slots, key=gap)
+        if long_enough(rest, near):
+            rest.slot = near.begin
+    taken = {r.slot for r in rests if r.slot}
+    for rest in rests:
+        if rest.clock is not None:
+            continue
+        free = [s for s in slots if s.begin not in taken and long_enough(rest, s)]
+        if free:
+            rest.slot = free[0].begin
+            taken.add(free[0].begin)
+
+
+@dataclass
+class BreakPlan:
+    """割り振る時間の休憩をどうするか(`plan_breaks`)。"""
+
+    #: 割り振る時間がまたぐ休憩の時刻(早い順)。`present` が空のものを足す
+    slots: list[BreakSlot]
+    #: 飛ばす休憩(割り振りの始めから何分目, 長さ)── **足す時刻だけ**。`split` の ``rests``
+    skip: list[tuple[int, int]]
+    #: 打ってある休憩の時刻をまたぐように合わせる行(割り振る行の何番目, 始めから何分目, 終わり, 休憩)。
+    #: 時刻を書いた休憩だけ(時刻の無い休憩は、どこにあっても保存の確かめにかからない)
+    pins: list[tuple[int, int, int, TypedRest]]
+    #: 打ってある休憩(この直の打った行ぜんぶ)
+    rests: list[TypedRest]
+
+    @property
+    def added(self) -> list[BreakSlot]:
+        return [s for s in self.slots if s.added]
+
+
+def plan_breaks(rows: Sequence[dict[str, str]], chosen: Sequence[int], *, shift_start: int,
+                shift_total: int, span_start: int, span_total: int, from_start: bool = False,
+                shift_window: Optional[tuple[int, int]] = None) -> BreakPlan:
+    """**休憩の時刻ごとに**、もう打ってあれば足さない・無ければ足す、を決める。
+
+    ``rows`` はこの直の打った行ぜんぶ(全ページ、ページ順・行順)、``chosen`` はそのうち割り振る行の
+    何番目か(「時間を割り振る」は全部、「LOTで時間を割り振る」はそのロットの行)。打ってある休憩を
+    探すのは**直ぜんぶ**(ほかのロット・ほかのページの行に打ってあっても、その時刻は足さない)。
+
+    もう打ってある休憩は、その行の停止の分として先に渡す(`row_stop_minutes`)ので、その時刻は
+    飛ばさない ── 飛ばすのは足す時刻だけ。時刻を書いた休憩の行は、その時刻をまたぐように合わせる
+    (`split_pinned`)。打ってある休憩の行は消さない・ほかの行へ動かさない。
+    """
+    rests = typed_rests(rows, shift_window)
+    match_rests(rests, break_slots(shift_start, shift_total, from_start=True), shift_start)
+    slots = break_slots(span_start, span_total, from_start=from_start)
+    for s in slots:
+        s.present = [r for r in rests if r.slot == s.begin]
+    position = {index: n for n, index in enumerate(chosen)}
+    pins: list[tuple[int, int, int, TypedRest]] = []
+    for rest in rests:
+        if rest.clock is None or rest.index not in position:
+            continue
+        w0 = (rest.clock.start - span_start) % DAY
+        pins.append((position[rest.index], w0, w0 + rest.clock.minutes, rest))
+    return BreakPlan(slots, [(s.at, s.length) for s in slots if s.added], pins, rests)
 
 
 def row_packs(values: dict[str, str]) -> Decimal:
@@ -499,17 +668,25 @@ class Plan:
     slots: list[tuple[int, int]] = field(default_factory=list)
     message: str = ""
     step: int = STEP
-    #: 休憩にかかって終わりをのばした行(`slots` の何番目か)。休憩を飛ばさなければ None
+    #: 休憩にかかって終わりをのばした行(`slots` の何番目か)。休憩を飛ばさなければ None。
+    #: 飛ばす休憩が2つ以上なら、いちばん早い休憩のもの(ぜんぶは `break_indexes`)
     break_index: Optional[int] = None
+    #: 飛ばした休憩ごと(早い順)の、またいで終わりをのばした行
+    break_indexes: list = field(default_factory=list)
+    #: 打ってある休憩の時刻に合わせて、始まりか終わりを決めた行(`split_pinned`)
+    pinned: list = field(default_factory=list)
 
 
 def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
           rest: Optional[tuple[int, int]] = None,
-          weights: Optional[Sequence[Decimal]] = None, origin: int = 0) -> Plan:
+          weights: Optional[Sequence[Decimal]] = None, origin: int = 0,
+          rests: Sequence[tuple[int, int]] = ()) -> Plan:
     """`stops`(行ごとの停止の分)の行へ、`total` 分を割り振る。
 
     `rest` は休憩(直の始めから何分目, 長さ)。その長さを除いて割り振り、休憩にかかる行の
-    終わりをのばし、後ろの行をずらす(`break_window`)。
+    終わりをのばし、後ろの行をずらす(`break_window`)。休憩が2つ以上なら `rests` に並べる
+    (早い順に1つずつ同じことをする。どちらも同じ時計の上の分なので、先の休憩でずらしたあとも
+    そのまま当てられる)。
 
     `weights` は行ごとの重み(梱包数。`pack_weights`)。停止の分を先に渡した残りを、この比で
     分けます。省けば全部 1 ── 均等も同じ道です。
@@ -518,22 +695,29 @@ def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
     **時計の5分刻み**(9:40・9:45 …)に寄せる(v4.43.0。LOTで時間を割り振るは前のロットの終わりから
     始まるので、始まりが5分刻みとは限らない)。直の始まりから割り振るときは 0。
     """
-    if rest is not None:
-        at, length = rest
-        plan = split(stops, total - length, step=step, weights=weights, origin=origin)
+    windows = sorted([*([rest] if rest is not None else []), *rests])
+    if windows:
+        plan = split(stops, total - sum(length for _at, length in windows), step=step,
+                     weights=weights, origin=origin)
         if not plan.ok:
             return plan
-        moved: list[tuple[int, int]] = []
-        for index, (a, b) in enumerate(plan.slots):
-            # 休憩がちょうど始まりからなら、最初の行がまたぐ(ずらさずにのばす)
-            if a >= at and a > 0:
-                moved.append((a + length, b + length))
-            elif b >= at:
-                moved.append((a, b + length))
-                plan.break_index = index
-            else:
-                moved.append((a, b))
-        plan.slots = moved
+        slots = plan.slots
+        for at, length in windows:
+            moved: list[tuple[int, int]] = []
+            crossing = None
+            for index, (a, b) in enumerate(slots):
+                # 休憩がちょうど始まりからなら、最初の行がまたぐ(ずらさずにのばす)
+                if a >= at and a > 0:
+                    moved.append((a + length, b + length))
+                elif b >= at:
+                    moved.append((a, b + length))
+                    crossing = index
+                else:
+                    moved.append((a, b))
+            slots = moved
+            plan.break_indexes.append(crossing)
+        plan.slots = slots
+        plan.break_index = plan.break_indexes[0]
         return plan
     n = len(stops)
     if n == 0:
@@ -592,3 +776,58 @@ def split(stops: Sequence[Decimal], total: int, *, step: int = STEP,
         slots.append((start, end))
         start = end
     return Plan(True, slots=slots, step=step)
+
+
+def split_pinned(stops: Sequence[Decimal], total: int, *, pins: Sequence[tuple[int, int, int]] = (),
+                 rests: Sequence[tuple[int, int]] = (), weights: Optional[Sequence[Decimal]] = None,
+                 origin: int = 0, step: int = STEP) -> Plan:
+    """`split` に、**打ってある休憩の時刻をその行がまたぐ**ように合わせることを足したもの。
+
+    ``pins`` は(行の何番目, 始めから何分目, 終わりは何分目)── 時刻を書いた休憩(`plan_breaks`)。
+    ふつうに割り振ってその行が休憩の時刻をまるごと含めばそのまま。含まなければ、そこで時間を
+    2つに分けて、それぞれを割り振り直す:
+
+        その行が休憩より後に始まる → その行の始まりを休憩の始まりに(前の行は休憩の始まりまでに収める)
+        その行が休憩より前に終わる → その行の終わりを休憩の終わりに(後の行は休憩の終わりから)
+
+    分けた側でまた同じように見る(1つの休憩で多くて2回)。前は合わせなかったので、窓で
+    「11:45〜12:45」と入れた行が割り振りで 7:00〜9:45 になり、保存の確かめで「行の外」になった。
+    合わせられないもの(休憩の時刻が割り振る時間の外・行の順と食い違う・分けると入りきらない・
+    足す休憩の途中で分けることになる)は合わせない ── 呼ぶ側が、割り振ったあとの行の外だと知らせる。
+    """
+    rests = sorted(rests)
+    n = len(stops)
+    weights = list(weights) if weights is not None and len(weights) == n else [Decimal(1)] * n
+    plan = split(stops, total, rests=rests, weights=weights, origin=origin, step=step)
+    if not plan.ok:
+        return plan
+    for index, w0, w1 in sorted(pins):
+        if not (0 <= index < n) or w0 < 0 or w1 > total or w1 <= w0:
+            continue
+        a, b = plan.slots[index]
+        if a <= w0 and w1 <= b:
+            continue
+        cut, left_n = (w0, index) if a > w0 else (w1, index + 1)
+        if not (0 < left_n < n) or not (0 < cut < total):
+            continue
+        if any(at < cut < at + length for at, length in rests):
+            continue
+        left = split_pinned(stops[:left_n], cut,
+                            pins=[p for p in pins if p[0] < left_n and p[2] <= cut],
+                            rests=[r for r in rests if r[0] + r[1] <= cut],
+                            weights=weights[:left_n], origin=origin, step=step)
+        right = split_pinned(stops[left_n:], total - cut,
+                             pins=[(i - left_n, s0 - cut, s1 - cut) for i, s0, s1 in pins
+                                   if i >= left_n and s0 >= cut],
+                             rests=[(at - cut, length) for at, length in rests if at >= cut],
+                             weights=weights[left_n:], origin=origin + cut, step=step)
+        if not left.ok or not right.ok:
+            continue
+        merged = Plan(True, slots=left.slots + [(x + cut, y + cut) for x, y in right.slots],
+                      step=min(left.step, right.step))
+        merged.break_indexes = left.break_indexes + [None if i is None else i + left_n
+                                                     for i in right.break_indexes]
+        merged.break_index = merged.break_indexes[0] if merged.break_indexes else None
+        merged.pinned = sorted({*left.pinned, index, *(i + left_n for i in right.pinned)})
+        return merged
+    return plan

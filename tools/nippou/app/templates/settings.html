@@ -1559,28 +1559,37 @@ LVC,119
     {# ---- 時間を割り振る(v4.30.0) ----
 
        日報入力で、開始・終了の時刻を打たずに、直の開始〜終了を打った行へ順に割り振る
-       (`logic/time_split`)。**オンにした端末だけ**日報入力にボタンが出る。変えるのは
-       管理者モード(上の帯の鍵) #}
+       (`logic/time_split`)。「時間を割り振る」「LOTで時間を割り振る」を**それぞれ**入り切りし、
+       使うにした端末だけ日報入力にそのボタンが出る。変えるのは管理者モード(上の帯の鍵)。
+       配布設定に入れて配れる(下の「配布設定」の「書き出す項目を選ぶ」)。書いていない端末は、
+       前の版の1つの入り切り(既定はオフ)に従う #}
     <div class="card" id="time-split-setting">
       <div class="card__head">
         <h2>時間を割り振る(日報入力)</h2>
-        <span class="lead">オンにすると、日報入力に「時間を割り振る」「LOTで時間を割り振る」ボタンが出ます</span>
+        <span class="lead">「使う」にしたボタンだけ、日報入力に出ます(それぞれ入り切りできます)</span>
       </div>
-      <div class="btn-row" id="time-split-choices">
-        <span class="lead">いま: <b id="time-split-now">{{ "オン" if time_split else "オフ" }}</b></span>
-        <button class="btn btn--sm{% if time_split %} btn--primary{% endif %}" type="button"
-                data-time-split="1" {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>オン</button>
-        <button class="btn btn--sm{% if not time_split %} btn--primary{% endif %}" type="button"
-                data-time-split="0" {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>オフ</button>
+      {% for b in time_split_buttons %}
+      <div class="btn-row time-split-choices" id="time-split-choices-{{ b.which }}" data-which="{{ b.which }}"
+           {% if loop.index > 1 %}style="margin-top:var(--sp-2)"{% endif %}>
+        <span class="lead">「{{ b.name }}」を使う: <b class="time-split-now">{{ "使う" if b.enabled else "使わない" }}</b></span>
+        <button class="btn btn--sm{% if b.enabled %} btn--primary{% endif %}" type="button"
+                data-time-split="1" data-which="{{ b.which }}"
+                {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>使う</button>
+        <button class="btn btn--sm{% if not b.enabled %} btn--primary{% endif %}" type="button"
+                data-time-split="0" data-which="{{ b.which }}"
+                {% if not admin %}disabled title="上の鍵を開けると変えられます"{% endif %}>使わない</button>
+        <span class="badge time-split-origin"{% if b.origin != "site" %} hidden{% endif %}>配布設定の値</span>
       </div>
+      {% endfor %}
       <p class="lead" style="margin-top:var(--sp-2)">
         開始・終了の時刻を打たずに、ロット№・梱包数・停止などを打ったあとで押すと、<b>その直の開始から
         終了まで</b>を、打った行へ順に割り振ります(この直の<b>全ページ</b>。1ページ目の1行目が直の開始、
         最後の行が直の終了)。区切りは<b>5分刻み</b>です。停止の分はその行に先に渡し(作業時間はマイナスに
         なりません)、残りを<b>梱包数の比</b>で分け(どの行にも梱包数が無ければ等しく)、さらに下の倍率で EX・段取り・
-        VC交換のぶん長くします。<b>休憩(1直 12:00〜13:00・2直 18:00〜19:00・3直 02:00〜03:00)にかかる行は
-        60分のばし</b>(例 11:40〜12:20 → 11:40〜13:20)、その行に休憩(停止の記号「0」60分)を入れます
-        (昼稼働「有」の直はのばしません)。入っている開始・終了の時刻は書き換えます(押す前に確かめます)。
+        VC交換のぶん長くします。<b>休憩(12:00〜13:00・18:00〜19:00・02:00〜03:00)にかかる行は
+        60分のばし</b>(例 11:40〜12:20 → 11:40〜13:20)、その行に休憩(停止の記号「0」60分)を入れます。
+        <b>その時刻の休憩をもう打ってあれば足しません</b>(打った行のまま。昼稼働「有」の直はのばしません)。
+        入っている開始・終了の時刻は書き換えます(押す前に確かめます)。
         「LOTで時間を割り振る」は、選んでいる行のロットだけを、直の開始か前のロットの終わりから割り振ります。
       </p>
       {# EX・段取り・VC交換の倍率(v4.42.0。`logic/time_split.Factors`) #}

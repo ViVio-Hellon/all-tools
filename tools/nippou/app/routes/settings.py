@@ -100,8 +100,10 @@ def index():
         shift_times=get_repo().get_shift_times(),
         shift_defaults=default_times_text(),
         state=state,
-        # 日報入力の「時間を割り振る」(v4.30.0)。変えるのは管理者モードだけ
+        # 日報入力の「時間を割り振る」(v4.30.0)。変えるのは管理者モードだけ。
+        # 「時間を割り振る」「LOTで時間を割り振る」をそれぞれ入り切りする(配布設定でも配れる)
         time_split=_time_split_enabled(),
+        time_split_buttons=_time_split_buttons(),
         # その倍率(EX・段取り・VC交換。v4.42.0)
         time_split_factors=_time_split_factors().as_dict(),
         # 段取り・VC交換と見た停止(停止理由の内訳の名前で見る。v4.42.2)
@@ -553,11 +555,31 @@ def _time_split_enabled() -> bool:
     return time_split_enabled()
 
 
+#: 設定画面に並べる、日報入力の2つのボタン(並び・名前)
+TIME_SPLIT_NAMES = {"shift": "時間を割り振る", "lot": "LOTで時間を割り振る"}
+
+
+def _time_split_buttons() -> list[dict]:
+    """2つのボタンのいま(使うか・配布設定の値か)。"""
+    from ..current import time_split_button, time_split_origin
+
+    return [{"which": which, "name": name, "enabled": time_split_button(which),
+             "origin": time_split_origin(which)}
+            for which, name in TIME_SPLIT_NAMES.items()]
+
+
 @bp.post("/api/settings/time-split")
 def time_split():
-    """日報入力の「時間を割り振る」を使うか(v4.30.0)。**変えるのは管理者モードだけ。**"""
+    """日報入力の「時間を割り振る」「LOTで時間を割り振る」を使うか。**変えるのは管理者モードだけ。**
+
+        時間を割り振る / LOTで時間を割り振る: 共にパスワードでオンオフ出来るようにし、配布設定できるように
+
+    ``which`` が ``"shift"``(時間を割り振る)/ ``"lot"``(LOTで時間を割り振る)ならそのボタンだけ。
+    ``which`` が無ければ2つとも(前の版の1つの入り切りと同じ)。
+    """
     from nippou import user_settings
-    from nippou.config import KEY_TIME_SPLIT
+
+    from ..current import time_split_key
 
     ctx = work_context.get_context()
     if not ctx.admin:
@@ -565,12 +587,20 @@ def time_split():
             "not_admin", "「時間を割り振る」のオン・オフは管理者モードでのみ変えられます")), 403
     payload = request.get_json(silent=True) or {}
     enabled = payload.get("enabled") is True
-    remembered = user_settings.save(KEY_TIME_SPLIT, enabled)
-    log_button_click("time_split_on" if enabled else "time_split_off", line=ctx.line)
+    which = str(payload.get("which") or "").strip()
+    if which and which not in TIME_SPLIT_NAMES:
+        return jsonify(error_body("bad_input", "どのボタンかが分かりません", field="which")), 400
+    chosen = [which] if which else list(TIME_SPLIT_NAMES)
+    remembered = user_settings.save_many({time_split_key(w): enabled for w in chosen})
+    names = "」「".join(TIME_SPLIT_NAMES[w] for w in chosen)
+    log_button_click(("time_split_on" if enabled else "time_split_off") + (f"_{which}" if which else ""),
+                     line=ctx.line)
+    buttons = _time_split_buttons()
     return jsonify({
-        "enabled": _time_split_enabled(), "remembered": remembered,
-        "message": ("日報入力に「時間を割り振る」を出します" if enabled
-                    else "日報入力の「時間を割り振る」を出さないようにしました"),
+        "enabled": all(b["enabled"] for b in buttons if b["which"] in chosen),
+        "buttons": buttons, "remembered": remembered,
+        "message": (f"日報入力に「{names}」を出します" if enabled
+                    else f"日報入力の「{names}」を出さないようにしました"),
     })
 
 

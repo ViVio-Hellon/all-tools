@@ -167,6 +167,17 @@ KEY_ACCESS_LINE_APPLIED = "access_rights_line"
 # 変えるには管理者パスワード(設定・管理者 →「この端末と配布」の面)。既定はオフ
 KEY_TIME_SPLIT = "time_split_enabled"
 
+# 「時間を割り振る」「LOTで時間を割り振る」を**それぞれ**使うか。変えるのは管理者パスワード
+# (設定・管理者の「時間を割り振る」の面)。配布設定に入れて配れる(`distribution.ITEMS`)。
+#
+#     時間を割り振る / LOTで時間を割り振る: 共にパスワードでオンオフ出来るようにし、配布設定できるように
+#
+# **書いていない端末は、前の版の1つの入り切り(`KEY_TIME_SPLIT`)に従う**(`TIME_SPLIT_INHERITS`)。
+# 版を上げただけで、オンにしていた端末のボタンが消えたり、オフの端末に出たりしないように
+KEY_TIME_SPLIT_SHIFT = "time_split_shift_enabled"
+KEY_TIME_SPLIT_LOT = "time_split_lot_enabled"
+TIME_SPLIT_INHERITS: dict[str, str] = {KEY_TIME_SPLIT_SHIFT: KEY_TIME_SPLIT, KEY_TIME_SPLIT_LOT: KEY_TIME_SPLIT}
+
 # 「時間を割り振る」の倍率(v4.42.0。`logic/time_split.Factors`)。EX のロット・ロットの変わり目の
 # 1梱包目(段取り)・VC交換。`{"ex": 1.2, "setup": 1.5, "vc": 1.5}`。変えるのは管理者モードだけ
 KEY_TIME_SPLIT_FACTORS = "time_split_factors"

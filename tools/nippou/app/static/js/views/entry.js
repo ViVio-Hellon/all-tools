@@ -3192,16 +3192,12 @@ export function start() {
     if (plan.weight_note) lines.push(plan.weight_note);
     // EX・段取り・VC交換で長めにする所(v4.42.0。文言はサーバが決める)
     for (const note of plan.adjust_notes || []) lines.push(`・${note}`);
-    // 休憩の時間は飛ばす(v4.31.0)。どの行にかかって、休憩を入れるのかも先に言う
-    const rest = plan.rest;
-    if (rest?.skipped) {
-      lines.push("", rest.skipped);
-    } else if (rest) {
-      lines.push("", `休憩 ${rest.start}〜${rest.end}(${rest.minutes}分)は飛ばします。` +
-        `${rest.page}ページ ${rest.row}行目が休憩をまたぎます。`);
-      if (rest.slot) lines.push(`その行に休憩(停止の記号「0」${rest.minutes}分)を入れます。`);
-      if (rest.note) lines.push(rest.note);
-    }
+    // 休憩は時刻ごとに、もう打ってあれば足さない・無ければ飛ばしてまたぐ行に休憩「0」を入れる。
+    // どの時刻をどうするか(「12:00 の休憩はもう入っているので足しません」)は**文言ごとサーバが決める**
+    // (`break_notes`。`app/routes/entry._add_breaks`)── ここで組み立てると2か所で食い違う
+    if (plan.rest?.skipped) lines.push("", plan.rest.skipped);
+    const breakNotes = plan.break_notes || [];
+    if (breakNotes.length) lines.push("", ...breakNotes);
     if (plan.overwrite) lines.push("", `開始・終了の時刻が入っている ${plan.overwrite} 行も書き換えます。`);
     lines.push("", "よろしいですか?");
     if (!confirm(lines.join("\n"))) return;

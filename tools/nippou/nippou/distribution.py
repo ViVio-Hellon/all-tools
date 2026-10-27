@@ -166,6 +166,10 @@ ITEMS: tuple[Item, ...] = (
     Item(config.KEY_SOUND_DIR, "音声ファイルの参照パス", True),
     Item(ITEM_SOUND_NAMES, "音声ファイルの名前", True, SOUND_NAME_KEYS),
     Item(config.KEY_ADMIN_PASSWORD, "管理者パスワード", True),
+    # 日報入力の2つのボタンを使うか(設定・管理者でそれぞれ入り切り)。配った先も同じボタンが出る。
+    # この端末で書いていなければ、前の版の1つの入り切りの値を入れる(`user_settings.terminal_value`)
+    Item(config.KEY_TIME_SPLIT_SHIFT, "「時間を割り振る」を使う", True),
+    Item(config.KEY_TIME_SPLIT_LOT, "「LOTで時間を割り振る」を使う", True),
     Item(ITEM_LINE, "この端末のライン(端末ごとに違う)", False,
          (config.KEY_TERMINAL_LINE, config.KEY_TERMINAL_MARU)),
 )
@@ -555,7 +559,7 @@ def reading(bundle: Bundle) -> dict[str, list[str]]:
         keys = [k for k in item.setting_keys if k in bundle.settings]
         if not keys:
             continue
-        mine = {k: stored.get(k) for k in keys}
+        mine = {k: _mine(stored, k) for k in keys}
         if all(not _is_set(v) or v == bundle.settings[k] for k, v in mine.items()) \
                 or not _decided_here(mine, came):
             applied.append(item.label)      # 配布設定の値(読み込んでいない分は次の起動で読む)
@@ -650,7 +654,7 @@ def export(password: str, items: list[str], files: list[str], *,
     for item in chosen:
         if with_sounds and item.key == config.KEY_SOUND_DIR:
             continue                                   # 写した音を使う
-        found = {k: current[k] for k in item.setting_keys if _is_set(current.get(k))}
+        found = {k: _mine(current, k) for k in item.setting_keys if _is_set(_mine(current, k))}
         if found:
             settings.update(found)
         elif item.key != ITEM_SOUND_NAMES:
@@ -798,6 +802,13 @@ def _from_distribution(current: dict[str, Any]) -> dict[str, Any]:
     return dict(found) if isinstance(found, dict) else {}
 
 
+def _mine(current: dict[str, Any], key: str) -> Any:
+    """この端末の値(`user_settings.terminal_value` ── 書いていなければ前の版の鍵の値)。"""
+    from . import user_settings
+
+    return user_settings.terminal_value(key, current)
+
+
 def _decided_here(mine: dict[str, Any], came: dict[str, Any]) -> bool:
     """この端末の値は**この端末で決めた**ものか。
 
@@ -819,7 +830,7 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
         keys = [k for k in item.setting_keys if k in bundle.settings]
         if not keys:
             continue
-        mine = {k: current.get(k) for k in keys}
+        mine = {k: _mine(current, k) for k in keys}
         if not overwrite and _decided_here(mine, came):
             if any(_is_set(v) and v != bundle.settings[k] for k, v in mine.items()):
                 result.kept.append(item.label)      # すでにある(この端末で決めた違う値)

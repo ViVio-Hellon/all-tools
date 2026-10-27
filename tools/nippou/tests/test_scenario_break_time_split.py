@@ -10,7 +10,8 @@
 (2) 休憩の分と時刻が合っている(下の一覧に直すところが無い)
 (3) もう一度割り振っても同じ
 (4) 保存(確定)が通る
-を確かめます。決まった休憩とは別の休憩(直の中で決まった休憩と重ならない時刻)は残し、
+を確かめます。もう打ってある休憩(窓で入れた・時刻を書かない)は打った行に残してその時刻には足さず、
+決まった休憩とは別の短い休憩(10分休憩・打ちかけの 1分)は残したうえで60分を足し、
 またぐ行の停止①〜⑤が埋まっていれば割り振らずに断ります。
 """
 from __future__ import annotations
@@ -107,26 +108,43 @@ def _make(shift: str):
         self.assertEqual(minutes, ["60"])
         self.assertEqual(body["rows"][str(row)]["break_range"], window)
 
-    def test_窓で入れた休憩はまたぐ行へまとめる(self) -> None:
+    def test_窓で入れた休憩はその行に残して足さない(self) -> None:
+        # 休憩がすでに入っている場合は、またいでいるところに休憩は足さない。窓で30分ずらして入れた
+        # 休憩もその時刻の休憩。打った行に残し、その行がその時刻をまたぐように割り振る
         body = _check(self, shift, {1: {"S": "0", "TH": "60", "break_range": shifted}}, 60, label="窓で入れた")
-        self.assertIn("1行目の休憩「0」(60分)", body["dry"]["rest"]["note"])
-        self.assertEqual(list(_rests(body["rows"]).values()), [["60"]])
-        self.assertEqual(body["rows"]["1"]["break_range"], "")
+        self.assertIsNone(body["dry"]["rest"], "足さない")
+        self.assertIn(f"{lunch[0]} の休憩はもう入っているので足しません(1行目の休憩「0」60分",
+                      "\n".join(body["dry"]["break_notes"]))
+        self.assertEqual(_rests(body["rows"]), {1: ["60"]})
+        self.assertEqual(break_time.normalize(body["rows"]["1"]["break_range"]), break_time.normalize(shifted))
 
-    def test_時刻を書かない休憩や分の違う休憩もまとめる(self) -> None:
-        body = _check(self, shift, {1: {"S": "0", "TH": "30"}, 4: {"S": "0", "TH": "50", "break_range": shifted}},
-                      60, label="時刻なし・分違い")
-        self.assertEqual(list(_rests(body["rows"]).values()), [["60"]])
+    def test_時刻を書かない休憩もその行に残して足さない(self) -> None:
+        body = _check(self, shift, {2: {"S": "0", "TH": "60"}}, 60, label="時刻なし")
+        self.assertIsNone(body["dry"]["rest"])
+        self.assertEqual(_rests(body["rows"]), {2: ["60"]})
+        self.assertEqual(body["rows"]["2"]["break_range"], "")
 
-    def test_直の外の時刻は決まった休憩を打ったものとみなす(self) -> None:
-        # 直の時間ではない時刻(ありえない)。別の休憩として残すと保存で止まるので、まとめる
+    def test_打ちかけの短い休憩は数えず60分を足す(self) -> None:
+        # 1分の「0」はその時刻の休憩ではない(休憩の長さの半分より短い)。60分を足し、1分は打った行に残す
+        body = _check(self, shift, {1: {"S": "0", "TH": "1"}}, 61, label="1分")
+        rests = _rests(body["rows"])
+        self.assertEqual(rests[1], ["1"])
+        self.assertEqual(sorted(rests.values()), [["1"], ["60"]])
+
+    def test_直の外の時刻の休憩も足さず打った行に残す(self) -> None:
+        # 直の時間ではない時刻(ありえない)。時刻の無い休憩として数え、その時刻には足さない。
+        # 打った時刻は消さない(保存の確かめが「直の外」と言うので、そこで直してもらう)
         wrong = "11:30〜12:30" if shift != "1直" else "19:00〜20:00"
-        body = _check(self, shift, {1: {"S": "0", "TH": "60", "break_range": wrong}}, 60, label="直の外")
-        self.assertEqual(list(_rests(body["rows"]).values()), [["60"]])
+        rows, _length = _open(self, shift, {1: {"S": "0", "TH": "60", "break_range": wrong}})
+        body = _split(self, rows).get_json()
+        self.assertEqual(_rests(body["rows"]), {1: ["60"]})
+        self.assertEqual(body["rows"]["1"]["break_range"], wrong)
+        self.assertIn("足しませんでした", body["message"])
 
     def test_別の休憩は残し決まった休憩と並べる(self) -> None:
         body = _check(self, shift, {1: {"S": "0", "TH": "10", "break_range": early}}, 70, label="別の休憩")
-        self.assertIn("決まった休憩とは別なのでそのままにします", body["dry"]["rest"]["note"])
+        self.assertIn("は短いので、休憩の時刻の休憩には数えません(そのまま残します)",
+                      "\n".join(body["dry"]["break_notes"]))
         rests = _rests(body["rows"])
         self.assertEqual(rests[1], ["10"])
         self.assertEqual(sorted(rests.values()), [["10"], ["60"]])

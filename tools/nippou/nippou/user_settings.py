@@ -72,6 +72,23 @@ def get(key: str, default: Any = None) -> Any:
     return data.get(key, default)
 
 
+def terminal_value(key: str, data: dict[str, Any] | None = None) -> Any:
+    """**この端末の**値(配布設定は見ない)。無ければ None。
+
+    書いていなくても、前の版の鍵に値があればそれ(`config.TIME_SPLIT_INHERITS` ── 「時間を割り振る」の
+    入り切りを2つに分けたとき、前の1つの入り切りを引き継ぐため)。配布設定を読み込むときも、この値を
+    「この端末の値」として比べる(`distribution`)。
+    """
+    data = load_all() if data is None else data
+    mine = data.get(key)
+    if _is_set(mine):
+        return mine
+    older = config.TIME_SPLIT_INHERITS.get(key)
+    if older and _is_set(data.get(older)):
+        return data.get(older)
+    return None
+
+
 # 値の出どころ。設定画面が「配布設定の値」の札を付けるのに使う
 ORIGIN_TERMINAL = "terminal"
 ORIGIN_SITE = "site"

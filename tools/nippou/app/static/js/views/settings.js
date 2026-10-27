@@ -1357,17 +1357,27 @@ export function start() {
   }
 
   // ---- 時間を割り振る(v4.30.0)── 日報入力のボタンを出すか。管理者モードだけ ----
-  for (const btn of document.querySelectorAll("#time-split-choices [data-time-split]")) {
+  // 「時間を割り振る」「LOTで時間を割り振る」をそれぞれ(`which`)。いまの値はサーバが返す2つで塗り直す
+  const paintTimeSplit = (buttons) => {
+    for (const b of buttons || []) {
+      const row = document.getElementById(`time-split-choices-${b.which}`);
+      if (!row) continue;
+      for (const btn of row.querySelectorAll("[data-time-split]")) {
+        btn.classList.toggle("btn--primary", (btn.dataset.timeSplit === "1") === b.enabled);
+      }
+      const now = row.querySelector(".time-split-now");
+      if (now) now.textContent = b.enabled ? "使う" : "使わない";
+      const origin = row.querySelector(".time-split-origin");
+      if (origin) origin.hidden = b.origin !== "site";
+    }
+  };
+  for (const btn of document.querySelectorAll(".time-split-choices [data-time-split]")) {
     btn.addEventListener("click", async () => {
       const box = document.getElementById("time-split-note");
       try {
         const body = await api.post("/api/settings/time-split",
-                                    { enabled: btn.dataset.timeSplit === "1" });
-        for (const b of document.querySelectorAll("#time-split-choices [data-time-split]")) {
-          b.classList.toggle("btn--primary", (b.dataset.timeSplit === "1") === body.enabled);
-        }
-        const now = document.getElementById("time-split-now");
-        if (now) now.textContent = body.enabled ? "オン" : "オフ";
+                                    { enabled: btn.dataset.timeSplit === "1", which: btn.dataset.which });
+        paintTimeSplit(body.buttons);
         toast(body.message, body.remembered === false ? "warn" : "ok");
         if (box) box.hidden = true;
       } catch (err) {

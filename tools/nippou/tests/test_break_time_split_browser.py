@@ -6,7 +6,8 @@
     時間割り振りを合わせて使用した場合、不具合がないかのチェック
 
 本物のブラウザで、窓で入れた休憩 → 割り振る、割り振る → 窓で別の休憩 → もう一度割り振る、の順に通し、
-休憩が2回数えられないこと・窓が勝手に開き直らないこと・合わなくなったら窓で知らせることを確かめます。
+休憩が2回数えられないこと・もう打ってある休憩は動かさず足さないこと・窓が勝手に開き直らないこと・
+合わなくなったら窓で知らせることを確かめます。
 無い環境では飛ばします。
 """
 from __future__ import annotations
@@ -85,10 +86,13 @@ class _Cases:
                     out.setdefault(row, []).append((code, page.input_value(f"#{minutes}{row}")))
         return out
 
-    def test_窓で入れた休憩を割り振るとまたぐ行へまとまる(self) -> None:
-        shift, (begin, end), _start = self.lunch()
+    def test_窓で入れた休憩はその行に残して足さない(self) -> None:
+        """休憩がすでに入っている場合は、時間がまたいでいるところに休憩は足さない(打った行に残す)。
+
+        前(v4.38.1〜)は、窓で入れた休憩をまたぐ行へ移して 60分 1つにまとめていた。"""
+        shift, (begin, end), start = self.lunch()
         page = self.open_split()
-        # 1行目(休憩をまたがない行)に、窓で決まった休憩を30分ずらして入れる
+        # 1行目に、窓で決まった休憩を30分ずらして入れる
         typed = f"{_hhmm(_minute(begin) - 30)}〜{_hhmm(_minute(end) - 30)}"
         page.select_option("#S1", "0")
         self.assertTrue(self.break_open(page))
@@ -96,23 +100,30 @@ class _Cases:
         page.fill("#break-text", typed)
         page.click("#break-apply")
         page.wait_for_selector("#break-modal", state="hidden")
-        page.wait_for_timeout(800)
-        self.assertFalse(page.is_visible("#break-modal"))
+        page.wait_for_function("document.getElementById('break-1')?.value !== ''", timeout=8000)
 
         self.split(page)
-        self.assertIn("1行目の休憩「0」(60分)", self.dialogs[-1], "移すことを先に言う")
+        self.assertIn(f"{begin} の休憩はもう入っているので足しません(1行目の休憩「0」60分", self.dialogs[-1],
+                      "足さないことを先に言う")
+        self.assertNotIn("は飛ばします。", self.dialogs[-1])
+        page.wait_for_function(
+            "(t) => [...document.querySelectorAll('.toast__text')].some((x) => x.textContent.includes(t))",
+            arg=f"{begin} の休憩はもう入っているので足しませんでした", timeout=8000)
         rests = self.rest_rows(page)
-        self.assertNotIn(1, rests, "1行目の休憩は移った")
-        self.assertEqual(page.locator("#break-1").count(), 0, "1行目の休憩の時刻の欄も消える")
-        [(row, got)] = rests.items()
-        self.assertEqual([m for _c, m in got], ["60"], "休憩は60分1つ")
+        self.assertEqual({r: [m for _c, m in got] for r, got in rests.items()}, {1: ["60"]},
+                         "打った行に残り、ほかの行には足さない")
         from nippou.logic import break_time
-        self.assertEqual(page.input_value(f"#break-{row}"), break_time.normalize(f"{begin}〜{end}"))
-        self.assertEqual(page.locator("#break-rows .break__problem").count(), 0)
+        self.assertEqual(break_time.normalize(page.input_value("#break-1")), break_time.normalize(typed))
+        self.assertEqual(page.locator("#break-rows .break__problem").count(), 0,
+                         page.text_content("#break-rows"))
         self.assertFalse(page.is_visible("#break-modal"), "合っているので窓は出ない")
-        # 休憩は1回だけ: 4行の作業時間はほぼ同じ(休憩を2回数えると、またぐ行だけ60分のびる)
+        # 休憩は1回だけ: 4行の作業時間の合計は 直の長さ − 60
+        from nippou.services import shift_check
+        s_text, e_text = shift_check.bounds_of(self.repo().get_shift_times(), shift)
+        length = (_minute(e_text) - _minute(s_text)) % 1440
         tims = [float(page.input_value(f"#TIM{n}") or 0) for n in range(1, 5)]
-        self.assertLessEqual(max(tims) - min(tims), 10, tims)
+        self.assertEqual(sum(tims), length - 60, tims)
+        row = 1
 
         # そのあと表の分だけ 50 にすると、窓で知らせる
         page.fill(f"#TH{row}", "50")
@@ -146,7 +157,9 @@ class _Cases:
         self.assertFalse(page.is_visible("#break-modal"))
 
         self.split(page)
-        self.assertIn("決まった休憩とは別なのでそのままにします", self.dialogs[-1])
+        self.assertIn("は短いので、休憩の時刻の休憩には数えません", self.dialogs[-1])
+        self.assertIn(f"{begin} の休憩はもう入っているので足しません", self.dialogs[-1],
+                      "1回目に足した休憩があるので、もう一度押しても足さない")
         rests = self.rest_rows(page)
         self.assertEqual([m for _c, m in rests.get(1, [])], ["10"], "別の休憩は残る")
         self.assertEqual([m for _c, m in rests.get(row, [])], ["60"])

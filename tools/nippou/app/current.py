@@ -76,15 +76,54 @@ def current_flow(report_date: str, line: str, shift: str, *,
                       warn_minutes=SETTINGS.print_warning_minutes)
 
 
-def time_split_enabled() -> bool:
-    """「時間を割り振る」を使う端末か(設定・管理者でオンにする。既定はオフ)。"""
-    from nippou import user_settings
-    from nippou.config import KEY_TIME_SPLIT
+#: 日報入力の2つのボタン → 入り切りの鍵(`config.KEY_TIME_SPLIT_SHIFT`・`KEY_TIME_SPLIT_LOT`)
+TIME_SPLIT_BUTTONS = ("shift", "lot")
 
-    value = user_settings.get(KEY_TIME_SPLIT, False)
+
+def _on(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "on", "yes")
     return bool(value)
+
+
+def time_split_key(which: str) -> str:
+    """"shift"(時間を割り振る)/ "lot"(LOTで時間を割り振る)の入り切りの鍵。"""
+    from nippou import config
+
+    return config.KEY_TIME_SPLIT_LOT if which == "lot" else config.KEY_TIME_SPLIT_SHIFT
+
+
+def time_split_button(which: str) -> bool:
+    """日報入力の「時間を割り振る」(``"shift"``)/「LOTで時間を割り振る」(``"lot"``)を使うか。
+
+    **この端末の値 → 配布設定 → 使わない。** この端末の値は、書いていなければ前の版の1つの入り切り
+    (`KEY_TIME_SPLIT`)を引き継ぐ(`user_settings.terminal_value`)── 版を上げただけで、オンにして
+    いた端末のボタンが消えたり、オフの端末に出たりしない。変えるのは管理者パスワード(設定・管理者)。
+    """
+    from nippou import distribution, user_settings
+
+    key = time_split_key(which)
+    value = user_settings.terminal_value(key)
+    if value is None:
+        value = distribution.value(key)
+    return _on(value) if value is not None else False
+
+
+def time_split_origin(which: str) -> str:
+    """その入り切りの出どころ: "site"(配布設定の値)/ "terminal"(この端末で決めた)/ ""(既定)。"""
+    from nippou import distribution, user_settings
+
+    key = time_split_key(which)
+    mine = user_settings.terminal_value(key)
+    shared = distribution.value(key)
+    if mine is not None:
+        return user_settings.ORIGIN_SITE if shared is not None and mine == shared else user_settings.ORIGIN_TERMINAL
+    return user_settings.ORIGIN_SITE if shared is not None else ""
+
+
+def time_split_enabled() -> bool:
+    """「時間を割り振る」「LOTで時間を割り振る」の**どちらかを**使う端末か(既定はオフ)。"""
+    return any(time_split_button(which) for which in TIME_SPLIT_BUTTONS)
 
 
 def time_split_factors():
