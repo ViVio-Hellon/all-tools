@@ -317,7 +317,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     writer = FrameWriter(proto)
     reader = sys.stdin.buffer
 
-    import start_app
+    # start_app 自身の __pycache__ も、アプリのフォルダ(共有フォルダに置けば全部の PC が同じ所)へ
+    # 書かない。置き場所(この PC の手元)は start_app が読み込まれながら決める
+    wrote = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        import start_app
+    finally:
+        if sys.pycache_prefix:
+            sys.dont_write_bytecode = wrote
 
     def fatal(error: "start_app.StartupError") -> int:
         try:

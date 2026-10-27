@@ -4,11 +4,16 @@ VBA 版は ``<basePath>\\<ブック名>\\<ライン名>\\DebugLog_yyyymmdd_hhmms
 追記していた。ここでも同じ階層構造を維持し、ライン名が取得できない場合は
 ``Unknown`` フォルダに出す(従来仕様を踏襲)。
 
-置き場所は ``<ログの置き場所>/kanban/<ライン名>/kanban_DebugLog_yyyymmdd_hhmmss.txt``。
+置き場所は ``<ログの置き場所>/kanban/<ライン名>/kanban_DebugLog_yyyymmdd_hhmmss_<PC名>.txt``。
 共有フォルダには日報・点検表などほかのツールのログも並ぶので、**ツール名のフォルダ
 (``kanban``)の下に置き、ファイル名もツール名(``kanban_``)で始める**(取り出したときも
 開かずにわかるように。VER3.5.10)。VER3.5.9 までは ``<置き場所>/KanbanSystem/<ライン名>/
 DebugLog_….txt`` だった(そのまま残る。記録(``記録/*.jsonl``)の読み手は前の場所も読む)。
+
+**名前に PC 名を入れる。**ログの置き場所を共有フォルダに配ると、同じラインの
+PC(exe で開いた PC と Start.vbs で開いた PC など)が同じフォルダに書く。名前が起動した
+時刻(秒)だけだったので、**同じ秒に開いた 2 台が 1 つのファイルに混ぜて書いていた**
+(どの行がどの PC のものか、ファイルを見ても分からない)。中の頭にも PC 名を書く。
 
 VBA 版はログ 1 行ごとにファイルを開き直していたため書き込みが遅かった。
 Python 版では ``logging`` のハンドラを 1 つ保持して使い回す。
@@ -31,8 +36,28 @@ _DBKIT_LOGGER_NAME = "dbkit"
 _UNKNOWN_LINE = "Unknown"
 #: ツールID。置き場所のフォルダ名とファイル名の頭(日報複合ツールの 4 ツールで共通の決まり)
 TOOL_ID = "kanban"
-#: ログのファイル名の頭(``kanban_DebugLog_<日時>.txt``)
+#: ログのファイル名の頭(``kanban_DebugLog_<日時>_<PC名>.txt``)
 FILE_PREFIX = f"{TOOL_ID}_DebugLog_"
+
+
+def pc_name() -> str:
+    """ログの名前・頭に入れる PC 名(アクセス権限・記録と同じ決め方: 差し替え → COMPUTERNAME → ホスト名)。"""
+    import socket
+
+    for value in (os.environ.get("KANBAN_PC_NAME"), os.environ.get("COMPUTERNAME")):
+        if value and value.strip():
+            return value.strip()
+    try:
+        return socket.gethostname() or "不明なPC"
+    except OSError:
+        return "不明なPC"
+
+
+def file_name(at: datetime, pc: str) -> str:
+    """``kanban_DebugLog_<日時>_<PC名>.txt``(PC 名はファイル名に使えない字を _ に)。"""
+    tag = "".join("_" if ch in '\\/:*?"<>|' or ch.isspace() else ch for ch in _sanitize(pc)) or "不明なPC"
+    return f"{FILE_PREFIX}{at:%Y%m%d_%H%M%S}_{tag}.txt"
+
 
 _logger: logging.Logger | None = None
 _log_path: Path | None = None
@@ -81,7 +106,7 @@ def initialize(
     for base in _candidate_dirs(log_dir, app_name, line):
         try:
             base.mkdir(parents=True, exist_ok=True)
-            candidate = base / f"{FILE_PREFIX}{datetime.now():%Y%m%d_%H%M%S}.txt"
+            candidate = base / file_name(datetime.now(), pc_name())
             handler = logging.FileHandler(candidate, encoding="utf-8")
             handler.setFormatter(formatter)
             handler.addFilter(ref_filter)
@@ -127,6 +152,7 @@ def initialize(
         # 版が読めなくてもログは書く(調べる手段を先に潰さない)
         logger.info("バージョン: %s", _version_text())
         logger.info("ライン名: %s", line)
+        logger.info("PC名: %s", pc_name())
         logger.info("ログファイル: %s", path)
         logger.info("=========================================")
     return path

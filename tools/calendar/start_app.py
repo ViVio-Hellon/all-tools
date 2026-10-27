@@ -287,6 +287,11 @@ def start(*, open_browser: bool = True) -> int:
     # (``launch_guard.StartupLock`` の説明)。
     startup = launch_guard.StartupLock()
     if not startup.acquire():
+        # デスクトップ版はこの入口も握っている(``launch_guard.hold_browser_entry``)。
+        # **待たずに理由を言う**(合流を待つと 20 秒黙ったあとで終わる)
+        if launch_guard.desktop_running():
+            log().info("デスクトップ版が動いているので、ブラウザ版は起動しません")
+            raise StartupError(DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
         joined = _handle_existing(open_browser, startup)
         if joined is not None:
             return joined
@@ -432,11 +437,33 @@ def _start_locked(*, open_browser: bool) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
+        # **待ち受けを止めてから、未送信を送れるだけ送って残りを覚える**(デスクトップ版の
+        # 窓を閉じたときと同じ。``bridge.BridgeServer.stop``)
+        _send_before_exit(srv)
         keeper_stop.set()
         # **自分が書いたものだけ消す。** 無条件に消すと、あとから起動して
         # 落ちたプロセスが生きているほうのロックを持っていってしまう
         launch_guard.remove_lock(only_mine=True)
         log().info("終了しました")
+
+
+def _send_before_exit(srv) -> None:
+    """ブラウザ版の終わり際に、未送信を送れるだけ送り、残った件数を覚える。
+
+    前は画面の「終了」・``stop.bat``(``/api/shutdown``)で止めると、未送信を送りにも行かず、
+    「未送信のまま終了」も覚えなかった(覚えるのはタブを閉じたときの見張りだけ)。
+    デスクトップ版(exe)は窓を閉じると送り切ってから覚えるので、**exe の PC の未送信は
+    端末一覧に出るのに、vbs の PC の未送信は出ない**、になっていた。
+    待ち受けはもう止まっているので、送っているあいだに新しい入力は来ない。
+    """
+    if getattr(srv, "app", None) is None:
+        return                                    # 組み立て前(DB も同期もまだ無い)
+    try:
+        from calendar_app import sync_service
+
+        sync_service.send_before_exit(sync_service.EXIT_SEND_SEC)
+    except Exception as exc:                      # noqa: BLE001 - 終わり方で止めない
+        log().warning("終わる前の送信でエラー: %s", exc)
 
 
 def _hold_until_stopped(srv, thread) -> None:
@@ -503,7 +530,9 @@ def start_bridge(*, token: str = "", server_factory) -> int:
     if not launch_guard.hold_desktop_lock():
         raise StartupError("ライン管理カレンダーがほかの窓で動いています",
                            "開いている窓をお使いください。")
-    if launch_guard.browser_running():
+    # ブラウザ版の入口も握る(desktop.lock を知らない前の版のブラウザ版を入れないため)。
+    # 取れなければブラウザ版が動いている
+    if not launch_guard.hold_browser_entry():
         launch_guard.release_desktop_lock()
         log().warning("ブラウザ版が動いているので、デスクトップ版は起動しません")
         raise StartupError(BROWSER_RUNNING_MESSAGE, BROWSER_RUNNING_HINT)

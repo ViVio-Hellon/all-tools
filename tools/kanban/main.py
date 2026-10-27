@@ -3,7 +3,8 @@
 
 **画面を開くのはこちらではありません。** 利用者は ``Start.vbs``(通常)か
 ``start.bat``(診断)を使います。どちらも ``start_app.py`` を呼び、Web サーバ
-とブラウザで画面を出します(基盤仕様書 2.1)。
+とブラウザで画面を出します(基盤仕様書 2.1)。``--import-only`` などを付けずに
+呼ばれたとき(``run_kanban_warehouse.bat`` など)は、そのまま ``start_app.py`` へ渡します。
 
 こちらは**画面を使わない実行**のための入口です。定時バッチや調査で使います::
 
@@ -161,8 +162,39 @@ def show_config(cfg: config.Config) -> int:
     return 0
 
 
+def _open_screen(args: argparse.Namespace) -> int:
+    """画面を開く(``start_app.main`` へ渡す)。ここで決めた引数のうち、起動で効くものだけ渡す。
+
+    Flask などはここで初めて読む(``--import-only`` などのバッチ実行には要らないまま)。
+    """
+    forward: list[str] = []
+    for flag, value in (("--mode", args.mode), ("--line", args.line), ("--config", args.config),
+                        ("--shared-db", args.shared_db), ("--sqlite", args.sqlite)):
+        if value:
+            forward += [flag, value]
+    if args.no_import:
+        forward.append("--no-import")
+    if args.verbose:
+        forward.append("--diagnose")
+    # start_app 自身の __pycache__ もアプリのフォルダへ書かない(bridge.py と同じ)
+    wrote = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        import start_app
+    finally:
+        if sys.pycache_prefix:
+            sys.dont_write_bytecode = wrote
+    return start_app.main(forward)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not (args.show_config or args.import_only or args.export_only):
+        # 画面を開く頼み(``run_kanban_warehouse.bat`` / ``run_kanban.bat --mode warehouse`` /
+        # ``python main.py --mode warehouse``)。**起動は start_app.py に渡す**(入口は 1 本のまま。
+        # Start.vbs と同じ道)。以前は「Start.vbs を使ってください」と標準エラーに出して終わって
+        # いたが、bat は pythonw で呼ぶので誰にも見えず、**倉庫モードの bat を押しても何も起きなかった**
+        return _open_screen(args)
     cfg = resolve_config(args)
 
     applog.initialize(
@@ -180,21 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.export_only:
             return run_export(cfg)
 
-        # 画面はこちらでは開かない。**入口を1つに絞る**ため、起動は
-        # start_app.py(と、それを呼ぶ Start.vbs / start.bat)に任せる
-        # (基盤仕様書 2.1 / 2.5)。ここで Flask を読むと、バッチ実行にも
-        # Web の依存が要ることになってしまう。
-        print(
-            "画面を開くには Start.vbs(通常)または start.bat(診断)を使ってください。\n"
-            "  Start.vbs                  … コンソールを出さずに起動\n"
-            "  start.bat                  … 経過とエラーを表示しながら起動\n"
-            "  python start_app.py --check … 実行環境の確認だけ\n"
-            "\n"
-            "このコマンドは画面を使わない実行(--import-only / --export-only /\n"
-            "--show-config)のためのものです。",
-            file=sys.stderr,
-        )
-        return 2
+        return 2                 # ここへは来ない(画面を開く頼みは先に start_app.py へ渡す)
     except KeyboardInterrupt:
         return 130
     finally:

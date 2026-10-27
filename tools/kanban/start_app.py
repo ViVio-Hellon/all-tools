@@ -36,14 +36,24 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# **環境変数を書くだけでは、このプロセスには効かない**(``PYTHONPYCACHEPREFIX`` は Python が
+# 立ち上がるときに 1 度だけ読む)。前はそれだけだったので、このあと読むモジュールの
+# ``__pycache__`` がアプリのフォルダ(共有フォルダに置けば、全部の PC が同じ所)へ書かれていた。
+# このプロセスの置き場所(``sys.pycache_prefix``)も替え、決めるための import でも書かせない
+_WROTE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 from kanban import app_config  # noqa: E402
 
-if not os.environ.get("PYTHONPYCACHEPREFIX"):
-    try:
+try:
+    if not sys.pycache_prefix:
         app_config.ensure_local_dirs()
-        os.environ["PYTHONPYCACHEPREFIX"] = str(app_config.local_dir("pycache"))
-    except OSError:
-        pass  # 作れなくても起動は続ける
+        sys.pycache_prefix = str(app_config.local_dir("pycache"))
+    os.environ.setdefault("PYTHONPYCACHEPREFIX", sys.pycache_prefix)   # 子のプロセスにも
+except OSError:
+    pass  # 作れなくても起動は続ける(置き場所が無いなら書かないまま)
+finally:
+    if sys.pycache_prefix:
+        sys.dont_write_bytecode = _WROTE_BYTECODE
 
 from kanban import applog, config, presence  # noqa: E402
 from kanban.applog import get_logger  # noqa: E402
@@ -262,9 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     import launch_guard
 
     if launch_guard.desktop_running():
-        message = (f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}")
-        log.info("起動しません: %s", message)
-        print(message)
+        log.info("起動しません: %s。%s", DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
+        _explain_not_started(args, DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
         store.close()
         return 0
 
@@ -274,7 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         log.info("起動しません: %s", guard.reason)
         opened = bool(not args.no_browser and guard.url)
         if opened:
-            _open_browser(guard.url)
+            # **開いてから終わる**(:func:`_open_browser` の ``wait``)
+            _open_browser(guard.url, wait=True)
         # **「すでに起動しています」で終わらせない。**
         #
         # このアプリに窓は無く、``pythonw.exe`` はタスクマネージャーの
@@ -305,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         again = launch_guard.check_existing(mode)
         log.info("ほぼ同時にもう 1 つ起動されました。先の 1 つへ合流します: %s", again.reason)
         if again.url and not args.no_browser:
-            _open_browser(again.url)
+            _open_browser(again.url, wait=True)
         print(f"すでに起動しています({again.reason or 'ほぼ同時に起動されたもう 1 つ'})。")
         store.close()
         return 0
@@ -319,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         log.error(message)
         print(message, file=sys.stderr)
+        _explain_not_started(args, "資材発注看板システムを起動できませんでした", message)
         store.close()
         return 2
 
@@ -591,9 +602,8 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
     # 間に日報複合ツールの窓で看板が開いていたら、こちらが止まる)
     if launch_guard.desktop_running():
         launch_guard.release_lock(mode)
-        message = f"{DESKTOP_RUNNING_MESSAGE}。{DESKTOP_RUNNING_HINT}"
-        log.info("起動しません: %s", message)
-        print(message)
+        log.info("起動しません: %s。%s", DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
+        _explain_not_started(args, DESKTOP_RUNNING_MESSAGE, DESKTOP_RUNNING_HINT)
         store.close()
         return 0
 
@@ -606,6 +616,7 @@ def _run(args, cfg, store, mode: str, line: str, port: int, root: Path,
         log.error("待ち受けを確認できませんでした")
         print("サーバを起動できませんでした。\n" + check.hint, file=sys.stderr)
         launch_guard.release_lock(mode)
+        _explain_not_started(args, "資材発注看板システムを起動できませんでした", check.hint)
         store.close()
         return 3
 
@@ -1054,17 +1065,79 @@ def _store_at(path, cfg):
     return store
 
 
-def _open_browser(url: str) -> None:
-    """既定のブラウザで開く。開けなくても起動は続ける。"""
+def _open_browser(url: str, *, wait: bool = False) -> None:
+    """既定のブラウザで開く。開けなくても起動は続ける。
 
-    def _later() -> None:
-        time.sleep(0.2)
+    ``wait=True`` は**このあとすぐ終わる**とき(すでに動いているほうへ合流する・起動しない
+    理由を出す)。別のスレッドで開くと、開く前にプロセスが終わってスレッドごと消え、
+    ブラウザが開かなかった ── 動いているのに Start.vbs をもう一度押しても何も出ず、
+    利用者からは「押しても何も起きない」に見えていた。
+    """
+
+    def _now() -> None:
         try:
             webbrowser.open(url)
         except Exception:  # noqa: BLE001 - 開けなくても URL は表示済み
             log.warning("ブラウザを開けませんでした。手動で開いてください: %s", url)
 
+    if wait:
+        _now()
+        return
+
+    def _later() -> None:
+        time.sleep(0.2)
+        _now()
+
     threading.Thread(target=_later, name="open-browser", daemon=True).start()
+
+
+#: 起動しなかった理由を書く画面(この端末のローカル領域の work)
+NOT_STARTED_PAGE = "起動しませんでした.html"
+
+
+def _explain_not_started(args, message: str, hint: str = "") -> None:
+    """起動しなかった理由を伝える。**Start.vbs(pythonw)にはコンソールが無い。**
+
+    以前は ``print`` だけだったので、Start.vbs から起こすと誰にも見えず、日報複合ツールの窓で
+    看板が動いている PC で Start.vbs を押しても**何も起きないように見えた**(理由はログにだけ
+    残る)。理由を書いた画面をブラウザで開く(``--no-browser`` のときは開かない)。
+    """
+    print(f"{message}。{hint}" if hint else message)
+    if getattr(args, "no_browser", False):
+        return
+    try:
+        page = _write_not_started_page(message, hint)
+    except OSError as exc:
+        log.warning("起動しなかった理由の画面を書けませんでした: %s", exc)
+        return
+    _open_browser(page.as_uri(), wait=True)
+
+
+def _write_not_started_page(message: str, hint: str) -> Path:
+    import html
+
+    target = app_config.local_dir("work") / NOT_STARTED_PAGE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    logs = applog.log_path() or app_config.local_dir("logs")
+    target.write_text(f"""<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>{html.escape(app_config.display_name())} - 起動しませんでした</title>
+<style>
+ body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef1f5;color:#101720;
+       font-family:system-ui,"Yu Gothic UI","Meiryo UI",sans-serif;line-height:1.7}}
+ .box{{width:min(560px,calc(100vw - 48px));background:#fff;border:1px solid #c9d2dc;border-radius:4px;padding:32px}}
+ h1{{margin:0 0 12px;font-size:19px}}
+ .hint{{margin-top:16px;padding:14px;background:#fff6e0;border-left:4px solid #c98a00;white-space:pre-wrap}}
+ code{{font-family:ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all}}
+</style></head>
+<body><main class="box">
+<h1>{html.escape(app_config.display_name())} は起動しませんでした</h1>
+<p id="message">{html.escape(message)}</p>
+{f'<div class="hint" id="hint">{html.escape(hint)}</div>' if hint else ''}
+<p>ログ: <code>{html.escape(str(logs))}</code>({html.escape(app_config.version_label())})</p>
+</main></body></html>
+""", encoding="utf-8")
+    return target
 
 
 if __name__ == "__main__":

@@ -245,6 +245,47 @@ def release_desktop_lock() -> None:
     lock, _desktop_lock = _desktop_lock, None
     if lock is not None:
         lock.release()
+    release_browser_entry()
+
+
+#: デスクトップ版が握る、**ブラウザ版の入口の錠**(``instance.lock``)
+_browser_entry: Optional["StartupLock"] = None
+
+
+def hold_browser_entry(wait_sec: float = 2.0) -> bool:
+    """デスクトップ版として、ブラウザ版の起動の入口(``instance.lock``)も握る。
+
+    取れなければ ``False`` ── ブラウザ版が動いている(または起動の途中)。
+
+    **デスクトップ版の錠(desktop.lock)を知らない前の版のため。** 単品のころの
+    カレンダー(日報複合ツールに入る前の版。VER4.0.0 の途中まで)の ``Start.vbs`` が同じ PC に残っていると、exe が
+    動いていてもそれは desktop.lock を見ないので、**同じ手元の作業用DB・設定のまま
+    一緒に動き出していた**(逆の順なら exe のほうが止まる)。前の版も入口の錠は
+    取ってから起動するので、ここを握っておけば入口が空くのを待ってあきらめる。
+    いまの版のブラウザ版は、入口が取れないときに desktop.lock を見て理由を言う
+    (``start_app.start``)。
+
+    立て直し(前の Python が終わってから次が起きる)の終わり際の重なりで断らないよう、
+    ``wait_sec`` 秒までは取り直す(Windows は終わったプロセスの錠を外すのが少し遅れる)。
+    """
+    global _browser_entry
+    if _browser_entry is not None:
+        return True
+    lock = StartupLock(instance_lock_path())
+    deadline = time.monotonic() + max(0.0, wait_sec)
+    while not lock.acquire():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+    _browser_entry = lock
+    return True
+
+
+def release_browser_entry() -> None:
+    global _browser_entry
+    lock, _browser_entry = _browser_entry, None
+    if lock is not None:
+        lock.release()
 
 
 def _held_by_other(path: Path) -> bool:

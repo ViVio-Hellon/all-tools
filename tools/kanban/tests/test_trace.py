@@ -208,7 +208,8 @@ class LayoutTest(TraceFixture):
     def test_logs_and_records_go_under_the_tool_folder_with_the_tool_name(self):
         log = applog.log_path()
         self.assertEqual(log.parent, self.logdir / "kanban" / "LVC")
-        self.assertRegex(log.name, r"^kanban_DebugLog_\d{8}_\d{6}\.txt$")
+        self.assertRegex(log.name, r"^kanban_DebugLog_\d{8}_\d{6}_.+\.txt$")
+        self.assertTrue(log.stem.endswith("_" + applog.pc_name()), "名前に PC 名が無い(同じ秒に開いた 2 台が混ざる)")
         self.assertEqual(trace.directory(), self.logdir / "kanban" / "記録")
         today = datetime.now()
         trace.write("refused", "断った", level=trace.LEVEL_WARNING)
