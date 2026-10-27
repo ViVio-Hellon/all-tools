@@ -1034,6 +1034,164 @@ class C_MultiTerminalTests(FlowCase):
 
 
 # ======================================================================
+# 4の2. 同じ直を、ほかの端末でも打っている ── 知らせだけ(v4.44.10)
+# ======================================================================
+def _other(body: dict) -> dict:
+    """応答の「ほかの端末」の帯(`services/other_terminal.notice`)。"""
+    return body["other_terminal"]
+
+
+class F_OtherTerminalTests(FlowCase):
+    """【直した】同じラインの2台目で同じ直を打つと、あとから保存したほうの中身で前の行が
+    **黙って**置き換わっていた。管理者が入力中の直を呼び出して直しても、ラインの端末が次に
+    保存すると直した中身が置き換わっていた。止めはせず(利用者の決定)、保存する前に知らせる。"""
+
+    def assertQuiet(self, body: dict, where: str) -> None:
+        got = _other(body)
+        self.assertFalse(got["shown"], f"{where}: 出してはいけない知らせ: {got['text']}")
+
+    def test_同じラインの2台目が同じ直を同時に打つと_保存する前に知らせ_置き換えたら両方に言う(self) -> None:
+        a = self.terminal("A", "PC-L1A")
+        b = self.terminal("B", "PC-L1B")
+        a.start_shift("山田")
+        b.start_shift("佐藤")
+        self.at("2026-10-05 09:00")
+        self.assertQuiet(a.saved(rows_of(row("A01", "07:00", "09:00")), "山田"), "A の保存")
+        a.wait_backup()
+        self.assertQuiet(a.shift_key(), "A の見張り")
+
+        # B はまだ保存していない。1分ごとの見張りで、保存する前に A の保存を知らせる
+        self.at("2026-10-05 09:10")
+        got = _other(b.shift_key())
+        self.assertTrue(got["shown"], "B に A の行があることを知らせていない")
+        self.assertEqual((got["kind"], got["pc"], got["at"]), ("conflict", "PC-L1A", "09:00"))
+        self.assertIn("この直は ほかの端末(PC-L1A)でも入力されています(09:00 に保存)", got["text"])
+        self.assertIn("この端末で保存すると、向こうで打った行をこの画面の中身で置き換えます",
+                      got["text"])
+        # 欄を離れたとき(打っているあいだ)の応答にも出る(控えは読みに行かず、見た答え)
+        self.assertEqual(_other(b.state(rows_of(row("B01", "07:00", "09:10")), "佐藤"))["kind"],
+                         "conflict")
+
+        # 止めはしない: B の保存は通り、控えは B の中身になる。B には「置き換えました」
+        body = b.saved(rows_of(row("B01", "07:00", "09:10")), "佐藤")
+        self.assertEqual(_other(body)["kind"], "conflict")
+        b.wait_backup()
+        self.assertEqual(self.backup_lots("L-1"), {(DAY, "1直", 1): ["B01"]})
+        got = _other(b.shift_key())
+        self.assertEqual((got["kind"], got["pc"]), ("replaced", "PC-L1A"))
+        self.assertIn("この直の、ほかの端末(PC-L1A・09:00 に保存)で打った行を、この端末の中身で"
+                      "置き換えました", got["text"])
+        # A には、B が保存したことを言う(A が次に保存すると、今度は B の行を置き換える)
+        got = _other(a.shift_key())
+        self.assertEqual((got["kind"], got["pc"], got["at"]), ("conflict", "PC-L1B", "09:10"))
+
+    def test_1台だけ_同じ端末で続けて_止まった端末から引き継ぐ_前の直を拾うときは知らせない(self) -> None:
+        """誤報を出さない: 控えのページが自分の保存か、自分が受け取った中身なら出さない。"""
+        a = self.terminal("A", "PC-L1A")
+        self.assertQuiet(a.start_shift("山田"), "A を開いた")
+        for when, rows in (("08:00", rows_of(row("A01", "07:00", "08:00"))),
+                           ("09:00", rows_of(row("A01", "07:00", "08:00"),
+                                             row("A02", "08:00", "09:00")))):
+            self.at(f"2026-10-05 {when}")
+            self.assertQuiet(a.autosave(rows, "山田")[1], f"A の自動保存 {when}")
+            self.assertQuiet(a.saved(rows, "山田"), f"A の保存 {when}")
+            a.wait_backup()
+            self.assertQuiet(a.shift_key(), f"A の見張り {when}")
+        a.restart()                                       # 同じ端末で開き直して続ける
+        self.assertQuiet(a.open_screen(), "A を開き直した")
+        self.assertQuiet(a.shift_key(), "A を開き直した見張り")
+        a.stop()                                          # A が壊れた
+
+        # 同じラインの B が続きを打つ(起動で控えから受け取っている)
+        self.at("2026-10-05 10:05")
+        b = self.terminal("B", "PC-L1B")
+        self.assertQuiet(b.open_screen(), "B を開いた")
+        self.assertQuiet(b.shift_key(), "B の見張り")
+        self.assertQuiet(b.choose_worker("山田"), "B の作業者")
+        self.at("2026-10-05 14:30")
+        full = rows_of(row("A01", "07:00", "08:00"), row("A02", "08:00", "09:00"),
+                       row("A03", "09:00", "10:00"), rest("10:00", "11:00"),
+                       row("B04", "11:00", "15:00"))
+        self.assertQuiet(b.saved(full, "山田"), "B の保存")
+        b.wait_backup()
+        self.assertQuiet(b.shift_key(), "B の保存のあとの見張り")
+        self.at("2026-10-05 14:55")
+        self.assertEqual(b.close_tick()["pushed"], 1)
+
+        # 2直は B のまま(前の直から引き継ぐ)。直った A は起動で B の続きを受け取る
+        self.at("2026-10-05 15:05")
+        b.start_next()
+        self.assertQuiet(b.start_shift("佐藤"), "B の2直")
+        self.at("2026-10-05 16:00")
+        self.assertQuiet(b.saved(rows_of(row("C01", "15:00", "16:00")), "佐藤"), "B の2直の保存")
+        b.wait_backup()
+        self.assertQuiet(b.shift_key(), "B の2直の見張り")
+        a.start()
+        self.assertQuiet(a.open_screen(), "直った A を開いた")
+        self.assertQuiet(a.shift_key(), "直った A の見張り")
+
+    def test_管理者が入力中の直を呼び出すと_入力中と言い_ラインの端末には管理者の直しを置き換えると言う(self) -> None:
+        """消えるのは**管理者の直し**: 管理者のPCで直して保存しても、ラインの端末が次に保存すると、
+        控え(と、送れば共有)はラインの端末の中身に戻る。"""
+        a = self.terminal("A", "PC-L1A")
+        a.start_shift("山田")
+        self.at("2026-10-05 09:00")
+        a.saved(rows_of(row("A01", "07:00", "09:00")), "山田")
+        a.wait_backup()
+
+        self.at("2026-10-05 09:30")
+        m = self.terminal("M", "PC-ADMIN")
+        m.ok("/api/records/backup/open", {"report_date": DAY, "line": "L-1", "shift": "1直"})
+        got = _other(m.open_screen())                     # 呼び出した時点で
+        self.assertEqual((got["kind"], got["pc"], got["at"]), ("busy", "PC-L1A", "09:00"))
+        self.assertIn("この直は いま PC-L1A の端末で入力中です(最後の保存 09:00)", got["text"])
+        self.assertIn("向こうが続けて保存すると、ここで直した中身は向こうの中身で置き換わります",
+                      got["text"])
+        body = m.saved(rows_of(row("A01", "07:00", "09:00", MAI="99")), "山田")
+        self.assertEqual(_other(body)["kind"], "busy", "直して保存したあとも言い続ける")
+        m.wait_backup()
+
+        # ラインの端末: 管理者が直したことを、保存する前に言う
+        got = _other(a.shift_key())
+        self.assertEqual((got["kind"], got["pc"], got["at"]), ("conflict", "PC-ADMIN", "09:30"))
+        # 知らせだけ(止めない)── A が保存すると管理者の直しは控えから消える
+        self.at("2026-10-05 09:40")
+        a.saved(rows_of(row("A01", "07:00", "09:00"), row("A02", "09:00", "09:40")), "山田")
+        a.wait_backup()
+        mai = {r["lot"]: r["mai"] for r in self.backup_rows("L-1")}
+        self.assertEqual(mai, {"A01": "10", "A02": "10"})
+        self.assertEqual(_other(a.shift_key())["kind"], "replaced")
+        # 管理者のPCには、ラインの端末がまた保存したことを言う
+        got = _other(m.shift_key())
+        self.assertEqual((got["kind"], got["pc"], got["at"]), ("conflict", "PC-L1A", "09:40"))
+
+    def test_管理者が終わった直を呼び出すときは入力中と言わない(self) -> None:
+        a = self.terminal("A", "PC-L1A")
+        a.start_shift("山田")
+        self.at("2026-10-05 14:30")
+        a.saved(clean_shift_rows("1直", "A"), "山田")
+        a.wait_backup()
+        self.at("2026-10-06 09:00")                       # 1直はとっくに閉じている
+        m = self.terminal("M", "PC-ADMIN")
+        m.ok("/api/records/backup/open", {"report_date": DAY, "line": "L-1", "shift": "1直"})
+        self.assertQuiet(m.open_screen(), "終わった直を呼び出した")
+        fixed = clean_shift_rows("1直", "A")
+        fixed["1"]["MAI"] = "12"
+        self.assertQuiet(m.saved(fixed, "山田"), "終わった直を直して保存")
+        m.wait_backup()
+        self.assertQuiet(m.shift_key(), "終わった直の見張り")
+
+    def backup_rows(self, line: str) -> list[dict]:
+        path = self.shared / "LocalBackup" / line / "日報入力データ.sqlite3"
+        conn = connect_readonly(path)
+        try:
+            return [dict(r) for r in conn.execute(
+                "SELECT lot, mai FROM daily_detail WHERE lot<>'' ORDER BY page, row_no")]
+        finally:
+            conn.close()
+
+
+# ======================================================================
 # 5. 共有が見えないあいだ
 # ======================================================================
 class D_OfflineTests(FlowCase):

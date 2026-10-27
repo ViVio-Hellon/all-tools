@@ -20,6 +20,8 @@ everywhere else, which the original VBA ``NippouDB_Save`` did not have.
 from __future__ import annotations
 
 import hashlib
+import os
+import socket
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
@@ -51,6 +53,18 @@ from .models import (
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def this_pc() -> str:
+    """この端末の名前(PC名)。ページを保存した端末として残す(`daily_header.saved_pc`)。
+
+    アクセス権限の表の当て方(`services/access_rights.identity`)と同じく、Windows の
+    `COMPUTERNAME` が先。引けなければ空(空のページには「ほかの端末」の知らせを出さない)。
+    """
+    try:
+        return os.environ.get("COMPUTERNAME") or socket.gethostname() or ""
+    except OSError:                                # pragma: no cover - 名前が引けない端末
+        return ""
 
 
 class NippouRepository:
@@ -103,10 +117,14 @@ class NippouRepository:
                     # **消す前に読みます。** やり直し(ロック待ち)のときも
                     # 巻き戻った中身をもう一度見るので、答えが変わりません
                     before = self.conn.execute(
-                        "SELECT synced_at, synced_hash FROM daily_header"
+                        "SELECT synced_at, synced_hash, base_hash FROM daily_header"
                         " WHERE report_date=? AND line=? AND shift=? AND page=?",
                         key).fetchone()
                     sent_hash = (before["synced_hash"] or "") if before else ""
+                    # **控えと揃えたときの指紋は持ち越します**(`services/other_terminal`)。
+                    # 打って中身が変わっても、「控えにあるのは自分が知っている中身か」は
+                    # 揃えたときの指紋で見ます
+                    base_hash = before["base_hash"] if before else None
                     # **共有と同じか。** 同じなら送った印もそのまま残す
                     same_as_sent = bool(sent_hash) and sent_hash == content_hash
                     header.dirty = not same_as_sent
@@ -124,8 +142,9 @@ class NippouRepository:
                         INSERT INTO daily_header
                             (report_date, line, shift, page, worker, day_shift, count,
                              weight_kg, lot_count, coefficient_lot_count, reason,
-                             saved_at, dirty, synced_at, content_hash, synced_hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             saved_at, dirty, synced_at, content_hash, synced_hash,
+                             saved_pc, base_hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             header.report_date, header.line, header.shift, header.page,
@@ -136,6 +155,7 @@ class NippouRepository:
                             # **送ったときの指紋は消しません。** 直して、
                             # また元に戻したときに「同じ」と分かるように
                             sent_hash,
+                            this_pc(), base_hash,
                         ),
                     )
                     for d in details:

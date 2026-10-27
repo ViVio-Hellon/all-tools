@@ -680,6 +680,132 @@ class RefusalTests(FlowCase):
         self.assert_clean()
 
 
+    def test_LOTが重複したら打った時点で両方の行に印と帯_直すと外れる(self) -> None:
+        """【直した】前は保存(自動保存も)に断られるまで重複が分からず、そのあいだの打ちかけが
+        手元に残らなかった。打った時点で、重複した行と相手の行に印を付け、帯で言い続ける
+        (トーストだけで消えない)。決まりは保存の断りと同じ ── ロット№を空けた続きの行は数えない。"""
+        page = self.boot()
+        self.type_lot(page, 1, LOT_A)
+        self.fill(page, 1, MAI="3", TUT="1")
+        self.settle(page, 1)
+        # ロット№を空けて上の行の続きを打った行は、重複に数えない
+        self.fill(page, 2, KZ="08", KH="00", SZ="09", SH="00", MAI="2", TUT="1")
+        self.settle(page, 2)
+        self.assertTrue(page.is_hidden("#lot-dup-note"), "続きの行(ロット№が空)を重複に数えた")
+        self.assertEqual(self.dup_rows(page), [])
+
+        self.type_lot(page, 3, LOT_A)                      # 引いた時点(欄を離れる前)で印
+        page.wait_for_function(
+            "document.querySelectorAll('#grid-body tr[data-dup-lot=\"1\"]').length === 2",
+            timeout=8000)
+        self.assertEqual(self.dup_rows(page), ["1", "3"])
+        note = page.inner_text("#lot-dup-note")
+        self.assertIn(f"LOTが重複しています: {LOT_A}(1行目・3行目)", note)
+        self.assertIn("自動保存もできません", note)
+        page.wait_for_function(
+            "[...document.querySelectorAll('.toast__text')]"
+            f".some((t) => t.textContent.includes('LOTが重複しています: {LOT_A}'))", timeout=8000)
+
+        # ほかの欄を打っても印と帯は残る(トーストのように消えない)
+        self.fill(page, 3, MAI="2", TUT="1")
+        self.settle(page, 3)
+        self.assertEqual(self.dup_rows(page), ["1", "3"])
+        self.assertTrue(page.is_visible("#lot-dup-note"))
+        # 保存の断りも同じものを言う(決まりが1つ)
+        self.assertEqual(self.click_save(page), 422)
+
+        # 直したら外れる
+        self.type_lot(page, 3, LOT_EX)
+        page.wait_for_function(
+            "!document.querySelector('#grid-body tr[data-dup-lot]')", timeout=8000)
+        self.assertTrue(page.is_hidden("#lot-dup-note"))
+        self.assert_clean()
+
+    @staticmethod
+    def dup_rows(page) -> list[str]:
+        return page.eval_on_selector_all(
+            "#grid-body tr[data-dup-lot='1']", "(rows) => rows.map((tr) => tr.dataset.row)")
+
+
+# ======================================================================
+# 6の2. 同じ直を、ほかの端末でも打っている(知らせだけ)
+# ======================================================================
+class OtherTerminalTests(FlowCase):
+    """同じラインの2台目の端末が、この直を控え(LocalBackup)へ保存した。
+
+    端末を2台立てて HTTP で叩く試験は `test_flow_multi_terminal`(F_OtherTerminalTests)。ここでは
+    **画面に出るか**を見ます ── 2台目の保存は、控えのファイルへ直に書いて作ります
+    (2台目の PC 名で `NippouRepository.save` を通す。書く形は端末の保存と同じ)。
+    """
+
+    OTHER = "PC-L1B"
+
+    def other_saves(self, lot: str) -> None:
+        """2台目(`OTHER`)が、この直の1ページ目を保存した(控えに入った)。"""
+        import os
+
+        from nippou.db.models import DetailRecord, HeaderRecord
+        from nippou.db.repository import NippouRepository
+        from nippou.services import local_backup
+
+        conn = local_backup._open_write(local_backup.path_for("L-1"))
+        try:
+            with patch.dict(os.environ, {"COMPUTERNAME": self.OTHER}):
+                NippouRepository(conn).save(
+                    HeaderRecord("2026年10月5日", "L-1", "1直", 1, worker="佐藤"),
+                    [DetailRecord("2026年10月5日", "L-1", "1直", 1, 1, lot=lot, kz="07", kh="00",
+                                  sz="08", sh="00", mai="4", tut="1")])
+        finally:
+            conn.close()
+
+    def tick(self, page) -> None:
+        """1分ごとの見張りを1回回し、`/api/shift/key` の答えを受け取るまで待つ。"""
+        page.wait_for_function("window.__ticks && window.__ticks.length > 0", timeout=10000)
+        with page.expect_response(lambda r: "/api/shift/key" in r.url):
+            page.evaluate("window.__ticks.forEach((f) => f())")
+
+    def band(self, page) -> dict:
+        return page.evaluate("""() => {
+          const el = document.getElementById('other-terminal');
+          return el ? {hidden: el.hidden, kind: el.dataset.kind, text: el.textContent.trim()} : null;
+        }""")
+
+    def test_2台目が保存したら_打っていなくても1分ごとの見張りで帯が出て_保存すると置き換えたと言う(self) -> None:
+        page = self.boot()
+        self.type_lot(page, 1, LOT_A)
+        self.fill(page, 1, KZ="07", KH="00", SZ="08", SH="00", MAI="3", TUT="1")
+        self.settle(page, 1)
+        self.assertEqual(self.click_save(page), 200)
+        # 1台だけで打って保存しているあいだは出さない
+        self.tick(page)
+        self.assertTrue(self.band(page)["hidden"], self.band(page))
+
+        self.other_saves(LOT_EX)
+        self.tick(page)                                    # 打っていない画面にも出る
+        page.wait_for_function(
+            "!document.getElementById('other-terminal').hidden", timeout=8000)
+        got = self.band(page)
+        self.assertEqual(got["kind"], "conflict")
+        self.assertIn(f"ほかの端末({self.OTHER})でも入力されています", got["text"])
+        self.assertIn("向こうで打った行をこの画面の中身で置き換えます", got["text"])
+        page.wait_for_function(
+            "[...document.querySelectorAll('.toast__text')]"
+            ".some((t) => t.textContent.includes('ほかの端末'))", timeout=8000)
+
+        # 止めはしない: 保存は通る。控えへ写したあとは「置き換えました」に変わり、帯は残る
+        self.fill(page, 1, MAI="4")
+        self.settle(page, 1)
+        self.assertEqual(self.click_save(page), 200)
+        self.tick(page)
+        page.wait_for_function(
+            "document.getElementById('other-terminal').dataset.kind === 'replaced'", timeout=8000)
+        got = self.band(page)
+        self.assertFalse(got["hidden"])
+        self.assertIn(f"ほかの端末({self.OTHER}", got["text"])
+        self.assertIn("この端末の中身で置き換えました", got["text"])
+        self.assert_clean()
+
+
 # ======================================================================
 # 7. 印刷・梱包資材重量計算への行き来
 # ======================================================================

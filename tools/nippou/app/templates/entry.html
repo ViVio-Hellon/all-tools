@@ -99,6 +99,13 @@
    **始まりは作業者を選ぶこと**にします。作業者はどのみち必ず要るので
    手間は増えません。選ぶまで表は伏せ、選んだ時点で打てるようにします。
    ================================================================ #}
+{# 同じ直を、ほかの端末でも打っている(v4.44.10 `services/other_terminal`)。**止めはしません。**
+   同じラインの2台目で打つと、あとから保存したほうの中身で前の行が置き換わります。管理者が
+   入力中の直を呼び出して直しても、ラインの端末が次に保存すると直した中身が置き換わります。
+   どちらの端末で打つかを人が決められるように、保存する前に言います #}
+{% set ot = view.other_terminal or {} %}
+<div class="msg msg--warn" id="other-terminal" role="alert" data-kind="{{ ot.kind or '' }}"
+     {% if not ot.shown %}hidden{% endif %}>{{ ot.text }}</div>
 {# 直の時間の出どころ ── **控えで動いているなら、そう言う。**
 
    境界は時間マスタ(`shift_config`)から来ます。読めないときは控えに
@@ -942,6 +949,12 @@
    そのまま保存された」が起きる ── 印は行にも残し、保存も断る #}
 <div class="msg msg--error" id="bad-note" hidden role="alert"
      style="margin-top:var(--sp-2)"></div>
+{# LOT の重複(v4.44.10)。**打った時点で出し、直すまで残します。** 重複したままだと
+   保存(確定)も自動保存も断るので、押してから知るのでは打ちかけが手元に残りません。
+   決まりは保存の断りと同じ1か所(`routes/entry._duplicate_lots`)── 行にも印を付けます #}
+{% set dup = view.lot_duplicates or {} %}
+<div class="msg msg--error" id="lot-dup-note" role="alert" style="margin-top:var(--sp-2)"
+     {% if not dup.text %}hidden{% endif %}>{{ dup.text }}</div>
 
 {# ================================================================
    表の下の2枚(v4.22.0)── 左に③のボタン、右に直実績合計

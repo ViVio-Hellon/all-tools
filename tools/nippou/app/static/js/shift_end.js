@@ -66,6 +66,7 @@ import { background } from "./api.js";
 import { markStale } from "./asof.js";
 import { go, guarded, leaving, refresh, typedHere } from "./nav.js";
 import { paintRibbon, showShiftMoved } from "./ribbon.js";
+import { paintOtherTerminal } from "./other_terminal.js";
 import { toast } from "./toast.js";
 
 // 訊きに行く間隔(ms)。VBA のタイマーが1分ごとだったので合わせる
@@ -113,6 +114,9 @@ async function shiftWatch() {
     // **帯は常に塗り直す。** またいでいなくても、ページが増えていることが
     // ある(別のタブで新しいページを出した、など)
     paintRibbon(body.ribbon);
+    // **同じ直を、ほかの端末でも打っている**(v4.44.10)。打っていない画面にも、
+    // 保存する前に出す(帯は入力画面にしか無いので、ほかの画面では何もしない)
+    paintOtherTerminal(body.other_terminal);
     const moved = body.shift_changed;
     // **固定した直の知らせを優先する。**
     //

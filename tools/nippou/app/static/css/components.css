@@ -381,6 +381,22 @@ table.grid tbody tr[data-bad="1"][data-focus="1"] td{
   background:var(--state-error-bg);
 }
 
+/* LOT が同じページで重複している行(v4.44.10)。**直すまで残る印**で、重複したままでは
+   保存(確定)も自動保存も通りません。重複した相手の行にも同じ印を付け、ロット№の欄を
+   赤く囲みます(色だけに頼らず、行番号も赤い札に) */
+table.grid tbody tr[data-dup-lot="1"] td.rowno{
+  color:var(--state-error); font-weight:700;
+  box-shadow:inset 4px 0 0 var(--state-error);
+}
+table.grid tbody tr[data-dup-lot="1"] td.rowno .rowno__n{
+  color:var(--on-fill); background:var(--state-error);
+  border-radius:999px; padding:0 4px;
+}
+table.grid tbody tr[data-dup-lot="1"] [data-family="LOT"]{
+  outline:2px solid var(--state-error); outline-offset:-2px;
+  background:var(--state-error-bg);
+}
+
 /* 押せるが通らないボタン。**disabled にはしない** ── 押して初めて
    「なぜ駄目か」が出るほうが、押せない理由を探すより早い */
 .btn--blocked{

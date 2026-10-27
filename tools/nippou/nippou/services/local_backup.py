@@ -118,6 +118,11 @@ def reachable() -> bool:
         return False
 
 
+def backing_off() -> bool:
+    """少し前に控えの置き場所へ届かなかった(しばらくは読みにも行かない)。"""
+    return time.monotonic() < _retry_at
+
+
 def lines_available() -> list[str]:
     """控えのあるライン(ラインの並びで)。届かなければ空。"""
     try:
@@ -193,6 +198,32 @@ def _newer(theirs: Optional[tuple[str, str]], mine: Optional[tuple[str, str]]) -
 def _sent_same(sent: Optional[tuple[str, str]], mine: Optional[tuple[str, str]]) -> bool:
     """控えで共有へ済のページ(`sent` = 送った時刻と指紋)が、手元のいまの中身と同じか。"""
     return bool(sent and mine and mine[1] and sent[1] == mine[1])
+
+
+def _settle_base(conn: sqlite3.Connection, key: PageKey) -> None:
+    """手元のそのページは**いま控えと同じ中身**、と覚える(`daily_header.base_hash`)。
+
+    控えから戻した・控えへ写したあとに呼びます(取引は呼ぶ側)。ほかの端末の知らせ
+    (`services/other_terminal`)は、控えの中身がこの指紋とも手元のいまの中身とも違う
+    ときだけ出します ── 自分が受け取った・写した中身では知らせません。
+    """
+    conn.execute(f"UPDATE {HEADER} SET base_hash=content_hash WHERE {_WHERE}", key)
+
+
+def _owner(conn: sqlite3.Connection, key: PageKey) -> Optional[tuple[str, str, str]]:
+    """控えのそのページを最後に保存した端末: (PC名, 保存した時刻, 指紋)。分からなければ None。"""
+    if "saved_pc" not in _columns(conn, HEADER):
+        return None                               # 前の版が作った控え(誰のものか分からない)
+    row = conn.execute(f"SELECT saved_pc, saved_at, content_hash FROM {HEADER} WHERE {_WHERE}",
+                       key).fetchone()
+    if row is None or not row[0]:
+        return None
+    return str(row[0]), str(row[1] or ""), str(row[2] or "")
+
+
+def _base(conn: sqlite3.Connection, key: PageKey) -> str:
+    row = conn.execute(f"SELECT base_hash FROM {HEADER} WHERE {_WHERE}", key).fetchone()
+    return str(row[0] or "") if row is not None else ""
 
 
 def _copy_page(src: sqlite3.Connection, dst: sqlite3.Connection, key: PageKey) -> bool:
@@ -296,6 +327,7 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
                 continue
             try:
                 done: list[PageKey] = []
+                written: list[PageKey] = []
                 with dst:                         # 1ラインぶんを1つの取引で
                     for key in keys:
                         mine, theirs = _stamp(repo.conn, key), _stamp(dst, key)
@@ -313,13 +345,22 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
                             # 控えのほうが新しい(別のPCで直された)── 上書きせず、手元へ戻す
                             with repo.conn:
                                 _copy_page(dst, repo.conn, key)
+                                _settle_base(repo.conn, key)
                             result.pulled += 1
                             pulled.add(key[:3])
-                        elif _copy_page(repo.conn, dst, key):
-                            result.written += 1
-                        elif theirs is not None:
-                            result.removed += 1
+                        else:
+                            if mine is not None:
+                                _note_replacing(dst, repo.conn, key, mine)
+                            if _copy_page(repo.conn, dst, key):
+                                result.written += 1
+                                written.append(key)
+                            elif theirs is not None:
+                                result.removed += 1
                         done.append(key)
+                # 控えへ写せた(取引が通った)ページは、控えと同じ中身になった
+                with repo.conn:
+                    for key in written:
+                        _settle_base(repo.conn, key)
                 repo.clear_backup_pending(done)
             except (OSError, sqlite3.Error) as exc:
                 log.warning("控えへ写せませんでした %s: %s", line, exc)
@@ -334,6 +375,28 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
         return result
     finally:
         _flush_lock.release()
+
+
+def _note_replacing(dst: sqlite3.Connection, local: sqlite3.Connection, key: PageKey,
+                    mine: tuple[str, str]) -> None:
+    """控えのそのページが**ほかの端末が保存した、この端末の知らない中身**なら、
+    この端末の中身で置き換えることを覚える(画面の知らせ `services/other_terminal`)。
+
+    止めはしません(知らせだけ)。知らせを作れなくても写すのはそのまま。
+    """
+    try:
+        from . import other_terminal
+
+        owner = _owner(dst, key)
+        if owner is None:
+            return
+        pc, saved_at, theirs_hash = owner
+        if other_terminal.unknown_to_me(pc, theirs_hash, mine[1], _base(local, key)):
+            log.warning("ほかの端末(%s・%s に保存)の控えのページを、この端末の中身で"
+                        "置き換えます key=%s", pc, saved_at, key)
+            other_terminal.note_replaced(key, pc, saved_at)
+    except Exception:                             # noqa: BLE001 - 写すのは止めない
+        log.exception("ほかの端末のページかを確かめられませんでした key=%s", key)
 
 
 def flush_soon() -> None:
@@ -402,6 +465,7 @@ def pull(repo: NippouRepository, line: str) -> Result:
             if _newer(stamp, mine.get(key)):
                 with repo.conn:
                     _copy_page(backup.conn, repo.conn, key)
+                    _settle_base(repo.conn, key)
                 result.pulled += 1
                 pulled.add(key[:3])
             elif key in unsent_here and _sent_same(sent_there.get(key), mine.get(key)):
@@ -474,6 +538,7 @@ def import_shift(repo: NippouRepository, report_date: str, line: str, shift: str
             if _newer(_stamp(backup.conn, key), _stamp(repo.conn, key)):
                 with repo.conn:
                     _copy_page(backup.conn, repo.conn, key)
+                    _settle_base(repo.conn, key)
                 result.pulled += 1
     if result.pulled:
         _refresh(repo, {(report_date, line, shift)})

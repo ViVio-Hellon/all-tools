@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS daily_header (
     -- 同じなら `dirty` を立てない、が保存の決まりです(README v3.65.0)
     content_hash              TEXT,
     synced_hash               TEXT,
+    -- 最後に中身を保存した端末(PC名)と、**この端末が最後に控え(LocalBackup)と
+    -- 揃えた中身の指紋**(v4.44.10 `services/other_terminal`)。
+    --
+    -- 同じラインの2台目の端末が、1台目の行を黙って置き換えないように知らせるため
+    -- です。控えにあるページが**ほかの端末の保存**で、指紋がこの端末のいまの中身とも
+    -- 揃えたときの中身とも違えば、「ほかの端末でも保存されています」と出します。
+    -- 共有の日報管理へは送りません(この端末と控えの中だけ)
+    saved_pc                  TEXT,
+    base_hash                 TEXT,
     PRIMARY KEY (report_date, line, shift, page)
 );
 
@@ -393,6 +402,10 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("daily_header", "synced_hash", "TEXT"),
     ("packing_report", "content_hash", "TEXT"),
     ("packing_report", "synced_hash", "TEXT"),
+    # 最後に保存した端末と、控えと揃えた中身の指紋(v4.44.10)。**空のまま足します**
+    # ── 空のページは「誰が保存したか分からない」なので、知らせを出しません
+    ("daily_header", "saved_pc", "TEXT"),
+    ("daily_header", "base_hash", "TEXT"),
 )
 
 

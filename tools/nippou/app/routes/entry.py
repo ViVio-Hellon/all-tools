@@ -210,6 +210,10 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
         bad_rows=len(bad))
     # 休憩の時刻の確かめは、直の時間とほかのページの休憩も入れて見る(保存の確かめと同じ)
     body["break_entries"] = _break_entries(state, report_date, line, shift, page)
+    # **LOT の重複は、打った時点で行に印を付ける**(v4.44.10)。重複したままだと保存も
+    # 自動保存も断るので(下の `save`)、押してから知るのでは打ちかけが手元に残りません。
+    # 決まりは保存の断りと同じ1か所(`_duplicate_lots`)── 画面は印を付けるだけ
+    body["lot_duplicates"] = _duplicate_lots(state)
     # 時間計算の断り。**入力は受け付けたうえで**画面に出す ── 打っている
     # 途中で保存できなくなるほうが困る(VBA は MsgBox で止めていた)
     body["time_problem"] = None if problem is None else {
@@ -339,7 +343,36 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
     # **開いている直**について出すので、過去の直を開いて(呼び出して)いるときも
     # その直のことが出ます
     body["push_mark"] = _push_mark(report_date, line, shift)
+    # **同じ直を、ほかの端末でも打っている**(v4.44.10 `services/other_terminal`)。
+    # 止めはしません(知らせだけ)。ここでは控えを読みに行かず、開いたとき・保存の前・
+    # 1分ごとの見張りで見た答えを出します(欄を離れるたびに共有のフォルダを読まない)
+    from nippou.services import other_terminal
+    body["other_terminal"] = other_terminal.notice(
+        report_date, line, shift, recall=ctx.recall.active, calc=calc)
     return body
+
+
+def _duplicate_lots(state) -> dict:
+    """このページで重複しているロット№と、その行。**保存の「LOTが重複しています」と同じ決まり。**
+
+    ロット№が空の行(上の行の続き)は数えません(`validation.find_duplicate_lots`)。
+    """
+    lots = [state.value(r, "LOT") for r in range(1, constants.ROW_COUNT + 1)]
+    rows = validation.duplicate_lot_rows(lots)
+    items = [{"lot": lot, "rows": numbers} for lot, numbers in rows.items()]
+    text = ""
+    if items:
+        where = "、".join(f"{i['lot']}({'・'.join(f'{n}行目' for n in i['rows'])})" for i in items)
+        text = (f"LOTが重複しています: {where}。同じページに同じロット№は打てません ── "
+                "直すまで保存(確定)も自動保存もできません。続きの行ならロット№を空けてください。")
+    return {"items": items, "text": text}
+
+
+def _scan_other_terminal(report_date: str, line: str, shift: str) -> None:
+    """控えを読んで、ほかの端末が保存したこの直のページを覚える(`services/other_terminal`)。"""
+    from nippou.services import other_terminal
+
+    other_terminal.scan(get_repo(), report_date, line, shift)
 
 
 def _push_mark(report_date: str, line: str, shift: str) -> dict:
@@ -990,6 +1023,8 @@ def index():
     from nippou import awake_clock
     tab_loaded_at = awake_clock.now()
     state = _load_state(report_date, line, shift, page)
+    # 開いたときに、ほかの端末がこの直を保存していないか見る(管理者が呼び出した直も)
+    _scan_other_terminal(report_date, line, shift)
     # 2ページ目から: まだ何も打っていないページなら、前のページの最後の終了を
     # 1行目の開始へ(v4.35.1 `_carry_from_previous_page`)
     _carry_from_previous_page(state, ctx, calc, (report_date, line, shift, page))
@@ -1904,8 +1939,8 @@ def save():
     key = (report_date, line, shift, page)
     problem = _recalculate(state, ctx, calc, shift=shift)
 
-    lots = [state.value(r, "LOT") for r in range(1, constants.ROW_COUNT + 1)]
-    duplicates = validation.find_duplicate_lots(lots)
+    # 画面の行の印(`_view` の `lot_duplicates`)と**同じ1か所**で数える
+    duplicates = [item["lot"] for item in _duplicate_lots(state)["items"]]
     if duplicates:
         # **422 で断る**(形は正しいが業務として通せない)。画面ぜんぶも
         # 一緒に返すので、断られた画面が古いままにならない
@@ -2065,6 +2100,10 @@ def save():
         log.info("空の紙は作りません key=%s", header.key())
         return jsonify(body), 422
 
+    # **書く前に**、ほかの端末がこの直を保存していないか見る(自動保存も)。この端末の
+    # 知らない行があれば、この応答の帯で「保存すると置き換えます」と言います。止めはしません
+    # ── 実際に置き換えるのは控えへ写すとき(`local_backup.flush` が覚える)
+    _scan_other_terminal(report_date, line, shift)
     try:
         page_writer.save_page(get_repo(), header, details, by_screen=True)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
@@ -2341,6 +2380,10 @@ def shift_key():
     # 見るだけになった瞬間は画面を塗り直す合図でもあります
     # (`static/js/shift_end.js`)
     standing = anchor_standing(ctx, calc)
+    # **ほかの端末がこの直を保存していないか**も1分ごとに見る(`services/other_terminal`)。
+    # 打っていない画面にも、保存する前に出せるように
+    from nippou.services import other_terminal
+    _scan_other_terminal(report_date, line, shift)
     return jsonify({
         "report_date": report_date, "line": line, "shift": shift, "page": page,
         "recall": ctx.recall.active,
@@ -2349,6 +2392,8 @@ def shift_key():
         "shift_changed": crossing.as_dict(),
         "anchor": ctx.anchor.as_dict(),
         "anchor_standing": standing.as_dict(),
+        "other_terminal": other_terminal.notice(
+            report_date, line, shift, recall=ctx.recall.active, calc=calc),
     })
 
 

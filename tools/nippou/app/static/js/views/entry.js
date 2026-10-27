@@ -16,6 +16,7 @@ import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
 import { beforeLeave, go, onSaved, pageSignal, refresh } from "../nav.js";
 import { paintRibbon, showShiftMoved } from "../ribbon.js";
+import { paintOtherTerminal } from "../other_terminal.js";
 import { playKey } from "../sound.js";
 // 開閉と焦点の戻しは1か所に置く(作業者選択・全停入力と同じ作り)
 import { open as openModal, close as closeModal } from "./modals.js";
@@ -739,6 +740,8 @@ function paint(view, { forceRow = 0, since = null } = {}) {
   paintSheets(view.sheets);
   paintShiftFindings(view.shift_findings);
   paintPushMark(view.push_mark);
+  paintOtherTerminal(view.other_terminal);
+  paintLotDuplicates(view.lot_duplicates);
   paintFilled(view.filled);
   // 「直の終わり」の時刻(**開いている直の**終わり)。直が変われば変わる
   if (typeof view.shift_end === "string") {
@@ -1531,6 +1534,34 @@ function paintBadRows(rows) {
   }
   const save = document.getElementById("save");
   if (save) save.classList.toggle("btn--blocked", bad.size > 0);
+}
+
+/**
+ * LOT の重複(v4.44.10)。**打った時点で、重複した行と相手の行に印を付ける。**
+ *
+ * 重複したままだと保存(確定)も自動保存も断られます。押してから知るのでは、
+ * そのあいだの打ちかけが手元に残りません。数えるのはサーバ(保存の断りと同じ1か所
+ * `routes/entry._duplicate_lots`)で、ここは印と帯を塗るだけ ── 直れば次の応答で外れます。
+ * 帯は直すまで残します。トーストは**新しく重複したときだけ**(打つたびに鳴らさない)。
+ * 付いていない応答(断りだけの応答など)では触りません。
+ */
+let lastDup = "";
+function paintLotDuplicates(dup) {
+  if (!dup) return;
+  const rows = new Set();
+  for (const item of dup.items || []) for (const n of item.rows || []) rows.add(String(n));
+  for (const tr of document.querySelectorAll("#grid-body tr")) {
+    if (rows.has(tr.dataset.row)) tr.dataset.dupLot = "1";
+    else delete tr.dataset.dupLot;
+  }
+  const note = document.getElementById("lot-dup-note");
+  if (note) {
+    note.hidden = !dup.text;
+    note.textContent = dup.text || "";
+  }
+  const sign = (dup.items || []).map((i) => `${i.lot}:${(i.rows || []).join(",")}`).join("|");
+  if (sign && sign !== lastDup) toast(dup.text, "error");
+  lastDup = sign;
 }
 
 function paintTimeProblem(problem) {
