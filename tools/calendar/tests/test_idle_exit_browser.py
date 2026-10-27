@@ -136,8 +136,13 @@ class TwoScreensCloseTests(unittest.TestCase):
         return (a, a_id), (b, b_id)
 
     def close(self, page, sid: str) -> None:
-        """タブを閉じる。閉じた合図(sendBeacon)がサーバに着くまで待つ。"""
-        page.close()
+        """タブを閉じる。閉じた合図(sendBeacon)がサーバに着くまで待つ。
+
+        **閉じるときの処理を走らせて閉じる**(``run_before_unload``)── 人がタブを閉じたときと同じ。
+        Playwright の ``close()`` は初めの決まりでは ``pagehide`` などを走らせないので、閉じた合図が
+        出たり出なかったりした(Linux では出て、Windows の CI では出なかった)。
+        """
+        page.close(run_before_unload=True)
         self.wait_for(lambda: ("leaving", sid) in self.watch.calls, "閉じた合図")
 
     def server_answers(self, page) -> bool:
