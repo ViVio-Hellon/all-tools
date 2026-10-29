@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 from flask import Blueprint, jsonify, render_template, request
 
-from nippou import admin_password, work_context
+from nippou import admin_password, user_settings, work_context
 from nippou.logging_setup import get_logger, log_button_click
 from nippou.presenters import vc as view
 from nippou.vc import grid, masters
@@ -201,8 +201,16 @@ def settings():
 
 def _need_key(body: dict, what: str):
     """管理者の鍵。**マスタ管理と同じ鍵**か、その場の管理者パスワード。"""
-    if _unlocked() or admin_password.verify(str(body.get("password", ""))):
+    if _unlocked():
         return None
+    try:
+        if admin_password.verify(str(body.get("password", ""))):
+            return None
+    except user_settings.SettingsUnreadable as exc:
+        # **読めないのを「変えていない」とみなして既定の値で通さない**
+        log.warning("%sを断りました(設定ファイルを読めない): %s", what, exc)
+        return jsonify(error_body(admin_password.REFUSE_UNREADABLE,
+                                  admin_password.unreadable_message(exc))), 503
     return jsonify(error_body(
         "need_password",
         f"{what}には管理者パスワードが要ります"

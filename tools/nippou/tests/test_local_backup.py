@@ -115,6 +115,34 @@ class BackupServiceTests(unittest.TestCase):
                 key).fetchone()[0]
         self.assertEqual(dirty, 0)                              # 控えも送り済み
 
+    def test_時計が進まなくても入れ直しを見分ける(self) -> None:
+        """時刻を止めた(試験・時計の刻みが粗い)ときも、入れ直した待ちを消さない。
+
+        待ちの印を時刻だけで作っていたので、保存と送り済みが同じ時刻だと同じ印になり、
+        写し終えたときに入れ直した待ちまで消えていた(混在起動の試験でときどき落ちた)。
+        """
+        from datetime import datetime as real
+        from nippou.db import repository as repo_mod
+
+        class Frozen(real):
+            @classmethod
+            def now(cls, tz=None):
+                return real(2026, 10, 5, 14, 30, 0)
+
+        with patch.object(repo_mod, "datetime", Frozen):
+            key = save(self.a)
+            copy = lb._copy_page
+
+            def copy_then_push(src, dst, page_key):
+                done = copy(src, dst, page_key)
+                if src is self.a.conn:
+                    self.a.mark_synced(key)
+                return done
+
+            with patch.object(lb, "_copy_page", side_effect=copy_then_push):
+                lb.flush(self.a)
+            self.assertEqual(self.a.backup_pending(), [key])
+
     def test_ラインごとのフォルダ(self) -> None:
         save(self.a, line="L-1")
         save(self.a, line="HVC")

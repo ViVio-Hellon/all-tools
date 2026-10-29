@@ -24,6 +24,10 @@
 {% if state.version_problem %}
 <div class="banner banner--warn">{{ state.version_problem }}</div>
 {% endif %}
+{% if state.config_unreadable %}
+<div class="banner banner--bad" id="config-unreadable">{{ state.config_unreadable }} — 組み込みの既定で動いています。
+  下に出ている値はこの端末の設定ではありません。読めるようになるまで、設定は保存しません(開き直すと読み直します)</div>
+{% endif %}
 
 
 <nav class="tabs tabs--settings" role="tablist" aria-label="設定の項目">

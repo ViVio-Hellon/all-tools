@@ -137,7 +137,9 @@ def check_environment(args=None) -> int:
            else "[あり]" if status.exists else "[なし(組み込みの既定で動きます)]")
     )
     print(f"担当ライン    : {cfg.line or '(未設定)'}")
-    print(f"管理者パスワード: {'この端末で決めた値' if cfg.admin_password_hash else '既定の値'}")
+    print("管理者パスワード: " + (
+        "分かりません(設定ファイルを読めません。読めるまで確かめません)" if cfg.unreadable
+        else "この端末で決めた値" if cfg.admin_password_hash else "既定の値"))
     from kanban import distribution
 
     bundle = distribution.read()
@@ -502,7 +504,13 @@ def _prepare(args):
                 # 起動用に既定の置き場所を埋めた cfg は保存しない(それを「決めた」ことにしない)
                 saved = config.load_config(args.config)
                 saved.line = code
-                config.save_config(saved)
+                try:
+                    config.save_config(saved)
+                except OSError as exc:
+                    # 設定ファイルを読めない(``SettingsUnreadable``)・書けない。**起動は止めない** ──
+                    # この起動は表のラインで動き、次の起動でまた表から当てる
+                    log.warning("担当ラインを設定ファイルに保存できませんでした(この起動は %s で動きます): %s",
+                                code, exc)
                 cfg.line = code
             access_control.mark_line_applied(store, code)
         if grant.line_problem or grant.ignored:

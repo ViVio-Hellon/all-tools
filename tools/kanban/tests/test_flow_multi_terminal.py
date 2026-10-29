@@ -1169,10 +1169,12 @@ class BrowserFlowTest(_Flow):
     def test_ほかの端末の操作が開いている画面に届き_落ちているあいだは帯が出る(self) -> None:
         site, ware = self.open(self.a), self.open(self.w)
         site.click(self.cell("1", "size"))
-        # 倉庫の画面は押さなくても赤になる(共有DBが変わったのを見て取り込み → 画面の読み直し)
-        ware.wait_for_selector(self.cell("1", "size", "ordered"), timeout=45000)
+        # 倉庫の画面は押さなくても赤になる(共有DBが変わったのを見て取り込み → 画面の読み直し)。
+        # 待ちは 120 秒: 変わったのを見逃しても取り込みの周期(30秒)+画面の読み直し(5秒)で届く作りだが、
+        # 重い Windows の CI では 45 秒では足りなかった(試験全体が普段の1.5倍かかった回)
+        ware.wait_for_selector(self.cell("1", "size", "ordered"), timeout=120000)
         ware.click(self.cell("1", "ship"))
-        site.wait_for_selector(self.cell("1", "ship", "shipped"), timeout=45000)
+        site.wait_for_selector(self.cell("1", "ship", "shipped"), timeout=120000)
         self.assertEqual(self.shared_marks(L1, "1"), (ON, ON, ""))
         # 現場Aだけ共有フォルダが見えなくなる → 押したものは帯「届いていません」に出る
         self.a.go_offline()
@@ -1180,12 +1182,12 @@ class BrowserFlowTest(_Flow):
         site.wait_for_selector(self.cell("2", "size", "ordered"), timeout=10000)
         site.wait_for_function(
             "() => { const b = document.getElementById('undelivered');"
-            " return b && !b.hidden && b.textContent.includes('見えません'); }", timeout=45000)
+            " return b && !b.hidden && b.textContent.includes('見えません'); }", timeout=120000)
         self.assertIn("届いていません", site.text_content("#undelivered"))
         # 戻ったら帯が消え、倉庫に届く
         self.a.go_online()
-        site.wait_for_selector("#undelivered", state="hidden", timeout=45000)
-        ware.wait_for_selector(self.cell("2", "size", "ordered"), timeout=45000)
+        site.wait_for_selector("#undelivered", state="hidden", timeout=120000)
+        ware.wait_for_selector(self.cell("2", "size", "ordered"), timeout=120000)
         self.assertEqual(self.shared_marks(L1, "2"), (ON, "", ""))
 
 

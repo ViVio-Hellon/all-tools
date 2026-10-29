@@ -113,7 +113,7 @@ class PasswordTests(_Keep):
         self.assertIsNotNone(result)
         self.assertEqual(result.reason, admin_password.REFUSE_UNREADABLE)
 
-    def test_読めないときは変えない・戻さない(self) -> None:
+    def test_読めないときは変えない_戻さない(self) -> None:
         with self.unreadable(), patch.object(user_settings, "READ_WAIT_SEC", 0):
             changed = admin_password.change("この端末の合言葉", "別の合言葉", "別の合言葉")
             reset = admin_password.reset("この端末の合言葉")

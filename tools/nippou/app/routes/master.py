@@ -27,7 +27,7 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request
 
-from nippou import admin_password, job_progress, master_admin, work_context
+from nippou import admin_password, job_progress, master_admin, user_settings, work_context
 from nippou.logging_setup import get_logger, log_button_click
 from nippou.logic import progress
 from nippou.presenters import master as master_presenter
@@ -97,7 +97,14 @@ def unlock():
         return jsonify({"unlocked": False, "message": "編集を閉じました"})
 
     password = str(payload.get("password", ""))
-    if not admin_password.verify(password):
+    try:
+        ok = admin_password.verify(password)
+    except user_settings.SettingsUnreadable as exc:
+        # **読めないのを「変えていない」とみなして既定の値で通さない**
+        log.warning("マスタ編集を断りました(設定ファイルを読めない): %s", exc)
+        return jsonify(error_body(admin_password.REFUSE_UNREADABLE,
+                                  admin_password.unreadable_message(exc))), 503
+    if not ok:
         log.warning("マスタ編集の認証に失敗しました")
         return jsonify(error_body("bad_password", "パスワードが違います",
                                   field="password")), 403

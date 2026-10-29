@@ -789,6 +789,14 @@ def _label(line: str) -> str:
     return line_names.label(line)
 
 
+def _why_not_remembered() -> str:
+    """覚えられなかった理由(設定ファイルを読めなかった・書けなかった)。分からなければ空。"""
+    from nippou import user_settings
+
+    reason = user_settings.last_problem()
+    return f"({reason})" if reason else ""
+
+
 def line_refusal():
     """**この端末のラインが決まるまで、日報を書く操作は断る**(v4.3.0)。
 
@@ -2923,7 +2931,8 @@ def change_line():
     message = (f"{_label(line)} に切り替えました(この端末に覚えました。"
                "起動し直しても変わりません)" if remembered else
                f"{_label(line)} に切り替えましたが、この端末に覚えられませんでした ── "
-               "起動し直すと元に戻ります。設定ファイルに書けるか確かめてください")
+               "起動し直すと元に戻ります。設定ファイルに書けるか確かめてください"
+               + _why_not_remembered())
     body = _view(state, ctx, calc, message=message)
     body["ribbon"] = ctx.ribbon(calc, page)
     body["maru_sub"] = ctx.maru_sub

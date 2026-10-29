@@ -159,6 +159,9 @@ def _state(cfg: config.Config, store) -> dict:
         "monitor_level": app_config.monitor_level(),
         **_admin_password_state(cfg),
         **_lock_state(),
+        # この端末の設定ファイルを読めなかった理由(画面の上に出す。読めたなら空)。
+        # 読めないあいだは既定の値が並ぶので、それを「この端末の設定」と思わせない
+        "config_unreadable": cfg.unreadable,
         "imported_lines": store.imported_lines(),
         "pending": store.pending_count(),
         "pending_items": [_pending_row(r) for r in store.pending_details()],
@@ -767,7 +770,14 @@ def _check_admin(body: dict) -> tuple[bool, object]:
             jsonify(_err("locked", "認証が切れています。管理者パスワードを入れてください", "password")),
             401,
         )
-    if not config.verify_admin_password(supplied, cfg.admin_password_hash):
+    # **設定ファイルを読めないときは確かめない。** 読めないときの cfg は組み込みの既定
+    # (決めていない端末と同じ)なので、決めてある端末でも既定の値で通っていた
+    try:
+        matched = config.verify_admin_password_for(cfg, supplied)
+    except config.SettingsUnreadable as exc:
+        log.warning("%s", exc)
+        return False, (jsonify(_err("settings_unreadable", str(exc), "password")), 503)
+    if not matched:
         log.warning("管理者パスワードが違います")
         return False, (jsonify(_err("bad_password", "パスワードが違います" + _password_hint(cfg),
                                     "password")), 401)
@@ -881,7 +891,13 @@ def change_password():
 
     cfg = _cfg()
     had = bool(cfg.admin_password_hash)
-    if not config.verify_admin_password(str(body.get("current_password", "")), cfg.admin_password_hash):
+    try:
+        matched = config.verify_admin_password_for(cfg, str(body.get("current_password", "")))
+    except config.SettingsUnreadable as exc:
+        # 読めないときに既定の値で通すと、決めてあったパスワードを知らない人が変えられる
+        log.warning("管理者パスワードの変更: %s", exc)
+        return jsonify(_err("settings_unreadable", str(exc), "current_password")), 503
+    if not matched:
         log.warning("管理者パスワードの変更: 今のパスワードが違います")
         return jsonify(_err("bad_password", "今のパスワードが違います", "current_password")), 401
 

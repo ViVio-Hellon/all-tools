@@ -13,10 +13,27 @@ Python版はレジストリを使わず、利用者ごとのローカル領域�
 ラインごとに1台のPCで動かす前提なので、「このPCはどのラインか」
 「参照するマスタはどこにあるか」は端末の持ちものになる。共有フォルダに
 置くと、あるラインの設定が別のラインに効いてしまう(基盤仕様書 2.7)。
+
+【「無い」と「読めない」を取り違えない】
+設定ファイルが**無い**(はじめて動かす端末)のと、**あるのに読めない**
+(ほかの処理が開いている・権限が無い)のとは別のことです。以前はどちらも
+空の設定として扱っていたので、読めなかった瞬間に1項目を保存すると、
+ほかの設定(置き場所・管理者パスワード・音など)が全部消えていました。
+管理者パスワードも「変えていない」とみなされ、既定の値で通っていました
+(別ツールで、共有を読めなかったのを「表が無い」と取り違えて送り直し、
+重複が大量にできた事案を受けた点検)。
+
+    画面に出す・決めるだけ … `load_all` / `get`(読めなければ空で続ける)
+    書く前・照合する前   … `load_checked`(読めなければ `SettingsUnreadable`)
 """
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
+import time
+from pathlib import Path
 from typing import Any
 
 from . import config
@@ -27,22 +44,98 @@ log = get_logger("user_settings")
 # ログに値を出さない鍵。伏せるだけで、保存はふつうに行う
 HIDDEN_IN_LOG = ("admin_password",)
 
+#: 読めないとき、読み直す回数と間(秒)。Windows では、ほかの処理が置き換えて
+#: いる瞬間に開くと断られる(一瞬のことが多い)
+READ_TRIES = 3
+READ_WAIT_SEC = 0.1
+#: 置き換えが断られたとき、やり直す回数と間(秒)。Windows では、ほかの処理が
+#: ファイルを開いている瞬間に置き換えると「アクセスが拒否されました」(WinError 5)になる
+REPLACE_TRIES = 20
+REPLACE_WAIT_SEC = 0.05
 
-def load_all() -> dict[str, Any]:
-    """設定ファイル全体を読む。**壊れていても例外にしない。**
+#: 「読んで・直して・書く」を1つずつにする錠。2つの保存が重なると、どちらも
+#: 同じ古い中身を読んで自分の分だけ直して書くので、後に書いたほうが先の変更を消す
+LOCK = threading.RLock()
 
-    ここで落ちると設定画面すら開けなくなり、直す手立てが無くなる。
-    読めなければ空として扱い、既定値で動かす。
+# 書けなかった理由(処理ごと。画面の知らせに添える ── `last_problem`)
+_local = threading.local()
+
+
+class SettingsUnreadable(OSError):
+    """設定ファイルは**ある**のに読めない(ロック中・権限・一時的な不調)。
+
+    **「無い・空」とは違う。** これが出たら書かない・照合で通さない。
+    """
+
+
+def load_checked() -> dict[str, Any]:
+    """書く前・照合する前に読む。**無ければ空、あるのに読めなければ** `SettingsUnreadable`。
+
+    読めないときは少し間をおいて読み直してから諦める(一瞬のことが多いので)。
+    中身が JSON として壊れているときはこれまでどおり空とみなす ── 書くときは
+    一時ファイルから置き換えるので書きかけの中身は残らない。壊れているなら
+    本当に壊れていて、保存すれば直る。
     """
     path = config.USER_CONFIG_PATH
+    for attempt in range(READ_TRIES):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            if attempt + 1 >= READ_TRIES:
+                raise SettingsUnreadable(
+                    f"この端末の設定ファイル({path})を読めませんでした: {exc}") from exc
+            time.sleep(READ_WAIT_SEC)
+            continue
+        except ValueError as exc:                 # 文字の符号が壊れている
+            log.warning("設定ファイルの中身が読めない形でした(空として扱います): %s", exc)
+            return {}
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            log.warning("設定ファイルの中身が読めない形でした(空として扱います): %s", exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def load_all() -> dict[str, Any]:
+    """設定ファイル全体を読む(**画面に出す・決めるだけ**)。**例外にしない。**
+
+    ここで落ちると設定画面すら開けなくなり、直す手立てが無くなる。
+    読めなければ空として扱い、既定値で動かす。**書くときは使わない**
+    (`save` / `save_many` / `forget` は `load_checked` で読み、読めなければ書かない)。
+    """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+        return load_checked()
+    except SettingsUnreadable as exc:
+        log.warning("%s(既定値で続行)", exc)
         return {}
-    except (OSError, ValueError) as exc:
-        log.warning("設定ファイルを読めませんでした(既定値で続行): %s", exc)
-        return {}
-    return data if isinstance(data, dict) else {}
+
+
+def problem() -> str:
+    """設定ファイルを読めない理由。読める(か、無い)なら空。"""
+    try:
+        load_checked()
+    except SettingsUnreadable as exc:
+        return str(exc)
+    return ""
+
+
+def last_problem() -> str:
+    """この処理で最後に書けなかった理由(画面の知らせに添える)。書けていれば空。"""
+    return getattr(_local, "problem", "")
+
+
+def last_unreadable() -> bool:
+    """この処理で最後に書けなかったのは、**いまの中身を読めなかったから**か。"""
+    return bool(getattr(_local, "unreadable", False))
+
+
+def _note(text: str, *, unreadable: bool = False) -> None:
+    _local.problem = text
+    _local.unreadable = unreadable
 
 
 def _is_set(value: Any) -> bool:
@@ -113,9 +206,7 @@ def origin(key: str) -> str:
 
 def save(key: str, value: Any) -> bool:
     """VBA `SaveSetting` 相当。書き込めなければ False。"""
-    data = load_all()
-    data[key] = value
-    return _write(data)
+    return save_many({key: value})
 
 
 def save_many(values: dict[str, Any]) -> bool:
@@ -123,30 +214,85 @@ def save_many(values: dict[str, Any]) -> bool:
 
     設定画面は複数の項目を1回で送ってくるので、1つずつ書くと
     3つ目で失敗したときに1つ目と2つ目だけ変わった状態が残る。
+
+    **いまの中身を読めなければ書かない**(False)。空に足して書くと、
+    ほかの設定が全部消える。
     """
-    data = load_all()
-    data.update(values)
-    return _write(data)
-
-
-def _write(data: dict[str, Any]) -> bool:
-    try:
-        config.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        config.USER_CONFIG_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError as exc:
-        log.warning("設定ファイルに書けませんでした: %s", exc)
-        return False
-    return True
+    with LOCK:
+        data = _load_for_write()
+        if data is None:
+            return False
+        data.update(values)
+        return _write(data)
 
 
 def forget(key: str) -> bool:
-    """1つ消す(= 既定値に戻す)。"""
-    data = load_all()
-    if key not in data:
-        return True
-    del data[key]
-    return _write(data)
+    """1つ消す(= 既定値に戻す)。いまの中身を読めなければ消さない(False)。"""
+    with LOCK:
+        data = _load_for_write()
+        if data is None:
+            return False
+        if key not in data:
+            _note("")
+            return True
+        del data[key]
+        return _write(data)
+
+
+def _load_for_write() -> dict[str, Any] | None:
+    """書く前に読む。読めなければ None(理由はログと `last_problem` に残す)。"""
+    try:
+        return load_checked()
+    except SettingsUnreadable as exc:
+        log.warning("設定を書きませんでした(ほかの設定を消さないため): %s", exc)
+        _note(f"{exc}。ほかの設定を消さないよう、書きませんでした", unreadable=True)
+        return None
+
+
+def _replace(tmp: Path, path: Path) -> None:
+    """一時ファイルで置き換える。**Windows で一瞬断られたら、少し待ってやり直す。**"""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt + 1 >= REPLACE_TRIES:
+                raise
+            time.sleep(REPLACE_WAIT_SEC)
+
+
+def _write(data: dict[str, Any]) -> bool:
+    """全体を書く。**一時ファイルに書いてから置き換える**(途中で落ちても半分の中身を残さない)。
+
+    以前は設定ファイルへ直に書いていたので、書いている途中で落ちると中身が
+    半分になり、次に読んだとき「壊れている = 空」になって全部の設定が消えた。
+    一時ファイルの名前は書くたびに変える(重なった保存が同じ一時ファイルに書かない)。
+    """
+    path = config.USER_CONFIG_PATH
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
+                                    dir=str(path.parent))
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            _replace(tmp, path)
+        except BaseException:
+            try:
+                tmp.unlink()                      # 一時ファイルは残さない
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        log.warning("設定ファイルに書けませんでした: %s", exc)
+        _note(f"この端末の設定ファイル({path})に書けませんでした: {exc}")
+        return False
+    _note("")
+    return True
 
 
 def log_saved(keys: list[str]) -> None:

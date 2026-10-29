@@ -108,6 +108,10 @@ REFUSE_FAILED = "failed"
 #: 書き出せる設定が無い(この端末で変えていない = 既定のまま)。配った先も既定で動くので要らない。
 #: 日報複合ツールの大設定(まとめて書き出す)が、失敗と分けて「要りません」と出すのに使う
 REFUSE_NOTHING = "nothing"
+#: この端末の設定ファイルを読めない(一時的なことが多い)。**「既定のまま」「この端末に無い」と
+#: 取り違えない** ── 以前は読めないと空とみなし、書き出しは「要りません」、読み込みは全部を
+#: 配布設定の値で埋めていた
+REFUSE_UNREADABLE = "settings_unreadable"
 
 #: 音声ファイルの名前の鍵(`sound_file_<音>`)。**音の並びは `logic/sound` から**
 SOUND_NAME_KEYS: tuple[str, ...] = tuple(config.sound_file_key(key)
@@ -283,13 +287,22 @@ def _is_set(value: Any) -> bool:
     return not (isinstance(value, str) and not value.strip())
 
 
-def _read_json(path: Path) -> tuple[Optional[dict[str, Any]], str]:
-    """(中身, 読めなかった理由)。無ければ (None, "")。**例外にしない。**"""
+def _read_json(path: Path, *, strict: bool = False) -> tuple[Optional[dict[str, Any]], str]:
+    """(中身, 読めなかった理由)。無ければ (None, "")。**例外にしない。**
+
+    ``strict`` なら、**あるのに開けない**(ロック中・権限)ときは `OSError` のまま上げる
+    (書き出し直すとき、前の中身を「無い」と取り違えて消さないため)。中身が壊れているのは
+    これまでどおり理由を返す。
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return None, ""
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
+        if strict:
+            raise
+        return None, f"配布設定を読めません({path}): {exc}"
+    except ValueError as exc:
         return None, f"配布設定を読めません({path}): {exc}"
     if not isinstance(data, dict):
         return None, f"配布設定の形が違います({path}): 中身が {{ }} で囲まれていません"
@@ -303,10 +316,15 @@ def _clean(raw: Any) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if k in SETTING_KEYS and _is_set(v)}
 
 
-def _sound_files(base: Path) -> list[Path]:
+def _sound_files(base: Path, *, strict: bool = False) -> list[Path]:
+    """`音\\` の音声ファイル。無ければ空。``strict`` なら、あるのに開けないとき `OSError`。"""
     try:
         return sorted(p for p in sounds_dir(base).iterdir() if p.is_file())
+    except FileNotFoundError:
+        return []
     except OSError:
+        if strict:
+            raise
         return []
 
 
@@ -617,10 +635,29 @@ class Result:
         return "配布設定: " + " / ".join(parts)
 
 
-def _authorized(password: str, admin: bool) -> bool:
-    from . import admin_password
+def _refusal(password: str, admin: bool, what: str) -> Optional[Result]:
+    """管理者パスワードの関門。通ってよければ None、駄目なら断りの `Result`。
 
-    return admin or admin_password.verify(str(password or ""))
+    **この端末の設定ファイルを読めなければ通さない**(読めないのを「パスワードを変えて
+    いない」とみなすと、既定の値で通ってしまう)。
+    """
+    from . import admin_password, user_settings
+
+    if admin:
+        return None
+    try:
+        if admin_password.verify(str(password or "")):
+            return None
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("%sを断りました(設定ファイルを読めない): %s", what, exc)
+        return Result(False, admin_password.unreadable_message(exc), REFUSE_UNREADABLE)
+    return Result(False, f"{what}には管理者パスワードが要ります。", REFUSE_NEED_PASSWORD)
+
+
+def _unreadable_terminal(exc: Exception, what: str) -> Result:
+    log.warning("%s(この端末の設定ファイルを読めない): %s", what, exc)
+    return Result(False, f"この端末の設定ファイルを読めなかったので、{what}"
+                         f"。少し待ってからもう一度押してください({exc})。", REFUSE_UNREADABLE)
 
 
 def _now() -> str:
@@ -651,9 +688,9 @@ def export(password: str, items: list[str], files: list[str], *,
     音の名前は前のもの・音の置き場所の項目は入れない。設定画面から書き出すとき(``False``)は
     選んだとおり(外せば消える)。
     """
-    if not _authorized(password, admin):
-        return Result(False, "配布設定を書き出すには管理者パスワードが要ります。",
-                      REFUSE_NEED_PASSWORD)
+    refused = _refusal(password, admin, "配布設定を書き出す")
+    if refused is not None:
+        return refused
     unknown = [k for k in list(items) + list(files)
                if k not in ITEM_KEYS and k not in FILE_KEYS]
     if unknown:
@@ -664,10 +701,21 @@ def export(password: str, items: list[str], files: list[str], *,
 
     from . import user_settings
 
-    current = user_settings.load_all()
+    # **読めないのを「この端末で変えていない(既定のまま・要りません)」と取り違えない。**
+    # 読めなければ書き出さない ── 書き出すと、配った先の全部の端末に効く
+    try:
+        current = user_settings.load_checked()
+    except user_settings.SettingsUnreadable as exc:
+        return _unreadable_terminal(exc, "配布設定を書き出しませんでした")
     with_sounds = FILE_SOUNDS in files
-    # まとめて書き出すとき: 前の配布設定(このフォルダの 設定.json・音\\)から残すもの
-    before, kept_sounds = (_previous() if keep_previous else ({}, []))
+    # まとめて書き出すとき: 前の配布設定(このフォルダの 設定.json・音\\)から残すもの。
+    # **開けないのを「前の中身が無い」と取り違えない**(そのまま書き出すと前のラインと音が消える)
+    try:
+        before, kept_sounds = (_previous() if keep_previous else ({}, []))
+    except OSError as exc:
+        log.warning("配布設定を書き出しません(いまの配布設定を開けない): %s", exc)
+        return Result(False, f"いまの配布設定を開けなかったので、書き出しませんでした(書き出すと、"
+                             f"前に入れていたラインや音声ファイルが消えます): {exc}", REFUSE_FAILED)
     if with_sounds:
         kept_sounds = []                               # 音を選んだ = この端末の音で入れ替える
     chosen = [ITEM_BY_KEY[k] for k in items]
@@ -763,15 +811,17 @@ def _previous() -> tuple[dict[str, Any], list[Path]]:
     """いまの `配布設定\\` の中身(設定 = 知らない鍵と空を捨てたもの, 音声ファイル)。無ければ空。
 
     まとめて書き出すとき(`export(keep_previous=True)`)に、前に設定画面で入れていたものを残すため。
-    読めない・形が違う 設定.json は「無い」と数える(残すものが無いだけで、書き出しは止めない)。
+    中身が壊れている・形が違う 設定.json は「無い」と数える(残すものが無いだけで、書き出しは止めない)。
+    **あるのに開けない**(ロック中・権限)ときは `OSError` ── 「無い」と取り違えて、前に入れていた
+    ものを消して書き出さない。
     """
     base = folder()
-    data, error = _read_json(settings_path(base))
+    data, error = _read_json(settings_path(base), strict=True)
     if error or data is None or data.get("format") != FORMAT:
         settings: dict[str, Any] = {}
     else:
         settings = _clean(data.get("settings"))
-    return settings, _sound_files(base)
+    return settings, _sound_files(base, strict=True)
 
 
 def _terminal_sounds() -> tuple[list[Path], list[str]]:
@@ -829,9 +879,9 @@ def _readme(meta: dict[str, Any], sounds: list[str]) -> str:
 
 
 def remove(password: str, *, admin: bool = False) -> Result:
-    if not _authorized(password, admin):
-        return Result(False, "配布設定を消すには管理者パスワードが要ります。",
-                      REFUSE_NEED_PASSWORD)
+    refused = _refusal(password, admin, "配布設定を消す")
+    if refused is not None:
+        return refused
     target = folder()
     try:
         if target.exists():
@@ -878,7 +928,15 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     from . import user_settings
 
     result = Result()
-    current = user_settings.load_all()
+    # **この端末の設定を読めなければ読み込まない。** 以前は読めないと「この端末に無い」と
+    # みなして全部を配布設定の値で埋め、この端末で決めた値を上書きしていた
+    try:
+        current = user_settings.load_checked()
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("配布設定を読み込みませんでした(この端末の設定ファイルを読めない): %s", exc)
+        result.error = (f"この端末の設定ファイルを読めなかったので、配布設定を読み込みませんでした"
+                        f"(次の起動、または「配布設定を読み込み直す」でもう一度読みます): {exc}")
+        return result
     came = _from_distribution(current)
     to_write: dict[str, Any] = {}
     for item in ITEMS:
@@ -920,7 +978,9 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     if remembered != came:
         to_write[KEY_FROM_DIST] = remembered
     if to_write and not user_settings.save_many(to_write):
-        result.error = "配布設定を、この端末の設定ファイルに書けませんでした"
+        reason = user_settings.last_problem()
+        result.error = ("配布設定を、この端末の設定ファイルに書けませんでした"
+                        + (f"({reason})" if reason else ""))
         result.applied = []
         return result
     if result.applied:
@@ -961,9 +1021,9 @@ def reapply(password: str, *, admin: bool = False) -> Result:
 
     照合するのは**この端末の**パスワードです(まだ読み込んでいなければ既定)。
     """
-    if not _authorized(password, admin):
-        return Result(False, "配布設定を読み込み直すには管理者パスワードが要ります。",
-                      REFUSE_NEED_PASSWORD)
+    refused = _refusal(password, admin, "配布設定を読み込み直す")
+    if refused is not None:
+        return refused
     bundle, error = _read()
     if error:
         return Result(False, error, REFUSE_BAD_INPUT)

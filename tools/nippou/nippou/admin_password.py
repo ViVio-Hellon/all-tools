@@ -19,6 +19,12 @@
 【変えていないときは、これまでどおり】
 一度も変えていない端末では `config.SETTINGS.admin_password` がそのまま
 通ります。入れ替えただけで認証が通らなくなる、を作りません。
+
+【設定ファイルを読めないときは通さない】
+「変えていない」と「読めない」は違います。以前は読めないと「変えていない」と
+みなしていたので、パスワードを変えた端末でも既定の値で通っていました。
+読めないときは照合せずに断り、理由を画面に出します(`REFUSE_UNREADABLE`)。
+変える・戻すも、読めなければ書きません(ほかの設定を消さない)。
 """
 from __future__ import annotations
 
@@ -49,6 +55,8 @@ REFUSE_WRONG = "wrong_password"     # いまのパスワードが違う
 REFUSE_TOO_SHORT = "too_short"      # 新しいパスワードが短い
 REFUSE_MISMATCH = "mismatch"        # 確認用と一致しない
 REFUSE_SAME = "same"                # 変わっていない
+REFUSE_UNREADABLE = "settings_unreadable"  # 設定ファイルを読めない(一時的なことが多い)
+REFUSE_WRITE_FAILED = "write_failed"       # 設定ファイルに書けなかった
 
 
 @dataclass
@@ -83,8 +91,20 @@ def _matches(password: str, stored: str) -> bool:
 # ==================================================================
 # 使う
 # ==================================================================
-def _stored() -> Optional[str]:
-    value = user_settings.get(KEY_ADMIN_PASSWORD)
+def _stored(*, strict: bool = False) -> Optional[str]:
+    """変えたパスワード(撹拌した値)。この端末 → 配布設定 の順(`user_settings.get` と同じ)。
+
+    ``strict`` なら、この端末の設定ファイルを読めないとき `user_settings.SettingsUnreadable`
+    ── **照合では「読めない」を「変えていない」と取り違えない**(取り違えると既定の値で通る)。
+    """
+    if not strict:
+        value = user_settings.get(KEY_ADMIN_PASSWORD)
+    else:
+        value = user_settings.load_checked().get(KEY_ADMIN_PASSWORD)
+        if not user_settings._is_set(value):
+            from . import distribution
+
+            value = distribution.value(KEY_ADMIN_PASSWORD)
     return value if isinstance(value, str) and value.strip() else None
 
 
@@ -93,9 +113,19 @@ def is_custom() -> bool:
     return _stored() is not None
 
 
+def unreadable_message(exc: Exception) -> str:
+    """設定ファイルを読めずに断ったときの、画面に出す一言。"""
+    return ("この端末の設定ファイルを読めなかったので、管理者パスワードを確かめられません"
+            f"でした。少し待ってからもう一度押してください({exc})。")
+
+
 def verify(password: str) -> bool:
-    """合っているか。**照合はここでしかしない。**"""
-    stored = _stored()
+    """合っているか。**照合はここでしかしない。**
+
+    この端末の設定ファイルを読めないときは `user_settings.SettingsUnreadable`
+    (既定の値では通さない)。呼ぶ側は断って `unreadable_message` を出す。
+    """
+    stored = _stored(strict=True)
     if stored is not None:
         return _matches(str(password), stored)
     # 一度も変えていない端末。これまでどおり既定の値で通す。
@@ -122,11 +152,31 @@ def hashed(new: str) -> str:
     return _encode(str(new), os.urandom(SALT_BYTES))
 
 
+def _unreadable(exc: Exception) -> Result:
+    log.warning("管理者パスワードを変えませんでした(設定ファイルを読めない): %s", exc)
+    return Result(False, unreadable_message(exc), REFUSE_UNREADABLE)
+
+
+def _not_written() -> Result:
+    reason = user_settings.last_problem()
+    log.warning("管理者パスワードを変えませんでした(設定ファイルに書けない): %s", reason)
+    return Result(False, "設定ファイルに書けなかったので、管理者パスワードは変えていません"
+                         + (f"({reason})。" if reason else "。"), REFUSE_WRITE_FAILED)
+
+
 def change(current: str, new: str, confirm: str) -> Result:
     """変える。**いまのパスワードを知っている人だけ。**
 
     肩越しに見ていた人が勝手に変えられる、を作らないための確認。
+    設定ファイルを読めないときは変えない(既定の値で通さない・ほかの設定を消さない)。
     """
+    try:
+        return _change(current, new, confirm)
+    except user_settings.SettingsUnreadable as exc:
+        return _unreadable(exc)
+
+
+def _change(current: str, new: str, confirm: str) -> Result:
     if not verify(current):
         # **何が違うのかは言わない。** 「そのパスワードは存在しない」等を
         # 返すと、総当たりの手がかりになる
@@ -142,7 +192,8 @@ def change(current: str, new: str, confirm: str) -> Result:
     if verify(new):
         return Result(False, "いまと同じパスワードです。", REFUSE_SAME)
 
-    user_settings.save(KEY_ADMIN_PASSWORD, hashed(new))
+    if not user_settings.save(KEY_ADMIN_PASSWORD, hashed(new)):
+        return _not_written()
     log.info("管理者パスワードを変更しました")
     return Result(True, "管理者パスワードを変えました。")
 
@@ -154,9 +205,13 @@ def reset(current: str) -> Result:
     の `admin_password` の行を消せば既定に戻ります。画面から「忘れた」で
     戻せるようにすると、確認そのものが意味を失います。
     """
-    if not verify(current):
-        return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
-    user_settings.save(KEY_ADMIN_PASSWORD, "")
+    try:
+        if not verify(current):
+            return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
+    except user_settings.SettingsUnreadable as exc:
+        return _unreadable(exc)
+    if not user_settings.save(KEY_ADMIN_PASSWORD, ""):
+        return _not_written()
     log.info("管理者パスワードを既定に戻しました")
     # 配布設定(`distribution`)に入れてあれば、戻る先はそちら
     if user_settings.origin(KEY_ADMIN_PASSWORD) == user_settings.ORIGIN_SITE:

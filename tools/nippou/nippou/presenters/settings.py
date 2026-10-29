@@ -33,6 +33,9 @@ log = get_logger("presenters.settings")
 # 断りの種類。**文言から推し量らない**
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_NEED_PASSWORD = "need_password"
+#: この端末の設定ファイルを読めない(一時的なことが多い)。読めないまま書くと
+#: ほかの設定が消え、照合は既定の値で通ってしまうので、書かずに断る
+REFUSE_UNREADABLE = "settings_unreadable"
 
 
 # 画面に出す参照パスの並び。**表示名の出どころはここ1つ**
@@ -1063,7 +1066,13 @@ def save(values: dict[str, Optional[str]],
     # 断ったのに一部だけ変わった状態が残る
     changing = _protected_changes(values)
     if changing and not admin:
-        if not admin_password.verify(str(password or "")):
+        try:
+            ok = admin_password.verify(str(password or ""))
+        except user_settings.SettingsUnreadable as exc:
+            log.warning("参照パスの変更を断りました(設定ファイルを読めない): %s", exc)
+            return SaveResult(False, admin_password.unreadable_message(exc),
+                              REFUSE_UNREADABLE, changing)
+        if not ok:
             # 合っていないのか、そもそも送っていないのかは言い分けない
             # ── 総当たりの手がかりになる。**何が要るか**だけを言う
             log.warning("参照パスの変更を断りました(管理者パスワード): %s",
@@ -1078,8 +1087,11 @@ def save(values: dict[str, Optional[str]],
     to_write = {k: (v or "").strip() for k, v in values.items() if v is not None}
     log_before = str(user_settings.load_all().get(config.KEY_LOG_DIR) or "").strip()
     if not user_settings.save_many(to_write):
-        return SaveResult(False, "設定ファイルに書けませんでした。",
-                          REFUSE_BAD_INPUT)
+        # **なぜ書けなかったかを添える**(読めなかったのなら、少し待てば書ける)
+        reason = user_settings.last_problem()
+        return SaveResult(False, "設定ファイルに書けなかったので、保存していません"
+                          + (f"({reason})。" if reason else "。"),
+                          REFUSE_UNREADABLE if user_settings.last_unreadable() else REFUSE_BAD_INPUT)
     user_settings.log_saved(list(to_write))
 
     # 置き場所が変わったので、手元の写しは捨てる。**捨てないと、

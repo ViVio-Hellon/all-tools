@@ -254,15 +254,25 @@ def read(base: Path | None = None) -> Bundle | None:
     return whole
 
 
-def _read_folder(folder: Path) -> Bundle | None:
-    """看板のフォルダの ``配布設定\\`` の中身。"""
+def _read_folder(folder: Path, *, strict: bool = False) -> Bundle | None:
+    """看板のフォルダの ``配布設定\\`` の中身。
+
+    ``strict=True`` なら、**あるのに読めない**(ほかの処理が開いている・権限)ときは ``OSError``
+    のまま返す(``None`` =「無い」と取り違えない)。まとめて書き出すとき、前に入れていた
+    担当ラインなどを「前は入れていない」とみなして消さないため(:func:`export`)。
+    """
     if not folder.is_dir():
         return None
     path = settings_path(folder)
     if path.is_file():
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
+            if strict:
+                raise
+            log.warning("配布設定を読めませんでした: %s", exc)
+            return None
+        except ValueError as exc:
             log.warning("配布設定を読めませんでした: %s", exc)
             return None
         if not isinstance(data, dict) or data.get("format") != FORMAT:
@@ -313,8 +323,13 @@ def terminal_values() -> dict[str, Any]:
     「この端末で選んだ値」とは数えないのに、ここで ``read_settings_file`` の
     生の値を数えていたため、前の版を使っていた端末では取り込み間隔・自動印刷
     などが**すべて「すでにある」になり、配布設定が読み込まれませんでした**。
+
+    **あるのに読めなければ** :class:`kanban.config.SettingsUnreadable`。空と答えると、
+    書き出しは「既定のまま(要りません)」、読み込みは「この端末に無い」と取り違える。
     """
     cfg = config.load_config()
+    if cfg.unreadable:
+        raise config.SettingsUnreadable(cfg.unreadable)
     present = dict(config._read_local(Path(cfg.source_path)))
     if cfg.line:
         present["line"] = cfg.line
@@ -337,9 +352,18 @@ def _show(key: str, value: Any) -> str:
 
 
 def summary() -> dict[str, Any]:
-    """設定画面に出す、配布設定のいま。**パスワードの値は出さない。**"""
+    """設定画面に出す、配布設定のいま。**パスワードの値は出さない。**
+
+    この端末の設定を読めないときは、項目ごとに「読めません」と出す(``unreadable`` に理由)。
+    「既定のまま」と出すと、書き出しても入らないと思わせる。
+    """
     bundle = read()
-    here = terminal_values()
+    unreadable = ""
+    try:
+        here = terminal_values()
+    except config.SettingsUnreadable as exc:
+        unreadable = str(exc)
+        here = {}
     builtin = config.Config()
     out: dict[str, Any] = {
         "exists": bundle is not None,
@@ -350,11 +374,13 @@ def summary() -> dict[str, Any]:
         # 日報複合ツールの大設定がまとめたファイルから読んでいる(看板のフォルダのものより新しい)
         "integrated": bool(bundle and bundle.integrated),
         "source": bundle.file if bundle else "",
+        "unreadable": unreadable,
         "items": [
             {
                 "key": key, "label": label, "default": default,
                 # この端末のいまの値(書き出すとこれが入る)
-                "here": _show(key, here[key]) if key in here else "",
+                "here": (_show(key, here[key]) if key in here
+                         else "(この端末の設定ファイルを読めません)" if unreadable else ""),
                 "builtin": (
                     "" if key in here
                     else "既定の値" if key == "admin_password_hash"
@@ -416,12 +442,26 @@ def export(items: list[str], *, keep_previous: bool = False) -> Result:
     if not items:
         return Result(False, "入れる項目を 1 つ以上選んでください。", "bad_input")
 
-    here = terminal_values()
+    # **読めないのを「既定のまま」と答えない。** 以前は読めないと「書き出せる設定がありません」
+    # (``nothing``)と答え、大設定はそれを「要りません」と信じてまとめたファイルに入れなかった。
+    # 前に入れていた担当ラインがあると、それだけの配布設定で置き換えてもいた
+    try:
+        here = terminal_values()
+    except config.SettingsUnreadable as exc:
+        log.warning("配布設定を書き出しません(この端末の設定を読めない): %s", exc)
+        return Result(False, f"この端末の設定ファイルを読めないため、書き出しませんでした"
+                             f"(少し待ってやり直してください): {exc}", "failed")
     settings = {k: here[k] for k in items if k in here}
     defaults = [ITEM_LABELS[k] for k in items if k not in here]
     carried: list[str] = []
     if keep_previous:
-        before = _read_folder(directory())
+        try:
+            before = _read_folder(directory(), strict=True)
+        except OSError as exc:
+            # 読めないのを「前は入れていない」と取り違えると、前に入れていた担当ラインなどが消える
+            log.warning("配布設定を書き出しません(いまの配布設定を読めない): %s", exc)
+            return Result(False, f"いまの配布設定を読めないため、書き出しませんでした(書き出すと、"
+                                 f"前に入れていた担当ラインなどが消えます): {exc}", "failed")
         for key in KEEP_ON_COMBINED:
             if key not in items and before is not None and key in before.settings:
                 settings[key] = before.settings[key]
@@ -561,11 +601,12 @@ def remove() -> Result:
 # 読み込む(配られた側)
 # ------------------------------------------------------------------
 def _from_distribution() -> dict[str, Any]:
-    """前に配布設定から読み込んで、この端末に書いた値(:data:`META_FROM_DIST`)。"""
-    try:
-        found = config.read_meta(META_FROM_DIST)
-    except OSError:
-        return {}
+    """前に配布設定から読み込んで、この端末に書いた値(:data:`META_FROM_DIST`)。
+
+    **あるのに読めなければ** :class:`kanban.config.SettingsUnreadable` のまま返す。以前は空と
+    答えていたので、覚えていた値が消え、次に書くとき覚え直した値で上書きしていた。
+    """
+    found = config.read_meta(META_FROM_DIST)
     return dict(found) if isinstance(found, dict) else {}
 
 
@@ -607,6 +648,12 @@ def _decided_here(key: str, value: Any, came: dict[str, Any], builtin: dict[str,
 
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
+    """配布設定を、この端末の設定に書く。
+
+    **この端末の設定を読めなければ何も書かない**(:class:`kanban.config.SettingsUnreadable`。
+    呼ぶ側が理由を出す)。以前は読めないと「この端末に無い」とみなして全部を配布設定の値で
+    埋め、担当ライン・この端末で決めたパスワードを消していた。
+    """
     result = Result()
     here = terminal_values()
     came = _from_distribution()
@@ -659,6 +706,12 @@ def apply_on_start() -> Result:
         return Result(True, "")
     try:
         result = _apply(bundle, overwrite=False)
+    except config.SettingsUnreadable as exc:
+        # 起動は止めない。読めるようになったら(次の起動で)読み込む
+        log.warning("この端末の設定ファイルを読めないため、配布設定を読み込みませんでした"
+                    "(次に起動したときにもう一度): %s", exc)
+        return Result(False, f"この端末の設定ファイルを読めないため、配布設定を読み込みませんでした: {exc}",
+                      "failed")
     except OSError as exc:
         log.warning("配布設定を読み込めませんでした(設定ファイルに書けません): %s", exc)
         return Result(False, f"配布設定を読み込めませんでした: {exc}", "failed")
@@ -676,6 +729,10 @@ def reapply() -> Result:
         return Result(False, "配布設定が置かれていません。", "bad_input")
     try:
         result = _apply(bundle, overwrite=True)
+    except config.SettingsUnreadable as exc:
+        log.warning("この端末の設定ファイルを読めないため、配布設定を読み込み直しませんでした: %s", exc)
+        return Result(False, f"この端末の設定ファイルを読めないため、読み込み直しませんでした"
+                             f"(少し待ってやり直してください): {exc}", "failed")
     except OSError as exc:
         return Result(False, f"この端末の設定に書けませんでした: {exc}", "failed")
     result.message = f"配布設定を読み込みました({len(result.applied)} 項目)。"

@@ -580,6 +580,20 @@ def _register_routes(app: Flask) -> None:
             return jsonify(_error("not_found", "その操作はこのモードでは使えません")), 404
         return jsonify(_error("not_found", "ページが見つかりません")), 404
 
+    @app.errorhandler(config.SettingsUnreadable)
+    def _settings_unreadable(exc):  # noqa: ANN202 - Flask のフック
+        """この端末の設定ファイルを読めないので、保存を断った(:class:`kanban.config.SettingsUnreadable`)。
+
+        **想定外のエラーにしない。** 読めないのはほかの処理が開いている・権限などで、少し待てば
+        通ることが多い。理由をそのまま画面へ返す(保存の失敗を受け止めていない経路 ──
+        担当ラインの切り替え・接続先の変更 ── もここへ来る)。
+        """
+        log.warning("この端末の設定ファイルを読めないため断りました: %s %s: %s",
+                    request.method, request.path, exc)
+        if request.path.startswith("/api/"):
+            return jsonify(_error("settings_unreadable", str(exc))), 503
+        return str(exc), 503
+
     @app.errorhandler(Exception)
     def _unexpected(exc):  # noqa: ANN202 - Flask のフック
         """想定していない例外。**理由を画面へ返し、経緯を記録に残す。**

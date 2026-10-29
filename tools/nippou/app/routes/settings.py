@@ -40,7 +40,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, render_template, request
 
 from nippou import (admin_password, app_config, config, constants,
-                    job_progress, running, work_context)
+                    job_progress, running, user_settings, work_context)
 from nippou.access_bridge import pusher
 from nippou.config import SETTINGS
 from nippou.logging_setup import get_logger, log_button_click
@@ -183,8 +183,15 @@ def admin():
 
     password = str(payload.get("password", ""))
     # **照合は `admin_password` でしかしない。** この端末で変えてあれば
-    # 撹拌した値と、変えていなければ既定と突き合わせる
-    if not admin_password.verify(password):
+    # 撹拌した値と、変えていなければ既定と突き合わせる。**設定ファイルを
+    # 読めなければ通さない**(読めないのを「変えていない」とみなすと既定の値で通る)
+    try:
+        ok = admin_password.verify(password)
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("管理者モードを断りました(設定ファイルを読めない): %s", exc)
+        return jsonify(error_body(admin_password.REFUSE_UNREADABLE,
+                                  admin_password.unreadable_message(exc))), 503
+    if not ok:
         log.warning("管理者モードの認証に失敗しました")
         return jsonify(error_body("bad_password", "パスワードが違います",
                                   field="password")), 403
@@ -599,9 +606,23 @@ def time_split():
     return jsonify({
         "enabled": all(b["enabled"] for b in buttons if b["which"] in chosen),
         "buttons": buttons, "remembered": remembered,
-        "message": (f"日報入力に「{names}」を出します" if enabled
+        "message": (_not_remembered(f"「{names}」") if not remembered
+                    else f"日報入力に「{names}」を出します" if enabled
                     else f"日報入力の「{names}」を出さないようにしました"),
     })
+
+
+def _not_remembered(what: str) -> str:
+    """設定ファイルに書けなかったときの一言。**変わっていないことと、なぜかを言う。**
+
+    この面の値は設定ファイルにしか無いので、書けなければ何も変わっていない。
+    「変えました」と出すと、押した人は変わったつもりで帰る。
+    """
+    from nippou import user_settings
+
+    reason = user_settings.last_problem()
+    return (f"設定ファイルに書けなかったので、{what}は変えていません"
+            + (f"({reason})" if reason else "") + "。少し待ってからもう一度押してください")
 
 
 def _gw_record_format() -> str:
@@ -643,7 +664,8 @@ def gw_record_format_save():
     log_button_click("gw_record_format", line=ctx.line, extra=fmt)
     return jsonify({"format": gw_record.record_format(), "name": gw_record.FORMATS[gw_record.record_format()],
                     "remembered": remembered,
-                    "message": f"GW計算の記録を「{gw_record.FORMATS[fmt]}」で残します"})
+                    "message": (f"GW計算の記録を「{gw_record.FORMATS[fmt]}」で残します" if remembered
+                                else _not_remembered("GW計算の記録の形式"))})
 
 
 def _time_split_stops():
@@ -688,7 +710,7 @@ def time_split_factors_save():
                      extra=" ".join(f"{k}={v}" for k, v in values.items()))
     return jsonify({
         "factors": _time_split_factors().as_dict(), "remembered": remembered,
-        "message": "割り振りの倍率を変えました",
+        "message": "割り振りの倍率を変えました" if remembered else _not_remembered("割り振りの倍率"),
     })
 
 
@@ -1406,6 +1428,8 @@ def state():
 _SAVE_STATUS = {
     settings_presenter.REFUSE_NEED_PASSWORD: 403,
     settings_presenter.REFUSE_BAD_INPUT: 400,
+    # 設定ファイルを読めない(一時的なことが多い)。入力の誤りではない
+    settings_presenter.REFUSE_UNREADABLE: 503,
 }
 
 
@@ -2223,8 +2247,11 @@ def change_admin_password():
                                        str(body.get("new", "")),
                                        str(body.get("confirm", "")))
     if not result.ok:
-        # どれも入力の形の誤り。**サーバの状態は動いていない**
-        return jsonify(error_body(result.reason, result.message)), 400
+        # どれも**サーバの状態は動いていない**。設定ファイルを読めない・書けないのは
+        # 入力の誤りではないので分ける(少し待てば通ることが多い)
+        status = {admin_password.REFUSE_UNREADABLE: 503,
+                  admin_password.REFUSE_WRITE_FAILED: 500}.get(result.reason, 400)
+        return jsonify(error_body(result.reason, result.message)), status
     payload = settings_presenter.to_dict()
     payload["message"] = result.message
     return jsonify(payload)
@@ -2241,6 +2268,8 @@ def _distribution_reply(result):
         status = 403 if result.reason == distribution.REFUSE_NEED_PASSWORD else 400
         if result.reason == distribution.REFUSE_FAILED:
             status = 500
+        elif result.reason == distribution.REFUSE_UNREADABLE:
+            status = 503                          # 設定ファイルを読めない(少し待てば通ることが多い)
         return jsonify(error_body(result.reason, result.message)), status
     # 読み込み直したら、参照の写しも捨てる(置き場所が変わっているかもしれない)
     from nippou import source_db

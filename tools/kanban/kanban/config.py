@@ -18,6 +18,8 @@ import json
 import os
 import secrets
 import socket
+import tempfile
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -204,6 +206,20 @@ def verify_admin_password(password: str, stored_hash: str) -> bool:
     if from_env:
         return secrets.compare_digest(password.encode("utf-8"), from_env.encode("utf-8"))
     return verify_password(password, DEFAULT_ADMIN_PASSWORD_HASH)
+
+
+def verify_admin_password_for(cfg: "Config", password: str) -> bool:
+    """読んだ設定 ``cfg`` で管理者パスワードを確かめる。**設定ファイルを読めなかったなら確かめない。**
+
+    読めないときの ``cfg`` は組み込みの既定(パスワードを決めていない端末と同じ)なので、
+    そのまま :func:`verify_admin_password` に渡すと、**パスワードを決めてある端末でも既定の値で
+    通っていた**。読めないあいだは :class:`SettingsUnreadable` を出す(呼ぶ側が理由を出す)。
+    """
+    if cfg.unreadable:
+        raise SettingsUnreadable(
+            "この端末の設定ファイルを読めないため、管理者パスワードを確かめられません"
+            f"(少し待ってやり直してください): {cfg.unreadable}")
+    return verify_admin_password(password, cfg.admin_password_hash)
 
 
 @dataclass(frozen=True)
@@ -395,6 +411,15 @@ class Config:
     # 読み込み元の設定ファイル(保存時に使用)
     source_path: str = ""
 
+    unreadable: str = ""
+    """読んだとき、設定ファイルが**あるのに読めなかった**理由(読めたなら空)。
+
+    起動は止めないので組み込みの既定で動きますが、**この設定は書き戻しません**
+    (:func:`save_config` が断る)。書けば、担当ライン・接続先・管理者パスワードが
+    既定の値に戻るため。管理者パスワードも、読めないあいだは確かめない
+    (:func:`verify_admin_password_for`)。設定の値ではないので ``to_dict`` には入れない。
+    """
+
     def resolved_shared_db_path(self) -> str:
         """実際に読み書きする共有 SQLite のパス。"""
         if self.shared_db_path:
@@ -584,6 +609,33 @@ APP_ROOT = _APP_ROOT
 _MIGRATED_FROM = "_アプリのフォルダから引き継いだ"
 
 
+#: 読めないとき、読み直す回数と間(秒)。Windows では、ほかの処理が置き換えている・
+#: 開いている瞬間に読むと断られる(一瞬のこと)
+READ_TRIES = 3
+READ_WAIT_SEC = 0.1
+#: 置き換えが断られたとき、やり直す回数と間(秒)。Windows では、ほかの処理がファイルを
+#: 開いている瞬間に置き換えると「アクセスが拒否されました」(WinError 5)になる
+REPLACE_TRIES = 20
+REPLACE_WAIT_SEC = 0.05
+
+
+class SettingsUnreadable(OSError):
+    """この端末の設定ファイルは**ある**のに読めない(ほかの処理が開いている・権限・一時的な不調)。
+
+    **「無い」とも「中身が壊れている」とも取り違えない。** 以前はどちらも同じ扱いで:
+
+    * 付記を1つ書くだけで(配布設定を読み込んだ日時など)、元のファイルを
+      ``….読めなかった_日時`` へ移し、付記1つだけのほぼ空の設定ファイルに置き換えていた
+      (担当ライン・接続先・管理者パスワードが消える)
+    * 読めないまま組み込みの既定で動き、保存すると既定の値を書いていた
+    * 管理者パスワードを決めてある端末でも、既定の値で通っていた
+
+    (別ツールで、共有を読めなかったのを「実績の表が無い」と取り違えて送り直し、重複が
+    大量にできた事案を受けた点検。)``OSError`` の仲間なので、保存の失敗を受け止めている
+    所(「設定を書けませんでした」)はそのまま理由を出せる。
+    """
+
+
 def settings_path() -> Path:
     """この端末の設定ファイル(``%APPDATA%\\KanbanSystem\\config.json``)。
 
@@ -633,6 +685,9 @@ class SettingsFileStatus:
     ignored: list[str] = field(default_factory=list)
     """書いてあったが読まなかった項目(形の違う値)。"""
 
+    unreadable: bool = False
+    """ファイルは**あるのに読めなかった**(ほかの処理が開いている・権限)。中身が壊れているのとは別。"""
+
 
 def read_settings_file(path: Path | None = None) -> SettingsFileStatus:
     """設定ファイルを読む(配った先と同じ読み方)。"""
@@ -645,7 +700,13 @@ def read_settings_file(path: Path | None = None) -> SettingsFileStatus:
         return status
     if not status.exists:
         return status
-    raw = _read_raw_local(target)
+    try:
+        raw = _read_raw_local(target)
+    except SettingsUnreadable as exc:
+        # **「JSON の形が違う」とは言わない。** 中身は無事かもしれない(直し方が違う)
+        status.error = str(exc)
+        status.unreadable = True
+        return status
     if raw is None:
         status.error = f"設定ファイルを読めませんでした(JSON の形が違います): {target}"
         return status
@@ -660,22 +721,46 @@ def read_settings_file(path: Path | None = None) -> SettingsFileStatus:
 
 
 def _read_raw_local(config_path: Path) -> dict[str, Any] | None:
-    """端末の設定ファイルをそのまま読む。無ければ ``{}``、読めなければ ``None``。
+    """端末の設定ファイルをそのまま読む。
+
+    * 無ければ ``{}``
+    * 中身が JSON として壊れている(読めない形)なら ``None`` ── 書くときに脇へ移して残す
+      (:func:`_write_json`)
+    * **あるのに読めなければ** :class:`SettingsUnreadable`(少し待って読み直してから)。
+      「無い」「壊れている」と取り違えると、書くときにほかの設定を消すため
 
     **BOM 付きも読みます**(``utf-8-sig``)。メモ帳で直すと BOM が付くことが
     あり、以前はそれだけで**ファイル全体を読まなかった** ── 担当ラインも
     接続先も消えたように見え、次に何かを保存した時点で本当に消えていました。
+
+    「あるか」を ``is_file()`` で先に確かめないのは、確かめられなかったとき
+    (権限など)に「無い」と答える Python の版があるため。開いてみて、無いと
+    言われたときだけ「無い」とする。
     """
-    if not config_path.is_file():
-        return {}
-    try:
-        raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return None
-    return raw if isinstance(raw, dict) else None
+    for attempt in range(READ_TRIES):
+        try:
+            text = config_path.read_text(encoding="utf-8-sig")
+        except (FileNotFoundError, NotADirectoryError):
+            return {}
+        except ValueError:
+            return None                      # 文字として読めない(壊れている)
+        except OSError as exc:
+            if attempt + 1 >= READ_TRIES:
+                raise SettingsUnreadable(
+                    f"この端末の設定ファイルを読めませんでした(ほかの処理が開いている・"
+                    f"権限が無い、など): {config_path}: {exc}") from exc
+            time.sleep(READ_WAIT_SEC)
+            continue
+        try:
+            raw = json.loads(text)
+        except ValueError:
+            return None
+        return raw if isinstance(raw, dict) else None
+    return None  # pragma: no cover - 上の繰り返しで必ず返る
 
 
 def _read_local(config_path: Path) -> dict[str, Any]:
+    """この端末で決めた値。**あるのに読めなければ** :class:`SettingsUnreadable`(空と答えない)。"""
     raw = _read_raw_local(config_path) or {}
     legacy = LOCAL_FORMAT_KEY not in raw and _LEGACY_DUMP_KEYS <= set(raw)
     builtin = Config().to_dict()
@@ -700,12 +785,31 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     (``%APPDATA%\\KanbanSystem\\config.json``)。``--config``・試験では渡された
     ファイルを読む。どちらも無ければ組み込みの既定値。壊れていれば読まずに
     既定で動く(起動は止めない)。
+
+    **あるのに読めないとき**(ほかの処理が開いている・権限)も止めずに既定で動くが、
+    読めなかったことを ``unreadable`` に覚える。その設定は書き戻さない(:func:`save_config`
+    が断る)── 書けば既定の値で上書きしてしまう。読めるようになってから読み直す。
     """
     config_path = Path(path) if path else settings_path()
-    if not path:
-        _migrate(config_path)
-    values = {k: v for k, v in _read_local(config_path).items() if k != "mode"}
+    try:
+        if not path:
+            _migrate(config_path)
+        values = {k: v for k, v in _read_local(config_path).items() if k != "mode"}
+    except SettingsUnreadable as exc:
+        _warn("この端末の設定ファイルを読めないため、組み込みの既定で動きます"
+              "(読めるようになるまで、設定は保存しません): %s", exc)
+        return replace(Config(), source_path=str(config_path), unreadable=str(exc))
     return replace(Config(), **values, source_path=str(config_path))
+
+
+def _warn(message: str, *args: Any) -> None:
+    """記録に残す(記録の準備がまだでも、設定を読むのは止めない)。"""
+    try:
+        from .applog import get_logger
+
+        get_logger("config").warning(message, *args)
+    except Exception:  # noqa: BLE001 - 記録できなくても読むことは続ける
+        pass
 
 
 def _migrate(config_path: Path) -> None:
@@ -716,6 +820,10 @@ def _migrate(config_path: Path) -> None:
     持ってくる(この端末で決めてある値は上書きしない)。引き継いだら印を付け、
     次からは読まない。書けなければ何もしない(読んだ値で動くことはしない ──
     次の起動でもう一度試す)。
+
+    **どちらかを読めないときも何もしない。** この端末の設定を読めないなら
+    :class:`SettingsUnreadable` のまま返す(呼ぶ側は既定で動く)。引き継ぎ元を読めないのに
+    印を付けると、読めるようになっても二度と引き継がない(値が消えたままになる)。
     """
     legacy = legacy_app_settings_path()
     try:
@@ -726,7 +834,12 @@ def _migrate(config_path: Path) -> None:
     raw = _read_raw_local(config_path)
     if raw is None or raw.get(_MIGRATED_FROM) == str(legacy):
         return
-    old = read_settings_file(legacy).values
+    old_status = read_settings_file(legacy)
+    if old_status.unreadable:
+        _warn("アプリのフォルダの設定を読めないため、今回は引き継ぎません(次の起動でもう一度): %s",
+              old_status.error)
+        return
+    old = old_status.values
     have = _read_local(config_path)
     carried = {k: v for k, v in old.items() if k not in have and k != "mode"}
     try:
@@ -753,7 +866,15 @@ def save_config(cfg: Config) -> None:
     **組み込みの既定と同じ値は書きません。** 書くのは変えたぶんだけなので、
     ファイルを開けば「何を変えてあるか」がそのまま読めます。付記(``_`` で
     始まる名前。配布設定を読み込んだ日時など)は残します。
+
+    **読めなかった設定は書きません**(``cfg.unreadable``。中身は組み込みの既定なので、
+    書けば担当ライン・接続先・管理者パスワードが消える)。書く直前にもう一度読み、
+    あるのに読めなければ書かない(:class:`SettingsUnreadable`)。
     """
+    if cfg.unreadable:
+        raise SettingsUnreadable(
+            "この端末の設定ファイルを読めないため、保存しませんでした(書くと、ほかの設定が"
+            f"既定の値に戻るため)。少し待ってやり直してください: {cfg.unreadable}")
     builtin = Config().to_dict()
     path = Path(cfg.source_path) if cfg.source_path else settings_path()
     values = {
@@ -777,7 +898,11 @@ def read_meta(key: str, path: Path | None = None) -> Any:
 
 
 def write_meta(key: str, value: Any, path: Path | None = None) -> None:
-    """この端末の設定ファイルに付記を書く。設定の値には触らない。"""
+    """この端末の設定ファイルに付記を書く。設定の値には触らない。
+
+    **あるのに読めなければ書かない**(:class:`SettingsUnreadable`)。以前は空とみなして、
+    付記1つだけのほぼ空の設定ファイルに置き換えていた。
+    """
     target = Path(path) if path else settings_path()
     raw = _read_raw_local(target) or {}
     _write_json(target, {LOCAL_FORMAT_KEY: LOCAL_FORMAT, **raw, key: value})
@@ -790,17 +915,48 @@ def _write_if_changed(path: Path, values: dict[str, Any]) -> None:
 
 
 def _write_json(path: Path, values: dict[str, Any]) -> None:
+    """一時ファイルに書いてから置き換える(途中までの中身を残さない)。
+
+    **あるのに読めないファイルには書かない**(:class:`SettingsUnreadable` のまま返す)。
+    脇へ移すのは、中身が JSON として壊れているときだけ。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     if _read_raw_local(path) is None:
-        # **読めないファイルを黙って上書きしない。** 手で直して壊した設定の
-        # 中身は、直せば読める。残しておけば取り戻せる
+        # **壊れたファイルを黙って上書きしない。** 手で直して壊した設定の
+        # 中身は、直せば読める。残しておけば取り戻せる(移せなければ書かない)
         from datetime import datetime
 
         keep = path.with_name(f"{path.name}.読めなかった_{datetime.now():%Y%m%d%H%M%S}")
+        _replace(path, keep)
+    # **一時ファイルの名前は書くたびに変える。** 決まった名前だと、2つの保存が
+    # 重なったとき同じ一時ファイルへ交互に書き、相手の中身で置き換えることがある
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(values, ensure_ascii=False, indent=2))
+        _replace(tmp, path)
+    except BaseException:
+        # 一時ファイルを残さない(置き換えを諦めたときも)
         try:
-            os.replace(path, keep)
+            tmp.unlink()
         except OSError:
             pass
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+        raise
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """``src`` で ``dst`` を置き換える。**Windows で一瞬断られたら、少し待ってやり直す。**
+
+    ほかの処理(別モードの看板・ウイルス対策・バックアップ)が ``dst`` を開いている
+    瞬間に置き換えると「アクセスが拒否されました」(WinError 5 = ``PermissionError``)に
+    なる。開いているのは一瞬なので、待てば通る。
+    """
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt + 1 >= REPLACE_TRIES:
+                raise
+            time.sleep(REPLACE_WAIT_SEC)

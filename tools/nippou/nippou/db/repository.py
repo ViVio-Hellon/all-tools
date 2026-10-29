@@ -20,6 +20,7 @@ everywhere else, which the original VBA ``NippouDB_Save`` did not have.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
 import socket
 import sqlite3
@@ -68,6 +69,10 @@ def this_pc() -> str:
         return ""
 
 
+#: 控えへ写す待ちの印に足す番号(`NippouRepository._backup_queued_at`)。入れるたびに1つ進む
+_BACKUP_QUEUE_SEQ = itertools.count(1)
+
+
 class NippouRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -80,14 +85,19 @@ class NippouRepository:
 
     @staticmethod
     def _backup_queued_at() -> str:
-        """控えへ写す待ちに入れた時刻。**入れ直したかの見分けにも使う**ので、マイクロ秒まで。
+        """控えへ写す待ちに入れた印(時刻+**入れるたびに必ず変わる番号**)。入れ直したかの見分けに使う。
 
         写している最中に同じページを入れ直す(共有へ保存して送り済みになった など)と、
         写し終えたときに「写した分」として待ちを消すと、**入れ直した分まで消えていた**
-        (控えに「未送信」のまま残る)。写し始めに読んだ時刻のままの待ちだけを消す
-        (`clear_backup_pending` の `stamps`)。秒まででは、同じ秒の入れ直しを見分けられない。
+        (控えに「未送信」のまま残る)。写し始めに読んだ印のままの待ちだけを消す
+        (`clear_backup_pending` の `stamps`)。
+
+        **時刻だけでは見分けられない**: 秒までなら同じ秒の入れ直しを、マイクロ秒でも時計が
+        進まない(試験で時刻を止めた・時計の刻みが粗い)ときは同じ印になる。並べる順は
+        時刻が先なので、入れた順のまま(番号は同じ時刻の中の順)。
         """
-        return datetime.now().isoformat(timespec="microseconds")
+        return (f"{datetime.now().isoformat(timespec='microseconds')}"
+                f"#{os.getpid()}-{next(_BACKUP_QUEUE_SEQ):012d}")
 
     def _queue_backup_in_tx(self, key: tuple[str, str, str, int]) -> None:
         """取引の中で、控えへ写す待ちに入れる(**保存と一緒に入るか、一緒に入らないか**)。"""
