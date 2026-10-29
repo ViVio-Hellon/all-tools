@@ -143,6 +143,49 @@ class BackupServiceTests(unittest.TestCase):
                 lb.flush(self.a)
             self.assertEqual(self.a.backup_pending(), [key])
 
+    def test_写している最中の保存は_写し終えるのを待って続けて写す(self) -> None:
+        """2つ目の書き写しは、1つ目が終わるのを待ってから写す(待たずに戻らない)。
+
+        1つ目の最中に共有へ保存して送り済みにすると、その待ちは残る(上の試験)。そのとき
+        2つ目が「ほかで写しています」で戻ると、残った待ちを写す人がいなくなり、控えが
+        「未送信」のまま・待ちも残ったままだった(Windows の混在起動の試験で落ちた)。
+        """
+        import threading
+
+        key = save(self.a)
+        copy = lb._copy_page
+
+        def second_flush() -> None:
+            # 送ったあとの要求の書き写し(2つ目)。接続はその処理の中で開く(sqlite3 の決まり)
+            conn = connect(self.tmp / "a.sqlite3")
+            try:
+                started["result"] = lb.flush(NippouRepository(conn), wait=10)
+            finally:
+                conn.close()
+
+        started: dict = {}
+
+        def copy_then_push(src, dst, page_key):
+            done = copy(src, dst, page_key)
+            if src is self.a.conn and "thread" not in started:
+                self.a.mark_synced(key)               # 写している最中に送り済みになる
+                # 送ったあとの要求の書き写し(2つ目)。1つ目はまだ錠を持っている
+                started["thread"] = threading.Thread(target=second_flush)
+                started["thread"].start()
+                time.sleep(0.3)                       # 2つ目が錠を待ち始める
+            return done
+
+        with patch.object(lb, "_copy_page", side_effect=copy_then_push):
+            lb.flush(self.a)
+        started["thread"].join(timeout=15)
+        self.assertNotEqual(started["result"].error, lb.BUSY)
+        self.assertEqual(self.a.backup_pending(), [])
+        with lb.reader("L-1") as backup:
+            dirty = backup.conn.execute(
+                f"SELECT dirty FROM {lb.HEADER} WHERE report_date=? AND line=? AND shift=? AND page=?",
+                key).fetchone()[0]
+        self.assertEqual(dirty, 0)
+
     def test_ラインごとのフォルダ(self) -> None:
         save(self.a, line="L-1")
         save(self.a, line="HVC")

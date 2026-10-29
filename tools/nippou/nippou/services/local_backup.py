@@ -296,11 +296,21 @@ def _base_missing() -> str:
             "(届くようになったら写します)")
 
 
-def flush(repo: NippouRepository, *, force: bool = False) -> Result:
-    """写す待ちのページを控えへ写す。**同時には1つだけ走る。**"""
+#: ほかで写している最中のときの一言(`flush`)
+BUSY = "ほかで写しています"
+#: 要求のあとに写すとき(`flush_soon`)、ほかで写し終えるのを待つ上限(秒)
+FLUSH_SOON_WAIT_SEC = 30.0
+
+
+def flush(repo: NippouRepository, *, force: bool = False, wait: float = 0.0) -> Result:
+    """写す待ちのページを控えへ写す。**同時には1つだけ走る。**
+
+    `wait` 秒まで、ほかで写し終えるのを待つ(0 なら待たずに `BUSY` で戻る)。
+    """
     global _retry_at
-    if not _flush_lock.acquire(blocking=False):
-        return Result(pending=len(repo.backup_pending()), error="ほかで写しています")
+    got = _flush_lock.acquire(timeout=wait) if wait > 0 else _flush_lock.acquire(blocking=False)
+    if not got:
+        return Result(pending=len(repo.backup_pending()), error=BUSY)
     try:
         # 入れた時刻も読んでおく ── 写している最中に入れ直されたページ(共有へ保存して
         # 送り済みになった など)の待ちを、写し終えたときに消さないため
@@ -413,7 +423,10 @@ def flush_soon() -> None:
         log.exception("控えへ写すために手元のDBを開けませんでした")
         return
     try:
-        result = flush(NippouRepository(conn))
+        # **ほかで写している最中なら、終わるのを待ってから写す。** 写している最中に入れ直した待ち
+        # (共有へ保存して送り済みになった など)は消さずに残すが、そのとき待たずに戻ると、
+        # 残った待ちを写す人がいなくなり、次に何か保存するまで控えが「未送信」のままだった
+        result = flush(NippouRepository(conn), wait=FLUSH_SOON_WAIT_SEC)
         if result.written or result.pulled or result.removed:
             log.info("%s", result.message)
     except Exception:                             # noqa: BLE001 - 次の機会に写す

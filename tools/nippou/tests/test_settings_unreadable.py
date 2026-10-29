@@ -103,7 +103,9 @@ class _Terminal(unittest.TestCase):
         return patcher
 
     def leftovers(self) -> list[str]:
-        return sorted(p.name for p in self.path.parent.iterdir() if p.name != self.path.name)
+        """置き換えに使った一時ファイルの残り(同じフォルダにできるログのフォルダなどは数えない)。"""
+        return sorted(p.name for p in self.path.parent.iterdir()
+                      if p.is_file() and p.name != self.path.name)
 
 
 # ------------------------------------------------------------------
