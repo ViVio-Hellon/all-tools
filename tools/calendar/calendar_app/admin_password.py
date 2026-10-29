@@ -70,6 +70,7 @@ REFUSE_WRONG = "wrong_password"          # いまのパスワードが違う
 REFUSE_TOO_SHORT = "too_short"           # 新しいパスワードが短い
 REFUSE_MISMATCH = "mismatch"             # 確認用と一致しない
 REFUSE_SAME = "same"                     # 変わっていない
+REFUSE_UNREADABLE = "settings_unreadable"  # 設定ファイルを読めない(一時的なことが多い)
 
 #: 守る設定と、断りに出す名前。**ここに1行足せば守る対象が増える**
 PROTECTED_LABELS = {
@@ -122,8 +123,12 @@ def _matches(password: str, stored: str) -> bool:
 # ---------------------------------------------------------------------------
 # 使う
 # ---------------------------------------------------------------------------
-def _stored() -> Optional[str]:
-    value = user_settings.get(KEY, "")
+def _stored(*, strict: bool = False) -> Optional[str]:
+    """この端末で変えたパスワード(撹拌した値)。``strict`` なら、読めないとき
+    `SettingsUnreadable` ── **照合では読めないのを「変えていない」と取り違えない**
+    (取り違えると、変えた端末でも既定のパスワードで通っていた)。"""
+    data = user_settings.load_checked() if strict else user_settings.load()
+    value = data.get(KEY, "")
     return value if isinstance(value, str) and value.strip() else None
 
 
@@ -149,8 +154,11 @@ def default_secret() -> tuple[str, str]:
 
 
 def verify(password: str) -> bool:
-    """合っているか。**照合はここでしかしない。**"""
-    stored = _stored()
+    """合っているか。**照合はここでしかしない。**
+
+    設定ファイルを読めないときは `SettingsUnreadable`(既定の値では通さない)。
+    """
+    stored = _stored(strict=True)
     if stored is not None:
         return _matches(str(password), stored)
     # 一度も変えていない端末。既定の値で通す
@@ -179,7 +187,13 @@ def guard(changing: list[str], password: str) -> Optional[Result]:
     if not changing:
         return None
     password = str(password or "")
-    if verify(password):
+    try:
+        ok = verify(password)
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("設定の変更を断りました(設定ファイルを読めない): %s", exc)
+        return Result(False, "この端末の設定ファイルを読めませんでした。少し待ってからもう一度"
+                             f"押してください({exc})。", REFUSE_UNREADABLE)
+    if ok:
         log.info("設定を変えます(管理者パスワード確認済み): %s",
                  " / ".join(changing))
         return None
@@ -231,11 +245,25 @@ def _hint() -> str:
     return "\nこの端末では、起動するときに決めたパスワードです(環境変数)。"
 
 
+def _unreadable(exc: Exception) -> Result:
+    log.warning("管理者パスワードを変えられませんでした(設定ファイルを読めない): %s", exc)
+    return Result(False, "この端末の設定ファイルを読めませんでした。少し待ってからもう一度"
+                         f"押してください({exc})。", REFUSE_UNREADABLE)
+
+
 def change(current: str, new: str, confirm: str) -> Result:
     """変える。**いまのパスワードを知っている人だけ。**
 
     肩越しに見ていた人が勝手に変えられる、を作らないための確認です。
+    設定ファイルを読めないときは変えない(ほかの設定を消さない)。
     """
+    try:
+        return _change(current, new, confirm)
+    except user_settings.SettingsUnreadable as exc:
+        return _unreadable(exc)
+
+
+def _change(current: str, new: str, confirm: str) -> Result:
     if not verify(current):
         log.warning("管理者パスワードの変更に失敗しました(いまの値が違う)")
         return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
@@ -261,8 +289,11 @@ def reset(current: str) -> Result:
     ``settings.json`` の ``管理者パスワード`` を消せば既定に戻ります。
     画面から「忘れた」で戻せるようにすると、確認そのものが意味を失います。
     """
-    if not verify(current):
-        return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
-    user_settings.set_value(KEY, "")
+    try:
+        if not verify(current):
+            return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
+        user_settings.set_value(KEY, "")
+    except user_settings.SettingsUnreadable as exc:
+        return _unreadable(exc)
     log.info("管理者パスワードを既定に戻しました")
     return Result(True, "既定のパスワードに戻しました。")

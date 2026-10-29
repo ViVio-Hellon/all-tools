@@ -8,9 +8,11 @@ Python 版では標準ライブラリのみで動かすため JSON ファイル�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -43,18 +45,81 @@ KEY_SYNC_INTERVAL = "自動同期間隔秒"
 DEFAULT_SYNC_INTERVAL = 20
 
 
-def load() -> dict[str, Any]:
-    """設定ファイル全体を読み込む。存在しない/壊れている場合は空の辞書。"""
+log = logging.getLogger(__name__)
+
+#: 読めないとき、読み直す回数と間(秒)。Windows では、ほかの処理が置き換えている瞬間に
+#: 開くと断られる(一瞬のこと)
+READ_TRIES = 3
+READ_WAIT_SEC = 0.1
+#: 置き換えが断られたとき、やり直す回数と間(秒)。Windows では、ほかの処理がファイルを
+#: 開いている瞬間に置き換えると「アクセスが拒否されました」(WinError 5)になる
+REPLACE_TRIES = 20
+REPLACE_WAIT_SEC = 0.05
+
+
+class SettingsUnreadable(OSError):
+    """設定ファイルは**ある**のに読めない(ロック中・権限・一時的な不調)。
+
+    **「無い・空」と取り違えない。** 以前は読めないと空の設定として返していたので、
+    そのまま1項目を保存すると、ほかの設定(ライン・置き場所・管理者パスワードなど)が
+    全部消え、管理者パスワードは既定の値で通っていた(別ツールで、共有を読めなかった
+    のを「表が無い」と取り違えて送り直した事案を受けた点検)。
+    """
+
+
+def _read(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+    return data if isinstance(data, dict) else {}
+
+
+def load_checked() -> dict[str, Any]:
+    """書く前・確かめる前に読む。**無ければ空、あるのに読めなければ** `SettingsUnreadable`。
+
+    読めないときは少し間をおいて読み直してから諦める。中身が JSON として壊れている
+    ときは空とみなす(書くときは一時ファイルから置き換えるので途中の中身は残らない ──
+    壊れているなら本当に壊れていて、保存すれば直る)。
+    """
     path = config.settings_path()
-    if not path.exists():
-        return {}
+    with LOCK:
+        for attempt in range(READ_TRIES):
+            try:
+                return _read(path)
+            except FileNotFoundError:
+                return {}
+            except ValueError:
+                log.warning("設定ファイルの中身が読めない形でした(空として扱います): %s", path)
+                return {}
+            except OSError as exc:
+                if attempt + 1 >= READ_TRIES:
+                    raise SettingsUnreadable(f"設定ファイル({path})を読めませんでした: {exc}") from exc
+                time.sleep(READ_WAIT_SEC)
+    return {}
+
+
+def load() -> dict[str, Any]:
+    """設定ファイル全体を読み込む(**画面に出す・決めるだけ**)。存在しない/壊れている/読めないなら空。
+
+    **書くときは使わない**(`set_value` / `update` は `load_checked` で読む)。
+    """
     try:
-        with path.open(encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        # 設定が壊れていてもアプリは起動できるようにする
+        return load_checked()
+    except SettingsUnreadable as exc:
+        # 設定が読めなくてもアプリは起動できるようにする(書くほうは断る)
+        log.warning("%s", exc)
         return {}
+
+
+def _replace(tmp: Path, path: Path) -> None:
+    """一時ファイルで置き換える。**Windows で一瞬断られたら、少し待ってやり直す。**"""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt + 1 >= REPLACE_TRIES:
+                raise
+            time.sleep(REPLACE_WAIT_SEC)
 
 
 #: 設定ファイルの「読んで・直して・書く」を1つずつにする錠。
@@ -80,7 +145,7 @@ def save(data: dict[str, Any]) -> None:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, ensure_ascii=False, indent=2)
-            tmp.replace(path)
+            _replace(tmp, path)
         except BaseException:
             try:
                 tmp.unlink()
@@ -100,7 +165,7 @@ def has_value(key: str) -> bool:
 
 def set_value(key: str, value: Any) -> None:
     with LOCK:
-        data = load()
+        data = load_checked()            # 読めなければ書かない(ほかの設定を消さない)
         data[key] = value
         save(data)
 
@@ -108,7 +173,7 @@ def set_value(key: str, value: Any) -> None:
 def update(values: dict[str, Any]) -> None:
     """いくつかの項目を**まとめて1回で**書く(途中の状態を残さない)。"""
     with LOCK:
-        data = load()
+        data = load_checked()            # 読めなければ書かない(ほかの設定を消さない)
         data.update(values)
         save(data)
 
