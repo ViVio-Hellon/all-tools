@@ -199,6 +199,8 @@ class Distribution:
         self.admin = admin
         self.log = logger
         self.dir = Path(base_dir) if base_dir else default_dir()
+        #: 最後に読んだとき、配布設定のファイルを読めなかった理由(読めた・無いなら空)
+        self.read_error = ""
 
     @property
     def settings_path(self) -> Path:
@@ -214,8 +216,13 @@ class Distribution:
         丸ごと使う**(同じなら点検表のフォルダのほう ── まとめて書き出すと両方に同じものが入る)。
         項目ごとには混ぜない。
         """
+        self.read_error = ""
         own = self.read_own()
         whole = self.read_integrated()
+        if self.read_error:
+            # **片方を読めないときは、どちらも使わない。** 読めないほうを「無い」とみなすと、
+            # 古いほうの配布設定で、配布設定から入れた値を戻してしまう(次に読めると、また戻る)
+            return None
         if whole is None:
             return own
         if own is not None and stamp(own.created_at) >= stamp(whole.created_at):
@@ -229,8 +236,11 @@ class Distribution:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return None
         except (OSError, ValueError) as exc:
-            self.log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+            self.log.warning("日報複合ツールの配布設定を読めませんでした(読み込みません): %s", exc)
+            self.read_error = f"{path}: {exc}"
             return None
         tools = data.get("tools") if isinstance(data, dict) else None
         entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
@@ -248,8 +258,11 @@ class Distribution:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return None
         except (OSError, ValueError) as exc:
-            self.log.warning("配布設定を読めませんでした: %s", exc)
+            self.log.warning("配布設定を読めませんでした(読み込みません): %s", exc)
+            self.read_error = f"{path}: {exc}"
             return None
         return self._bundle_of(data, path)
 
@@ -294,6 +307,8 @@ class Distribution:
             "created_version": "",
             "integrated": False,
             "source": "",
+            # 配布設定のファイルを読めなかった理由(無いのとは違う。読めるまで読み込まない)
+            "read_error": self.read_error,
         }
         if bundle is None:
             return out
@@ -322,6 +337,10 @@ class Distribution:
         if not items:
             return Result(False, "入れる項目を1つ以上選んでください。", REFUSE_BAD_INPUT)
 
+        unreadable = self._settings_problem()
+        if unreadable:
+            # 読めないのを「この端末で変えていない(既定のまま)」と取り違えない
+            return Result(False, unreadable, REFUSE_FAILED)
         current = self.settings.values()
         settings = {k: current[k] for k in items if k in current and ITEM_CHECKS[k](current[k])}
         defaults = [ITEM_LABELS[k] for k in items if k not in settings]
@@ -403,8 +422,26 @@ class Distribution:
     def _mark_applied(self, created_at: str) -> None:
         self.settings.put(KEY_APPLIED, {"at": _now(), "created_at": created_at})
 
+    def _settings_problem(self) -> str:
+        """この端末の設定ファイルを読めなければ、画面に出す理由。読めれば空。"""
+        ensure = getattr(self.settings, "ensure_readable", None)
+        if ensure is None:
+            return ""
+        from app.repositories.settings_repository import SettingsUnreadable
+        try:
+            ensure()
+        except SettingsUnreadable as exc:
+            self.log.warning("この端末の設定ファイルを読めないため、配布設定を扱いません: %s", exc.detail)
+            return f"この端末の設定ファイルを読めないため、配布設定を扱いませんでした({exc.detail})。"
+        return ""
+
     def _apply(self, bundle: Bundle, *, overwrite: bool) -> Result:
         result = Result()
+        # **この端末の設定を読めなければ読み込まない。** 以前は読めないと「この端末に無い」とみなし、
+        # 全部を配布設定の値で埋めて、ほかの設定(パスワード・ログの保存先など)も消していた
+        unreadable = self._settings_problem()
+        if unreadable:
+            return Result(False, unreadable, REFUSE_FAILED)
         current = self.settings.values()
         found = current.get(KEY_FROM_DIST)
         came = dict(found) if isinstance(found, dict) else {}
@@ -445,10 +482,15 @@ class Distribution:
         """起動時に呼ぶ。`配布設定\\` があれば、**その端末に無いものだけ**読む。"""
         bundle = self.read()
         if bundle is None:
+            if self.read_error:
+                return Result(False, f"配布設定を読めませんでした(次の起動で読み直します): {self.read_error}",
+                              REFUSE_FAILED)
             return Result(True, "")
         if bundle.integrated:
             self.log.info("配布設定を読みます: %s(日報複合ツールの大設定がまとめたファイル)", bundle.file)
         result = self._apply(bundle, overwrite=False)
+        if not result.ok:
+            return result
         if result.applied:
             self.log.info("配布設定を読み込みました: %s(すでにあったので読まなかったもの: %s)",
                           ", ".join(result.applied), ", ".join(result.kept) or "なし")
@@ -461,8 +503,13 @@ class Distribution:
             return Result(False, "配布設定を読み込み直すには管理者パスワードが要ります。", REFUSE_NEED_PASSWORD)
         bundle = self.read()
         if bundle is None:
+            if self.read_error:
+                return Result(False, f"配布設定を読めませんでした。少し待ってもう一度押してください: {self.read_error}",
+                              REFUSE_FAILED)
             return Result(False, "配布設定が置かれていません。", REFUSE_BAD_INPUT)
         result = self._apply(bundle, overwrite=True)
+        if not result.ok:
+            return result
         result.message = f"配布設定を読み込みました({len(result.applied)}項目: {'・'.join(result.applied)})。"
         self.log.info("配布設定を読み込み直しました: %s", ", ".join(result.applied))
         return result

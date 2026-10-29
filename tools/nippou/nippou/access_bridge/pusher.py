@@ -42,6 +42,14 @@ Accessへ送る」ような場面向けに ``dbkit`` 側に残してある。
 表の列は、ACE を使わない内蔵の読み取り(`nippou/accdb`)で .accdb のファイルを読んで
 知ります(`access_table`)。読めなかったときは VBA の形(`頁`・④⑤なし)とみなします。
 v4.35.3 までは、送る前に明細表へ④⑤の列を ALTER TABLE で足していました(やめました)。
+
+**「読めなかった」と「形が読めない・ファイルが無い」を分けます。** ファイルを開けなかった
+(共有が一瞬切れた・ほかで掴んでいる・権限 など。`OSError`)ときは、その場の事情で表の形が
+分からないだけです。そこで④⑤の列が無いとみなして送ると、④⑤を出さないまま**送り済みの印**が
+付き、あとで読めても送り直されません。なので**④⑤を打ったページはそのとき送らず**、未送信の
+まま残して理由を返します(次の共有へ保存で送ります)。④⑤の無いページは、表の形によらず
+同じ中身になるので VBA の形で送ります。読み取りが対応していない形(`AccdbError`)・ファイル
+そのものが無い(置き場所は見える)ときは、今までどおり VBA の形とみなします。
 """
 from __future__ import annotations
 
@@ -144,34 +152,78 @@ class AccessTable:
 #: VBA `NippouDB_EnsureTables` の形(`頁`・④⑤なし)。表を見られなかったときもこれ
 VBA_TABLE = AccessTable()
 
+
+@dataclass(frozen=True)
+class _Unread:
+    """書き先のファイルを**その場の事情で開けなかった**(共有が切れた・掴まれている・権限)。"""
+
+    reason: str
+
+
 #: 書き先(.accdb)ごとの「表の名前 → 列」。**1回の共有へ保存で1回だけ読む**
-#: (`push_pending` の頭で忘れる)。読めなかったファイルは None
-_access_columns: dict[str, Optional[dict[str, tuple[str, ...]]]] = {}
+#: (`push_pending` の頭で忘れる)。形を読めない・無いファイルは None、開けなかったら `_Unread`
+_access_columns: dict[str, object] = {}
 
 
-def _read_access_columns(accdb_path: Path) -> Optional[dict[str, tuple[str, ...]]]:
-    """.accdb の表ごとの列(内蔵の読み取り。ACE を使わない)。読めなければ None。"""
+def _read_access_columns(accdb_path: Path) -> object:
+    """.accdb の表ごとの列(内蔵の読み取り。ACE を使わない)。
+
+    戻りは3つ: 列の dict / None(形を読めない・ファイルが無い ── VBA の形とみなす)/
+    `_Unread`(**開けなかった** ── 表の形は分からない)。
+    """
     from ..accdb import reader
 
     try:
         with reader.AccdbReader(str(accdb_path)) as db:
             return {name: tuple(c.name for c in db.columns(name))
                     for name in db.table_names()}
+    except OSError as exc:
+        if _really_missing(accdb_path, exc):
+            _logger.warning("書き先の Access のファイルがありません(VBA の形とみなします) %s: %s",
+                            accdb_path, exc)
+            return None
+        _logger.warning("書き先の Access の表の列を読めませんでした(開けない。④⑤のあるページは"
+                        "今回は送りません) %s: %s", accdb_path, exc)
+        return _Unread(str(exc))
     except Exception as exc:                      # noqa: BLE001 - VBA の形とみなして続ける
         _logger.warning("書き先の Access の表の列を読めませんでした(VBA の形とみなします)"
                         " %s: %s", accdb_path, exc)
         return None
 
 
+def _really_missing(accdb_path: Path, exc: OSError) -> bool:
+    """ファイルが**本当に無い**か(置き場所は見えていて、そこに無い)。届かないのとは分ける。"""
+    if not isinstance(exc, FileNotFoundError):
+        return False
+    try:
+        return Path(accdb_path).parent.is_dir()
+    except OSError:
+        return False
+
+
 def access_table(accdb_path: Path, table: str) -> AccessTable:
-    """書き先の Access の表の形。ファイルを読めない・表が無いときは VBA の形。"""
+    """書き先の Access の表の形。ファイルを読めない・表が無いときは VBA の形。
+
+    **開けなかったかどうか**は `access_unread` で見ます(形は VBA とみなしても、
+    ④⑤を打ったページは送らない ── 冒頭)。
+    """
+    found = _access_columns_of(accdb_path)
+    if not isinstance(found, dict) or table not in found:
+        return VBA_TABLE
+    return AccessTable(found[table])
+
+
+def access_unread(accdb_path: Path) -> str:
+    """書き先の .accdb を**その場の事情で開けなかった**ときの理由(開けた・無い・形が違うなら空)。"""
+    found = _access_columns_of(accdb_path)
+    return found.reason if isinstance(found, _Unread) else ""
+
+
+def _access_columns_of(accdb_path: Path) -> object:
     key = str(accdb_path)
     if key not in _access_columns:
         _access_columns[key] = _read_access_columns(Path(accdb_path))
-    found = _access_columns[key]
-    if found is None or table not in found:
-        return VBA_TABLE
-    return AccessTable(found[table])
+    return _access_columns[key]
 
 
 def forget_access_tables() -> None:
@@ -251,6 +303,9 @@ def has_stops45(details: list[DetailRecord]) -> bool:
 
 #: ④⑤を書けなかったときの知らせ(利用者に決めてもらった言い方のまま)
 NO_STOPS45_NOTICE = "Access の表に作業停止④⑤の列が無いので、④⑤は共有へ出ていません"
+#: 書き先の .accdb を開けず、表に④⑤の列があるか分からなかったとき(そのページは送らない)
+STOPS45_UNREAD_NOTICE = ("書き先の Access のファイルを開けず、表に作業停止④⑤の列があるか"
+                         "確かめられなかったので、④⑤を打ったこのページは送っていません")
 
 
 @dataclass
@@ -520,6 +575,18 @@ def _push_one(
             Path(accdb_path), header, details,
             header_table_name(header.line), detail_table_name(header.line))
     else:
+        # **書き先の表の形を、その場の事情で読めなかった**。④⑤を打ったページは送らない
+        # (④⑤の列が無いとみなして送ると、④⑤を出さないまま送り済みになる ── 冒頭)
+        unread = access_unread(accdb_path)
+        if unread and has_stops45(details):
+            why = (f"{STOPS45_UNREAD_NOTICE}(未送信のまま残しました。"
+                   f"次の共有へ保存で送ります: {unread})")
+            _logger.warning("送りませんでした key=%s: %s", header.key(), why)
+            repo.log_sync("push", header_table_name(header.line), "error", why)
+            summary.failed.append(PushOutcome(
+                key=header.key(), success=False,
+                error=AccessBridgeError(kind=ErrorKind.UNKNOWN, err_number=None, message=why)))
+            return
         # **VBA の表に合わせて書く**(列を足さない ── 冒頭)
         head_table = access_table(accdb_path, header_table_name(header.line))
         rows_table = access_table(accdb_path, detail_table_name(header.line))

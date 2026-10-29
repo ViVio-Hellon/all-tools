@@ -100,7 +100,15 @@ class InspectionBusiness:
         self.log.info("業務を終了しました(%s)", reason)
 
     def apply_log_settings(self) -> Dict[str, Any]:
-        """設定の「ログの保存先・保存日数」を書き出しに反映する(再起動は要らない)。"""
+        """設定の「ログの保存先・保存日数」を書き出しに反映する(再起動は要らない)。
+
+        **設定ファイルを読めないときは替えない。** 読めないのを「決めていない」と取り違えて、
+        共有フォルダに決めたログの保存先をローカル(既定)に戻さない。
+        """
+        if self.settings.load_error:
+            self.log.warning("設定ファイルを読めないため、ログの保存先・保存日数は替えません: %s",
+                             self.settings.load_error)
+            return logging_utils.status()
         return logging_utils.apply_settings(self.settings.get(logging_utils.KEY_DIR),
                                             self.settings.get(logging_utils.KEY_KEEP_DAYS))
 

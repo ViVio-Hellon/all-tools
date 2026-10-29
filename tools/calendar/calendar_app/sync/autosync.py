@@ -373,8 +373,11 @@ class AutoSync:
             if receive:
                 try:
                     self.receive(conn)
-                except (source_db.SourceError, OSError, ValueError) as exc:
-                    # 送信はできているので、表示が少し古いだけ
+                except (source_db.SourceError, OSError, ValueError,
+                        sqlite3.Error) as exc:
+                    # 送信はできているので、表示が少し古いだけ。手元の送信待ちを
+                    # 数えられなかったとき(``sqlite3.Error``)も取り込まずにここへ来る
+                    # ── 「0件」と読んで入れ替えると、まだ送っていない行が消える
                     status.state = SyncState.OFFLINE
                     status.message = f"取り込みに失敗: {exc}"
                     status.pending = _pending_count(conn)

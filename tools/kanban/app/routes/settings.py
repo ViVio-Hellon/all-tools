@@ -1492,17 +1492,46 @@ def discard_failed():
     hook = current_app.config.get("MANUAL_REFRESH")
     if hook is not None:
         try:
-            hook()
-            note = " 共有DBから取り込み直しました(共有DBにある看板は共有DBの状態に、無い看板は手元からも消えました)。"
+            imported = hook()
         except Exception as exc:  # noqa: BLE001 - 捨てたことは変わらない
             log.exception("捨てたあとの取り込みに失敗")
             note = f" ただし取り込み直せませんでした: {exc}"
+        else:
+            # **読めなかったラインを「取り込み直した」と言わない。** 取り込みは例外を上げずに
+            # 失敗したラインを結果に入れて返す。読めていないあいだ、手元の看板は消えも戻りもしない
+            unread = _discard_not_reimported(imported, {r["line"] for r in rows})
+            if unread:
+                log.warning("送れない操作を捨てたあと、共有DBを読めず取り込み直せませんでした: %s", unread)
+                note = (f" ただし共有DBを読めなかったので、まだ取り込み直せていません({unread})。"
+                        "画面の看板は、次に取り込めたときに共有DBの状態に戻ります。")
+            else:
+                note = " 共有DBから取り込み直しました(共有DBにある看板は共有DBの状態に、無い看板は手元からも消えました)。"
     log.info("送れない操作を捨てました: %d 件", len(rows))
     return jsonify({
         "ok": True,
         "discarded": [{"line": r["line"], "mgmt_no": r["mgmt_no"], "error": r["sync_error"]} for r in rows],
         "message": f"送れない操作を {len(rows)} 件 捨てました。" + note,
     })
+
+
+def _discard_not_reimported(imported, lines: set[str]) -> str:
+    """捨てた操作のラインのうち、続けての取り込みで**読めなかった**ものと理由。全部読めたら空。
+
+    結果の形が分からない(試験の差し替えなど)ときは空。取り込みが途中で止まった
+    (:meth:`kanban.db.sync.Importer.run_once` は例外を上げずに空の結果を返す)ときは、そう言う。
+    表が無いライン(:data:`kanban.db.sync.TABLE_MISSING`)は読めている(本当に無い)ので数えない。
+    """
+    from kanban.db.sync import TABLE_MISSING
+
+    got = getattr(imported, "lines", None)
+    if got is None:
+        return ""
+    if not got:
+        return "取り込みが途中で止まりました。記録を見てください"
+    bad = [f"{getattr(r, 'table_name', '') or r.line}: {getattr(r, 'message', '') or '読めませんでした'}"
+           for r in got
+           if getattr(r, "line", "") in lines and not r.ok and getattr(r, "message", "") != TABLE_MISSING]
+    return " / ".join(bad)
 
 
 @bp.post("/api/sync/retry-failed")

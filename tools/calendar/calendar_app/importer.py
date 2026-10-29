@@ -275,6 +275,8 @@ def import_source(conn: sqlite3.Connection, path: str | Path, *,
     :raises PendingChangesError: 未送信の変更が残っている (force=False のとき)
     :raises SourceError: 取り込み元を開けない
     :raises sqlite3.OperationalError: 手元の錠が取れない (登録の最中など)
+    :raises sqlite3.Error: 手元の送信待ちを**数えられない**。「0件」とは読まず、
+        入れ替えずにやめる(``outbox_sync.unsent_tables``)
 
     【確かめるのは2回 ── 入れ替える直前に、錠を取ってからもう一度】
     以前は入口で1回だけ「送信待ちが0件か」を見て、そのあと共有を読み、

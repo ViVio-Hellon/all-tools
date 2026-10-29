@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -81,24 +82,53 @@ def path_problem(path: str) -> str:
 
 
 def create_if_missing(db: HistoryDb) -> bool:
-    """ファイルが無ければ作る(**フォルダがあるときだけ**)。作ったら True。"""
-    if db.exists():
-        return False
+    """ファイルが無ければ作る(**フォルダがあるときだけ**)。作ったら True。
+
+    **「無い」と「確かめられない」を分ける。** 以前は :meth:`SharedDb.exists` が偽なら作りに
+    行った ── ``exists`` は確かめられないとき(権限・共有フォルダの一時的な不調)も偽を返すので、
+    あるファイルを「無い」と取り違えて作り(あるファイルへ表を作る文を打ち)、「作りました」と
+    記録していた。確かめられないときは作らずに断る(次に送るときにまた確かめる)。
+
+    0 バイトのファイル(何かが開きかけて残した)は、読む側が「読めない」と断る
+    (:meth:`SharedDb.local_copy`)ので、ここで表まで用意する。
+    """
     target = Path(db.path)
-    if not target.parent.is_dir():
+    try:
+        size: int | None = os.stat(target).st_size
+    except FileNotFoundError:
+        size = None
+    except OSError as exc:
+        raise SharedDbError(f"看板履歴のファイルを確かめられませんでした: {target}({exc})") from exc
+    if size:
+        return False
+    if size is None and not target.parent.is_dir():
         raise SharedDbError(f"看板履歴のフォルダが見つかりません: {target.parent}")
-    conn = sqlite3.connect(str(target))
+    try:
+        conn = sqlite3.connect(str(target))
+    except sqlite3.Error as exc:
+        raise SharedDbError(f"看板履歴のファイルを開けませんでした: {target}({exc})") from exc
     try:
         # 空のファイルは sqlite3 として開けない(ファイル見出しが無い)ので、ここで表まで作る
         from .sync import HISTORY_COLUMNS
 
+        # **開いてみたら表があった**(0 バイトに見えたのは一瞬だけだった)なら、作ったとは言わない
+        had = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                           (TABLE,)).fetchone() is not None
         columns = ", ".join(f"[{c}] TEXT NOT NULL DEFAULT ''" for c, _ in HISTORY_COLUMNS)
         conn.execute(f"CREATE TABLE IF NOT EXISTS [{TABLE}] ({columns})")
         conn.execute(f"CREATE INDEX IF NOT EXISTS [idx_看板履歴_ID] ON [{TABLE}] ([ID])")
         conn.commit()
+    except sqlite3.Error as exc:
+        raise SharedDbError(f"看板履歴のファイルを用意できませんでした: {target}({exc})") from exc
     finally:
         conn.close()
-    applog.info("看板履歴のファイルを作りました: %s", target)
+    db.forget_copy()
+    if had:
+        return False
+    if size is None:
+        applog.info("看板履歴のファイルを作りました: %s", target)
+    else:
+        applog.info("看板履歴のファイルが 0 バイトだったので、表を用意しました: %s", target)
     return True
 
 

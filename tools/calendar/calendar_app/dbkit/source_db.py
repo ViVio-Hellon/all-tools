@@ -132,6 +132,17 @@ def is_missing_table_error(exc: BaseException) -> bool:
     return "no such table" in text
 
 
+def is_transient_error(exc: BaseException) -> bool:
+    """**いまはたまたま**通らなかった(ロック中・共有の瞬断・開けない・表がまだ無い)。
+
+    この失敗から「この相手には作れない・無い」と結論しない。覚えずに、次の回に
+    やり直す。権限が無い(読み取り専用の共有)などはここに入らない。
+    """
+    text = str(exc).lower()
+    return (is_lock_error(exc) or is_missing_table_error(exc)
+            or "disk i/o error" in text or "unable to open" in text)
+
+
 # ---------------------------------------------------------------------------
 # SQL の組み立て
 # ---------------------------------------------------------------------------
@@ -399,11 +410,15 @@ class SourceConnection:
             (name,)))
 
     def columns(self, table: str) -> list[str]:
-        """その表に実在する列名。無い表なら空。"""
-        try:
-            rows = self.query(f"PRAGMA table_info({quote_identifier(table)})")
-        except SourceError:
-            return []
+        """その表に実在する列名。**無い表なら空。読めなければ ``SourceError``。**
+
+        「読めなかった」を「無い」と同じ空で返していた。呼ぶ側はそれを「表が無い・
+        列が無い」と読み、送信ID列を付けずに送り直す・端末一覧を作り直しにかかる・
+        送信IDで当てるはずの削除を自然キーで消す、をしていた(共有が一瞬読めない
+        だけで起きる)。無い表は ``PRAGMA table_info`` が例外なしの空を返すので、
+        空と例外で2つを分けられる。
+        """
+        rows = self.query(f"PRAGMA table_info({quote_identifier(table)})")
         return [str(r["name"]) for r in rows]
 
     # -- 内部 ---------------------------------------------------------
@@ -490,8 +505,13 @@ def to_uri(path: Path) -> str:
 
 
 def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
-    """``file:...?mode=ro`` で開く。ふだんはこれで通る。"""
-    uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
+    """``file:...?mode=ro`` で開く。ふだんはこれで通る。
+
+    **書くときも ``mode=rw``(無ければ作らない)。** 前は書くときに何も付けず
+    (= ``rwc``)、「ある」と見てから開くまでに共有のファイルが消えた・見えなく
+    なった(差し替え・瞬断)と、**空の新しい共有DBを作って**そこへ書き始めた。
+    """
+    uri = to_uri(resolved) + ("?mode=ro" if read_only else "?mode=rw")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
     conn = _prepare(conn, read_only=read_only)
     if read_only and _is_wal(conn):
@@ -509,7 +529,13 @@ def _is_wal(conn: sqlite3.Connection) -> bool:
 
 
 def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
-    """素のパスで開く。URI が通らない環境・WAL の DB 向け(読むときは ``query_only``)。"""
+    """素のパスで開く。URI が通らない環境・WAL の DB 向け(読むときは ``query_only``)。
+
+    素のパスの ``connect`` は、無いファイルを**黙って作る**。書くときは開く直前に
+    もう一度あるかを見る(``_try_uri`` の ``mode=rw`` と同じ約束。無い共有DBを作らない)。
+    """
+    if not read_only and not os.path.exists(resolved):
+        raise OSError(f"ファイルが見つかりません(開く直前に見えなくなりました): {resolved}")
     conn = sqlite3.connect(str(resolved), timeout=BUSY_TIMEOUT_MS / 1000)
     return _prepare(conn, read_only=read_only)
 

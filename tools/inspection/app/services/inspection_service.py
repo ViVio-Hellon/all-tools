@@ -237,6 +237,13 @@ class InspectionService:
         if any(os.path.normcase(str(e.get("path", ""))) == os.path.normcase(inv.root) for e in inv.errors):
             # 点検表フォルダそのものを読めなかった(権限・共有の瞬断)。空の一覧で前回の控えを潰さない
             return
+        if inv.errors:
+            # **一部のフォルダを読めなかった**(カテゴリー・サブカテゴリーの権限・共有の瞬断)。
+            # 読めなかったフォルダの点検表が抜けた一覧で前回の控えを上書きしない(次の起動で
+            # 「前回の一覧」から抜けて出る)。画面の一覧は今回読めた分で、読めなかったことは記録に出る
+            self.log.warning("読めなかったフォルダが %d 件あるため、一覧の控えは前回のまま残します",
+                             len(inv.errors))
+            return
         try:
             os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
             tmp = self.cache_path + ".tmp"

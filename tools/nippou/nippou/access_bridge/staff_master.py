@@ -24,12 +24,20 @@ def load_staff_members(
     master_path: Optional[Path] = None,
     runner: Optional[ScriptRunner] = None,
 ) -> list[StaffMember]:
-    """port of ``人員()`` の名簿読み込み部分。"""
+    """port of ``人員()`` の名簿読み込み部分。**読めなければ空**(読めなかったかは `read_staff_members`)。"""
+    return read_staff_members(master_path, runner)[0]
+
+
+def read_staff_members(
+    master_path: Optional[Path] = None,
+    runner: Optional[ScriptRunner] = None,
+) -> tuple[list[StaffMember], str]:
+    """(名簿, 読めなかった理由)。**理由が空でなければ読めなかった**(空の名簿とは分ける)。"""
     master_path = master_path or SETTINGS.gw_material_master_path
     result = import_table(master_path, SETTINGS.staff_master_table, runner=runner)
     if not result.success:
         _logger.warning("班員名簿の取得に失敗しました error=%s", result.error)
-        return []
+        return [], str(result.error or "班員名簿を読めませんでした")
 
     members: list[StaffMember] = []
     for row in result.rows:
@@ -41,4 +49,4 @@ def load_staff_members(
                         # 現場が足した列(v4.15.0)。無い名簿では空のまま
                         operator=row.get(SETTINGS.staff_operator_column, "").strip())
         )
-    return members
+    return members, ""

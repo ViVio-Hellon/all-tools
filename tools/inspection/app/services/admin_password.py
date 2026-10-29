@@ -94,7 +94,14 @@ class AdminPassword:
         return self._stored() is not None
 
     def verify(self, password: str) -> bool:
-        """合っているか。**照合はここでしかしない。**"""
+        """合っているか。**照合はここでしかしない。**
+
+        設定ファイルを読めなければ `SettingsUnreadable`(画面には理由が出る)。以前は読めないと
+        「変えていない」とみなし、**変えた端末でも既定のパスワードで通して**いた。
+        """
+        ensure = getattr(self.settings, "ensure_readable", None)
+        if ensure is not None:
+            ensure()
         stored = self._stored()
         if stored is not None:
             return _matches(str(password), stored)

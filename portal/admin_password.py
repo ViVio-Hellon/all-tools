@@ -64,16 +64,24 @@ def hash_text(password: str) -> str:
     return _encode(str(password), secrets.token_bytes(SALT_BYTES))
 
 
-def _stored() -> Optional[str]:
-    value = user_settings.get(user_settings.KEY_ADMIN_PASSWORD)
+def _stored(*, strict: bool = True) -> Optional[str]:
+    """変えたパスワード(撹拌値)。変えていなければ None。
+
+    **設定ファイルを読めなければ `user_settings.Unreadable`**(`strict`)。以前は読めないと
+    「変えていない」とみなし、**既定のパスワードで鍵が開いて**いた(変えた端末でも)。
+    """
+    data = user_settings.load_checked() if strict else user_settings.load()
+    value = data.get(user_settings.KEY_ADMIN_PASSWORD)
     return value if isinstance(value, str) and value.strip() else None
 
 
 def is_custom() -> bool:
-    return _stored() is not None
+    """画面に出すだけ(読めなければ「変えていない」と出る。照合は `verify`)。"""
+    return _stored(strict=False) is not None
 
 
 def verify(password: str) -> bool:
+    """合っているか。設定ファイルを読めなければ `user_settings.Unreadable`(既定で通さない)。"""
     stored = _stored()
     if stored is not None:
         return _matches(str(password), stored)

@@ -89,6 +89,32 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(mai_of(backup, key), "10")
             self.assertEqual(backup.load(*key)[0].worker, "山田")
 
+    def test_写している最中に入れ直したページは待ちに残る(self) -> None:
+        """控えへ写している最中に、同じページが**送り済みになった**(共有へ保存)とき。
+
+        写し終えたときに「写した分」として待ちを消すと、送り済みにしたときに入れ直した
+        待ちまで消え、控えは「未送信」のまま残っていた(管理者の「記録を見る」に未送信と出る)。
+        """
+        key = save(self.a)
+        copy = lb._copy_page
+
+        def copy_then_push(src, dst, page_key):
+            done = copy(src, dst, page_key)
+            if src is self.a.conn:                # 写した直後に、共有へ保存して送り済みにする
+                self.a.mark_synced(key)
+            return done
+
+        with patch.object(lb, "_copy_page", side_effect=copy_then_push):
+            lb.flush(self.a)
+        self.assertEqual(self.a.backup_pending(), [key])      # 入れ直した待ちは残る
+        lb.flush(self.a)
+        self.assertEqual(self.a.backup_pending(), [])
+        with lb.reader("L-1") as backup:
+            dirty = backup.conn.execute(
+                f"SELECT dirty FROM {lb.HEADER} WHERE report_date=? AND line=? AND shift=? AND page=?",
+                key).fetchone()[0]
+        self.assertEqual(dirty, 0)                              # 控えも送り済み
+
     def test_ラインごとのフォルダ(self) -> None:
         save(self.a, line="L-1")
         save(self.a, line="HVC")

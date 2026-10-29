@@ -28,11 +28,15 @@
 (`logic/standard_time.team_of`)。名簿が読めないときは全員「不明」で
 残します ── 実績は失わず、あとで名簿が読めるようになれば
 「標準作業時間に過去ぶんを入れる」で班を付け直せます。
+
+**ただし、共有にすでにその直の班があれば、それを残します**(同じ作業者のとき)。名簿が
+一瞬読めないだけで、前に送った班を「不明」で上書きしないように(`load_teams` が
+「読めなかった」と「本当に空」を分けて返す。`_kept_team`)。
 """
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -118,15 +122,48 @@ def ensure_tables(conn: sqlite3.Connection) -> list[str]:
 # ======================================================================
 # 実績を作る
 # ======================================================================
-def load_teams() -> dict[str, str]:
-    """班員名簿 `名前 → 班`。読めなければ空(全員「不明」になる)。"""
+class Teams(dict):
+    """班員名簿 `名前 → 班`。**`problem` が空でなければ、名簿を読めなかった**(中身は空)。"""
+
+    problem: str = ""
+
+
+def load_teams() -> Teams:
+    """班員名簿 `名前 → 班`。読めなければ空(全員「不明」になる)で、`problem` に理由。
+
+    **読めなかったのか、本当に空なのかを分けます**(`flush` が、共有にある班を
+    「不明」で上書きしないために使う)。
+    """
     from ..access_bridge import staff_master
 
     try:
-        return {m.name: m.team for m in staff_master.load_staff_members() if m.team}
-    except Exception:                             # noqa: BLE001 - 実績は残す
+        members, problem = staff_master.read_staff_members()
+    except Exception as exc:                      # noqa: BLE001 - 実績は残す
         log.exception("班員名簿を読めませんでした(班は「不明」で残します)")
-        return {}
+        members, problem = [], f"班員名簿を読めませんでした: {exc}"
+    out = Teams({m.name: m.team for m in members if m.team})
+    out.problem = problem
+    return out
+
+
+def _kept_team(conn: sqlite3.Connection, key: tuple[str, str, str], worker: str) -> str:
+    """共有の T_作業実績 にいまあるその直の班。**同じ作業者で、班が1つに決まっているときだけ。**
+
+    名簿を読めなかったときに使います ── 読めないだけで、前に送った班を「不明」で
+    上書きしないように(名簿が読めれば、次に送るときに名簿の班になります)。
+    """
+    have = {r[1] for r in conn.execute(f"PRAGMA table_info({_quote(SAMPLE_TABLE)})")}
+    if not {"班", "作業者"} <= have:
+        return ""
+    found = {(str(r[0] or ""), str(r[1] or "")) for r in conn.execute(
+        f"SELECT 班, 作業者 FROM {_quote(SAMPLE_TABLE)} WHERE 報告日=? AND ライン=? AND 直=?",
+        key)}
+    if len(found) != 1:
+        return ""
+    team, who = next(iter(found))
+    if who != worker or team in ("", logic.TEAM_UNKNOWN):
+        return ""
+    return team
 
 
 @dataclass
@@ -287,6 +324,10 @@ class Outcome:
     error: str = ""
     path: str = ""
     lines: list[str] = field(default_factory=list)
+    #: 班員名簿を読めなかったときの理由(班は共有にあった班のまま・無ければ「不明」)
+    teams_problem: str = ""
+    #: 名簿を読めなかったので、共有にあった班のまま残した直の数
+    kept_teams: int = 0
 
     @property
     def ok(self) -> bool:
@@ -304,8 +345,13 @@ class Outcome:
                     f"直{self.pending}つぶんは次の「共有へ保存」で写します")
         if not self.shifts:
             return ""
-        return (f"標準作業時間: 直{self.shifts}つぶん({self.rows}行)を蓄積し、"
+        text = (f"標準作業時間: 直{self.shifts}つぶん({self.rows}行)を蓄積し、"
                 f"{'・'.join(self.lines)} の標準 {self.standards}件を出し直しました")
+        if self.teams_problem:
+            text += ("(班員名簿を読めなかったので、班は共有にあった班のまま・無い直は「不明」で"
+                     "入れました。名簿が読めるようになったら「標準作業時間に過去ぶんを入れる」で"
+                     f"付け直せます: {self.teams_problem})")
+        return text
 
 
 def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple],
@@ -326,6 +372,10 @@ def flush(repo: NippouRepository, db_path: Path) -> Outcome:
     if not pending:
         return out
     teams = load_teams()
+    out.teams_problem = getattr(teams, "problem", "")
+    if out.teams_problem:
+        log.warning("標準作業時間: 班員名簿を読めませんでした(共有にある班は上書きしません): %s",
+                    out.teams_problem)
     # 端末の名前はほかの記録と同じ PC 名(`this_pc`: COMPUTERNAME が先)
     terminal = this_pc()
     now = datetime.now().isoformat(timespec="seconds")
@@ -345,6 +395,12 @@ def flush(repo: NippouRepository, db_path: Path) -> Outcome:
                 report = repo.load_packing_report(work_date, line, shift)
                 rows = (samples_of(repo, report, repo.packing_details(report.id), teams)
                         if report is not None else [])
+                if rows and getattr(teams, "problem", ""):
+                    # **名簿を読めなかった。** 共有にあるその直の班を「不明」で上書きしない
+                    kept = _kept_team(conn, key, rows[0].worker)
+                    if kept:
+                        rows = [replace(s, team=kept) for s in rows]
+                        out.kept_teams += 1
                 conn.execute(
                     f"DELETE FROM {_quote(SAMPLE_TABLE)} WHERE 報告日=? AND ライン=? AND 直=?",
                     key)

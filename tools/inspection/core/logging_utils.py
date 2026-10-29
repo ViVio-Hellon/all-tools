@@ -98,11 +98,22 @@ def settings_path() -> Path:
     return app_config.local_dir("data") / "user_settings.json"
 
 
-def read_settings() -> Dict[str, Any]:
+def read_settings_checked() -> Dict[str, Any]:
+    """設定の中身。**無ければ空、あるのに読めなければ例外**(OSError / ValueError)。"""
     try:
         with open(settings_path(), "r", encoding="utf-8") as fp:
             data = json.load(fp)
-        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("中身の形が違います")
+    return data
+
+
+def read_settings() -> Dict[str, Any]:
+    """読めなければ空(書き出し先を決めるだけ。**古いログを消すかどうかは `prune` が確かめ直す**)。"""
+    try:
+        return read_settings_checked()
     except (OSError, ValueError):
         return {}
 
@@ -158,6 +169,9 @@ class _Target:
         self.fallback_reason = ""        # 指定に書けず、ローカルへ退避している理由
         self.retry_at = 0.0
         self.keep_days = DEFAULT_KEEP_DAYS
+        # 設定ファイルを読めなかった理由(読めた・無いなら空)。読めないあいだは保存日数が
+        # 分からないので、古いログを消さない(既定の 90 日で、長く残すはずのログを消さない)
+        self.settings_error = ""
 
     def local(self) -> Path:
         return app_config.local_dir("logs")
@@ -179,7 +193,12 @@ class _Target:
     def current(self) -> Path:
         with self.lock:
             if self.dir is None:
-                settings = read_settings()
+                try:
+                    settings = read_settings_checked()
+                    self.settings_error = ""
+                except (OSError, ValueError) as exc:
+                    settings = {}
+                    self.settings_error = f"{settings_path()}: {exc}"
                 self.keep_days = keep_days(settings.get(KEY_KEEP_DAYS))
                 self.resolve(str(settings.get(KEY_DIR) or ""))
             elif self.fallback_reason and time.monotonic() >= self.retry_at:
@@ -329,6 +348,8 @@ def status() -> Dict[str, Any]:
         "is_local": _target.is_local(),
         "fallback_reason": _target.fallback_reason,
         "keep_days": _target.keep_days,
+        # 設定ファイルを読めず、保存先・保存日数が分からない(古いログは消さない)
+        "settings_error": _target.settings_error,
         "owner": owner_tag(),
         "file": str(log_path_for(date.today())),
         "events_file": str(events_path_for(date.today())),
@@ -483,6 +504,19 @@ def prune(now: Optional[datetime] = None) -> List[str]:
     (出力先の直下・VER2.4.5 までの名前)の両方を見る。**点検表の名前の形と合わない
     ファイル(ほかのツールのログ・メモ)には触れない**(`own_files`)。
     """
+    _target.current()
+    if _target.settings_error:
+        # **読めないのを「保存日数を決めていない(既定)」と取り違えて消さない。** 読めたら日数を入れ直す
+        try:
+            settings = read_settings_checked()
+        except (OSError, ValueError) as exc:
+            _target.settings_error = f"{settings_path()}: {exc}"
+            get_logger("logging").warning(
+                "設定ファイルを読めないため、古いログを消しません(保存日数が分からない): %s",
+                _target.settings_error)
+            return []
+        _target.keep_days = keep_days(settings.get(KEY_KEEP_DAYS))
+        _target.settings_error = ""
     limit = ((now or datetime.now()) - timedelta(days=_target.keep_days)).strftime("%Y%m%d")
     removed: List[str] = []
     for path, info in own_files(own_only=True):
@@ -503,4 +537,5 @@ def reset_for_tests() -> None:
         _target.requested = ""
         _target.fallback_reason = ""
         _target.keep_days = DEFAULT_KEEP_DAYS
+        _target.settings_error = ""
     _reopen_files()

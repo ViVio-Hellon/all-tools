@@ -132,6 +132,33 @@ def is_duplicate_error(message: str) -> bool:
     return any(hint.lower() in lowered for hint in DUPLICATE_ERROR_HINTS)
 
 
+# 接続が切れた・ネットワークに届かないと読めるドライバメッセージの断片。
+# **送った文が Access に届いたかどうか分からない**失敗(`outbox_sync` が、未送信と取り違えて
+# 新しい送信IDで送り直さないために使う)。SQLSTATE 08xxx は接続の失敗
+CONNECTION_ERROR_HINTS = (
+    "08s01",             # Communication link failure
+    "08001", "08003", "08004", "08007",
+    "communication link",
+    "network",
+    "ネットワーク",
+    "通信",
+    "disconnect",
+    "接続が切",
+    "接続されていません",
+    "接続できません",
+)
+
+
+def is_connection_error(message: str) -> bool:
+    """接続の失敗か(=送った文が届いたかどうか分からない)。
+
+    INSERT がこれで失敗したとき、Access には入っているかもしれません。未送信とみなして
+    新しい送信IDで送り直すと、届いていた場合に二重に入ります(`outbox_sync.write_back`)。
+    """
+    lowered = message.lower()
+    return any(hint.lower() in lowered for hint in CONNECTION_ERROR_HINTS)
+
+
 # DDL(列追加・インデックス作成)が「もう存在する」ために失敗したと
 # 読めるドライバメッセージの断片。`outbox_sync` のスキーマ準備で使う
 ALREADY_EXISTS_HINTS = (

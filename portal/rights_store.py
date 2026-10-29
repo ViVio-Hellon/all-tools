@@ -91,7 +91,13 @@ class Store:
         # 置き場所を変えたら、前の場所の写しでは決めない。**読めた時刻も前の場所のもの**なので出さない
         # (以前は届かない場所へ変えると「前回読めた手元の写しで決めています」と出たが、実際は
         # 写しを使わず全部のタブを出していた。「最後に読めた」も前の場所の時刻だった)
-        other_place = bool(data.get("source")) and data.get("source") != str(shared_db.location().path)
+        try:
+            here = str(shared_db.location(strict=True).path)
+        except shared_db.SourceError:
+            # この端末の設定を読めない: どこに決めたか分からないので、写しの場所を疑わない
+            # (既定の場所と比べて「別の場所の写し」と捨てると、全部のタブを出してしまう)
+            here = str(data.get("source") or "")
+        other_place = bool(data.get("source")) and data.get("source") != here
         if other_place:
             state = STATE_NEVER
         return Snapshot(state=state, rows=list(data.get("rows") or []) if state == STATE_OK else [],
@@ -104,7 +110,13 @@ class Store:
         """共有の表を読み直す(変わっていなければ読まない)。"""
         with self._sync_lock:
             self._checked_at = time.time()
-            path = shared_db.location().path
+            try:
+                path = shared_db.location(strict=True).path
+            except shared_db.SourceError as exc:
+                # **読めないのを「決めていない」と取り違えない。** 既定の DB を読んで写しを置き換えない
+                self._last_error = str(exc)
+                log.warning("タブ表示権限を読み直しません(手元の写しで決めます): %s", exc)
+                return SyncResult(False, state=self.snapshot().state, error=self._last_error)
             if not shared_db.reachable(path):
                 self._last_error = f"共有の DB に届きません: {path}"
                 log.info("%s(手元の写しで決めます)", self._last_error)

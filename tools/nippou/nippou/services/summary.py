@@ -70,11 +70,41 @@ def _shift_pages(repo: NippouRepository, report_date: str, line: str,
     return found
 
 
-def stop_labels() -> dict[str, str]:
-    """停止の記号 → 内訳名。読めなければ空(記号だけで残す)。"""
-    from .month_rollover import stop_labels as read
+class StopLabels(dict):
+    """停止の記号 → 内訳名。**`problem` が空でなければ、いまは読めなかった**(中身は読めた分だけ)。"""
 
-    return read()
+    problem: str = ""
+
+
+def stop_labels() -> StopLabels:
+    """停止の記号 → 内訳名。読めなかった分は入らず、`problem` に理由を入れる。
+
+    **読めなかったのか、本当に無いのかを分けます。** 共有が一瞬届かないだけで名前を空にして
+    集計を作り直すと、共有へ送った集計と中身が変わったことになり、送り直しで共有の「内訳」を
+    空で上書きしていました。読めなかったときは `refresh_shift` が、その直の前の集計にあった
+    名前を使います。本当に無い(CSV も表も無い・表が空)ときは今までどおり空です。
+    """
+    from .month_rollover import read_stop_labels
+
+    found, problem = read_stop_labels()
+    out = StopLabels(found)
+    out.problem = problem
+    return out
+
+
+def _names_kept(repo: NippouRepository, work_date: str, line: str,
+                shift: str) -> dict[str, str]:
+    """その直の**いまある集計**に書いてある、記号 → 内訳名(読めなかったときの名前)。"""
+    report = repo.load_packing_report(work_date, line, shift)
+    if report is None:
+        return {}
+    out: dict[str, str] = {}
+    for detail in repo.packing_details(report.id):
+        for stop in detail.stops:
+            code = (stop.stop_code or "").strip()
+            if code and (stop.stop_reason or "") and code not in out:
+                out[code] = stop.stop_reason
+    return out
 
 
 # ======================================================================
@@ -144,12 +174,25 @@ def _as_detail(row: LotRow) -> PackingDetail:
 def refresh_shift(repo: NippouRepository, work_date: str, line: str,
                   shift: str, labels: Optional[dict[str, str]] = None
                   ) -> Optional[PackingReport]:
-    """1直ぶんを作り直して残す。ページが1つも無ければ何もしません。"""
+    """1直ぶんを作り直して残す。ページが1つも無ければ何もしません。
+
+    **停止内訳を読めなかったとき**(`StopLabels.problem`)は、その直の前の集計にあった名前
+    (共有へ送った名前)を使います。読めないことで名前が空になり、送り直しで共有の「内訳」を
+    空で上書きしないように。
+    """
     pages = _shift_pages(repo, work_date, line, shift)
     if not pages:
         return None
-    report, details = build(pages, work_date, line, shift,
-                            labels if labels is not None else stop_labels())
+    labels = labels if labels is not None else stop_labels()
+    if getattr(labels, "problem", ""):
+        kept = _names_kept(repo, work_date, line, shift)
+        if kept:
+            log.warning("停止内訳を読めなかったので、%s/%s/%s の集計は前の名前で作ります(%s)",
+                        work_date, line, shift, labels.problem)
+        problem = labels.problem
+        labels = StopLabels({**kept, **labels})       # 読めた分があればそちらが先
+        labels.problem = problem
+    report, details = build(pages, work_date, line, shift, labels)
     repo.save_packing_report(report, details)
     return report
 

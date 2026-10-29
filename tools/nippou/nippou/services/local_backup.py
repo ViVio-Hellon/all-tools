@@ -302,7 +302,11 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
     if not _flush_lock.acquire(blocking=False):
         return Result(pending=len(repo.backup_pending()), error="ほかで写しています")
     try:
-        pending = repo.backup_pending()
+        # 入れた時刻も読んでおく ── 写している最中に入れ直されたページ(共有へ保存して
+        # 送り済みになった など)の待ちを、写し終えたときに消さないため
+        stamped = repo.backup_pending_stamped()
+        stamps = dict(stamped)
+        pending = [key for key, _ in stamped]
         result = Result(pending=len(pending))
         if not pending:
             return result
@@ -361,7 +365,7 @@ def flush(repo: NippouRepository, *, force: bool = False) -> Result:
                 with repo.conn:
                     for key in written:
                         _settle_base(repo.conn, key)
-                repo.clear_backup_pending(done)
+                repo.clear_backup_pending(done, stamps)
             except (OSError, sqlite3.Error) as exc:
                 log.warning("控えへ写せませんでした %s: %s", line, exc)
                 result.error = f"{line_names.label(line)} の控えへ写せませんでした: {exc}"

@@ -78,10 +78,20 @@ class NippouRepository:
     _BACKUP_QUEUE_SQL = ("INSERT OR REPLACE INTO backup_pending"
                          " (report_date, line, shift, page, queued_at) VALUES (?, ?, ?, ?, ?)")
 
+    @staticmethod
+    def _backup_queued_at() -> str:
+        """控えへ写す待ちに入れた時刻。**入れ直したかの見分けにも使う**ので、マイクロ秒まで。
+
+        写している最中に同じページを入れ直す(共有へ保存して送り済みになった など)と、
+        写し終えたときに「写した分」として待ちを消すと、**入れ直した分まで消えていた**
+        (控えに「未送信」のまま残る)。写し始めに読んだ時刻のままの待ちだけを消す
+        (`clear_backup_pending` の `stamps`)。秒まででは、同じ秒の入れ直しを見分けられない。
+        """
+        return datetime.now().isoformat(timespec="microseconds")
+
     def _queue_backup_in_tx(self, key: tuple[str, str, str, int]) -> None:
         """取引の中で、控えへ写す待ちに入れる(**保存と一緒に入るか、一緒に入らないか**)。"""
-        self.conn.execute(self._BACKUP_QUEUE_SQL,
-                          (*key, datetime.now().isoformat(timespec="seconds")))
+        self.conn.execute(self._BACKUP_QUEUE_SQL, (*key, self._backup_queued_at()))
         self.backup_queued = True
 
     # ------------------------------------------------------------------
@@ -879,7 +889,7 @@ class NippouRepository:
     # -- 控え(LocalBackup)へ写す待ち (`services/local_backup`) ---------------
     def queue_backup(self, keys: Iterable[tuple[str, str, str, int]]) -> None:
         """控えへ写す待ちに入れる(ページ単位。同じページは1つ)。"""
-        rows = [(*k, datetime.now().isoformat(timespec="seconds")) for k in keys]
+        rows = [(*k, self._backup_queued_at()) for k in keys]
         if not rows:
             return
         self.conn.executemany(self._BACKUP_QUEUE_SQL, rows)
@@ -888,18 +898,31 @@ class NippouRepository:
 
     def backup_pending(self) -> list[tuple[str, str, str, int]]:
         """控えへ写す待ちのページ(入れた順)。"""
-        return [(r["report_date"], r["line"], r["shift"], int(r["page"]))
+        return [key for key, _ in self.backup_pending_stamped()]
+
+    def backup_pending_stamped(self) -> list[tuple[tuple[str, str, str, int], str]]:
+        """控えへ写す待ちのページと、入れた時刻(入れた順)。写し終えたときに入れ直しを見分ける。"""
+        return [((r["report_date"], r["line"], r["shift"], int(r["page"])), r["queued_at"])
                 for r in self.conn.execute(
-                    "SELECT report_date, line, shift, page FROM backup_pending"
+                    "SELECT report_date, line, shift, page, queued_at FROM backup_pending"
                     " ORDER BY queued_at, rowid")]
 
-    def clear_backup_pending(self, keys: Iterable[tuple[str, str, str, int]]) -> None:
+    def clear_backup_pending(self, keys: Iterable[tuple[str, str, str, int]],
+                             stamps: Optional[dict] = None) -> None:
+        """待ちを消す。`stamps`({ページ: 入れた時刻})を渡すと、**その時刻のままの待ちだけ**消す
+        (写している最中に入れ直したページは、待ちに残って次に写る)。"""
         rows = [tuple(k) for k in keys]
         if not rows:
             return
-        self.conn.executemany(
-            "DELETE FROM backup_pending WHERE report_date=? AND line=? AND shift=? AND page=?",
-            rows)
+        if stamps is None:
+            self.conn.executemany(
+                "DELETE FROM backup_pending WHERE report_date=? AND line=? AND shift=? AND page=?",
+                rows)
+        else:
+            self.conn.executemany(
+                "DELETE FROM backup_pending WHERE report_date=? AND line=? AND shift=? AND page=?"
+                " AND queued_at=?",
+                [(*k, stamps.get(k, "")) for k in rows])
         self.conn.commit()
 
     # -- 標準作業時間へ写す待ち (`services/standard_time`) ------------------

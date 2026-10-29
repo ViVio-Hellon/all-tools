@@ -510,14 +510,21 @@ class SharedDb:
                 raise SharedDbError(
                     f"共有DBを手元へ写せませんでした ({self.path}): {exc}"
                 ) from exc
-            if _is_usable_sqlite(target):
+            # **0 バイトの写しは「読めなかった」。** sqlite3 は 0 バイトのファイルを「表が 1 つも
+            # 無い DB」として開けてしまう。そのまま読むと、共有ファイルが一瞬空に見えただけ
+            # (入れ替え・コピーの途中、届きかけで切れた など)で「看板の表が無い」「アクセス権限の
+            # 表が無い」「看板履歴の表が無い」と取り違え、表が無いときの動き(盤のボタンを止める・
+            # 空の権限を「前回読めた内容」として覚える・表を作る)へ進んでしまう
+            empty = _is_empty_file(target)
+            if not empty and _is_usable_sqlite(target):
                 self._copy_stamp = stamp
                 self._copy_path = target
                 self.copies_made += 1
                 applog.debug("共有DBを手元へ写しました: %s → %s", source, target)
                 return target
             _remove_copy(target)
-            last_error = "写しを sqlite3 として開けませんでした"
+            last_error = ("写しが 0 バイト(空)でした" if empty
+                          else "写しを sqlite3 として開けませんでした")
             if attempt == 0:
                 applog.warning(
                     "共有DBの写しが不完全でした。写し直します: %s", source
@@ -636,6 +643,14 @@ def not_kanban_reason(path: str, others: Sequence[str]) -> str:
     return (f"看板の表(看板_LVC など)が 1 つもありません: {path}\n"
             "梱包資材マスタなど、別のツールのファイルではありませんか。"
             + (f"(入っている表: {shown})" if shown else "(表が 1 つもありません)"))
+
+
+def _is_empty_file(path: Path) -> bool:
+    """0 バイトか。**確かめられなければ空ではない扱い**(その先の sqlite3 の確かめに任せる)。"""
+    try:
+        return Path(path).stat().st_size == 0
+    except OSError:
+        return False
 
 
 def _is_usable_sqlite(path: Path) -> bool:

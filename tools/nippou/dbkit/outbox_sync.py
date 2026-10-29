@@ -24,8 +24,17 @@
 有無を確かめるが、結果(使えた/使えなかった)は端末内でキャッシュする。
 ALTER TABLE / CREATE INDEX は失敗しうる操作なので、毎回リトライして
 無駄な失敗ログを積み上げたり、ロック競合を増やしたりしないためである。
-ロック競合など「今回はたまたま判定できなかった」場合だけキャッシュ
-せず、次回また試す。
+ロック競合・接続の失敗など「今回はたまたま判定できなかった」場合だけ
+キャッシュせず、次回また試す。**判定できなかった回は、そのテーブルを
+送らない**(送信ID無しで送ると、あとで再送したときに Access 側が二重登録を
+弾けない ── 確かめられなかったことを「列が無い」と取り違えない)。
+
+【届いたか分からない失敗】
+INSERT が接続の失敗(ネットワークが切れた等。`access_odbc.is_connection_error`)で
+終わったときは、Access に入ったかどうか分からない。未送信とみなして予約を外すと、
+次は**新しい送信ID**で送られ、届いていた場合に二重に入る。なので予約は外さず
+「送信中」のまま残し、期限切れの拾い直しで**同じ送信ID**で送り直す(一意インデックスが
+二重登録を弾く)。そのテーブルの残りの行は送らずに予約を外す(まだ送っていないので安全)。
 """
 from __future__ import annotations
 
@@ -310,6 +319,11 @@ def _try_ddl(access: "access_odbc.AccessConnection", sql: str,
         if access_odbc.is_lock_error(message):
             log.debug("%s: ロック競合のため今回は見送ります(次回再試行)", label)
             return None
+        if access_odbc.is_connection_error(message):
+            # 届かなかっただけ。「作れない」と覚えると、以後ずっと送信ID無しで送ってしまう
+            log.warning("%s: 接続の失敗のため今回は確かめられませんでした(次回再試行): %s",
+                        label, exc)
+            return None
         if access_odbc.is_already_exists_error(message):
             log.debug("%s: 既にあります", label)
             return True
@@ -320,7 +334,7 @@ def _try_ddl(access: "access_odbc.AccessConnection", sql: str,
 
 
 def ensure_op_id_column(access: "access_odbc.AccessConnection",
-                        spec: WriteBackSpec) -> bool:
+                        spec: WriteBackSpec) -> Optional[bool]:
     """Access側テーブルに送信ID列と一意インデックスがあるかを確かめる。
 
     無ければ作る。列を足し忘れた端末で書き戻すとINSERTが「そんな列は
@@ -329,6 +343,9 @@ def ensure_op_id_column(access: "access_odbc.AccessConnection",
     戻り値の真偽だけを `write_back` に返す
     (False のときは送信ID列を省いて、旧来どおり予約による二重防止
     だけで送る)。
+
+    **None は「今回は確かめられなかった」**(ロック競合・接続の失敗)。キャッシュせず、
+    `write_back` はそのテーブルを今回は送らない(次回また確かめる)。
     """
     cache_key = (str(access.path), spec.access_table, spec.op_id_column)
     cached = _op_id_column_cache.get(cache_key)
@@ -341,7 +358,7 @@ def ensure_op_id_column(access: "access_odbc.AccessConnection",
         f" ADD COLUMN {access_odbc.quote_identifier(spec.op_id_column)} TEXT(32)",
         f"{spec.access_table} への {spec.op_id_column} 列の追加")
     if column_ok is None:
-        return False
+        return None
 
     index_name = f"IX_{spec.access_table}_{spec.op_id_column}"
     index_ok = _try_ddl(
@@ -351,7 +368,7 @@ def ensure_op_id_column(access: "access_odbc.AccessConnection",
         f" ({access_odbc.quote_identifier(spec.op_id_column)})",
         f"{spec.access_table} への一意インデックスの作成")
     if index_ok is None:
-        return False
+        return None
 
     ready = column_ok and index_ok
     _op_id_column_cache[cache_key] = ready
@@ -372,7 +389,17 @@ def write_back(conn: sqlite3.Connection,
     """
     result = WriteBackResult()
     for spec in specs:
-        op_id_ready = spec.use_op_id_guard and ensure_op_id_column(access, spec)
+        op_id_ready = False
+        if spec.use_op_id_guard:
+            checked = ensure_op_id_column(access, spec)
+            if checked is None:
+                # **確かめられなかった。送らない**(送信ID無しで送ると、再送の二重登録を防げない)
+                message = (f"{spec.access_table}: 送信ID列を確かめられなかったので、"
+                           "今回は送っていません(次回送ります)")
+                log.warning("%s", message)
+                result.errors.append(message)
+                continue
+            op_id_ready = checked
         try:
             rows, op_ids = claim_rows(conn, spec)
         except sqlite3.Error as exc:
@@ -385,7 +412,7 @@ def write_back(conn: sqlite3.Connection,
         # ここに入るのは「確実に失敗した」とわかった行だけ(release_claim参照)
         failed: list[int] = []
         try:
-            for row in rows:
+            for index, row in enumerate(rows):
                 row_id = int(row[spec.key_column])
                 values = {k: row[k] for k in row.keys() if k != spec.key_column}
                 if op_id_ready:
@@ -397,6 +424,16 @@ def write_back(conn: sqlite3.Connection,
                         # 前回の送信が届いていた(送信ID重複)。エラーではなく成功
                         log.info("%s 行%s は既に届いていました(送信ID重複)",
                                  spec.access_table, row_id)
+                    elif access_odbc.is_connection_error(str(exc)):
+                        # **届いたか分からない。** 予約は外さない(同じ送信IDで送り直す)。
+                        # 残りの行はまだ送っていないので、予約を外して次回すぐ拾えるように
+                        log.warning("%s 行%s は届いたか分かりません(接続の失敗)。同じ送信IDで"
+                                    "送り直します: %s", spec.access_table, row_id, exc)
+                        result.errors.append(
+                            f"{spec.access_table}(行{row_id}): 届いたか分からないので、"
+                            f"同じ送信IDで送り直します: {exc}")
+                        failed.extend(int(r[spec.key_column]) for r in rows[index + 1:])
+                        break
                     else:
                         log.warning("%s の1行を送れませんでした: %s",
                                     spec.access_table, exc)

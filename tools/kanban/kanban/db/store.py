@@ -1277,19 +1277,27 @@ class Store:
         return self.retry(_apply, "mark_items_synced")
 
     def mark_items_failed(
-        self, keys: Sequence[tuple[str, str]], message: str
+        self, keys: Sequence[tuple[str, str]], message: str, *, count: bool = True
     ) -> None:
-        """書き戻しに失敗した行に失敗回数とエラーを記録する。"""
+        """書き戻しに失敗した行に失敗回数とエラーを記録する。
+
+        ``count`` が偽なら**理由だけ**書き、失敗回数は増やさない。共有DBを一時的に開けない・
+        ロック中・送れなかった理由を読めない、のように**次の回に送れば届く見込みがある**失敗に
+        使う(:func:`kanban.db.sync._export_items`)。数えると、共有フォルダの数十秒の不調で
+        :data:`MAX_SYNC_ATTEMPTS` に届いて「要確認」(送り先が無い扱い)になり、自動では二度と
+        送らず、「送れない操作を捨てる」の対象にも並んでいた。
+        """
         if not keys:
             return
+        step = 1 if count else 0
 
         def _apply() -> None:
             with self.write_transaction() as conn:
                 for line, mgmt_no in keys:
                     conn.execute(
-                        "UPDATE kanban_item SET sync_attempts = sync_attempts + 1,"
+                        "UPDATE kanban_item SET sync_attempts = sync_attempts + ?,"
                         " sync_error = ? WHERE line = ? AND mgmt_no = ?",
-                        (message[:500], line, mgmt_no),
+                        (step, message[:500], line, mgmt_no),
                     )
 
         self.retry(_apply, "mark_items_failed")

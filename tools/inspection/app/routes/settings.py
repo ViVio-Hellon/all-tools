@@ -31,7 +31,9 @@ def _state(biz, **extra):
     from app.services import admin_password
     return {"ok": True, "settings": biz.settings.to_dict(), "demo": biz.demo,
             "admin": {"custom": biz.admin.is_custom(), "min_length": admin_password.MIN_LENGTH},
-            "distribution": biz.distribution.summary(), **extra}
+            "distribution": biz.distribution.summary(),
+            # この端末の設定ファイルを読めない理由(読めないあいだは保存しない。空なら読めている)
+            "settings_error": biz.settings.load_error, **extra}
 
 
 @bp.get("/api/settings")

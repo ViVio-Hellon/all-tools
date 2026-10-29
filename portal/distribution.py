@@ -123,6 +123,18 @@ def read() -> Optional[Bundle]:
                   str(data.get("version", "")))
 
 
+def read_problem() -> str:
+    """置いてある配布設定を読めない理由。無い・読めるなら空。"""
+    path = file_path()
+    if not path.is_file():
+        path = next((p for p in (directory() / name for name in OLD_FILE_NAMES) if p.is_file()), path)
+    try:
+        _read_json(path)
+    except FileUnreadable as exc:
+        return str(exc)
+    return ""
+
+
 #: 大設定の「4ツールの分もまとめて書き出す」は、4ツールの配布設定もこのファイル(`日報複合ツール.json`)の
 #: `tools` → `<ツール>` に入れる(各ツールの `tools\\<ツール>\\配布設定\\設定.json` と同じ中身)。
 #: 配った先の各ツールは、自分のフォルダの配布設定と、このファイルの自分の分の**作った時刻が新しいほう**を
@@ -142,28 +154,69 @@ def stamp(text: Any) -> str:
     return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
 
 
-def _file_data() -> dict[str, Any]:
-    """`日報複合ツール.json` の中身そのもの(無い・読めなければ空)。"""
-    path = file_path()
+class FileUnreadable(RuntimeError):
+    """配布設定のファイルはあるのに読めない(**無いのとは違う**)。"""
+
+
+def _read_json(path: Path) -> Optional[Any]:
+    """JSON の中身。**無ければ None、あるのに読めなければ `FileUnreadable`。**"""
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise FileUnreadable(f"{path} を読めません: {exc}") from exc
+    except ValueError as exc:                     # 文字の符号が壊れている
+        raise FileUnreadable(f"{path} の中身が壊れています: {exc}") from exc
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise FileUnreadable(f"{path} の中身が壊れています: {exc}") from exc
+
+
+def _file_data(*, strict: bool = False) -> dict[str, Any]:
+    """`日報複合ツール.json` の中身そのもの(無ければ空)。
+
+    読めないときは空(画面に出すだけ)。**`strict=True` なら `FileUnreadable`** ── 書き出し直すとき、
+    読めなかったのを「4ツールの分が無い」と取り違えて、まとめた4ツールの分を消さない。
+    """
+    try:
+        data = _read_json(file_path())
+    except FileUnreadable:
+        if strict:
+            raise
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def _existing_tools() -> dict[str, Any]:
-    tools = _file_data().get(TOOLS_KEY)
+def _existing_tools(*, strict: bool = False) -> dict[str, Any]:
+    tools = _file_data(strict=strict).get(TOOLS_KEY)
     return dict(tools) if isinstance(tools, dict) else {}
 
 
+def _tool_folder_file(tool: Any) -> Path:
+    return Path(tool.dir) / TOOL_DIR_NAME / TOOL_FILE_NAME
+
+
 def _tool_folder_data(tool: Any) -> Optional[dict[str, Any]]:
-    """そのツールのフォルダの配布設定(`tools\\<ツール>\\配布設定\\設定.json`)の中身。無い・読めなければ None。"""
+    """そのツールのフォルダの配布設定(`tools\\<ツール>\\配布設定\\設定.json`)の中身。無い・読めなければ None。
+
+    無いのか読めないのかは `_tool_folder_problem` で分ける(まとめて書き出すとき)。
+    """
     try:
-        data = json.loads((Path(tool.dir) / TOOL_DIR_NAME / TOOL_FILE_NAME).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
+        data = _read_json(_tool_folder_file(tool))
+    except FileUnreadable:
         return None
     return data if isinstance(data, dict) and isinstance(data.get("settings"), dict) else None
+
+
+def _tool_folder_problem(tool: Any) -> str:
+    """そのツールのフォルダの配布設定を**あるのに読めない**理由。無い・読めるなら空。"""
+    try:
+        _read_json(_tool_folder_file(tool))
+    except FileUnreadable as exc:
+        return str(exc)
+    return ""
 
 
 def _secret(key: str) -> bool:
@@ -288,10 +341,20 @@ def export(tools: Optional[dict[str, Any]] = None) -> Result:
     ファイルに入っている4ツールの分をそのまま残す(大設定の分だけ書き出し直しても消さない)。
     大設定の分が既定のままでも、4ツールの分があればファイルは作る(結果は「要りません」)。
     """
-    current = user_settings.load()
+    # **読めないのを「既定のまま」「4ツールの分が無い」と取り違えない。** 読めなければ書き出さない
+    # (この端末の設定は `user_settings.Unreadable`。呼ぶ側が理由を出す)
+    current = user_settings.load_checked()
     settings = {k: current[k] for k, _ in ITEMS if _present(current.get(k))}
     defaults = [label for k, label in ITEMS if k not in settings]
-    keep = _existing_tools() if tools is None else dict(tools)
+    if tools is None:
+        try:
+            keep = _existing_tools(strict=True)
+        except FileUnreadable as exc:
+            log.warning("配布設定を書き出しません(いまのファイルを読めない): %s", exc)
+            return Result(False, f"いまの配布設定を読めないため、書き出しませんでした"
+                                 f"(書き出すと、まとめて入れた4ツールの分が消えます): {exc}", "failed")
+    else:
+        keep = dict(tools)
     nothing = ("書き出せる設定がありません(置き場所も管理者パスワードも既定のままです。"
                "配った先も既定で動くので、配布設定は要りません)。")
     if not settings and (tools is None or not keep):
@@ -448,8 +511,40 @@ def export_all() -> dict[str, Any]:
         results.append(_outcome(tool.id, tool.title, result))
     # **4ツールの分も大設定の1つのファイルに入れる**(ツールのフォルダに書き出したものと同じ中身)。
     # 配った先の各ツールは、ツールのフォルダのものが無くても、このファイルの自分の分を読む
-    tools = {tool.id: data for tool in catalog.tools if (data := _tool_folder_data(tool)) is not None}
-    portal = _outcome(catalog.portal.id, catalog.portal.title, export(tools))
+    tools: dict[str, Any] = {}
+    unread: dict[str, str] = {}
+    for tool in catalog.tools:
+        data = _tool_folder_data(tool)
+        if data is None:
+            problem = _tool_folder_problem(tool)
+            if problem:
+                # **読めないのを「無い」と取り違えて、まとめたファイルからそのツールの分を消さない**
+                unread[tool.id] = problem
+                continue
+            data = _tool_folder_data(tool)        # 読めなかったのが一瞬だったとき
+        if data is not None:
+            tools[tool.id] = data
+    portal_result: Optional[Result] = None
+    if unread:
+        try:
+            before = _existing_tools(strict=True)
+        except FileUnreadable as exc:
+            portal_result = Result(False, f"いまの配布設定を読めないため、書き出しませんでした: {exc}", STATE_FAILED)
+            before = {}
+        for tool_id, why in unread.items():
+            log.warning("まとめて書き出す: %s の配布設定を読めないので、前の分を残します: %s", tool_id, why)
+            if tool_id in before:
+                tools[tool_id] = before[tool_id]
+    if portal_result is None:
+        try:
+            portal_result = export(tools)
+        except user_settings.Unreadable as exc:
+            portal_result = Result(False, str(exc), STATE_FAILED)
+    portal = _outcome(catalog.portal.id, catalog.portal.title, portal_result)
+    for item in results:
+        if item["id"] in unread:
+            item["line"] += (f"。ツールのフォルダの配布設定を読めなかったので、まとめたファイルには"
+                             f"前の分を残しました({unread[item['id']]})")
     if tools:
         titles = "・".join(t.title for t in catalog.tools if t.id in tools)
         portal["line"] += f"。4ツールの分({titles})も {TOOL_DIR_NAME}\\{FILE_NAME} にまとめました"
@@ -512,7 +607,9 @@ KEY_FROM_DIST = "distribution_values"
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
-    current = user_settings.load()
+    # **この端末の設定を読めなければ読み込まない**(`user_settings.Unreadable`)。以前は読めないと
+    # 「この端末に無い」とみなして全部を配布設定の値で埋め、ほかの設定も消していた
+    current = user_settings.load_checked()
     found = current.get(KEY_FROM_DIST)
     came = dict(found) if isinstance(found, dict) else {}
     values: dict[str, Any] = {}
@@ -564,6 +661,9 @@ def reapply() -> Result:
     """大設定から。**すでにあるものも上書きして**読み込み直す。"""
     bundle = read()
     if bundle is None:
+        problem = read_problem()
+        if problem:
+            return Result(False, f"配布設定を読めませんでした: {problem}", "failed")
         return Result(False, "配布設定が置かれていません。", "missing")
     result = _apply(bundle, overwrite=True)
     result.message = f"配布設定を読み込み直しました({len(result.applied)}項目)"

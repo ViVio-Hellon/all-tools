@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ from dbkit.periodic import PeriodicTask
 
 from .. import applog, config
 from ..accdb.types import CATEGORY_NUMBER, CATEGORY_TEXT
-from .shared import SharedDb, TableSnapshot, _looks_like_lock, build_update
+from .shared import SharedDb, SharedDbError, TableSnapshot, _looks_like_lock, build_update
 from ..domain.models import MUTABLE_FIELDS
 from .store import DEFAULT_COLUMN_MAP, IDENTITY_FIELDS, Store
 
@@ -435,14 +436,47 @@ def _missing_row_reason(gateway: SharedDb, table: str, key_column: str, mgmt_no:
     try:
         found = [r["k"] for r in gateway.select(
             f"SELECT {_quote(key_column)} AS k FROM {_quote(table)}")]
-    except Exception:  # noqa: BLE001 - 理由が分からなくても失敗の記録はする
-        return "対象行なし"
+    except Exception as exc:  # noqa: BLE001 - 読めなければ「無い」と決めない
+        # **読めなかったのを「行が無い」にしない。** 空を返し、呼び出し側は一時的な失敗として
+        # 扱う(諦めの回数に数えない。:data:`UNCONFIRMED_ROW`)
+        applog.warning("export_pending: %s/%s: 送れなかった理由を確かめるため共有DBを読もうとして"
+                       "読めませんでした (%s)", table, mgmt_no, exc)
+        return ""
     near = [k for k in found if keys.same(k, mgmt_no)]
     if near:
         return (f"対象行なし: 共有DBの {table} では{key_column}が「{near[0]}」と書かれていて"
                 f"(文字の種類・空白・型の違い)、この端末の「{mgmt_no}」と一致しません")
     return (f"対象行なし: 共有DBの {table} に{key_column} {mgmt_no} の行がありません"
             "(マスタで消された・Access から差し替えた・接続先が変わった など)")
+
+
+#: 送れなかった理由を確かめに共有DBを読めなかったとき(:func:`_missing_row_reason`)の一言
+UNCONFIRMED_ROW = ("共有DBを読めなかったので、送れなかった理由(行が無い・ほかの端末が先に変えた など)を"
+                   "確かめられませんでした。次の回にもう一度送ります")
+
+#: **次の回に送れば届く見込みがある**失敗の言葉(小文字で比べる)。ロック中(:func:`_looks_like_lock`)の
+#: ほかに、共有フォルダの一時的な不調で sqlite3 / このツールが返すもの
+TRANSIENT_SNIPPETS = (
+    "unable to open database file",
+    "disk i/o error",
+    "共有dbが見つかりません",
+    "共有dbを開けませんでした",
+    "共有dbを手元へ写せ",
+)
+
+
+def is_transient_failure(message: str) -> bool:
+    """共有DBを**一時的に**開けない・書けない失敗か(行が無い・列が無い、のような送り先の問題ではない)。
+
+    こういう失敗は諦め(要確認)の回数に数えない(:meth:`kanban.db.store.Store.mark_items_failed`)。
+    """
+    lowered = (message or "").lower()
+    return _looks_like_lock(lowered) or any(s in lowered for s in TRANSIENT_SNIPPETS)
+
+
+def _could_not_reach(exc: BaseException) -> bool:
+    """書き戻しの例外が「共有DBへ届かなかった・開けなかった」ものか(このツールの不具合ではない)。"""
+    return isinstance(exc, (SharedDbError, OSError, sqlite3.Error)) or is_transient_failure(str(exc))
 
 
 def _identity_guards(column_map: dict[str, str], row: dict[str, Any]) -> list[tuple[str, Any]]:
@@ -646,11 +680,14 @@ def _export_items(
                 # 「成功」として dirty を落としてしまう
                 statement_results = gateway.execute(statements)
             except Exception as exc:
+                # **共有DBを開けなかった**(届かない・写せない・権限 など)。送り先の行が無いのとは
+                # 違うので、諦めの回数に数えない(次の回にまた送る)。理由は帯に出す
                 message = f"{line}: 書き戻しに失敗 ({exc})"
-                applog.error("export_pending: %s", message)
+                applog.error("export_pending: %s(次の回にもう一度送ります)", message)
                 result.errors.append(message)
                 result.failed += len(statements)
-                store.mark_items_failed([(k[0], k[1]) for k in keys], str(exc))
+                store.mark_items_failed([(k[0], k[1]) for k in keys], str(exc),
+                                        count=not _could_not_reach(exc))
                 continue
 
             synced: list[tuple[str, str, int]] = []
@@ -701,11 +738,14 @@ def _export_items(
                     # 条件に一致する行が共有DBに無い。**なぜ無いのか**まで書く
                     # (画面の「要確認」にそのまま出る。「対象行なし」だけでは直しようがない)
                     why = why or _missing_row_reason(gateway, table_name, key_column, key[1])
+                    # 理由を確かめに読めなかった(空)。「行が無い」と決めず、数えずに次の回へ
+                    confirmed = bool(why)
+                    why = why or UNCONFIRMED_ROW
                     message = f"{key[0]}/{key[1]}: {why}"
                     applog.warning("export_pending: %s", message)
                     result.errors.append(message)
                     result.failed += 1
-                    store.mark_items_failed([(key[0], key[1])], why)
+                    store.mark_items_failed([(key[0], key[1])], why, count=confirmed)
                 else:
                     # (Access の頃の ``error_number`` はもう無い。参照すると
                     # 例外で書き戻しの周期ごと止まり、失敗も記録されなかった)
@@ -713,8 +753,10 @@ def _export_items(
                     applog.error("export_pending: %s", message)
                     result.errors.append(message)
                     result.failed += 1
+                    # ロック中・一時的に開けない は諦めの回数に数えない(次の回にまた送る)
                     store.mark_items_failed(
-                        [(key[0], key[1])], statement_result.error_message
+                        [(key[0], key[1])], statement_result.error_message,
+                        count=not is_transient_failure(statement_result.error_message),
                     )
 
             cleared = store.mark_items_synced(synced, sent)
@@ -1145,11 +1187,25 @@ class Exporter:
     #: 起動したときに 1 回だけ送り直しに戻す(「⚠ 1 件がまだ共有に届いていません」が残らない)
     REVIVE_ON_START = "と一致しません"
 
+    #: 前の版が**一時的な失敗**(ロック中・共有DBを開けない)を数えて諦めた行の理由。いまは数えない
+    #: (:func:`is_transient_failure`)ので、起動したときに送り直しに戻す。理由の書き方そのまま(大文字小文字も)
+    REVIVE_TRANSIENT_ON_START = (
+        "database is locked", "database table is locked", "unable to open database file",
+        "disk I/O error", "共有DBが見つかりません", "共有DBを開けませんでした", "共有DBを手元へ写せ",
+    )
+
     def start(self) -> None:
         try:
             revived = self.store.revive_failed(self.REVIVE_ON_START)
             if revived:
                 applog.info("export: 管理番号の書き方が違うだけで諦めていた %d 件を送り直します", revived)
+        except Exception:  # noqa: BLE001 - 戻せなくても書き戻しは始める
+            pass
+        try:
+            revived = sum(self.store.revive_failed(m) for m in self.REVIVE_TRANSIENT_ON_START)
+            if revived:
+                applog.info("export: 共有DBを一時的に開けない・ロック中だっただけで諦めていた %d 件を送り直します",
+                            revived)
         except Exception:  # noqa: BLE001 - 戻せなくても書き戻しは始める
             pass
         self._task.start()

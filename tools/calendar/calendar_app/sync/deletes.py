@@ -211,12 +211,21 @@ def forward_pending_deletes(
                 sent_seqs.append(int(row["seq"]))
                 continue
             where: dict[str, object] = same
-        elif op_id and _has_op_id_column(source, table_name):
-            # 送っている最中に消した行。送信IDで**その1行だけ**に当てる
-            # (届いていなかったなら何にも当たらない ── それで正しい)
-            where = {OP_ID_KEY: op_id}
         else:
-            where = natural_key_where(natural_key)
+            try:
+                by_op_id = bool(op_id) and _has_op_id_column(source, table_name)
+            except source_db.SourceError as exc:
+                # **列を読めないことを「送信ID列が無い」と読まない。** 読み違えると
+                # 自然キーで消しにいき、同じ文面のほかの行(届いていない自分の行の
+                # 代わりに、ほかの端末の行)を消す。今回は送らず、予約に残す
+                errors.append(f"{table_name}(seq={row['seq']}): {exc}")
+                continue
+            if by_op_id:
+                # 送っている最中に消した行。送信IDで**その1行だけ**に当てる
+                # (届いていなかったなら何にも当たらない ── それで正しい)
+                where = {OP_ID_KEY: op_id}
+            else:
+                where = natural_key_where(natural_key)
 
         if not where:
             # 対象を特定する材料が無い (データ不備)。滞留させても解決しないため
@@ -248,11 +257,11 @@ def forward_pending_deletes(
 
 def _has_op_id_column(source: "source_db.SourceConnection", table_name: str) -> bool:
     """取り込み元の表に送信ID列があるか。**無ければ自然キーで消す**
-    (無い列で絞ると毎回失敗し、削除予約が永遠に残って取り込みも止まる)。"""
-    try:
-        return OP_ID_KEY in source.columns(table_name)
-    except source_db.SourceError:
-        return False
+    (無い列で絞ると毎回失敗し、削除予約が永遠に残って取り込みも止まる)。
+
+    :raises source_db.SourceError: 列を**読めなかった**(無いのとは違う。呼ぶ側は今回は消さない)
+    """
+    return OP_ID_KEY in source.columns(table_name)
 
 
 #: ID で消す前に照らし合わせる列。削除の予約に残した自然キーと同じ6つ ──

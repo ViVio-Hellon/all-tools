@@ -66,10 +66,22 @@ class Location:
         return {"folder": self.folder, "name": self.name, "path": str(self.path), "origin": self.origin}
 
 
-def configured() -> tuple[str, str]:
-    """大設定で決めた置き場所(フォルダ, ファイル名)。決めていなければ空。"""
-    folder = str(user_settings.get(user_settings.KEY_SHARED_DIR) or "").strip()
-    name = str(user_settings.get(user_settings.KEY_SHARED_NAME) or "").strip()
+def configured(*, strict: bool = False) -> tuple[str, str]:
+    """大設定で決めた置き場所(フォルダ, ファイル名)。決めていなければ空。
+
+    `strict=True` は、この端末の設定ファイルを**読めなければ `SourceError`**(`settings_unreadable`)。
+    読めないのを「決めていない」と取り違えると、既定の共有の DB を読み・書きしてしまう
+    (大設定で別の DB に決めた端末が、既定の DB にタブ表示権限の行を足す)。
+    """
+    if strict:
+        try:
+            data = user_settings.load_checked()
+        except user_settings.Unreadable as exc:
+            raise SourceError("settings_unreadable", str(exc)) from exc
+    else:
+        data = user_settings.load()
+    folder = str(data.get(user_settings.KEY_SHARED_DIR) or "").strip()
+    name = str(data.get(user_settings.KEY_SHARED_NAME) or "").strip()
     return folder, name
 
 
@@ -80,8 +92,9 @@ def fallback() -> tuple[str, str]:
     return folder, name
 
 
-def location() -> Location:
-    folder, name = configured()
+def location(*, strict: bool = False) -> Location:
+    """効いている置き場所。**読んで書く・写しを作るときは `strict=True`**(`configured`)。"""
+    folder, name = configured(strict=strict)
     origin = "大設定"
     if not folder:
         origin = "環境変数" if os.environ.get("ALLTOOLS_SHARED_DB_DIR", "").strip() else "既定"
@@ -89,24 +102,37 @@ def location() -> Location:
     return Location(folder or fallback_folder, name or fallback_name, origin)
 
 
-def to_uri(path: Path, *, read_only: bool = False) -> str:
+def to_uri(path: Path, *, read_only: bool = False, create: bool = True) -> str:
+    """`create=False` は、書くときも**無ければ作らない**(`mode=rw`)。"""
     text = str(path)
     if text.startswith("\\\\") or text.startswith("//"):
         rest = text.replace("\\", "/").lstrip("/")
         uri = "file:////" + quote(rest, safe="/")
     else:
         uri = Path(text).resolve().as_uri()
-    return uri + ("?mode=ro" if read_only else "")
+    if read_only:
+        return uri + "?mode=ro"
+    return uri if create else uri + "?mode=rw"
 
 
 def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
+    """開く。**無い DB は作らない。**
+
+    以前は、確かめた(`is_file`)あとに共有が一瞬切れた・ほかのツールがマスタを差し替えている
+    最中だと、書く URI(既定の `mode=rwc`)と素のパスが**空の新しい DB を共有に作り**、
+    読むほうは「表がありません」、「表を作る」は新しい DB に表を作っていた。書く URI は
+    `mode=rw`(作らない)にし、素のパスで開き直すのは、直前にもう一度ファイルが見えたときだけ。
+    """
     if not path.is_file():
         raise SourceError("no_source", f"共有の DB が見つかりません: {path}")
     last: Optional[Exception] = None
-    # URI で開く(読むときは読み取り専用)→ 開けなければ素のパス
-    ways = ((to_uri(path, read_only=read_only), True), (str(path), False))
+    # URI で開く(読むときは読み取り専用・書くときも作らない)→ 開けなければ素のパス
+    ways = ((to_uri(path, read_only=read_only, create=False), True), (str(path), False))
     for target, as_uri in ways:
         conn = None
+        if not as_uri and not os.path.isfile(str(path)):
+            # 素のパスは、無ければ空の DB を作ってしまう。見えなくなったなら開かない
+            raise SourceError("no_source", f"共有の DB が見えなくなりました: {path}({last})")
         try:
             conn = sqlite3.connect(target, uri=as_uri, timeout=BUSY_TIMEOUT_SEC,
                                    isolation_level=None, check_same_thread=False)

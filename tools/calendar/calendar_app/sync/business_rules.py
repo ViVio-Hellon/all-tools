@@ -112,9 +112,13 @@ def missing_added_columns(source: "source_db.SourceConnection",
 
     * 足せた・もうある   … 省かない(届く)
     * 待っても足せない   … 省いて送る(連絡そのものは届く。時刻と班は手元にだけ残る)
-    * ロック競合で今は不明 … 省かない。列が無ければその行は送れずに
+    * ロック競合・共有の瞬断で今は不明 … 省かない。列が無ければその行は送れずに
       送信待ちに残り、次の周期で足し直してから届く(省いて送ると、
-      時刻と班が共有から永久に欠ける)
+      時刻と班が共有から永久に欠ける。前は瞬断(``disk I/O error`` など)を
+      「待っても足せない」と覚え、再起動するまで省いて送っていた)
+
+    :raises source_db.SourceError: 共有の表の列を**読めなかった**(無い表は空として扱う)。
+        呼ぶ側は今回は送らない
     """
     present = set(source.columns(table))
     if not present:
@@ -138,8 +142,8 @@ def missing_added_columns(source: "source_db.SourceConnection",
             text = str(exc).lower()
             if "duplicate column" in text:
                 continue                    # ほかの端末が先に足した
-            if source_db.is_lock_error(exc):
-                debug_log(f"business_rules: {table} の「{name}」列を今は足せません(使用中) {exc}")
+            if source_db.is_transient_error(exc):
+                debug_log(f"business_rules: {table} の「{name}」列を今は足せません(使用中・瞬断) {exc}")
                 continue
             debug_log(f"business_rules: {table} に「{name}」列を足せません。省いて送ります {exc}")
             failed.add(name)
@@ -169,10 +173,21 @@ def send_data_with_duplicate_guard(
     if not rows:
         return result
 
-    op_id_ready = spec.use_op_id_guard and outbox_sync.ensure_op_id_column(source, spec)
-    # 後から足した列(記入班・登録日時)。共有の表に無ければ後ろに足す。
-    # 足せない相手には、その列を省いて送る(行そのものは止めない)
-    unsendable = missing_added_columns(source, spec.source_table)
+    try:
+        # **共有の表の形を確かめられなければ、今回は送らない。** 読めなかったことを
+        # 「送信ID列が無い」と読んで送信IDなしで送ると、前の送信が届いていた行が
+        # 共有にもう1行できる(``outbox_sync.ensure_op_id_column``)。予約は送信IDを
+        # 残したまま戻し、次の回に送る
+        op_id_ready = (spec.use_op_id_guard
+                       and outbox_sync.ensure_op_id_column(source, spec))
+        # 後から足した列(記入班・登録日時)。共有の表に無ければ後ろに足す。
+        # 足せない相手には、その列を省いて送る(行そのものは止めない)
+        unsendable = missing_added_columns(source, spec.source_table)
+    except source_db.SourceError as exc:
+        outbox_sync.release_claim(conn, spec, list(op_ids), op_ids)
+        debug_log(f"business_rules: {spec.source_table} の形を確かめられず今回は送らない {exc}")
+        result.errors.append(f"{spec.source_table}: {exc}")
+        return result
     failed: list[int] = []
     try:
         for row in rows:
@@ -220,7 +235,7 @@ def send_data_with_duplicate_guard(
             outbox_sync.mark_synced(conn, spec, [row_id])
             result.sent += 1
     except Exception:
-        outbox_sync.release_claim(conn, spec, failed)
+        outbox_sync.release_claim(conn, spec, failed, op_ids)
         raise
-    outbox_sync.release_claim(conn, spec, failed)
+    outbox_sync.release_claim(conn, spec, failed, op_ids)
     return result

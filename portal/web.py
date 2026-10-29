@@ -27,7 +27,7 @@ from typing import Any, Callable, Optional
 from flask import Flask, jsonify, render_template, request
 
 from . import admin_password, app_config, awake_clock, catalog as catalog_mod, distribution, identity as identity_mod
-from . import shared_db, tab_rights
+from . import shared_db, tab_rights, user_settings
 from .logging_utils import get_logger, log_dir
 from .rights_store import store
 
@@ -289,6 +289,14 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         if not secrets.compare_digest(supplied.encode("utf-8"), app.config["TOKEN"].encode("utf-8")):
             return _error("bad_token", "この画面は無効になりました。日報複合ツールを開き直してください", 401)
         return None
+
+    @app.errorhandler(user_settings.Unreadable)
+    def _settings_unreadable(exc):                # noqa: ANN202 - Flask のフック
+        # **この端末の設定ファイルを読めない。** 空とみなして書く(置き場所・パスワードを消す)のでも、
+        # 既定のパスワードで通すのでもなく、理由を出して断る(少し待てば読めることが多い)
+        log.warning("この端末の設定ファイルを読めないため断りました: %s %s: %s",
+                    request.method, request.path, exc)
+        return _error("settings_unreadable", str(exc), 503)
 
     @app.after_request
     def _headers(response):                       # noqa: ANN202 - Flask のフック
@@ -576,7 +584,12 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         refused = need_admin()
         if refused:
             return refused
-        path = shared_db.location().path
+        try:
+            # この端末の設定を読めなければ書かない(読めないのを「決めていない」と取り違えて、
+            # 既定の共有の DB に書かない)
+            path = shared_db.location(strict=True).path
+        except shared_db.SourceError as exc:
+            return _error(exc.code, str(exc), 503)
         if not shared_db.reachable(path):
             return _error("no_source", f"共有の DB に届きません: {path}", 422)
         try:
@@ -791,6 +804,8 @@ def _settings_view(catalog) -> dict:
         "first_contact_range": list(user_settings.FIRST_CONTACT_MIN_RANGE),
         "decision": decision.to_dict(catalog),
         "admin": admin_password.session.peek(),
+        # この端末の設定ファイルを読めない理由(読めないあいだは書かない。空なら読めている)
+        "settings_error": user_settings.problem(),
         "password_custom": admin_password.is_custom(),
         # `folder` / `name` は効いている場所。欄に入れるのは**大設定で決めた値**(`set_*`)だけ
         # ── 効いている既定(環境変数・既定)を欄に入れると、「変える」を押したときに

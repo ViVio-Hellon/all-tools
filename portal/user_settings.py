@@ -2,12 +2,20 @@
 
 入っているもの: 共有の DB の置き場所(フォルダ・ファイル名)・管理者パスワードの撹拌値。
 書くときは一時ファイルに書いてから入れ替える(書きかけで壊さない)。
+
+【読めないのと、無いのは違う】
+ファイルが無い(一度も設定していない)ときは空。**ファイルはあるのに読めない**(ほかが入れ替えて
+いる最中・ロック・権限・中身が壊れている)ときは `Unreadable`。以前はどちらも空として扱い、
+書くとき(`update`)に**空に足した1項目だけで上書き**していた ── 共有の DB の置き場所・管理者
+パスワード・配布設定の覚えが消え、起動時の配布設定の読み込みも「この端末に無い」と見て上書きしていた。
+書くとき・決めて書くときは `load_checked`(読めなければ書かない)。画面に出すだけなら `load`(空)。
 """
 from __future__ import annotations
 
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,12 +44,63 @@ def path() -> Path:
     return app_config.local_root() / "data" / "user_settings.json"
 
 
+#: 読めなかったとき、読み直す回数と間(秒)。Windows では入れ替えの最中に一瞬読めないことがある
+READ_TRIES = 3
+READ_RETRY_SEC = 0.1
+
+
+class Unreadable(RuntimeError):
+    """設定ファイルはあるのに読めない(**無いのとは違う**)。読めないあいだは書かない。"""
+
+    def __init__(self, target: Path, cause: Any) -> None:
+        self.path = target
+        self.cause = cause
+        super().__init__(f"この端末の設定ファイルを読めません({target}: {cause})。"
+                         "設定を書き換えずに止めました。少し待ってもう一度試してください"
+                         "(続くときはファイルの中身・権限を確かめてください)")
+
+
+def load_checked() -> dict[str, Any]:
+    """設定の中身。**無ければ空、あるのに読めなければ `Unreadable`**(書く前・決めて書く前に使う)。"""
+    target = path()
+    last: Any = None
+    for attempt in range(READ_TRIES):
+        try:
+            text = target.read_text(encoding="utf-8-sig")
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:                    # ロック中・権限など(一瞬のことがある)
+            last = exc
+            if attempt + 1 < READ_TRIES:
+                time.sleep(READ_RETRY_SEC)
+            continue
+        except ValueError as exc:                 # 文字の符号が壊れている
+            raise Unreadable(target, f"中身が壊れています: {exc}") from exc
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise Unreadable(target, f"中身が壊れています: {exc}") from exc
+        if not isinstance(data, dict):
+            raise Unreadable(target, "中身の形が違います")
+        return data
+    raise Unreadable(target, last)
+
+
 def load() -> dict[str, Any]:
+    """画面に出す・既定を決めるための読み。読めなければ空(**書くときは `load_checked`**)。"""
     try:
-        data = json.loads(path().read_text(encoding="utf-8-sig"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+        return load_checked()
+    except Unreadable:
         return {}
+
+
+def problem() -> str:
+    """設定ファイルを読めない理由。読める(か、無い)なら空。"""
+    try:
+        load_checked()
+    except Unreadable as exc:
+        return str(exc)
+    return ""
 
 
 def get(key: str, default: Optional[Any] = None) -> Any:
@@ -68,8 +127,9 @@ def save(key: str, value: Any) -> None:
 
 
 def update(values: dict[str, Any]) -> None:
+    """書き換える。**ファイルを読めなければ書かない**(`Unreadable`)── 空に足して上書きしない。"""
     with _lock:
-        data = load()
+        data = load_checked()
         for key, value in values.items():
             if value is None:
                 data.pop(key, None)

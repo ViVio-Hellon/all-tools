@@ -163,20 +163,44 @@ def unsent_tables(conn: sqlite3.Connection,
     """複数specの中で、まだ取り込み元へ送っていない行が残っているものを返す。
 
     総入れ替え取り込みの前に「未送信を失わないか」を確認する用途。
+
+    **数えられなければ例外のまま返す**(``sqlite3.Error``)。前は数えられなかった表を
+    黙って飛ばしていたので、「未送信は0件」と読んだ取り込みが手元を総入れ替えし、
+    **まだ送っていない行を消していた。** 飛ばすのは表そのものが無いときだけ。
     """
     remaining: dict[str, int] = {}
     for spec in specs:
         try:
             rows = pending_rows(conn, spec)
-        except sqlite3.Error:
-            continue
+        except sqlite3.Error as exc:
+            if "no such table" in str(exc).lower():
+                continue                        # 本当に無い表(この DB では使っていない)
+            raise
         if rows:
             remaining[spec.sqlite_table] = len(rows)
     return remaining
 
 
+class OpIds(dict):
+    """行ID → 送信ID。``claim_rows`` が返す。
+
+    ``reclaimed`` は**前にも送ったことのある**行(送信中のまま残っていた予約を
+    拾い直したもの)。前の送信が共有へ届いていたかどうかは分からないので、
+    この送信IDは捨てない(``release_claim``)。
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.reclaimed: set[int] = set()
+
+
+#: 送れなかった予約を「すぐ拾い直してよい」にしておく印(``同期日時`` に入れる)。
+#: 期限切れの拾い直しと同じ道で、**同じ送信ID**のまま次の回に送られる
+_RETRY_NOW = ""
+
+
 def claim_rows(conn: sqlite3.Connection,
-               spec: WriteBackSpec) -> tuple[list[sqlite3.Row], dict[int, str]]:
+               spec: WriteBackSpec) -> tuple[list[sqlite3.Row], OpIds]:
     """送る行を予約してから返す。行IDごとの送信IDも一緒に返す。
 
     【なぜ予約が要るか】
@@ -192,7 +216,7 @@ def claim_rows(conn: sqlite3.Connection,
     """
     ensure_sync_table(conn)
     conn.row_factory = sqlite3.Row
-    op_ids: dict[int, str] = {}
+    op_ids = OpIds()
     # 呼んだ側の書きかけは先に確定させる(``ensure_sync_table`` が以前は
     # ここで commit していた。それを当てにしている呼び手のため)
     if conn.in_transaction:
@@ -201,7 +225,7 @@ def claim_rows(conn: sqlite3.Connection,
     try:
         # 1) 期限切れの予約を拾い直す。送信IDは引き継ぐ(採番し直さない)
         stale = conn.execute(
-            f"SELECT 行ID, 送信ID FROM [{SYNC_LOG_TABLE}]"
+            f"SELECT 行ID, 送信ID, 同期日時 FROM [{SYNC_LOG_TABLE}]"
             f" WHERE テーブル名 = ? AND 状態 = ?"
             f" AND 同期日時 < datetime('now','localtime',?)",
             (spec.sqlite_table, SYNC_SENDING,
@@ -210,15 +234,19 @@ def claim_rows(conn: sqlite3.Connection,
             row_id = int(record["行ID"])
             op_id = record["送信ID"] or uuid.uuid4().hex
             op_ids[row_id] = op_id
+            op_ids.reclaimed.add(row_id)
             conn.execute(
                 f"UPDATE [{SYNC_LOG_TABLE}]"
                 " SET 送信ID = ?, 同期日時 = datetime('now','localtime')"
                 " WHERE テーブル名 = ? AND 行ID = ?",
                 (op_id, spec.sqlite_table, row_id))
-        if stale:
+        # 前の回に送れなかった(``release_claim`` が「すぐ拾い直す」にした)ものは
+        # 知らせるほどのことではない。落ちて残っていた予約だけを知らせる
+        left = sum(1 for r in stale if str(r["同期日時"] or "") != _RETRY_NOW)
+        if left:
             log.warning("%s: 送信中のまま残っていた予約を%s件拾い直します"
                         "(同じ送信IDで再送するので取り込み元側が重複を弾きます)",
-                        spec.sqlite_table, len(stale))
+                        spec.sqlite_table, left)
 
         # 2) まだ記録の無い行を新規に予約する(送信IDを新規採番)
         fresh = conn.execute(
@@ -271,7 +299,7 @@ def mark_synced(conn: sqlite3.Connection, spec: WriteBackSpec,
 
 
 def release_claim(conn: sqlite3.Connection, spec: WriteBackSpec,
-                  row_ids: Iterable[int]) -> None:
+                  row_ids: Iterable[int], op_ids: Optional[dict] = None) -> None:
     """送れなかったことが確実な行の予約を外す(次回すぐ新しい送信IDで拾える)。
 
     ここに渡すのは、取り込み元への送信で `SourceError` を捕まえて「届いて
@@ -285,16 +313,30 @@ def release_claim(conn: sqlite3.Connection, spec: WriteBackSpec,
     `claim_rows` の期限切れ拾い直しが同じ送信IDで再送し、取り込み元側の
     一意インデックスに二重登録を弾かせるのが、その場合の唯一の安全策
     になる。
+
+    【拾い直した行は、送信IDを捨てない】(``op_ids`` に ``claim_rows`` の戻り値を渡す)
+    「今回は届かなかった」と分かっても、**前の回の送信**が届いていたかは分からない
+    (届いたあと「済」を書く前に落ちたから、送信中のまま残っていた)。前は今回の失敗
+    (ロック中・共有の瞬断)だけで予約ごと消していたので、次は新しい送信IDで送り、
+    共有の一意インデックスをすり抜けて**同じ行がもう1行できた。** そういう行は
+    予約と送信IDを残したまま「すぐ拾い直す」にする(次の回に同じ送信IDで送る)。
     """
     ids = [int(i) for i in row_ids]
     if not ids:
         return
+    reclaimed = getattr(op_ids, "reclaimed", set()) if op_ids is not None else set()
+    keep = [i for i in ids if i in reclaimed]
+    drop = [i for i in ids if i not in reclaimed]
     ensure_sync_table(conn)
     with conn:
         conn.executemany(
             f"DELETE FROM [{SYNC_LOG_TABLE}]"
             " WHERE テーブル名 = ? AND 行ID = ? AND 状態 = ?",
-            [(spec.sqlite_table, i, SYNC_SENDING) for i in ids])
+            [(spec.sqlite_table, i, SYNC_SENDING) for i in drop])
+        conn.executemany(
+            f"UPDATE [{SYNC_LOG_TABLE}] SET 同期日時 = ?"
+            " WHERE テーブル名 = ? AND 行ID = ? AND 状態 = ?",
+            [(_RETRY_NOW, spec.sqlite_table, i, SYNC_SENDING) for i in keep])
 
 
 # ------------------------------------------------------------------
@@ -318,15 +360,19 @@ def _try_ddl(source: "source_db.SourceConnection", sql: str,
 
     True  : 成功した、または「もう存在する」ので実質OK
     False : 権限不足など、待っても直らない失敗(以後は諦めて素通りする)
-    None  : ロック競合など一時的な失敗(今回は判定できない、次回また試す)
+    None  : ロック競合・共有の瞬断など一時的な失敗(今回は判定できない、次回また試す)
+
+    **一時的な失敗を「作れない」と覚えない**(``source_db.is_transient_error``)。
+    前はロック以外(``disk I/O error`` など共有の瞬断)を「待っても直らない」と覚え、
+    再起動するまで送信IDなしで送り続けていた。
     """
     try:
         source.execute(sql)
         log.info("%s: 完了しました", label)
         return True
     except source_db.SourceError as exc:
-        if source_db.is_lock_error(exc):
-            log.debug("%s: ロック競合のため今回は見送ります(次回再試行)", label)
+        if source_db.is_transient_error(exc):
+            log.info("%s: いまはできません(次回再試行): %s", label, exc)
             return None
         message = str(exc).lower()
         if "duplicate column" in message or "already exists" in message:
@@ -352,12 +398,23 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
     2回で、ALTER TABLE を投げるより安い。覚えで済ませると、取り込み元が
     差し替わった端末が「列はある」と思い込んだまま送り続ける
     (``_op_id_failed`` の説明)。
+
+    :raises source_db.SourceError: **あるかどうかを確かめられなかった**(共有を読めない・
+        作る途中でロック中や瞬断)。呼ぶ側は**今回はその表を送らない**(送信待ちに残し、
+        次の回にやり直す)。前は読めなかったことを「列が無い」と読み、作れなければ
+        送信IDを付けずに送っていた ── 送信中のまま残っていた行(前の送信が届いて
+        いたかもしれない行)を、一意インデックスの守り無しで送り直して重複させた。
     """
     cache_key = (str(source.path), spec.source_table, spec.op_id_column)
     index_name = f"IX_{spec.source_table}_{spec.op_id_column}"
 
-    has_column = spec.op_id_column in source.columns(spec.source_table)
-    if has_column and source.has_index(index_name):
+    try:
+        has_column = spec.op_id_column in source.columns(spec.source_table)
+        has_index = has_column and source.has_index(index_name)
+    except source_db.SourceError as exc:
+        raise source_db.SourceError(
+            f"{spec.source_table} の形を読めません(今回は送りません): {exc}") from exc
+    if has_index:
         # 既に整っている。**ここが普段通る道**なので、何も書かない
         _op_id_failed.pop(cache_key, None)
         return True
@@ -376,7 +433,9 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
             f" ADD COLUMN {source_db.quote_identifier(spec.op_id_column)} TEXT",
             f"{spec.source_table} への {spec.op_id_column} 列の追加")
     if column_ok is None:
-        return False
+        raise source_db.SourceError(
+            f"{spec.source_table} に {spec.op_id_column} 列を足せるか、いまは分かりません"
+            "(今回は送りません)")
 
     index_ok = _try_ddl(
         source,
@@ -386,7 +445,9 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
         f" ({source_db.quote_identifier(spec.op_id_column)})",
         f"{spec.source_table} への一意インデックスの作成")
     if index_ok is None:
-        return False
+        raise source_db.SourceError(
+            f"{spec.source_table} の一意インデックスを作れるか、いまは分かりません"
+            "(今回は送りません)")
 
     ready = bool(column_ok and index_ok)
     if not ready:
@@ -413,13 +474,21 @@ def write_back(conn: sqlite3.Connection,
     """
     result = WriteBackResult()
     for spec in specs:
-        op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
         try:
             rows, op_ids = claim_rows(conn, spec)
         except sqlite3.Error as exc:
             result.errors.append(f"{spec.sqlite_table}: {exc}")
             continue
         if not rows:
+            continue
+        # 送信ID列を確かめるのは**送るものがあるときだけ**(共有を読みに行かない)。
+        # 確かめられなければ今回は送らない ── 送信IDなしで送り直すと重複しうる
+        try:
+            op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
+        except source_db.SourceError as exc:
+            release_claim(conn, spec, list(op_ids), op_ids)
+            log.warning("%s: %s", spec.sqlite_table, exc)
+            result.errors.append(f"{spec.source_table}: {exc}")
             continue
 
         sent = 0
@@ -452,10 +521,10 @@ def write_back(conn: sqlite3.Connection,
             # 戻し、残り(未処理の行・取り込み元に届いたかもしれない行)は
             # 「送信中」のまま残す。期限切れ拾い直しが同じ送信IDで後日
             # 再送し、取り込み元の一意インデックスが二重登録を防ぐ
-            release_claim(conn, spec, failed)
+            release_claim(conn, spec, failed, op_ids)
             log.exception("%s: 書き戻し中に想定外の例外", spec.sqlite_table)
             raise
-        release_claim(conn, spec, failed)
+        release_claim(conn, spec, failed, op_ids)
         if sent:
             result.sent[spec.sqlite_table] = sent
     return result

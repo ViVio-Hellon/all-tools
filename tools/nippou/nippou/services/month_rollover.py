@@ -58,6 +58,9 @@ class RolloverResult:
     #: **この端末では書き出さなかったライン** → 共有にあって手元に無いページの数
     #: (この端末のラインではなく、手元にはその月の一部しか無い ── `_partial_lines`)
     skipped: dict[str, int] = field(default_factory=dict)
+    #: **共有の日報データを読めなかったので、今回は書き出さなかったライン** → 理由
+    #: (この端末のラインではないもの。次の共有へ保存でやり直す ── `_partial_lines`)
+    unverified: dict[str, str] = field(default_factory=dict)
 
     @property
     def ran(self) -> bool:
@@ -72,8 +75,10 @@ class RolloverResult:
                     "まだ共有へ送っていないものがあります"
                     "(送り終えたあとの共有へ保存で書き出します)")
         if not self.exports:
-            if self.skipped:
-                return f"{self.decision.label}: {self._skipped_text()}"
+            notes = [t for t in (self._skipped_text() if self.skipped else "",
+                                 self._unverified_text()) if t]
+            if notes:
+                return f"{self.decision.label}: " + "\n".join(notes)
             return f"{self.decision.label}: 書き出すデータがありませんでした"
         where = self.exports[0].folder.parent
         head = (f"{self.decision.label} を書き出しました"
@@ -81,6 +86,8 @@ class RolloverResult:
                 f"\n{where}")
         if self.skipped:
             head += f"\n{self._skipped_text()}"
+        if self.unverified:
+            head += f"\n{self._unverified_text()}"
         if self.failed:
             return (f"{head}\n**書き出しが途中で終わりました。**"
                     "書き出し先に届いているか確かめてください")
@@ -100,11 +107,23 @@ class RolloverResult:
                 f"(共有にある{missing}ページが手元にありません)、書き出すと共有の月の書き出しから"
                 "そのぶんが消えるためです。書き出しはそのラインの端末が行います")
 
+    def _unverified_text(self) -> str:
+        from ..logic import line_names
+
+        if not self.unverified:
+            return ""
+        names = "・".join(line_names.label(ln) for ln in self.unverified)
+        why = next(iter(self.unverified.values()))
+        return (f"{names} は、共有の日報データを読めなかったので今回は書き出していません"
+                "(この端末にその月の全部があるか確かめられないため。次の共有へ保存で"
+                f"やり直します: {why})")
+
     def as_dict(self) -> dict:
         return {"decision": self.decision.as_dict(), "ran": self.ran,
                 "exports": [e.as_dict() for e in self.exports],
                 "failed": self.failed, "pending": self.pending,
                 "held": self.held, "skipped": dict(self.skipped),
+                "unverified": dict(self.unverified),
                 "message": self.message}
 
 
@@ -134,8 +153,12 @@ def settle(repo: NippouRepository, result: "RolloverResult",
 
     どれかが欠けたら覚えません ── 次の「共有へ保存」でもう1度書き出します
     (同じ中身を上書きするだけなので害はありません)。
+
+    **共有を読めなかったので見送ったラインがあるとき(`unverified`)も覚えません**
+    (覚えると、そのラインは二度と書き出されない)。
     """
-    if not result.ran or result.failed or result.pending or not second_ok:
+    if (not result.ran or result.failed or result.pending or result.unverified
+            or not second_ok):
         return False
     repo.mark_rolled(result.decision.year, result.decision.month)
     return True
@@ -184,17 +207,37 @@ def stop_labels() -> dict[str, str]:
     """停止の記号 → 内訳名。停止集計CSVに名前を載せるために引く。
 
     読めなければ空 ── 記号だけで書き出します(名前が無くても、
-    どの記号が何分だったかは残ります)。
+    どの記号が何分だったかは残ります)。**読めなかったのか、本当に無いのかを
+    知りたいときは `read_stop_labels`**(集計を作り直す道 `services/summary` はそちら)。
+    """
+    return read_stop_labels()[0]
+
+
+def read_stop_labels() -> tuple[dict[str, str], str]:
+    """(停止の記号 → 内訳名, 読めなかった理由)。**理由が空でなければ「読めなかった」**。
+
+        共有ファイルが読み込めなかったことを「無い」と誤認し、送り直していた(別のツールの事案)
+
+    停止内訳(CSV・伝送用ファイルの表)は共有にあります。一瞬届かないだけで名前が空になり、
+    それで集計を作り直すと、**共有へ送った集計と中身が変わった**ことになって送り直しになり、
+    共有の停止の表の「内訳」が空で上書きされていました。読めなかったこと(CSV があるのに
+    開けない・表を読めない)は、ここで理由として返します(空の名前とは分けます)。
     """
     from ..access_bridge import stop_master
 
     try:
-        by_category = stop_master.load_all_categories()
-    except Exception:                             # noqa: BLE001 - 書き出しを止めない
-        log.warning("停止内訳マスタを読めませんでした。記号だけで書き出します")
-        return {}
-    return {r.code: r.label
-            for items in by_category.values() for r in items if r.code}
+        sources = stop_master.load_sources()
+    except Exception as exc:                      # noqa: BLE001 - 書き出しを止めない
+        log.warning("停止内訳マスタを読めませんでした: %s", exc)
+        return {}, f"停止内訳を読めませんでした: {exc}"
+    labels = {r.code: r.label
+              for items in sources.effective.values() for r in items if r.code}
+    problems = []
+    if sources.csv_error:
+        problems.append(f"停止内訳CSV({sources.csv_path}): {sources.csv_error}")
+    # 読めなかったことは `stop_master` がそれぞれ記録に残している(ここでは重ねない)
+    problems += [f"{category}: {why}" for category, why in sources.master_errors.items()]
+    return labels, " / ".join(problems)
 
 
 def run(repo: NippouRepository, base_dir: Path, *,
@@ -221,10 +264,11 @@ def run(repo: NippouRepository, base_dir: Path, *,
     # **どのラインが動いたか**は日報のほうで数えます ── 集計はライン
     # ごとに読み直すので、先にラインの一覧が要ります
     lines = sorted({header.line for header, _ in records})
-    skipped = _partial_lines(records, found.year, found.month, lines)
-    lines = [ln for ln in lines if ln not in skipped]
+    unverified: dict[str, str] = {}
+    skipped = _partial_lines(records, found.year, found.month, lines, unverified=unverified)
+    lines = [ln for ln in lines if ln not in skipped and ln not in unverified]
     if not lines:
-        return RolloverResult(found, skipped=skipped)
+        return RolloverResult(found, skipped=skipped, unverified=unverified)
     exports: list[MonthExport] = []
     for line in lines:
         exports.append(month_export.write_month(
@@ -236,15 +280,18 @@ def run(repo: NippouRepository, base_dir: Path, *,
     written = [p for e in exports for p in e.files]
     if not all(p.exists() and p.stat().st_size > 0 for p in written):
         log.error("月替わりの書き出しが途中で終わりました: %s", found.label)
-        return RolloverResult(found, exports, failed=True, skipped=skipped)
+        return RolloverResult(found, exports, failed=True, skipped=skipped,
+                              unverified=unverified)
 
     pending = repo.month_has_pending(found.year, found.month)
     log.info("月替わり: %s を書き出しました(%dライン)。手元はそのまま",
              found.label, len(exports))
-    return RolloverResult(found, exports, pending=pending, skipped=skipped)
+    return RolloverResult(found, exports, pending=pending, skipped=skipped,
+                          unverified=unverified)
 
 
-def _partial_lines(records, year: int, month: int, lines: list[str]) -> dict[str, int]:
+def _partial_lines(records, year: int, month: int, lines: list[str], *,
+                   unverified: Optional[dict[str, str]] = None) -> dict[str, int]:
     """**この端末で書き出してはいけないライン** → 共有にあって手元に無いページの数。
 
         管理者のPCで、ほかのライン(HVC)の9月30日 2直を控えから呼び出して直し、共有へ保存
@@ -256,9 +303,15 @@ def _partial_lines(records, year: int, month: int, lines: list[str]) -> dict[str
     書くものです。そこで、**この端末のラインではない**ラインのうち、共有の日報データに
     あるのに手元に無いページがあるものは書き出しません(知らせで言います)。
 
-    この端末のラインは今までどおり書き出します(1ライン=1端末)。共有を確かめられない
-    とき(Access・届かない)も今までどおりです ── 手元に全部ある(過去の日報を取り込んだ)
-    ほかのラインも、今までどおり書き出します。
+    この端末のラインは今までどおり書き出します(1ライン=1端末)。書き先が Access で確かめ
+    られないとき・共有の日報データが**本当に無い**(置き場所は見えていてファイルが無い・置き場所を
+    決めていない端末)ときも今までどおりです ── 手元に全部ある(過去の日報を取り込んだ)ほかのラインも、今までどおり
+    書き出します。
+
+    **共有を読めなかったとき**(置き場所に届かない・開けない・読めない)は、ほかのラインを
+    **今回は書き出しません**(`unverified` にラインと理由を入れる)。読めなかったことを
+    「共有に無い」と取り違えて書き出すと、そのラインの端末が書き出した月の中身を、この端末の
+    一部だけで上書きします。見送った月は済んだと覚えないので、次の共有へ保存でやり直します。
     """
     from .. import work_context
 
@@ -272,7 +325,14 @@ def _partial_lines(records, year: int, month: int, lines: list[str]) -> dict[str
     for line in lines:
         if line == own:
             continue
-        shared = _shared_month_pages(line, year, month)
+        try:
+            shared = _shared_month_pages(line, year, month)
+        except _SharedUnread as exc:
+            log.warning("月替わり: %s の %d年%d月 は共有の日報データを読めなかったので、"
+                        "今回は書き出しません: %s", line, year, month, exc)
+            if unverified is not None:
+                unverified[line] = str(exc)
+            continue
         if shared is None:
             continue
         missing = len(shared - mine.get(line, set()))
@@ -283,9 +343,34 @@ def _partial_lines(records, year: int, month: int, lines: list[str]) -> dict[str
     return out
 
 
+def _shared_place_set() -> bool:
+    """共有の日報データの置き場所を**決めてある**か(設定画面・配布設定・環境変数)。
+
+    決めてある置き場所が見えないのは「届かない」、決めていない(既定のまま)置き場所が
+    無いのは「無い」(共有を使っていない端末)── 後者は今までどおり書き出します。
+    """
+    import os
+
+    from .. import config, user_settings
+
+    try:
+        configured = str(user_settings.get(config.KEY_ACCESS_DIR) or "").strip()
+    except Exception:                             # noqa: BLE001 - 読めなければ環境変数だけ
+        configured = ""
+    return bool(configured or os.environ.get("NIPPOU_ACCESS_DIR", "").strip())
+
+
+class _SharedUnread(Exception):
+    """共有の日報データを**読めなかった**(届かない・開けない・読めない)。無いのとは別。"""
+
+
 def _shared_month_pages(line: str, year: int, month: int
                         ) -> Optional[set[tuple[str, str, int]]]:
-    """共有の日報データにある、そのライン・その月の (報告日, 直, ページ)。**確かめられなければ None。**"""
+    """共有の日報データにある、そのライン・その月の (報告日, 直, ページ)。
+
+    書き先が Access(確かめようがない)・ファイルが**本当に無い**(置き場所は見える・置き場所を
+    決めていない端末)ときは None。**読めなかったときは `_SharedUnread`**(None と分ける ── `_partial_lines`)。
+    """
     import sqlite3
 
     from ..access_bridge import pusher, sqlite_backend
@@ -294,8 +379,13 @@ def _shared_month_pages(line: str, year: int, month: int
 
     path = SETTINGS.access_db_path
     try:
-        if not pusher.is_sqlite_target(path) or not path.is_file():
+        if not pusher.is_sqlite_target(path):
             return None
+        if not path.is_file():
+            if path.parent.is_dir() or not _shared_place_set():
+                # 本当に無い(まだ1度も送っていない・置き場所を決めていない端末)
+                return None
+            raise _SharedUnread(f"共有の日報データの置き場所に届きません: {path.parent}")
         table = pusher.header_table_name(line)
         conn = sqlite_backend.connect(path)
         try:
@@ -310,7 +400,7 @@ def _shared_month_pages(line: str, year: int, month: int
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         log.warning("月替わり: 共有の日報データを確かめられませんでした: %s", exc)
-        return None
+        raise _SharedUnread(f"共有の日報データを読めませんでした: {exc}") from exc
     found: set[tuple[str, str, int]] = set()
     for report_date, shift, page_no in rows:
         day = parse_business_date(str(report_date or ""))

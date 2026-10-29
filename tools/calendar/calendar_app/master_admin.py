@@ -389,7 +389,12 @@ def columns(table: str, present: Optional[Iterable[str]] = None) -> list[Column]
 
 
 def source_columns(path: Path, table: str) -> list[str]:
-    """取り込み元に実在する列名。"""
+    """取り込み元に実在する列名。**表が無ければ空。読めなければ ``SourceError``。**
+
+    前は読めなかったときも空を返していたので、画面は「まだ1件もありません」と出し、
+    行の追加は「表がまだ無い」と見て定義どおりの列で足していた ── 見えなかった
+    だけの行(アクセス権限など、鍵を共有が振る表)が、もう1行できる。
+    """
     from .dbkit import source_db
 
     try:
@@ -397,7 +402,14 @@ def source_columns(path: Path, table: str) -> list[str]:
             return source.columns(table)
     except source_db.SourceError as exc:
         log.warning("%s の列を読めませんでした: %s", table, exc)
-        return []
+        raise
+
+
+def _unreadable(label: str, exc: Exception) -> str:
+    """読めなかったときに出す文言。**「無い」「0件」とは言わない。**"""
+    return (f"{label}を取り込み元から読めませんでした: {exc}\n"
+            "共有フォルダにつながっているか・ほかの端末が開いたままでないかを"
+            "確かめて、画面を更新してください。")
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +457,15 @@ def page(table: str = config.TABLE_MEMBER, *, query: str = "",
         return view
     view.source = str(ready.path)
 
-    present = source_columns(ready.path, table)
+    from .dbkit import source_db
+
+    try:
+        present = source_columns(ready.path, table)
+    except source_db.SourceError as exc:
+        view.editable = False
+        view.reason = REFUSE_NO_SOURCE
+        view.why = _unreadable(view.label, exc)
+        return view
     if not present and managed is not None and not managed.requires_table:
         # **まだ1台も記録していない。** 表そのものが無いのは異常ではない
         # ので、列だけ定義どおりに出して「空」と言う
@@ -463,7 +483,15 @@ def page(table: str = config.TABLE_MEMBER, *, query: str = "",
             f"(取り込み元の列: {', '.join(present) or 'なし'})")
         return view
 
-    rows = _read_rows(ready.path, table, [c.name for c in view.columns])
+    try:
+        rows = _read_rows(ready.path, table, [c.name for c in view.columns])
+    except source_db.SourceError as exc:
+        # **読めなかったのを「0件」と見せない。** 0件の一覧で直せる画面を出すと、
+        # 見えなかった行を打ち直してもう1行作らせてしまう
+        view.editable = False
+        view.reason = REFUSE_NO_SOURCE
+        view.why = _unreadable(view.label, exc)
+        return view
     if query:
         needle = query.casefold()
         rows = [r for r in rows
@@ -510,8 +538,9 @@ def _read_rows(path: Path, table: str, names: list[str]) -> list[dict[str, Any]]
             rows = source.query(
                 f"SELECT * FROM {source_db.quote_identifier(table)}")
     except source_db.SourceError as exc:
+        # 読めなかったのを空の一覧にしない(``page`` が「読めません」と出す)
         log.warning("%s を読めませんでした: %s", table, exc)
-        return []
+        raise
 
     managed = BY_TABLE.get(table)
     key = row_key(table)
@@ -567,7 +596,13 @@ def save_row(conn: sqlite3.Connection, table: str, row_key: str,
     if not key:
         return Result(False, "直す行が指定されていません。", REFUSE_BAD_VALUE)
 
-    present = source_columns(ready.path, table)
+    from .dbkit import source_db
+
+    try:
+        present = source_columns(ready.path, table)
+    except source_db.SourceError as exc:
+        return Result(False, _unreadable(managed.label if managed else table, exc),
+                      REFUSE_NO_SOURCE)
     cleaned, error = _clean(table, values, present, creating=False)
     if error is not None:
         return error
@@ -579,7 +614,6 @@ def save_row(conn: sqlite3.Connection, table: str, row_key: str,
         return blocked
 
     from . import db
-    from .dbkit import source_db
 
     # 開いたときの値。**送られた列のうち、実在する列だけ**を見る
     guard: dict[str, Any] = {}
@@ -628,7 +662,15 @@ def add_row(conn: sqlite3.Connection, table: str,
     if not ready.ok:
         return ready.as_result()
 
-    present = source_columns(ready.path, table)
+    from .dbkit import source_db
+
+    try:
+        present = source_columns(ready.path, table)
+    except source_db.SourceError as exc:
+        # **読めなかったのを「まだ表が無い」と読まない。** 読めない間に足すと、
+        # 見えなかっただけの行がもう1行できる
+        return Result(False, _unreadable(managed.label if managed else table, exc),
+                      REFUSE_NO_SOURCE)
     if not present and managed is not None and not managed.requires_table:
         # **まだ表が無い。** 1台も起動していない共有へ前もって登録する道を
         # 塞がないよう、定義どおりの列があるものとして進む(``prepare`` が
@@ -657,8 +699,6 @@ def add_row(conn: sqlite3.Connection, table: str,
     blocked = _guard(table, cleaned, password)
     if blocked is not None:
         return blocked
-
-    from .dbkit import source_db
 
     try:
         with _connect(ready.path) as source:

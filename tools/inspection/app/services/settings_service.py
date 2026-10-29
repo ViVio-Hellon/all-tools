@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.repositories.settings_repository import SettingsRepository
+from app.repositories.settings_repository import SettingsRepository, SettingsUnreadable
 
 #: 画面の明るさで選べるもの。`theme_choice` が無い(= "default")なら大設定の既定に従う
 THEMES = ("light", "dark")
@@ -183,7 +183,16 @@ class SettingsService:
         self.log = logger
         self.forced_root_folder = normalize_folder(forced_root_folder or "")  # 模擬モード用
         self._lock = threading.Lock()
-        self._data = self._migrate_theme(repository.load())
+        #: 設定ファイルを読めなかった理由(読めた・無いなら空)。**読めないあいだは保存しない**
+        #: (空に足して上書きすると、点検表フォルダ・管理者パスワードなどが消える)
+        self.load_error = ""
+        try:
+            data = repository.load()
+        except SettingsUnreadable as exc:
+            data = {}
+            self.load_error = exc.detail or exc.message
+            self.log.warning("この端末の設定ファイルを読めません(読めるまで保存しません): %s", self.load_error)
+        self._data = self._migrate_theme(data)
 
     def _migrate_theme(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """前の版の `dark_mode` を一度だけ移す(上の【画面の明るさ】)。
@@ -204,6 +213,27 @@ class SettingsService:
         self.log.info("前の版の明暗の設定(dark_mode=%s)を移しました: %s", legacy,
                       "ダークを選んだもの" if data.get("theme_choice") == "dark" else "既定(大設定に従う)")
         return data
+
+    def ensure_readable(self) -> None:
+        """設定ファイルを読めていなければ読み直す。**それでも読めなければ `SettingsUnreadable`。**
+
+        保存する前・配布設定で埋める前・管理者パスワードを照合する前に呼ぶ(読めないのを
+        「設定が無い」と取り違えて、上書きしたり既定のパスワードで通したりしない)。
+        """
+        if not self.load_error:
+            return
+        try:
+            data = self.repo.load()
+        except SettingsUnreadable as exc:
+            with self._lock:
+                self.load_error = exc.detail or exc.message
+            raise
+        with self._lock:
+            self.load_error = ""
+        data = self._migrate_theme(data)
+        with self._lock:
+            self._data = data
+        self.log.info("この端末の設定ファイルを読めました(保存できます)")
 
     @property
     def default_root_folder(self) -> str:
@@ -260,6 +290,7 @@ class SettingsService:
         self.put_many({key: value})
 
     def put_many(self, values: Dict[str, Any]) -> None:
+        self.ensure_readable()
         with self._lock:
             data = dict(self._data)
             for key, value in values.items():
@@ -275,6 +306,7 @@ class SettingsService:
         """`theme` は light / dark(選んだ)か "default"(覚えを消す = 大設定の既定に従う)。"""
         if theme is not None and theme not in THEMES + (THEME_DEFAULT,):
             raise ValueError(f"知らない明暗です: {theme!r}")
+        self.ensure_readable()
         with self._lock:
             data = dict(self._data)
             if reset_root_folder:
