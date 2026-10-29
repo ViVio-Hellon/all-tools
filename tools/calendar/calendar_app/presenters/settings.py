@@ -111,10 +111,15 @@ def view(conn: sqlite3.Connection) -> SettingsView:
 
     # 参照パスから実ファイルを探して、**開いてみる**。
     # exists() で済ませると、壊れているファイルを「見つかった」と答えてしまう
-    data_db = sources.find_data_db()
-    master_db = sources.find_master_db()
+    # **届かないのを「見つかりません」と出さない**(``sources.locate``)
+    data_db, data_unreadable = sources.locate(sources.find_data_db)
+    master_db, master_unreadable = sources.locate(sources.find_master_db)
     data_probe = sources.probe(data_db)
     master_probe = sources.probe(master_db)
+    if data_unreadable:
+        data_probe.error = data_unreadable
+    if master_unreadable:
+        master_probe.error = master_unreadable
     ready = master_admin.readiness()
 
     problems: list[str] = []
@@ -139,7 +144,10 @@ def view(conn: sqlite3.Connection) -> SettingsView:
         # 要る日になってから「指定先に何も無い」と分かっても遅い
         problems.append("ログフォルダに書けないので、この端末の既定の場所へ"
                         f"書いています: {log_status['fallback_reason']}")
-    if data_db is None and service.configured:
+    if data_unreadable:
+        problems.append("保存用DB(連絡帳): 休み・連絡の登録はこの端末に預かり、読めた時点で送ります。"
+                        + data_unreadable)
+    elif data_db is None and service.configured:
         # 参照パスはあるが、いま見えない(共有の停止・ネットワーク断)。
         # **登録はできる**(送信待ちに残り、見えたら送る)ので、断るとは言わない
         problems.append(
@@ -153,7 +161,10 @@ def view(conn: sqlite3.Connection) -> SettingsView:
             "参照パスを設定するまで、休み・連絡の登録はできません。")
     elif not data_probe.ok:
         problems.append(f"保存用DB を開けません: {data_probe.error}")
-    if master_db is None and (config.master_db_dir_text() or config.data_db_dir_text()):
+    if master_unreadable:
+        problems.append("マスタDB(班員名簿): 読めるまで班員名簿は前回取り込んだもので動きます。"
+                        + master_unreadable)
+    elif master_db is None and (config.master_db_dir_text() or config.data_db_dir_text()):
         problems.append(
             "マスタDB(班員名簿)がいま見えません。見えるまで班員名簿は前回取り込んだもので"
             "動きます(取り込みと修正は、見えてから)。")
@@ -275,13 +286,14 @@ def storage() -> list[dict[str, Any]]:
     local = app_config.local_root()
 
     def item(group: str, name: str, path: Path | None, holds: str,
-             note: str, keep: bool) -> dict[str, Any]:
+             note: str, keep: bool, unreadable: str = "") -> dict[str, Any]:
         return {"group": group, "name": name,
-                "path": str(path) if path else "(見つかりません)",
+                "path": str(path) if path else ("(読めません)" if unreadable else "(見つかりません)"),
                 "exists": bool(path and path.exists()),
                 "holds": holds, "note": note, "keep": keep}
 
-    data_db, master_db = sources.find_data_db(), sources.find_master_db()
+    data_db, data_unreadable = sources.locate(sources.find_data_db)
+    master_db, master_unreadable = sources.locate(sources.find_master_db)
     return [
         # --- この端末だけ ---
         item(GROUP_LOCAL, "settings.json", config.settings_path(),
@@ -315,11 +327,11 @@ def storage() -> list[dict[str, Any]]:
         item(GROUP_SHARED, config.SOURCE_FILE_DATA, data_db,
              "休み管理・削除履歴・端末一覧(どのPCがどのラインか)",
              "全端末の正式なデータです。ここを直すと全端末に効きます。",
-             True),
+             True, data_unreadable),
         item(GROUP_SHARED, config.SOURCE_FILE_MASTER, master_db,
              "班員名簿・アクセス権限(梱包資材総合ツールと共用)",
              "マスタ管理から直します。全端末(と別ツール)に効きます。",
-             True),
+             True, master_unreadable),
         # --- アプリのフォルダ ---
         item(GROUP_APP, "配布設定", distribution.DIR,
              "配る前に書き出した設定(参照パス・管理者パスワードなど)",

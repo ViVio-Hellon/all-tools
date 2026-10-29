@@ -276,11 +276,16 @@ def readiness(table: str = "") -> Readiness:
     where = managed.where if managed else WHERE_MASTER
 
     if where == WHERE_DATA:
-        found = sources.find_data_db()
+        finder = sources.find_data_db
         label = f"保存用DB({config.SOURCE_FILE_DATA})"
     else:
-        found = sources.find_master_db()
+        finder = sources.find_master_db
         label = f"マスタDB({config.SOURCE_FILE_MASTER})"
+    try:
+        found = finder()
+    except sources.SourceError as exc:
+        # **届かないのを「見つかりません」と言わない・別の場所のマスタを直させない**
+        return Readiness(reason=REFUSE_NO_SOURCE, why=f"{label}: {exc}")
 
     if found is None:
         # **どこを見たのかを言う。** マスタのフォルダが未設定なら保存用と

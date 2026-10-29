@@ -375,10 +375,10 @@ def apply_reservation() -> str:
     """
     from . import sources
 
-    found = sources.find_data_db()
-    if found is None:
-        return ""
     try:
+        found = sources.find_data_db()
+        if found is None:
+            return ""
         with source_db.connect(found, read_only=False) as source:
             return take_reservation(source)
     except (source_db.SourceError, OSError) as exc:
@@ -414,10 +414,10 @@ def publish() -> bool:
     """
     from . import sources
 
-    found = sources.find_data_db()
-    if found is None:
-        return False
     try:
+        found = sources.find_data_db()
+        if found is None:
+            return False
         with source_db.connect(found, read_only=False) as source:
             return report(source, force=True)
     except (source_db.SourceError, OSError) as exc:
@@ -436,10 +436,10 @@ def listing(path: Optional[Path] = None) -> list[dict[str, Any]]:
     """
     from . import db, sources
 
-    target = path if path is not None else sources.find_data_db()
-    if target is None:
-        return []
     try:
+        target = path if path is not None else sources.find_data_db()
+        if target is None:
+            return []
         with source_db.connect(target, read_only=True) as source:
             if not source.has_table(TABLE):
                 return []

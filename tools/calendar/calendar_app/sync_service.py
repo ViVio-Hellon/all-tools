@@ -68,6 +68,8 @@ class SyncService:
         self._wake = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_error = ""
+        #: 参照パスのフォルダに届かなかった理由(届いて探せたら空)
+        self._unreadable = ""
         self._path = ""
         self._folder = ""
         #: 見失ったファイルを最後に探し直した時刻(``_follow_moved``)
@@ -95,12 +97,36 @@ class SyncService:
         1回きりで、共有が落ちていた日はそのあいだずっと「参照パス未設定」
         扱いになり、登録まで断っていた。
         """
-        found = sources.find_data_db()
+        try:
+            # この端末の設定を読めないのを「参照パスが未設定」と取り違えない
+            settings.load_checked()
+            folder = config.data_db_dir_text() or settings.access_data_path()
+            found = sources.find_data_db()
+        except (sources.SourceError, settings.SettingsUnreadable) as exc:
+            # **届かない・読めないのを「見つからない」と取り違えない。** 送り先を
+            # 空にも別のファイル(旧設定・別フォルダのマスタ)にも替えず、いまのまま
+            # 次の回に探し直す(``_ensure`` が ``_unreadable`` を見て呼び直す)
+            with self._lock:
+                self._unreadable = (str(exc) if isinstance(exc, sources.SourceError)
+                                    else "この端末の設定ファイルを読めませんでした。"
+                                         f"少しして自動でやり直します。({exc})")
+                keep = self._auto is not None
+            log.warning("取り込み元を探せませんでした(送り先は変えません): %s", exc)
+            return keep
         path = str(found) if found else ""
         # 班員名簿はマスタDBにある。受信のたびに一緒に入れ直す
-        master = sources.find_master_db() if path else None
-        folder = config.data_db_dir_text() or settings.access_data_path()
+        master = None
+        if path:
+            try:
+                master = sources.find_master_db()
+            except sources.SourceError as exc:
+                # マスタのフォルダに届かない。**保存用のフォルダの古いマスタへ移らない**
+                # (``find_master_db``)。いま使っているマスタのまま(無ければ名簿は入れ直さない)
+                previous = self._auto.master_path if self._auto is not None else ""
+                master = Path(previous) if previous else None
+                log.warning("マスタDBを探せませんでした(いまのまま): %s", exc)
         with self._lock:
+            self._unreadable = ""
             changed = path != self._path or folder != self._folder
             self._path = path
             self._folder = folder
@@ -140,10 +166,15 @@ class SyncService:
         if now - self._refound_at < REFIND_SEC:
             return
         self._refound_at = now
-        found = sources.find_data_db()
-        if found is None:
+        try:
+            found = sources.find_data_db()
+            if found is None:
+                return
+            master = sources.find_master_db()
+        except sources.SourceError as exc:
+            # 読めないのを「無くなった・別のファイルになった」と取り違えない。いまのまま
+            log.info("取り込み元を探し直せませんでした(いまのまま): %s", exc)
             return
-        master = sources.find_master_db()
         if str(found) == auto.source_path and str(master or "") == auto.master_path:
             return
         log.info("取り込み元のファイルが変わっていたので探し直しました: %s / マスタ %s",
@@ -154,7 +185,7 @@ class SyncService:
         """取り込み元が決まっているか。参照パスがあって見失っているなら探し直す。"""
         if self._auto is not None:
             return True
-        return bool(self._folder) and self._find()
+        return (bool(self._folder) or bool(self._unreadable)) and self._find()
 
     @property
     def path(self) -> str:
@@ -167,7 +198,7 @@ class SyncService:
         auto = self._auto
         if auto is None:
             # 参照パスはあるが、いま共有が見えない。見えれば送る(見つけ直す)
-            return bool(self._folder) and settings.auto_sync_enabled()
+            return (bool(self._folder) or bool(self._unreadable)) and settings.auto_sync_enabled()
         return bool(auto.enabled and settings.auto_sync_enabled())
 
     @property
@@ -177,7 +208,8 @@ class SyncService:
         **共有がいま見えなくても、参照パスがあれば決まっている。** 登録は
         送信待ちに残り、見えた時点で送る。断るのは場所が無いときだけ。
         """
-        return self._auto is not None or bool(self._folder)
+        # 設定・共有を読めなかっただけなら、決まっていないとは言わない(登録は送信待ちに預かる)
+        return self._auto is not None or bool(self._folder) or bool(self._unreadable)
 
     @property
     def reachable(self) -> bool:
@@ -212,21 +244,18 @@ class SyncService:
             status.state = SyncState.DISABLED
         elif self._auto is None:
             status.state = SyncState.OFFLINE
-            status.message = f"共有フォルダに取り込み元が見えません: {self._folder}"
+            status.message = (self._unreadable
+                              or f"共有フォルダに取り込み元が見えません: {self._folder}")
         elif status.state is not SyncState.OFFLINE:
             status.state = SyncState.PENDING if status.pending else SyncState.SYNCED
         return status
 
     @staticmethod
     def _pending_count() -> int:
-        from .sync import total_pending_count
-
+        """**画面に出すためだけ。** 数えられなければ 0(決めごとには使わない ──
+        ``unsent_count`` / ``remember_exit`` は ``pending_count_checked`` を使う)。"""
         try:
-            conn = db.connect()
-            try:
-                return total_pending_count(conn)
-            finally:
-                conn.close()
+            return pending_count_checked()
         except Exception as exc:                  # noqa: BLE001 - 表示のためだけ
             log.warning("送信待ちの件数を数えられませんでした: %s", exc)
             return 0
@@ -417,16 +446,38 @@ META_UNSENT_AT_EXIT = "unsent_at_exit"
 META_UNSENT_EXIT_AT = "unsent_exit_at"
 
 
+def pending_count_checked() -> int:
+    """手元の送信待ちの件数。**数えられなければ例外のまま**(0 とは読まない)。"""
+    from .sync import total_pending_count
+
+    conn = db.connect()
+    try:
+        return total_pending_count(conn)
+    finally:
+        conn.close()
+
+
+#: 送信待ちを数えられないときに ``unsent_count`` が返す数。**0 とは読まない**
+#: ── 0 と読むと、まだ送っていない入力を残したまま粘らずに終わり、「未送信を残して
+#: 終わった」の覚えも消していた
+UNKNOWN_PENDING = 1
+
+
 def unsent_count() -> int:
     """まだ取り込み元へ出せていない件数。``idle_exit`` が粘るかを決める。
 
     **送り先が決まっていなければ 0 を返す。** 待っても送れないので、
     粘る理由が無い(参照パスが未設定の端末を居座らせない)。
+    数えられないときは ``UNKNOWN_PENDING``(残っているものとして粘る)。
     """
     service = get_service()
     if not service.configured:
         return 0
-    return service.status().pending
+    try:
+        return pending_count_checked()
+    except Exception as exc:                      # noqa: BLE001 - 0 と読まずに粘る
+        log.warning("送信待ちの件数を数えられませんでした(残っているものとして扱います): %s", exc)
+        return UNKNOWN_PENDING
 
 
 def request_send() -> None:
@@ -444,9 +495,15 @@ def remember_exit(pending: int) -> None:
     まで誰も気づけない。0 のときは**消す** ── 前回の記録が居座ると、
     直ったのに出続ける。
     """
+    from .sync import total_pending_count
+
     try:
         conn = db.connect()
         try:
+            if not pending:
+                # **消すのは、数え直して本当に0件のときだけ。** 数え直せなければ覚えを
+                # 変えない(例外で下へ)。「数えられない」を0と読んで消していた
+                pending = total_pending_count(conn)
             db.set_meta(conn, META_UNSENT_AT_EXIT, str(pending) if pending else "")
             db.set_meta(conn, META_UNSENT_EXIT_AT,
                         db.now_string() if pending else "")

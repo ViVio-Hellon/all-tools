@@ -60,9 +60,16 @@ def pending(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def pending_at(path: str) -> list[dict[str, Any]]:
     """手元のDBファイルから読む(帯が数秒ごとに読むので、軽く1文だけ)。"""
+    from pathlib import Path
+
+    from ..dbkit import source_db
+
     try:
-        conn = sqlite3.connect(path, timeout=2)
-    except sqlite3.Error:
+        # **読むだけで開く**(``mode=ro``)。素のパスの ``connect`` は、無いファイルを
+        # 黙って作る ── 手元のDBが一瞬見えないと、その場所に空のDBを作っていた
+        conn = sqlite3.connect(source_db.to_uri(Path(path).absolute()) + "?mode=ro",
+                               uri=True, timeout=2)
+    except (sqlite3.Error, ValueError):
         return []
     try:
         row = conn.execute('SELECT "value" FROM "_sync_meta" WHERE "key"=?',

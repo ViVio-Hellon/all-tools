@@ -190,8 +190,12 @@ def set_paths():
     service = sync_service.get_service()
     service.reload()
 
-    found = sources.find_data_db()
-    if found is None:
+    found, unreadable = sources.locate(sources.find_data_db)
+    if unreadable:
+        # 届かないのを「取り込み元が見つかりません」と言わない(見えれば同期が見つけ直す)
+        message = (f"{' と '.join(changed)}のフォルダを保存しました。"
+                   f"ただし、{unreadable}")
+    elif found is None:
         message = (f"{' と '.join(changed)}のフォルダを保存しました。"
                    "ただし、そのフォルダに取り込み元(.sqlite3)が見つかりません。")
     else:
@@ -345,7 +349,9 @@ def reapply_distribution():
         # 「読み込んだ」と言うのに同期は古い場所を見続ける
         service = sync_service.get_service()
         service.reload()
-        if sources.find_data_db() is not None:
+        found, unreadable = sources.locate(sources.find_data_db)
+        if found is not None or unreadable:
+            # 読めなかっただけなら回しておく(見えた時点で同期が見つけ直す)
             service.start()
         terminals.publish()
     return _distribution_reply(result)
@@ -454,12 +460,17 @@ def do_import():
 
     paths: list[Path] = []
     missing: list[str] = []
-    if target in ("all", "data"):
-        found = sources.find_data_db()
-        paths.append(found) if found else missing.append("保存用DB(連絡帳)")
-    if target in ("all", "master"):
-        found = sources.find_master_db()
-        paths.append(found) if found else missing.append("マスタDB(班員名簿)")
+    try:
+        if target in ("all", "data"):
+            found = sources.find_data_db()
+            paths.append(found) if found else missing.append("保存用DB(連絡帳)")
+        if target in ("all", "master"):
+            found = sources.find_master_db()
+            paths.append(found) if found else missing.append("マスタDB(班員名簿)")
+    except SourceError as exc:
+        # **届かないのを「見つかりません」と言わない・別の場所から取り込まない**
+        log.warning("取り込み元を探せませんでした: %s", exc)
+        return _refuse("unreadable", str(exc))
 
     if not paths:
         return _refuse(

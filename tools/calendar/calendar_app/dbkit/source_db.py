@@ -104,6 +104,15 @@ class SourceError(RuntimeError):
     """取り込み元を読み書きできなかった。"""
 
 
+class SourceUnreadable(SourceError):
+    """取り込み元の置き場所(フォルダ)に届かない・一覧を読めない。**「無い」とは違う。**
+
+    前は届かないフォルダを「何も無いフォルダ」として扱い、次の候補(旧設定のフルパス・
+    保存用DBのフォルダにあるマスタ)へ移っていた。共有が一瞬見えないだけで、別の DB へ
+    送る・別の名簿で入れ替える、が起きる。読めないときは代わりを使わずに止め、次の回にやり直す。
+    """
+
+
 # ---------------------------------------------------------------------------
 # エラーの種別
 # ---------------------------------------------------------------------------
@@ -642,12 +651,88 @@ def list_source_files(directory: Optional[Path]) -> list[Path]:
     return [p for p in entries if p.is_file() and p.suffix.lower() in SUFFIXES]
 
 
-def find(directory: Optional[Path], name: str) -> Optional[Path]:
-    """名前で探す。**拡張子違いも同じものとして扱う**(.sqlite3 / .db)。"""
+def unreadable_message(where: Path | str, exc: BaseException) -> str:
+    """届かない・読めないときの一言(画面とログに出す)。"""
+    return (f"共有フォルダを読めませんでした({where})。少しして自動でやり直します。"
+            f"続くときは共有フォルダとネットワークを確かめてください。({exc})")
+
+
+def confirmed_absent(path: Path | str) -> bool:
+    """``path`` が**本当に無い**と確かめられたか(親フォルダに届いて一覧を読め、その中に無い)。
+
+    親フォルダに届かない・一覧を読めない・一覧には名前があるのに見えない、は ``False``
+    (=「読めない」)。名前は大文字小文字を見ずに比べる(Windows)。
+    """
+    # 親フォルダそのものも無ければ、その上で確かめる(届くところまで上がる)。共有ごと
+    # 見えない(``\\サーバ\共有`` の一覧が読めない)なら、いちばん上で ``False``
+    child = Path(path)
+    while True:
+        parent = child.parent
+        if parent == child:
+            return False
+        try:
+            names = os.listdir(parent)
+        except FileNotFoundError:
+            child = parent
+            continue
+        except (OSError, ValueError):
+            return False
+        wanted = child.name.casefold()
+        return all(n.casefold() != wanted for n in names)
+
+
+def list_source_files_checked(directory: Path | str) -> list[Path]:
+    """そのフォルダにある取り込み元の候補(名前順)。**読めなければ** ``SourceUnreadable``。
+
+    ``list_source_files`` は読めないフォルダを空のフォルダとして返す(見て回るだけの所向け)。
+    こちらは「無い」と言うのを、フォルダの一覧を読めたとき(またはフォルダそのものが無いと
+    親フォルダで確かめたとき)だけにする。
+    """
+    folder = Path(directory)
+    try:
+        with os.scandir(folder) as it:
+            entries = [(entry.name, entry.is_file()) for entry in it]
+    except FileNotFoundError as exc:
+        if confirmed_absent(folder):
+            return []
+        raise SourceUnreadable(unreadable_message(folder, exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise SourceUnreadable(unreadable_message(folder, exc)) from exc
+    entries.sort(key=lambda e: e[0].lower())
+    return [folder / name for name, is_file in entries
+            if is_file and Path(name).suffix.lower() in SUFFIXES]
+
+
+def file_checked(path: Path | str) -> Optional[Path]:
+    """そのファイルがあれば返す。**本当に無いと確かめたときだけ** ``None``。
+
+    見えない(届かない・権限・ロック)なら ``SourceUnreadable``。
+    """
+    target = Path(path)
+    try:
+        os.stat(target)
+    except FileNotFoundError as exc:
+        if confirmed_absent(target):
+            return None
+        raise SourceUnreadable(unreadable_message(target.parent, exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise SourceUnreadable(unreadable_message(target.parent, exc)) from exc
+    return target
+
+
+def find(directory: Optional[Path], name: str, *,
+         checked: bool = False) -> Optional[Path]:
+    """名前で探す。**拡張子違いも同じものとして扱う**(.sqlite3 / .db)。
+
+    ``checked=True`` なら、フォルダを読めないとき ``None``(無い)ではなく
+    ``SourceUnreadable``(``list_source_files_checked``)。
+    """
     if directory is None or not str(directory):
         return None
     stem = Path(name).stem.casefold()
-    for path in list_source_files(directory):
+    listed = (list_source_files_checked(directory) if checked
+              else list_source_files(directory))
+    for path in listed:
         if path.stem.casefold() == stem:
             return path
     return None
@@ -673,7 +758,8 @@ class Probe:
 
     def describe(self) -> str:
         if self.path is None:
-            return "見つかりません"
+            # 置き場所に届かなかった(``unreadable``)のを「見つかりません」と言わない
+            return f"読めません: {self.error}" if self.error else "見つかりません"
         if self.ok:
             text = f"開けました ({len(self.tables)}表 / {self.size:,} バイト)"
             if self.opened_by and self.opened_by != WAY_URI:

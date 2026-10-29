@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import threading
 import time
@@ -84,7 +85,32 @@ def install(app: Flask) -> None:
         # 404・405 などは Flask の決まりどおりに返す(思わぬエラーではない)
         if isinstance(exc, HTTPException):
             return exc
+        unreadable = unreadable_reply(exc)
+        if unreadable is not None:
+            return unreadable
         return unexpected_reply(exc)
+
+
+def unreadable_reply(exc: BaseException):
+    """**読めなかった**(この端末の設定ファイル・共有フォルダ)。思わぬエラーとは分けて、
+    何が起きたかと「少しして、もう一度」を返す。書く処理はその手前で止まっている
+    (`settings.load_checked` / `source_db.SourceUnreadable`)。"""
+    from calendar_app import settings as user_settings
+    from calendar_app.dbkit.source_db import SourceUnreadable
+
+    if isinstance(exc, user_settings.SettingsUnreadable):
+        message = ("この端末の設定ファイルを読めませんでした。何も書き換えていません。"
+                   f"少しして、もう一度やってください。({exc})")
+    elif isinstance(exc, SourceUnreadable):
+        message = str(exc)
+    else:
+        return None
+    log.warning("読めないため断りました %s %s: %s", request.method, request.path, exc)
+    if request.path.startswith("/api/") or request.path.startswith("/print"):
+        return jsonify({"error": {"code": "unreadable", "message": message}}), 503
+    return Response(
+        "<!doctype html><meta charset='utf-8'><title>読めません</title>"
+        f"<p>{html.escape(message)}</p>", status=503, mimetype="text/html")
 
 
 def unexpected_reply(exc: BaseException):

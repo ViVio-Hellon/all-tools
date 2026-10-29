@@ -121,6 +121,19 @@ REFUSE_FAILED = "failed"
 REFUSE_NOTHING = "nothing"
 
 
+class DistributionUnreadable(OSError):
+    """配布設定のファイルは**ある**のに読めない(ロック中・権限・壊れている)。
+
+    **「置かれていない」と取り違えない。** 前は読めないと無いものとして扱い、もう片方
+    (大設定がまとめたファイル)の古い中身で読み込み直していた。
+    """
+
+
+#: 読めなかったときに画面・記録に出す一言
+UNREADABLE_SETTINGS = "この端末の設定ファイルを読めませんでした。少しして、もう一度やってください。"
+UNREADABLE_BUNDLE = "配布設定のファイルを読めませんでした。少しして、もう一度やってください。"
+
+
 def settings_path(base: Optional[Path] = None) -> Path:
     return (base or DIR) / SETTINGS_NAME
 
@@ -226,12 +239,10 @@ def _bundle_of(data: Any, where: Path, *, integrated: bool) -> Optional[Bundle]:
 def read_integrated() -> Optional[Bundle]:
     """まとめたファイルのカレンダーの分。無い・読めない・カレンダーの分が無いなら None。"""
     path = integrated_path()
-    if path is None or not path.is_file():
+    if path is None:
         return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+    data = _read_json(path, "日報複合ツールの配布設定")
+    if data is None:
         return None
     tools = data.get("tools") if isinstance(data, dict) else None
     entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
@@ -247,6 +258,8 @@ def read() -> Optional[Bundle]:
     丸ごと使う**(同じならカレンダーのフォルダのほう ── まとめて書き出すと両方に同じものが入る)。
     項目ごとには混ぜない。
     """
+    # **片方でも読めなければ** ``DistributionUnreadable``(読めたほうへ替えない ──
+    # 読めなかったほうが新しいかもしれない)
     own = read_own()
     whole = read_integrated()
     if whole is None:
@@ -258,22 +271,45 @@ def read() -> Optional[Bundle]:
 
 def read_own() -> Optional[Bundle]:
     """カレンダーのフォルダの ``配布設定\\`` の中身。"""
-    if not DIR.is_dir():
-        return None
     path = settings_path()
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        log.warning("配布設定を読めませんでした: %s", exc)
+    data = _read_json(path, "配布設定")
+    if data is None:
         return None
     return _bundle_of(data, path, integrated=False)
 
 
+def _read_json(path: Path, label: str) -> Any:
+    """配布設定の JSON を読む。**本当に無いと確かめたときだけ** ``None``。
+
+    ある(かもしれない)のに読めない・壊れている(途中で切れた)は ``DistributionUnreadable``。
+    無いのは、届く親フォルダの一覧に無いと確かめたときだけ(``source_db.confirmed_absent``)。
+    """
+    from .dbkit import source_db
+
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError as exc:
+        if source_db.confirmed_absent(path):
+            return None
+        log.warning("%sを読めませんでした: %s", label, exc)
+        raise DistributionUnreadable(f"{UNREADABLE_BUNDLE}({path}: {exc})") from exc
+    except (OSError, ValueError) as exc:
+        log.warning("%sを読めませんでした: %s", label, exc)
+        raise DistributionUnreadable(f"{UNREADABLE_BUNDLE}({path}: {exc})") from exc
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        log.warning("%sの中身が読めない形でした: %s", label, exc)
+        raise DistributionUnreadable(f"{UNREADABLE_BUNDLE}({path}: {exc})") from exc
+
+
 def summary() -> dict[str, Any]:
     """設定画面に出す、配布設定のいま。**パスワードの値は出さない。**"""
-    bundle = read()
+    try:
+        bundle = read()
+        unreadable = ""
+    except DistributionUnreadable as exc:
+        bundle, unreadable = None, str(exc)
     applied = user_settings.get(KEY_APPLIED, None)
     out: dict[str, Any] = {
         "exists": bundle is not None,
@@ -287,6 +323,8 @@ def summary() -> dict[str, Any]:
         "version": "",
         "integrated": False,
         "source": "",
+        # 読めなかった(「置かれていません」とは出さない)
+        "unreadable": unreadable,
     }
     if bundle is None:
         return out
@@ -338,12 +376,21 @@ def export(password: str, items: list[str], *, admin: bool = False,
     if not items:
         return Result(False, "入れる項目を1つ以上選んでください。", REFUSE_BAD_INPUT)
 
-    current = user_settings.load()
+    try:
+        # **読めない設定を「既定のまま」と取り違えて、項目の抜けた配布設定にしない**
+        current = user_settings.load_checked()
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("配布設定を書き出せません: %s", exc)
+        return Result(False, UNREADABLE_SETTINGS, REFUSE_FAILED)
     settings = {k: current[k] for k in items if _present(current.get(k))}
     defaults = [ITEM_LABELS[k] for k in items if not _present(current.get(k))]
     carried: list[str] = []
     if keep_previous:
-        before = read_own()
+        try:
+            # 前の配布設定を読めないのを「前に入れていない」と取り違えない(ラインが消える)
+            before = read_own()
+        except DistributionUnreadable as exc:
+            return Result(False, str(exc), REFUSE_FAILED)
         for key in KEEP_ON_COMBINED:
             if key not in items and before is not None and key in before.settings:
                 settings[key] = before.settings[key]
@@ -454,7 +501,12 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
     # 読んでから書くまでを錠の中で(あいだに入った保存を古い値で消さない)
     with user_settings.LOCK:
-        _apply_locked(bundle, overwrite, result)
+        try:
+            _apply_locked(bundle, overwrite, result)
+        except user_settings.SettingsUnreadable as exc:
+            # **読めない設定を空とみなして配布設定で埋め、ほかの設定ごと書き直さない**
+            log.warning("配布設定を読み込めません: %s", exc)
+            return Result(False, UNREADABLE_SETTINGS, REFUSE_FAILED)
     if result.applied:
         if ITEM_LABELS[user_settings.KEY_LOG_DIR] in result.applied:
             # ログの書き先が変わった。**その場で付け替える**(次の起動を待つと、
@@ -476,7 +528,10 @@ def _decided_here(key: str, value: Any, came: dict[str, Any]) -> bool:
 
 
 def _apply_locked(bundle: Bundle, overwrite: bool, result: Result) -> None:
-    current = user_settings.load()
+    # **書く前は load_checked**(読めなければ ``SettingsUnreadable``)。前は ``load`` で、
+    # 読めないと空の設定に配布設定を埋めて丸ごと保存し、この端末の値(ライン・置き場所・
+    # パスワードなど)を消し、配布設定の値で上書きしていた
+    current = user_settings.load_checked()
     found = current.get(KEY_FROM_DIST)
     came = dict(found) if isinstance(found, dict) else {}
     written: dict[str, Any] = {}
@@ -509,7 +564,10 @@ def _apply_locked(bundle: Bundle, overwrite: bool, result: Result) -> None:
 def describe() -> str:
     """起動の記録の1行。**起動のたびに、何を読んでいるかを残す**(配った先で「効いていない」と
     言われたとき、まず見るところ)。"""
-    bundle = read()
+    try:
+        bundle = read()
+    except DistributionUnreadable as exc:
+        return f"{exc}(今回は読み込みません。次の起動でやり直します)"
     if bundle is not None and bundle.integrated:
         return (f"配布設定を読みます: {bundle.file}(日報複合ツールの大設定がまとめたファイル。"
                 f"設定 {len(bundle.settings)}件: {'、'.join(ITEM_LABELS[k] for k in bundle.settings)})")
@@ -524,10 +582,18 @@ def describe() -> str:
 
 def apply_on_start() -> Result:
     """起動時に呼ぶ。``配布設定\\`` があれば、**その端末に無いものだけ**読む。"""
-    bundle = read()
+    try:
+        bundle = read()
+    except DistributionUnreadable as exc:
+        # 読めた片方で埋めない。今回は読まず、次の起動でやり直す
+        log.warning("%s", exc)
+        return Result(False, str(exc), REFUSE_FAILED)
     if bundle is None:
         return Result(True, "")
     result = _apply(bundle, overwrite=False)
+    if not result.ok:
+        log.warning("配布設定を読み込みませんでした: %s", result.message)
+        return result
     if result.applied:
         log.info("配布設定を読み込みました: %s(すでにあったので読まなかったもの: %s)",
                  ", ".join(result.applied), ", ".join(result.kept) or "なし")
@@ -540,10 +606,15 @@ def reapply(password: str) -> Result:
     blocked = _guard(password, "読み込み直す")
     if blocked is not None:
         return blocked
-    bundle = read()
+    try:
+        bundle = read()
+    except DistributionUnreadable as exc:
+        return Result(False, str(exc), REFUSE_FAILED)
     if bundle is None:
         return Result(False, "配布設定が置かれていません。", REFUSE_BAD_INPUT)
     result = _apply(bundle, overwrite=True)
+    if not result.ok:
+        return result
     result.message = f"配布設定を読み込みました({len(result.applied)}項目)"
     log.info("配布設定を読み込み直しました: %s", ", ".join(result.applied))
     return result

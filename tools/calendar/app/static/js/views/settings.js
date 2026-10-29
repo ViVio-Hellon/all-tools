@@ -263,7 +263,7 @@ function render(payload) {
    ["ログ", payload.log_dir],
    ["配布設定", payload.distribution.exists
      ? `あり(${payload.distribution.created_at} に ${payload.distribution.created_on} で作成)`
-     : "なし"],
+     : (payload.distribution.unreadable ? "読めません" : "なし")],
    ["配布設定の読み込み", payload.distribution.applied_at || "(まだ)"],
    ["最終送信", payload.last_sent_at || "(まだ)"],
    ["最終取り込み", payload.last_received_at || "(まだ)"],
@@ -282,9 +282,12 @@ function render(payload) {
    ------------------------------------------------------------------ */
 function renderDistribution(dist) {
   const pill = document.getElementById("st-dist-state");
-  pill.textContent = dist.exists ? "あり" : "なし";
+  // 読めなかったのを「なし」と出さない(`distribution.summary` の unreadable)
+  pill.textContent = dist.exists ? "あり" : (dist.unreadable ? "読めません" : "なし");
   pill.className = `sub pill pill--${dist.exists ? "ok" : "warn"}`;
-  document.getElementById("st-dist-meta").textContent = dist.exists
+  document.getElementById("st-dist-meta").textContent = dist.unreadable
+    ? dist.unreadable
+    : dist.exists
     ? `${dist.created_at} に ${dist.created_on} で作成(VER${dist.version})`
       + (dist.integrated ? `。日報複合ツールの大設定がまとめたファイル(${dist.source})を読んでいます`
         + "(カレンダーのフォルダの配布設定より新しいため。両方あるときは作った時刻が新しいほう)" : "")

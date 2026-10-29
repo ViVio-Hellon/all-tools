@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import shutil
 import sqlite3
 import sys
@@ -50,6 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from calendar_app import config  # noqa: E402
 from calendar_app.accdb.reader import AccdbError, AccdbReader  # noqa: E402
+from calendar_app.dbkit import source_db  # noqa: E402
+from calendar_app.settings import _replace  # noqa: E402
 from calendar_app.logging_utils import configure_logging  # noqa: E402
 
 #: 変換する表と、その作成 SQL。**カレンダーが読む3つだけ**
@@ -175,22 +178,48 @@ def convert_table(reader: AccdbReader, out: sqlite3.Connection,
     return count
 
 
+def _exists_checked(target: Path) -> bool:
+    """出力先がもうあるか。**届かない・読めないのを「無い」と取り違えない。**
+
+    前は ``target.exists()`` で見ていた。共有フォルダが一瞬見えないと「無い」と読み、
+    そのまま ``sqlite3.connect`` で**動いている共有DBを開いて書き込みにいく**
+    (見えたとき)・空のファイルを作る、になりえた。無いと言うのは、親フォルダの
+    一覧を読めてその中に無いときだけ(``source_db.confirmed_absent``)。
+    """
+    try:
+        os.stat(target)
+        return True
+    except FileNotFoundError as exc:
+        if source_db.confirmed_absent(target):
+            return False
+        reason = exc
+    except OSError as exc:
+        reason = exc
+    raise SystemExit(
+        f"[中止] 出力先を確かめられません(共有フォルダに届かない・読めない): {target}\n"
+        f"       {reason}\n"
+        "       何も書き換えていません。少しして、もう一度やってください。")
+
+
 def convert(source: Path, target: Path, *, force: bool = False) -> dict[str, Any]:
-    """1つの .accdb を .sqlite3 へ変換する。"""
-    if target.exists():
-        if not force:
-            raise SystemExit(
-                f"[中止] 出力先が既にあります: {target}\n"
-                "       上書きするなら --force を付けてください"
-                "(控えを取ってから置き換えます)。")
-        backup = target.with_name(
-            f"{target.stem}_変換前_{_dt.datetime.now():%Y%m%d_%H%M%S}{target.suffix}")
-        shutil.copyfile(target, backup)
-        print(f"  控え: {backup}")
-        target.unlink()
+    """1つの .accdb を .sqlite3 へ変換する。
+
+    **作るのは出力先と同じフォルダの作業用のファイル**(名前は取り込み元に拾われない
+    形)で、全部書き終えてから出力先へ置き換える。前は ``--force`` のとき先に出力先を
+    消してから .accdb を読んだので、読めない・途中で落ちると出力先が無くなるか、
+    途中までの中身で残った。
+    """
+    exists = _exists_checked(target)
+    if exists and not force:
+        raise SystemExit(
+            f"[中止] 出力先が既にあります: {target}\n"
+            "       上書きするなら --force を付けてください"
+            "(控えを取ってから置き換えます)。")
 
     report: dict[str, Any] = {"source": str(source), "target": str(target),
                               "tables": {}, "skipped": []}
+    # 拡張子を .sqlite3 / .db にしない ── 書いている途中で取り込み元として拾われない
+    work = target.with_name(f".{target.name}.変換中-{os.getpid()}")
     with AccdbReader(str(source)) as reader:
         available = set(reader.table_names())
         found = [t for t in SCHEMA if t in available]
@@ -201,18 +230,51 @@ def convert(source: Path, target: Path, *, force: bool = False) -> dict[str, Any
                 f"       探した表: {', '.join(SCHEMA)}\n"
                 f"       入っていた表: {', '.join(sorted(available)) or 'なし'}")
 
-        out = sqlite3.connect(str(target))
+        # **無いと確かめた名前に、自分で作る**(あれば作らない = 他人のファイルに書かない)
+        os.close(os.open(work, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
         try:
-            # **WAL にしない。** WAL は共有メモリを使うので、共有フォルダ
-            # (SMB) に置いた瞬間そのファイルは誰からも開けなくなる
-            out.execute("PRAGMA journal_mode = DELETE")
-            with out:
-                for table in found:
-                    count = convert_table(reader, out, table)
-                    report["tables"][table] = count
-        finally:
-            out.close()
+            out = sqlite3.connect(str(work))
+            try:
+                # **WAL にしない。** WAL は共有メモリを使うので、共有フォルダ
+                # (SMB) に置いた瞬間そのファイルは誰からも開けなくなる
+                out.execute("PRAGMA journal_mode = DELETE")
+                with out:
+                    for table in found:
+                        count = convert_table(reader, out, table)
+                        report["tables"][table] = count
+            finally:
+                out.close()
+        except BaseException:
+            _remove_quietly(work)
+            raise
+
+    try:
+        if exists:
+            backup = target.with_name(
+                f"{target.stem}_変換前_{_dt.datetime.now():%Y%m%d_%H%M%S}{target.suffix}")
+            shutil.copyfile(target, backup)
+            print(f"  控え: {backup}")
+        elif _exists_checked(target):
+            raise SystemExit(
+                f"[中止] 変換しているあいだに出力先が置かれました: {target}\n"
+                "       上書きするなら --force を付けてください。")
+        # Windows では一瞬断られることがあるので、やり直し付きで置き換える
+        _replace(work, target)
+    except BaseException:
+        _remove_quietly(work)
+        raise
     return report
+
+
+def _remove_quietly(path: Path) -> None:
+    for extra in ("", "-journal"):
+        try:
+            Path(str(path) + extra).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"  作業用のファイルを消せませんでした: {path}{extra} ({exc})",
+                  file=sys.stderr)
 
 
 def inspect(source: Path) -> None:
