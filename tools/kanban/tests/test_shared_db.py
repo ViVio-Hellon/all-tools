@@ -438,27 +438,48 @@ class WritePathTest(unittest.TestCase):
     def test_a_share_path_reaches_sqlite_unchanged(self):
         """共有フォルダのパスが、組み直されずに SQLite へ渡ること。
 
-        ここ(Linux)では共有フォルダを開けないので、**何を渡したか**を見る。
+        ここ(Linux)では共有フォルダを開けないので、**何を渡したか**を見る。書くときは
+        **無ければ作らない** ``mode=rw`` の URI で開く(素のパスは、一瞬見えなくなった共有に
+        空の DB を作る)。URI でも道はそのまま(``file:`` の直後に ``//`` を作らない ── ホスト名
+        として断られる形にしない)。URI で開けなければ、**ファイルが見えるときだけ**素のパスで開き直す。
         """
         unc = r"\\nlmfangyshrd\各課共有\0130_日軽稲沢\梱包課\AIM\【■】_参照用ファイル\看板マスタ.sqlite3"
         db = SharedDb(unc)
-        seen = {}
 
         class Stop(Exception):
             pass
 
-        def fake_connect(database, *args, **kwargs):
-            seen["database"] = database
-            seen["uri"] = kwargs.get("uri", False)
-            raise Stop
+        for visible in (True, False):
+            with self.subTest(visible=visible):
+                seen = []
 
-        with mock.patch.object(db, "_require_exists"), \
-                mock.patch("kanban.db.shared.sqlite3.connect", fake_connect):
-            with self.assertRaises(Stop):
-                db._connect(read_only=False)
+                def fake_connect(database, *args, **kwargs):
+                    seen.append((database, kwargs.get("uri", False)))
+                    if kwargs.get("uri"):
+                        raise sqlite3.OperationalError("この SQLite は URI で開けない")
+                    raise Stop
 
-        self.assertEqual(seen["database"], unc, "パスを組み直している")
-        self.assertFalse(seen["uri"], "URI として開いている(ホスト名で断られる)")
+                with mock.patch.object(db, "_require_exists"), \
+                        mock.patch("kanban.db.shared.os.path.isfile", return_value=visible), \
+                        mock.patch("kanban.db.shared.sqlite3.connect", fake_connect):
+                    with self.assertRaises(Stop if visible else SharedDbError):
+                        db._connect(read_only=False)
+
+                first, as_uri = seen[0]
+                self.assertTrue(as_uri)
+                self.assertEqual(first, f"file:{unc}?mode=rw", "パスを組み直している")
+                self.assertFalse(first.startswith("file://"), "ホスト名で断られる形にした")
+                if visible:
+                    self.assertEqual(seen[1:], [(unc, False)])
+                else:
+                    self.assertEqual(seen[1:], [], "見えないファイルを素のパスで開いた(空の DB を作る)")
+
+    def test_a_share_path_written_with_slashes_keeps_an_empty_authority(self):
+        """``//サーバ/共有/…`` と書いた道は ``file:////サーバ/…``(空の authority)にする。"""
+        from kanban.db.shared import _uri
+
+        self.assertEqual(_uri("//srv/共有/看板マスタ.sqlite3", "rw"), "file:////srv/共有/看板マスタ.sqlite3?mode=rw")
+        self.assertEqual(_uri("/a/#1 100%?/k.sqlite3", "rw"), "file:/a/%231 100%25%3f/k.sqlite3?mode=rw")
 
     def test_the_old_uri_form_is_what_sqlite_refuses(self):
         """直した理由そのものを残す: ホスト名付きの URI は SQLite が断る。"""

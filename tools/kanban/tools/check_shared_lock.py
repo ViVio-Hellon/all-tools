@@ -28,16 +28,33 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
+import os
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 TABLE = "lock_test_counter"
 
+#: 運用で使うファイルの名前。**試験の表を入れない**(この道具は表を消して作り直す)
+PRODUCTION_NAMES = ("kanban.sqlite3", "看板マスタ.sqlite3", "看板履歴.sqlite3", "梱包資材マスタ.sqlite3")
 
-def _connect(path: str, busy_timeout_ms: int) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0, isolation_level=None)
+
+def _connect(path: str, busy_timeout_ms: int, *, create: bool = False) -> sqlite3.Connection:
+    """開く。**作ってよいのは最初の準備(``create``)だけ。**
+
+    準備のあと(各プロセス・結果の確かめ)は、共有フォルダが一瞬切れたときに素のパスが空の
+    DB を作らないよう ``mode=rw``(無ければ作らない)で開く。
+    """
+    if create:
+        conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0, isolation_level=None)
+    else:
+        conn = _connect_existing(path, busy_timeout_ms / 1000.0)
+        conn.isolation_level = None
     conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute("PRAGMA synchronous = FULL")
     # WAL は SMB では張れないことが多いため、実運用の store.py と同じ判定にする
@@ -49,8 +66,49 @@ def _connect(path: str, busy_timeout_ms: int) -> sqlite3.Connection:
     return conn
 
 
+def _connect_existing(path: str, timeout: float) -> sqlite3.Connection:
+    from kanban.db.shared import connect_existing
+
+    return connect_existing(path, timeout=timeout)
+
+
+def path_problem(path: str) -> str:
+    """その場所で試してよいか。よければ空文字。
+
+    * 運用のファイルと同じ名前は断る
+    * **すでにあるファイルは、この道具が作った試験用のもの(表が ``lock_test_counter`` だけ)に限る**
+      ── 看板マスタなどを指すと、そこへ試験の表を作って残してしまう
+    * フォルダは作らない(共有フォルダが一瞬見えないだけのとき、そこへ作ってしまう)
+    """
+    target = Path(path)
+    if target.name in PRODUCTION_NAMES:
+        return f"運用ファイルと同名です({target.name})。テスト専用の別名パスを指定してください"
+    try:
+        os.stat(target)
+    except (FileNotFoundError, NotADirectoryError):
+        if not os.path.isdir(target.parent):
+            return f"フォルダが見つかりません(届かない場合も含む): {target.parent}"
+        return ""
+    except OSError as exc:
+        return f"その場所を確かめられません: {target}({exc})"
+    try:
+        conn = _connect_existing(str(target), 5.0)
+        try:
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return f"sqlite3 として開けません: {target}({exc})"
+    others = [n for n in names if n != TABLE]
+    if others:
+        return (f"試験用ではないファイルです(入っている表: {'、'.join(others[:5])})。"
+                "テスト専用の別名パスを指定してください")
+    return ""
+
+
 def init_db(path: str) -> None:
-    conn = _connect(path, 8000)
+    conn = _connect(path, 8000, create=True)
     conn.execute(f"DROP TABLE IF EXISTS {TABLE}")
     conn.execute(
         f"CREATE TABLE {TABLE} (worker TEXT PRIMARY KEY, count INTEGER NOT NULL)"
@@ -196,10 +254,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--busy-timeout-ms", type=int, default=8000, help="busy_timeout(ミリ秒)")
     args = parser.parse_args(argv)
 
-    if Path(args.path).name == "kanban.sqlite3":
-        parser.error("運用ファイルと同名です。テスト専用の別名パスを指定してください")
+    problem = path_problem(args.path)
+    if problem:
+        parser.error(problem)
 
-    Path(args.path).parent.mkdir(parents=True, exist_ok=True)
     ok = run_check(args.path, args.workers, args.seconds, args.busy_timeout_ms)
     return 0 if ok else 1
 

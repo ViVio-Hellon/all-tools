@@ -25,8 +25,11 @@ Access をやめて共有 SQLite へ移るときの、最初で最後の一歩�
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -75,11 +78,40 @@ def describe(accdb_path: str) -> int:
     return 0
 
 
+def _out_state(out: Path) -> str:
+    """出力先の様子。``"none"``(無いと確かめた)/ ``"file"`` / それ以外は**確かめられない理由**。
+
+    「あるか」を ``exists()`` で見ると、確かめられない(共有フォルダに届かない・権限)ときに
+    「無い」と答えることがある。そう取り違えると、あるファイルを --force 無しで作り直しに行く。
+    """
+    try:
+        os.stat(out)
+        return "file"
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError as exc:
+        return f"出力先を確かめられませんでした: {out}({exc})"
+    try:
+        if os.path.isdir(out.parent):
+            return "none"
+        os.stat(out.parent)
+    except OSError as exc:
+        return f"出力先のフォルダに届きません: {out.parent}({exc})"
+    return f"出力先のフォルダが見つかりません: {out.parent}"
+
+
 def convert(accdb_path: str, out_path: str, *, force: bool = False) -> int:
     out = Path(out_path)
-    if out.exists() and not force:
+    state = _out_state(out)
+    if state == "file" and not force:
         print(f"[エラー] 出力先が既にあります: {out}\n"
               "  上書きしてよければ --force を付けてください。", file=sys.stderr)
+        return 1
+    if state not in ("file", "none"):
+        # **フォルダを作りに行かない。** 共有フォルダが一瞬見えないだけのとき、そこへ空の
+        # フォルダ・ファイルを作ってしまう
+        print(f"[エラー] {state}\n  共有フォルダに届いているか確かめてから、もう一度実行してください。",
+              file=sys.stderr)
         return 1
 
     with filereader.AccdbReader(accdb_path) as db:
@@ -89,24 +121,35 @@ def convert(accdb_path: str, out_path: str, *, force: bool = False) -> int:
         print("[エラー] 看板テーブルが見つかりませんでした。", file=sys.stderr)
         return 1
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        out.unlink()
-
+    # **いまのファイルを消してから書かない。** 同じフォルダの一時ファイルへ書き上げてから
+    # 置き換える。前は先に消して出力先へ直接書いていたので、変換の途中(Access を読み切れない・
+    # 落ちた)には、ほかの PC から共有DBが「無い」「空」「途中まで」に見えた
+    fd, name = tempfile.mkstemp(prefix=f"{out.stem}.", suffix=".converting", dir=str(out.parent))
+    os.close(fd)
+    tmp = Path(name)
     total = 0
-    conn = sqlite3.connect(str(out))
     try:
-        # **WAL にしない。** 共有フォルダに置く前提のファイルなので、
-        # 共有メモリを使うモードにすると SMB の上で開けなくなる
-        conn.execute("PRAGMA journal_mode = DELETE")
-        for name in picked:
-            table = filereader.read_table(accdb_path, name)
-            rows = _copy_table(conn, table)
-            total += rows
-            print(f"  {name:<20} {rows} 行")
-        conn.commit()
-    finally:
-        conn.close()
+        conn = sqlite3.connect(str(tmp))
+        try:
+            # **WAL にしない。** 共有フォルダに置く前提のファイルなので、
+            # 共有メモリを使うモードにすると SMB の上で開けなくなる
+            conn.execute("PRAGMA journal_mode = DELETE")
+            for name in picked:
+                table = filereader.read_table(accdb_path, name)
+                rows = _copy_table(conn, table)
+                total += rows
+                print(f"  {name:<20} {rows} 行")
+            conn.commit()
+        finally:
+            conn.close()
+        _replace(tmp, out)
+    except BaseException:
+        for leftover in (tmp, Path(str(tmp) + "-journal")):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+        raise
 
     print(f"\n変換しました: {out}  (テーブル {len(picked)} / 行 {total})")
     print("\n次の手順:")
@@ -114,6 +157,19 @@ def convert(accdb_path: str, out_path: str, *, force: bool = False) -> int:
     print("  2. 設定画面の「接続先」を、このファイルのパスに変える")
     print("  3. 全端末でアプリを開き直す")
     return 0
+
+
+def _replace(src: Path, dst: Path, tries: int = 10, wait: float = 0.5) -> None:
+    """置き換える。**Windows で一瞬断られたら、少し待ってやり直す**(ほかの PC・ウイルス対策が
+    開いている瞬間は ``PermissionError`` になる)。"""
+    for attempt in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt + 1 >= tries:
+                raise
+            time.sleep(wait)
 
 
 def _copy_table(conn: sqlite3.Connection, table) -> int:

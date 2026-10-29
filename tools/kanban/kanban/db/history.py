@@ -23,7 +23,7 @@ import sqlite3
 from pathlib import Path
 
 from .. import applog, config
-from .shared import SharedDb, SharedDbError, _is_usable_sqlite, kanban_tables_in
+from .shared import SharedDb, SharedDbError, _is_usable_sqlite, connect_existing, kanban_tables_in
 
 TABLE = "看板履歴"
 
@@ -104,7 +104,9 @@ def create_if_missing(db: HistoryDb) -> bool:
     if size is None and not target.parent.is_dir():
         raise SharedDbError(f"看板履歴のフォルダが見つかりません: {target.parent}")
     try:
-        conn = sqlite3.connect(str(target))
+        # 作るのは「無い」と確かめたとき(親フォルダは見えている)だけ。0 バイトのファイルは
+        # **あるものだけ開く**(その間に消えたなら作らない)
+        conn = sqlite3.connect(str(target)) if size is None else connect_existing(target)
     except sqlite3.Error as exc:
         raise SharedDbError(f"看板履歴のファイルを開けませんでした: {target}({exc})") from exc
     try:
@@ -150,7 +152,12 @@ def copy_from_shared(shared: SharedDb, history: HistoryDb) -> int:
     columns = [c for c, _ in HISTORY_COLUMNS if c in have]
     names = ", ".join(f"[{c}]" for c in columns)
     picks = ", ".join(f"COALESCE(s.[{c}], '')" for c in columns)
-    conn = sqlite3.connect(history.path, timeout=history.busy_timeout_ms / 1000)
+    # **看板履歴.sqlite3 を作らない**(``mode=rw``)。確かめた直後に共有が一瞬切れると、素のパスは
+    # そこへ空の DB を作り、表が無いので写せずに、空のファイルだけを共有に残していた
+    try:
+        conn = connect_existing(history.path, timeout=history.busy_timeout_ms / 1000)
+    except sqlite3.Error as exc:
+        raise SharedDbError(f"看板履歴を開けませんでした({history.path}): {exc}") from exc
     try:
         conn.execute("ATTACH DATABASE ? AS src", (str(source),))
         cursor = conn.execute(

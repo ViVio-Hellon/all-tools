@@ -183,8 +183,10 @@ def load(shared: SharedDb | None, history: SharedDb | None = None) -> Dataset:
             continue
         try:
             rows = shared.read_table(table).rows
-        except SharedDbError:
-            continue
+        except SharedDbError as exc:
+            # **読めなかったラインを黙って抜かない**(集計からそのラインが消えて見える)
+            data.why = f"共有DBを読めませんでした。少しして自動でやり直します: {exc}"
+            return data
         data.totals[code] = sum(
             1 for r in rows
             if str(r.get(config.COL_MATERIAL) or "").strip()
@@ -194,11 +196,13 @@ def load(shared: SharedDb | None, history: SharedDb | None = None) -> Dataset:
     data.available = True
     data.comments = _load_comments(shared, names)
     source, source_names = shared, names
-    if history is not None and history.exists():
+    # **看板履歴.sqlite3 に届かないのを「まだ無い」と取り違えて、看板マスタの以前の記録
+    # (古い置き場所)で集計しない。** 以前の置き場所を読むのは、無いと確かめられたときだけ
+    if history is not None and not history.confirmed_missing():
         try:
             source, source_names = history, set(history.table_names())
         except SharedDbError as exc:
-            data.why = f"看板履歴を読めません: {exc}"
+            data.why = f"看板履歴を読めません。少しして自動でやり直します: {exc}"
             return data
     data.history_path = source.path
     if HISTORY_TABLE not in source_names:

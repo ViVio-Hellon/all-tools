@@ -49,7 +49,7 @@ from typing import Any, Iterable, Sequence
 
 from . import applog, config, keys
 from .domain import state
-from .db.shared import SharedDb, SharedDbError, _looks_like_lock
+from .db.shared import SharedDb, SharedDbError, _looks_like_lock, connect_existing
 
 ACCESS_SUFFIXES = (".accdb", ".mdb")
 SQLITE_SUFFIXES = (".sqlite3", ".sqlite", ".db")
@@ -219,10 +219,11 @@ def _read_access(path: Path) -> dict[str, SourceTable]:
 
 
 def _read_sqlite(path: Path) -> dict[str, SourceTable]:
-    # **素のパスで開く(URI にしない)。** 共有フォルダ(\\server\…)のファイルは
-    # URI にすると開けない(kanban.db.shared の接続と同じ)。書かないよう query_only にする
+    # **無ければ作らない**(:func:`kanban.db.shared.connect_existing`。共有フォルダ(\\server\…)
+    # でも開ける形)。選んだあとに一瞬見えなくなったファイルの場所へ空の DB を作らない。
+    # 書かないよう query_only にする
     try:
-        conn = sqlite3.connect(str(path))
+        conn = connect_existing(path)
         conn.execute("PRAGMA query_only = ON")
     except sqlite3.Error as exc:
         raise SourceError(f"sqlite3 を開けません: {exc}") from exc
@@ -395,24 +396,30 @@ def plan(source_path: str, shared: SharedDb | None) -> Plan:
     out.dest_facts = _facts(Path(shared.path), [n for n in dest_names if not is_access_internal(n)])
     out.only_in_dest = sorted((n for n in dest_names if n not in tables and not is_access_internal(n)),
                               key=_order)
-    for name in sorted(tables, key=_order):
-        src = tables[name]
-        if name not in dest_names:
-            out.only_in_source.append(name)
-            continue
-        dest_cols = shared.column_names(name)
-        suspect = _suspect_rows(src)
-        cand = Candidate(
-            name=name, rows=len(src.rows), columns=src.columns,
-            current_rows=_count(shared, name),
-            not_copied=[c for c in src.columns if c not in dest_cols],
-            suspect=suspect,
-            refresh_why=refresh_why(name, src, dest_cols, suspect),
-            keeps=KEEPS_KANBAN_SHORT if is_kanban_table(name) else "",
-        )
-        if is_kanban_table(name) and cand.can_refresh:
-            cand.preview = _preview_kanban(shared, src, dest_cols)
-        out.candidates.append(cand)
+    try:
+        for name in sorted(tables, key=_order):
+            src = tables[name]
+            if name not in dest_names:
+                out.only_in_source.append(name)
+                continue
+            dest_cols = shared.column_names(name)
+            suspect = _suspect_rows(src)
+            cand = Candidate(
+                name=name, rows=len(src.rows), columns=src.columns,
+                current_rows=_count(shared, name),
+                not_copied=[c for c in src.columns if c not in dest_cols],
+                suspect=suspect,
+                refresh_why=refresh_why(name, src, dest_cols, suspect),
+                keeps=KEEPS_KANBAN_SHORT if is_kanban_table(name) else "",
+            )
+            if is_kanban_table(name) and cand.can_refresh:
+                cand.preview = _preview_kanban(shared, src, dest_cols)
+            out.candidates.append(cand)
+    except SharedDbError as exc:
+        # **読めなかった表を「0 行」「列が無い」と見せない**(入れ替えるかどうかを決める画面)
+        out.candidates, out.only_in_source = [], []
+        out.message = f"共有DBを読めませんでした。少ししてからもう一度選んでください: {exc}"
+        return out
     out.ok = True
     out.near = _near_names(out.only_in_source, out.only_in_dest)
     can = sum(1 for c in out.candidates if c.can_refresh)
@@ -531,10 +538,11 @@ def _order(name: str) -> tuple:
 
 
 def _count(shared: SharedDb, name: str) -> int:
+    """共有DBのいまの行数。**読めなければ SharedDbError**(0 行と答えない)。"""
     try:
         return int(shared.select(f"SELECT COUNT(*) AS n FROM {_q(name)}")[0]["n"])
-    except (SharedDbError, IndexError, KeyError):
-        return 0
+    except (IndexError, KeyError) as exc:
+        raise SharedDbError(f"{name} の行数を読めませんでした") from exc
 
 
 # ------------------------------------------------------------------
@@ -577,7 +585,11 @@ def refresh(source_path: str, shared: SharedDb | None, tables: Iterable[str],
             refusals.append(f"{name}(共有DBに無い)")
         else:
             src = source[name]
-            why = refresh_why(name, src, shared.column_names(name), _suspect_rows(src))
+            try:
+                dest_cols = shared.column_names(name)
+            except SharedDbError as exc:
+                return RefreshResult(False, f"共有DBを読めませんでした。何も変えていません: {exc}", REFUSE_READ)
+            why = refresh_why(name, src, dest_cols, _suspect_rows(src))
             if why:
                 refusals.append(f"{name}({why})")
     if refusals:
@@ -650,7 +662,7 @@ def _verify_written(path: Path, done: list[tuple[str, int, int]],
         written_at = ""
     unmatched: list[str] = []
     try:
-        conn = sqlite3.connect(str(path))
+        conn = connect_existing(path)       # 確かめるだけ。見えなくなった場所へ空の DB を作らない
         conn.execute("PRAGMA query_only = ON")
         conn.row_factory = sqlite3.Row
         try:

@@ -60,6 +60,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -212,15 +213,45 @@ def stamp(text: Any) -> str:
     return digits[:14].ljust(14, "0") if len(digits) >= 8 else ""
 
 
-def read_integrated() -> Bundle | None:
-    """まとめたファイルの看板の分。無い・読めない・看板の分が無いなら ``None``。"""
-    path = integrated_path()
-    if path is None or not path.is_file():
-        return None
+class Unreadable(OSError):
+    """配布設定が**あるのに読めない**(ほかの処理が開いている・権限・書きかけで JSON が途中まで)。"""
+
+
+def _there(path: Path, *, strict: bool, folder: bool = False) -> bool:
+    """あるか。``strict`` なら、**確かめられないときは** :class:`Unreadable`(無いと答えない)。"""
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        st = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        if strict:
+            raise Unreadable(f"配布設定を確かめられませんでした: {path}({exc})") from exc
+        return False
+    return stat.S_ISDIR(st.st_mode) if folder else stat.S_ISREG(st.st_mode)
+
+
+def _load_json(path: Path, *, strict: bool, what: str) -> Any:
+    """JSON を読む。読めなければ ``None``(``strict`` なら :class:`Unreadable`)。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
-        log.warning("日報複合ツールの配布設定を読めませんでした: %s", exc)
+        if strict:
+            raise Unreadable(f"{what}を読めませんでした: {path}({exc})") from exc
+        log.warning("%sを読めませんでした: %s", what, exc)
+        return None
+
+
+def read_integrated(*, strict: bool = False) -> Bundle | None:
+    """まとめたファイルの看板の分。無い・読めない・看板の分が無いなら ``None``。
+
+    ``strict`` なら、**あるのに読めない**ときは :class:`Unreadable`(``None`` =「無い」と取り違えると、
+    看板のフォルダの古い配布設定を読み込んで、この端末の接続先などを前の値に戻してしまう)。
+    """
+    path = integrated_path()
+    if path is None or not _there(path, strict=strict):
+        return None
+    data = _load_json(path, strict=strict, what="日報複合ツールの配布設定")
+    if data is None:
         return None
     tools = data.get("tools") if isinstance(data, dict) else None
     entry = tools.get(TOOL_ID) if isinstance(tools, dict) else None
@@ -236,17 +267,20 @@ def read_integrated() -> Bundle | None:
                   created_on=str(entry.get("created_on", "")), integrated=True, file=str(path))
 
 
-def read(base: Path | None = None) -> Bundle | None:
+def read(base: Path | None = None, *, strict: bool = False) -> Bundle | None:
     """置いてある配布設定。無い・読めない・形が違うなら ``None``。
 
     ``base`` を渡さなければ(配った先が読むとき)、日報複合ツールの大設定がまとめたファイルも見る。
     **両方あるときは作った時刻が新しいほうを丸ごと使う**(同じなら看板のフォルダのほう ──
     まとめて書き出すと両方に同じものが入る)。項目ごとには混ぜない。
+
+    ``strict`` なら、どちらかが**あるのに読めない**ときは :class:`Unreadable`(読み込む側。読めた
+    ほうだけで決めると、新しいほうに届かない回に古いほうで上書きする)。
     """
-    own = _read_folder(base or directory())
+    own = _read_folder(base or directory(), strict=strict)
     if base is not None:
         return own
-    whole = read_integrated()
+    whole = read_integrated(strict=strict)
     if whole is None:
         return own
     if own is not None and not own.legacy and stamp(own.created_at) >= stamp(whole.created_at):
@@ -257,23 +291,17 @@ def read(base: Path | None = None) -> Bundle | None:
 def _read_folder(folder: Path, *, strict: bool = False) -> Bundle | None:
     """看板のフォルダの ``配布設定\\`` の中身。
 
-    ``strict=True`` なら、**あるのに読めない**(ほかの処理が開いている・権限)ときは ``OSError``
-    のまま返す(``None`` =「無い」と取り違えない)。まとめて書き出すとき、前に入れていた
+    ``strict=True`` なら、**あるのに読めない**(ほかの処理が開いている・権限・フォルダに届かない・
+    書きかけで JSON が途中まで)ときは :class:`Unreadable`(``OSError``)を上げる(``None`` =「無い」と
+    取り違えない)。まとめて書き出すとき、前に入れていた
     担当ラインなどを「前は入れていない」とみなして消さないため(:func:`export`)。
     """
-    if not folder.is_dir():
+    if not _there(folder, strict=strict, folder=True):
         return None
     path = settings_path(folder)
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except OSError as exc:
-            if strict:
-                raise
-            log.warning("配布設定を読めませんでした: %s", exc)
-            return None
-        except ValueError as exc:
-            log.warning("配布設定を読めませんでした: %s", exc)
+    if _there(path, strict=strict):
+        data = _load_json(path, strict=strict, what="配布設定")
+        if data is None:
             return None
         if not isinstance(data, dict) or data.get("format") != FORMAT:
             log.warning("配布設定の形が違うため読みません: %s", path)
@@ -285,12 +313,10 @@ def _read_folder(folder: Path, *, strict: bool = False) -> Bundle | None:
             file=str(path),
         )
     legacy = folder / LEGACY_SETTINGS_NAME
-    if legacy.is_file():
+    if _there(legacy, strict=strict):
         # 前の版が書いた形。項目が平らに並び、付記は "_保存日時" などの名前
-        try:
-            data = json.loads(legacy.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError) as exc:
-            log.warning("前の版の配布設定を読めませんでした: %s", exc)
+        data = _load_json(legacy, strict=strict, what="前の版の配布設定")
+        if data is None:
             return None
         if not isinstance(data, dict):
             return None
@@ -700,8 +726,16 @@ def describe() -> str:
 
 
 def apply_on_start() -> Result:
-    """起動時に呼ぶ。``配布設定\\`` があれば、**その端末に無いものだけ**読む。"""
-    bundle = read()
+    """起動時に呼ぶ。``配布設定\\`` があれば、**その端末に無いものだけ**読む。
+
+    **配布設定があるのに読めないときは何も読み込まない**(次に起動したときにもう一度)。
+    """
+    try:
+        bundle = read(strict=True)
+    except Unreadable as exc:
+        log.warning("配布設定を読めないため、今回は読み込みません(次に起動したときにもう一度): %s", exc)
+        return Result(False, f"配布設定を読めませんでした。次に起動したときにもう一度読みます: {exc}",
+                      "failed")
     if bundle is None:
         return Result(True, "")
     try:
@@ -724,7 +758,11 @@ def apply_on_start() -> Result:
 
 def reapply() -> Result:
     """設定画面から。**すでにあるものも上書きして**読み込み直す。"""
-    bundle = read()
+    try:
+        bundle = read(strict=True)
+    except Unreadable as exc:
+        log.warning("配布設定を読めないため、読み込み直しませんでした: %s", exc)
+        return Result(False, f"配布設定を読めませんでした(少し待ってやり直してください): {exc}", "failed")
     if bundle is None:
         return Result(False, "配布設定が置かれていません。", "bad_input")
     try:

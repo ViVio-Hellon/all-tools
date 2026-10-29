@@ -37,6 +37,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+import stat as stat_module
 import itertools
 import threading
 import time
@@ -165,10 +166,18 @@ class SharedDb:
         return self.exists()
 
     def exists(self) -> bool:
+        """見えるか。**偽は「無い」ではない**(確かめられないときも偽)。
+
+        「無い」と決めて作る・別の場所へ切り替えるときは :meth:`confirmed_missing` を使う。
+        """
         try:
             return Path(self.path).is_file()
         except OSError:
             return False
+
+    def confirmed_missing(self) -> bool:
+        """**無いと確かめられた**か(:func:`confirmed_missing`)。"""
+        return confirmed_missing(self.path)
 
     def describe(self) -> str:
         return f"共有DB: {self.path} (経路={self.mode})"
@@ -286,8 +295,24 @@ class SharedDb:
         conn = self._connect(read_only=False)
         try:
             conn.isolation_level = None  # 自動コミット(明示的に短く区切る)
+            locked = ""
             for sql, params in statements:
-                results.append(self._execute_one(conn, sql, params))
+                if locked:
+                    # **ロックが解けないまま待ち続けない。** 1 文ごとに待つ(busy_timeout +
+                    # やり直し。1 文で数十秒)と、100 文の書き戻しは 1 時間を超えて取り込み・
+                    # 終わる処理を止めていた。残りは送らずに「ロック中」として返す
+                    # (送った印は付かず、諦めの回数にも数えない。次の回に送る)
+                    results.append(StatementResult(ok=False, error_message=locked))
+                    continue
+                outcome = self._execute_one(conn, sql, params)
+                results.append(outcome)
+                if outcome.is_lock_conflict:
+                    locked = outcome.error_message
+            if locked and len(results) > 1:
+                skipped = sum(1 for r in results if not r.ok and r.error_message == locked) - 1
+                if skipped > 0:
+                    applog.warning("共有DBがロックされたままなので、残りの %d 文は次の回に送ります: %s",
+                                   skipped, self.path)
         finally:
             conn.close()
             if any(r.ok for r in results):
@@ -354,9 +379,9 @@ class SharedDb:
         self._require_exists()
         if read_only:
             return self._open_copy()
-        # **パスはそのまま渡す。URI にしない。**
+        # **``file://サーバ/…`` の URI にしない。**
         #
-        # 以前は ``file:`` の URI に組み直して開いていた。ところが共有フォルダの
+        # 以前は ``Path.as_uri()`` で ``file:`` の URI に組み直して開いていた。ところが共有フォルダの
         # パス ``\\nlmfangyshrd\各課共有\…`` は ``file://nlmfangyshrd/…`` になり、
         # SQLite はこの ``nlmfangyshrd`` の部分(authority)を**ネットワークに
         # 触る前に**断る::
@@ -365,20 +390,42 @@ class SharedDb:
         #
         # 読むほうは手元へ写してから開くので素のパスで動いており、**書くほう
         # だけが共有フォルダで全滅していた** ── マスタに行を足すと 500、
-        # 書き戻しは失敗し続けて「未反映」が減らない。書くときに URI の
-        # 指定(``mode=`` など)は何も使っていないので、素のパスで開けば済む。
-        # Windows の SQLite は ``\\server\share\…`` をそのまま開ける
-        # (接続先を保存するときの確認 ``_is_usable_sqlite`` も素のパスで開いている)
+        # 書き戻しは失敗し続けて「未反映」が減らない。
+        # Windows の SQLite は ``\\server\share\…`` をそのまま開けるので、道はそのまま書く
+        # (:func:`_uri`。authority を作らない形)。URI で開けなければ素のパスで開き直す。
+        #
+        # **無ければ作らない**(:func:`connect_existing` の ``mode=rw``)。素のパスの ``sqlite3.connect`` は、
+        # 確かめた直後に共有が一瞬切れた・ほかの PC が差し替えている最中だと、そこへ空の DB を
+        # 作っていた(読む側は 0 バイトを「読めない」と断るが、作った空のファイルは共有に残る)
         try:
-            conn = sqlite3.connect(self.path, timeout=self.busy_timeout_ms / 1000)
+            conn = connect_existing(self.path, timeout=self.busy_timeout_ms / 1000)
+        except sqlite3.Error as exc:
+            raise SharedDbError(f"共有DBを開けませんでした ({self.path}): {exc}") from exc
+        try:
             conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
         except sqlite3.Error as exc:
+            conn.close()
             raise SharedDbError(f"共有DBを開けませんでした ({self.path}): {exc}") from exc
         # **WAL にしない。** 共有メモリを使うので SMB の上では開けなくなる
         return conn
 
     def _require_exists(self) -> None:
-        if not self.exists():
+        try:
+            there = Path(self.path).is_file()
+        except OSError:
+            there = False
+        if not there:
+            try:
+                os.stat(self.path)
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            except OSError as exc:
+                # **届かない・権限が無いのを「見つかりません」と言わない**(直し方が違う)
+                raise SharedDbError(
+                    f"共有DBを確かめられませんでした ({self.path}): {exc}\n"
+                    "  共有フォルダに届かない・ほかの処理が掴んでいる・権限が無い、などです。"
+                    "少しして自動でやり直します。"
+                ) from exc
             raise SharedDbError(
                 f"共有DBが見つかりません: {self.path}\n"
                 "  ・共有フォルダに届いているか\n"
@@ -475,7 +522,12 @@ class SharedDb:
         # 世代は**同じ共有DBを指す接続すべてで 1 つ**にした
         gen = _generation(self.path)
         source = Path(self.path)
-        stat = source.stat()
+        try:
+            stat = source.stat()
+        except OSError as exc:
+            # 確かめた直後に届かなくなった・掴まれている。生の OSError のまま上げると、
+            # SharedDbError だけを受ける画面(マスタ管理・集計)が 500 になる
+            raise SharedDbError(f"共有DBを手元へ写せませんでした ({self.path}): {exc}") from exc
         stamp = (stat.st_size, stat.st_mtime_ns)
 
         if not force and self._copy_stamp == stamp and self._copy_gen == gen:
@@ -507,6 +559,8 @@ class SharedDb:
             try:
                 self._copy_files(source, target)
             except OSError as exc:
+                # 途中まで写したもの(ロック・届きかけで切れた)を残さない
+                _remove_copy(target)
                 raise SharedDbError(
                     f"共有DBを手元へ写せませんでした ({self.path}): {exc}"
                 ) from exc
@@ -626,7 +680,7 @@ def kanban_tables_in(path: Path) -> tuple[list[str], list[str]]:
     """
     from .. import config
 
-    conn = sqlite3.connect(str(path))
+    conn = connect_existing(path)
     try:
         names = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -660,7 +714,7 @@ def _is_usable_sqlite(path: Path) -> bool:
     返ってきて最初の問い合わせで落ちます。ここで1文引いて確かめます。
     """
     try:
-        conn = sqlite3.connect(str(path))
+        conn = connect_existing(path)       # 確かめるだけで、無いファイルを作らない
     except sqlite3.Error:
         return False
     try:
@@ -670,6 +724,68 @@ def _is_usable_sqlite(path: Path) -> bool:
         return False
     finally:
         conn.close()
+
+
+def confirmed_missing(path: str | os.PathLike[str]) -> bool:
+    """**無いと確かめられた**か。
+
+    真になるのは、ファイルが「無い」と言われ(``FileNotFoundError``)、**親フォルダには届いて
+    フォルダだと分かった**ときだけ。親フォルダに届かない・権限が無い・掴まれている、は偽
+    (「無い」ではなく「確かめられない」)。無いものを作る・別の場所へ切り替えるのは、これが
+    真のときだけにする。
+    """
+    target = Path(os.fspath(path))
+    try:
+        os.stat(target)
+        return False
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError:
+        return False
+    try:
+        return stat_module.S_ISDIR(os.stat(target.parent).st_mode)
+    except OSError:
+        return False
+
+
+def _uri(path: str, mode: str) -> str:
+    """``file:`` の URI(``?mode=``)。**共有フォルダ(UNC)でも開ける形。**
+
+    ``file:`` の後ろが ``//`` で始まると SQLite はその次をサーバ名(authority)と読み、
+    空か ``localhost`` 以外は断る(``invalid uri authority: nlmfangyshrd``)。道はそのまま書き
+    (Windows では ``\\\\サーバ\\共有\\…`` のまま)、``//`` で始まる道だけ空の authority を前に
+    足す(``file:////サーバ/共有/…``。日報の ``readonly_uri`` と同じ)。URI で意味を持つ
+    ``%`` ``?`` ``#`` は % で書く。
+    """
+    text = os.fspath(path)
+    for raw, escaped in (("%", "%25"), ("?", "%3f"), ("#", "%23")):
+        text = text.replace(raw, escaped)
+    if text.startswith("//"):
+        text = "//" + text
+    return f"file:{text}?mode={mode}"
+
+
+def connect_existing(path: str | os.PathLike[str], *, timeout: float = 5.0) -> sqlite3.Connection:
+    """**あるファイルだけ**を開く(読み書き。無ければ作らない ── ``mode=rw``)。
+
+    素のパスの ``sqlite3.connect`` は、無ければ空の DB を作る。共有フォルダが一瞬切れた・
+    ほかの PC が差し替えている最中に開くと、そこへ空のファイルを作っていた。
+
+    URI で開けない(変わった綴りのパスなど)ときだけ素のパスで開き直す。そのときも、
+    **直前にもう一度ファイルが見えたときだけ**(見えなければ作ってしまうので開かない)。
+    """
+    text = os.fspath(path)
+    try:
+        return sqlite3.connect(_uri(text, "rw"), uri=True, timeout=timeout)
+    except sqlite3.Error as exc:
+        first = exc
+    try:
+        visible = os.path.isfile(text)
+    except OSError:
+        visible = False
+    if not visible:
+        raise sqlite3.OperationalError(f"unable to open database file: {text}({first})")
+    return sqlite3.connect(text, timeout=timeout)
 
 
 def _looks_like_lock(message: str) -> bool:
