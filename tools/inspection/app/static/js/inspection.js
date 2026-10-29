@@ -230,6 +230,8 @@ function applyInventory(inv, note) {
     save(SEL_KEY, state.selection);
   }
   renderAll();
+  // 読めなかったフォルダの点検表を前の一覧のまま出している(サーバの `keep_unread`)
+  if (inv.notice) toast(inv.notice, "warn");
   if (note && reachable) toast(note, "ok");
   // 選んでいないのに「選んだものは残しています」と言わない(初めての起動で迷わせた)
   else if (note) {
@@ -400,6 +402,12 @@ function renderItems() {
   $("items-title").textContent = "点検表";
   $("items-count").textContent = "";
   if (!inv) { setTools(false); return; }
+  if (!inv.root_exists && inv.unreadable) {
+    // 無いと確かめたのではない(共有に届かない・権限)。前の一覧があればサーバがそれを出す
+    showEmpty("点検表フォルダを読めません", `${inv.root}\n\n共有フォルダにつながらない・権限などで読めませんでした。少しして「再読込」を押してください。`);
+    setTools(false);
+    return;
+  }
   if (!inv.root_exists) {
     showEmpty("点検表フォルダが見つかりません", `${inv.root}\n\n右上の「設定」→「点検表フォルダ」で正しいフォルダを指定してください。`);
     setTools(false);

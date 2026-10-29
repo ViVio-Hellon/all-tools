@@ -21,11 +21,30 @@ from datetime import datetime
 from typing import Any, Dict
 
 from app.errors import ApiError
+from core import app_config
 
 KEEP_BACKUPS = 10
 #: 読めなかったとき、読み直す回数と間(秒)。Windows では入れ替えの最中に一瞬読めないことがある
 READ_TRIES = 3
 READ_RETRY_SEC = 0.1
+
+
+#: 置き換えを断られたとき、やり直す回数と間(秒)。Windows では読んでいる最中のファイルを
+#: 置き換えると一瞬 PermissionError になる
+REPLACE_TRIES = 5
+REPLACE_WAIT_SEC = 0.1
+
+
+def _replace(tmp: str, target: str) -> None:
+    """一時ファイルで置き換える。**Windows で一瞬断られたら、少し待ってやり直す。**"""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt + 1 >= REPLACE_TRIES:
+                raise
+            time.sleep(REPLACE_WAIT_SEC)
 
 
 class SettingsUnreadable(ApiError):
@@ -54,8 +73,14 @@ class SettingsRepository:
                 try:
                     with open(self.path, "r", encoding="utf-8") as fp:
                         text = fp.read()
-                except FileNotFoundError:
-                    return {}
+                except FileNotFoundError as exc:
+                    # 「無い」は、親フォルダを一覧できて本当に無いときだけ(届かないのは読めないのと同じ)
+                    if app_config.confirmed_missing(self.path):
+                        return {}
+                    last = exc
+                    if attempt + 1 < READ_TRIES:
+                        time.sleep(READ_RETRY_SEC)
+                    continue
                 except OSError as exc:            # ロック中・権限など(一瞬のことがある)
                     last = exc
                     if attempt + 1 < READ_TRIES:
@@ -79,7 +104,7 @@ class SettingsRepository:
             tmp = self.path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fp:
                 json.dump(data, fp, ensure_ascii=False, indent=2)
-            os.replace(tmp, self.path)
+            _replace(tmp, self.path)
 
     def _backup(self) -> None:
         if not os.path.isfile(self.path):

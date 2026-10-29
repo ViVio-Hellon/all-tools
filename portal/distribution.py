@@ -101,17 +101,40 @@ def _show(key: str, value: Any) -> str:
 # ------------------------------------------------------------------
 # 読む
 # ------------------------------------------------------------------
+def _source() -> tuple[Optional[Path], str]:
+    """読む配布設定のファイルと、確かめられなかった理由。
+
+    いまの名前のファイルが**無いと確かめられたときだけ**、前の名前(`統合ツール.json`)を見る。
+    以前は `is_file()` で見ていたので、いまのファイルに届かない(共有の瞬断・権限)と「無い」とみなして
+    前の名前の古い配布設定を読み、配布設定から入れた値を古い値に戻していた(読めると、また戻る)。
+    """
+    for path in (file_path(), *(directory() / name for name in OLD_FILE_NAMES)):
+        try:
+            path.stat()
+        except FileNotFoundError:
+            if app_config.confirmed_missing(path):
+                continue
+            return None, f"{path} に届きません(配布設定のフォルダを読めません)"
+        except OSError as exc:
+            return None, f"{path} を読めません: {exc}"
+        return path, ""
+    return None, ""
+
+
 def read() -> Optional[Bundle]:
-    """置いてある配布設定。無い・読めない・形が違うなら None。"""
-    path = file_path()
-    if not path.is_file():
-        path = next((p for p in (directory() / name for name in OLD_FILE_NAMES) if p.is_file()), path)
-    if not path.is_file():
+    """置いてある配布設定。無い・読めない・形が違うなら None(読めない理由は `read_problem`)。"""
+    path, problem = _source()
+    if problem:
+        log.warning("配布設定を読めませんでした(次の起動で読み直します): %s", problem)
+        return None
+    if path is None:
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
+        data = _read_json(path)
+    except FileUnreadable as exc:
         log.warning("配布設定を読めませんでした: %s", exc)
+        return None
+    if data is None:
         return None
     if not isinstance(data, dict) or data.get("format") != FORMAT or not isinstance(data.get("settings"), dict):
         log.warning("配布設定の形が違うため読みません: %s", path)
@@ -125,9 +148,9 @@ def read() -> Optional[Bundle]:
 
 def read_problem() -> str:
     """置いてある配布設定を読めない理由。無い・読めるなら空。"""
-    path = file_path()
-    if not path.is_file():
-        path = next((p for p in (directory() / name for name in OLD_FILE_NAMES) if p.is_file()), path)
+    path, problem = _source()
+    if problem or path is None:
+        return problem
     try:
         _read_json(path)
     except FileUnreadable as exc:
@@ -162,8 +185,11 @@ def _read_json(path: Path) -> Optional[Any]:
     """JSON の中身。**無ければ None、あるのに読めなければ `FileUnreadable`。**"""
     try:
         text = path.read_text(encoding="utf-8-sig")
-    except FileNotFoundError:
-        return None
+    except FileNotFoundError as exc:
+        # 「無い」は、親フォルダを一覧できて本当に無いときだけ(届かないのは読めないのと同じ)
+        if app_config.confirmed_missing(path):
+            return None
+        raise FileUnreadable(f"{path} に届きません: {exc}") from exc
     except OSError as exc:
         raise FileUnreadable(f"{path} を読めません: {exc}") from exc
     except ValueError as exc:                     # 文字の符号が壊れている

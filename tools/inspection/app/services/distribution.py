@@ -232,11 +232,12 @@ class Distribution:
     def read_integrated(self) -> Optional[Bundle]:
         """まとめたファイルの点検表の分。無い・読めない・点検表の分が無いなら None。"""
         path = integrated_path(self.dir)
-        if path is None or not path.is_file():
+        if path is None:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            self._missing(path, exc)
             return None
         except (OSError, ValueError) as exc:
             self.log.warning("日報複合ツールの配布設定を読めませんでした(読み込みません): %s", exc)
@@ -254,17 +255,29 @@ class Distribution:
     def read_own(self) -> Optional[Bundle]:
         """点検表のフォルダの `配布設定\\` の中身。"""
         path = self.settings_path
-        if not path.is_file():
-            return None
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            self._missing(path, exc)
             return None
         except (OSError, ValueError) as exc:
             self.log.warning("配布設定を読めませんでした(読み込みません): %s", exc)
             self.read_error = f"{path}: {exc}"
             return None
         return self._bundle_of(data, path)
+
+    def _missing(self, path: Path, exc: OSError) -> bool:
+        """`FileNotFoundError` のとき、**本当に無い**か(親フォルダを一覧できて無い)。
+
+        以前は `is_file()` で見ていたので、配布設定のフォルダに届かない(共有の瞬断・権限)と「無い」と
+        みなし、もう一方(古いまとめたファイル)の値で、配布設定から入れた値を戻していた。
+        届かないときは読めないのと同じに扱う(`read_error`。どちらも使わない)。
+        """
+        if app_config.confirmed_missing(path):
+            return True
+        self.log.warning("配布設定のフォルダに届きません(読み込みません): %s", exc)
+        self.read_error = f"{path}: 届きません({exc})"
+        return False
 
     def _bundle_of(self, data: Any, path: Path) -> Optional[Bundle]:
         if not isinstance(data, dict) or data.get("format") != FORMAT:

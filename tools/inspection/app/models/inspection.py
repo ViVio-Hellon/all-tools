@@ -72,6 +72,12 @@ class Inventory:
     listed_files: int = 0     # 画面に表示する点検表の数
     errors: List[Dict[str, str]] = field(default_factory=list)
     by_id: Dict[str, InspectionItem] = field(default_factory=dict, repr=False)
+    #: 点検表フォルダそのものを**読めなかった**(届かない・権限など。無いと確かめたのではない)
+    unreadable: bool = False
+    #: 読めなかったフォルダの点検表を、前の一覧から残して出している数
+    kept: int = 0
+    #: 画面に出す一言(読めなかったので前の一覧のまま出している、など)
+    notice: str = ""
 
     def find(self, item_id: str) -> Optional[InspectionItem]:
         return self.by_id.get(item_id)
@@ -86,5 +92,8 @@ class Inventory:
             "listed_files": self.listed_files,
             "unmatched_files": self.total_files - self.listed_files,
             "errors": self.errors[:50],
+            "unreadable": self.unreadable,
+            "kept": self.kept,
+            "notice": self.notice,
             "categories": [c.to_dict() for c in self.categories],
         }

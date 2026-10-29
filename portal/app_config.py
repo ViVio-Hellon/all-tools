@@ -131,6 +131,30 @@ def ensure_local_dirs() -> Path:
     return root
 
 
+def confirmed_missing(path: Any) -> bool:
+    """`path` が**無いと確かめられた**か。
+
+    `FileNotFoundError` だけでは「無い」と決めない(Windows は共有フォルダ・サーバに届かないときも
+    同じ例外になる)。いちばん近い**在る親フォルダを一覧でき**、次の名前がその中に無いときだけ True。
+    親に届かない・一覧できない・名前が一覧にある(読めないだけ)なら False(= 読めない)。
+    """
+    child = os.path.abspath(os.fspath(path))
+    parent = os.path.dirname(child)
+    while True:
+        try:
+            names = os.listdir(parent)
+        except FileNotFoundError:
+            up = os.path.dirname(parent)
+            if up == parent:
+                return False
+            child, parent = parent, up
+            continue
+        except OSError:
+            return False
+        want = os.path.normcase(os.path.basename(child))
+        return all(os.path.normcase(name) != want for name in names)
+
+
 def is_desktop() -> bool:
     """日報複合ツールの窓(外枠)から起こされたか。"""
     return os.environ.get("ALLTOOLS_SHELL", "") == "1"

@@ -67,8 +67,14 @@ def load_checked() -> dict[str, Any]:
     for attempt in range(READ_TRIES):
         try:
             text = target.read_text(encoding="utf-8-sig")
-        except FileNotFoundError:
-            return {}
+        except FileNotFoundError as exc:
+            # 「無い」は、親フォルダを一覧できて本当に無いときだけ(届かないのは読めないのと同じ)
+            if app_config.confirmed_missing(target):
+                return {}
+            last = exc
+            if attempt + 1 < READ_TRIES:
+                time.sleep(READ_RETRY_SEC)
+            continue
         except OSError as exc:                    # ロック中・権限など(一瞬のことがある)
             last = exc
             if attempt + 1 < READ_TRIES:
@@ -139,4 +145,22 @@ def update(values: dict[str, Any]) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, target)
+        replace(tmp, target)
+
+
+#: 置き換えを断られたとき、やり直す回数と間(秒)。Windows では読んでいる最中のファイルを
+#: 置き換えると一瞬 PermissionError になる
+REPLACE_TRIES = 5
+REPLACE_WAIT_SEC = 0.1
+
+
+def replace(tmp: Path, target: Path) -> None:
+    """一時ファイルで置き換える。**Windows で一瞬断られたら、少し待ってやり直す。**"""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt + 1 >= REPLACE_TRIES:
+                raise
+            time.sleep(REPLACE_WAIT_SEC)

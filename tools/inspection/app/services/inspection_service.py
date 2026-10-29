@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core import event_log
+from core import app_config, event_log
 from app.models.inspection import Category, InspectionItem, Inventory, SubCategory, UnmatchedFile
 
 ProgressCallback = Callable[[int, str], None]
@@ -53,17 +53,19 @@ def display_name(category: str, subcategory: str, base_name: str,
 def _list_dirs(path: str, errors: List[Dict[str, str]]) -> List[os.DirEntry]:
     try:
         with os.scandir(path) as it:
-            dirs = [e for e in it if _is_dir(e)]
+            dirs = [e for e in it if _is_dir(e, errors)]
     except OSError as exc:
         errors.append({"path": path, "message": f"フォルダを読み取れません: {exc.strerror or exc}"})
         return []
     return sorted(dirs, key=lambda e: _sort_key(e.name))
 
 
-def _is_dir(entry: os.DirEntry) -> bool:
+def _is_dir(entry: os.DirEntry, errors: List[Dict[str, str]]) -> bool:
     try:
         return entry.is_dir()
-    except OSError:
+    except OSError as exc:
+        # 黙って飛ばさない(飛ばすと、そのフォルダの点検表が「無い」ように一覧から消える)
+        errors.append({"path": entry.path, "message": f"フォルダを読み取れません: {exc.strerror or exc}"})
         return False
 
 
@@ -81,7 +83,8 @@ def _list_files(path: str, exts: Tuple[str, ...], errors: List[Dict[str, str]]) 
                 try:
                     if entry.is_file():
                         files.append(entry)
-                except OSError:
+                except OSError as exc:
+                    errors.append({"path": entry.path, "message": f"ファイルを読み取れません: {exc.strerror or exc}"})
                     continue
     except OSError as exc:
         errors.append({"path": path, "message": f"フォルダを読み取れません: {exc.strerror or exc}"})
@@ -95,6 +98,7 @@ def scan_folder(root: str, extensions: List[str], require_prefix: bool = True,
     exts = tuple(e.lower().lstrip(".") for e in extensions)
     inventory = Inventory(root=root, root_exists=bool(root) and os.path.isdir(root), scanned_at=time.time())
     if not inventory.root_exists:
+        _mark_unreadable(inventory)
         return inventory
     errors = inventory.errors
     scanned = 0
@@ -135,8 +139,103 @@ def scan_folder(root: str, extensions: List[str], require_prefix: bool = True,
         # (次の起動で「前回の一覧」が空になる)。初めから見えなかったときと同じに扱う
         inventory = Inventory(root=root, root_exists=False, scanned_at=inventory.scanned_at,
                               errors=errors)
+        _mark_unreadable(inventory)
     inventory.scan_ms = int((time.perf_counter() - started) * 1000)
     return inventory
+
+
+UNREADABLE_ROOT = "点検表フォルダに届きません(共有フォルダにつながらない・権限など)"
+
+
+def _mark_unreadable(inventory: Inventory) -> None:
+    """点検表フォルダが見えないとき、**無いと確かめられた**のか、届かない(読めない)だけかを分ける。
+
+    Windows は共有フォルダ・サーバに届かないときも「見つからない」と答える。親フォルダを一覧できて
+    そこに無いときだけ「見つかりません」。それ以外は「読めない」(前の一覧のまま出す。`keep_unread`)。
+    """
+    if not inventory.root or app_config.confirmed_missing(inventory.root):
+        return
+    inventory.unreadable = True
+    if not any(_same_path(e.get("path", ""), inventory.root) for e in inventory.errors):
+        inventory.errors.insert(0, {"path": inventory.root, "message": UNREADABLE_ROOT})
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path or ""))
+
+
+def _same_path(a: str, b: str) -> bool:
+    return _norm(a) == _norm(b)
+
+
+def keep_unread(scanned: Inventory, previous: Optional[Inventory]) -> Inventory:
+    """**読めなかったフォルダの点検表を、前の一覧から残した**一覧(画面に出す一覧)。
+
+    以前は、読めなかったフォルダは空として一覧を作り直していたので、共有の瞬断・ロック・権限で
+    1つのフォルダ(または点検表フォルダそのもの)が読めないだけで、その点検表が画面から消え、
+    選んでおいたものも外れていた。読めたフォルダは今回の中身、読めなかったフォルダは前の一覧の中身。
+    本当に無いと確かめたもの(読めたフォルダの中に無い・点検表フォルダが無い)は残さない。
+
+    前の一覧が無い・別のフォルダのもの・読めなかったものが無いなら、今回の一覧のまま。
+    控え(`inventory_cache.json`)には書かない(読めなかったものがある一覧は控えない。`_save_cache`)。
+    """
+    if (previous is None or not previous.root_exists or not scanned.errors
+            or not _same_path(previous.root, scanned.root)):
+        return scanned
+    if not scanned.root_exists and not scanned.unreadable:
+        return scanned                                  # 点検表フォルダが無いと確かめた
+    bad = {_norm(e.get("path", "")) for e in scanned.errors}
+    root = scanned.root
+    if scanned.unreadable or _norm(root) in bad:
+        # 点検表フォルダそのものを読めなかった: 前の一覧をそのまま出す(時刻も前のもの)
+        kept = Inventory(root=root, root_exists=True, scanned_at=previous.scanned_at, scan_ms=scanned.scan_ms,
+                         categories=list(previous.categories), total_files=previous.total_files,
+                         listed_files=previous.listed_files, errors=list(scanned.errors),
+                         by_id=dict(previous.by_id), unreadable=scanned.unreadable,
+                         kept=previous.listed_files)
+        kept.notice = ("点検表フォルダを読めませんでした(共有フォルダにつながらない・権限など)。"
+                       "前の一覧のまま出しています。少しして「再読込」を押してください")
+        return kept
+    cats: Dict[str, Category] = {c.name: Category(c.name, list(c.subcategories)) for c in scanned.categories}
+    carried: List[InspectionItem] = []
+    for old_cat in previous.categories:
+        cat_path = _norm(os.path.join(root, old_cat.name))
+        cat_bad = cat_path in bad
+        for old_sub in old_cat.subcategories:
+            sub_path = _norm(os.path.join(root, old_cat.name, old_sub.name))
+            whole = cat_bad or sub_path in bad
+            cat = cats.get(old_cat.name)
+            sub = next((x for x in cat.subcategories if x.name == old_sub.name), None) if cat else None
+            # 読めなかったサブカテゴリーは全部、読めたサブカテゴリーは読めなかったファイルだけ前のものを残す
+            # (読めたのに無いものは残さない ── 消された・名前が変わった)
+            have = {i.id for i in sub.items} if sub is not None else set()
+            take = [i for i in old_sub.items if (whole or _norm(i.path) in bad) and i.id not in have]
+            unmatched = list(old_sub.unmatched) if whole and sub is None else []
+            if not take and not unmatched:
+                continue
+            if sub is not None:
+                merged = SubCategory(sub.name, sorted(sub.items + take, key=lambda i: _sort_key(i.file_name)),
+                                     list(sub.unmatched))
+                cat.subcategories = [merged if x is sub else x for x in cat.subcategories]
+            else:
+                if cat is None:
+                    cat = cats[old_cat.name] = Category(old_cat.name, [])
+                cat.subcategories = sorted(cat.subcategories + [SubCategory(old_sub.name, take, unmatched)],
+                                           key=lambda x: _sort_key(x.name))
+            carried.extend(take)
+    if not carried:
+        return scanned
+    out = Inventory(root=root, root_exists=scanned.root_exists, scanned_at=scanned.scanned_at,
+                    scan_ms=scanned.scan_ms, total_files=scanned.total_files + len(carried),
+                    listed_files=scanned.listed_files + len(carried), errors=list(scanned.errors),
+                    categories=sorted(cats.values(), key=lambda c: _sort_key(c.name)), kept=len(carried))
+    for cat in out.categories:
+        for sub in cat.subcategories:
+            for item in sub.items:
+                out.by_id[item.id] = item
+    out.notice = (f"読めなかったフォルダがあります({len(scanned.errors)} 件)。そのフォルダの点検表 "
+                  f"{len(carried)} 件は前の一覧のまま出しています。少しして「再読込」を押してください")
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -346,13 +445,26 @@ class InspectionService:
             if self._stale(gen, root):
                 self.log.info("フォルダが変わったので、前のフォルダ(%s)の検索結果を捨てて調べ直します", root)
                 return None
-            self._inventory = inventory
+            # 読めなかったフォルダの点検表は、前の一覧から残して出す(画面から消さない・選択を外さない)
+            shown = keep_unread(inventory, self._inventory)
+            self._inventory = shown
             self._from_cache = False
             self._status.update(scanned=inventory.total_files, current="")
             reason = self._status.get("reason", "")
             # 控えに書くのも錠の中(書いているあいだに別のフォルダの結果が入れ替わらない)
             self._save_cache(inventory)
-        if not inventory.root_exists:
+        if shown.notice:
+            self.log.warning("%s: %s", shown.notice, root)
+        if not inventory.root_exists and inventory.unreadable:
+            self.log.warning("点検表フォルダに届きません(無いと確かめたのではない): %s", root)
+            event_log.record(
+                "scan", event_log.NG, code="FOLDER_UNREADABLE", message="点検表フォルダを読めませんでした",
+                why=event_log.why_chain(
+                    "点検表フォルダを読めませんでした", f"見に行ったフォルダ: {root}",
+                    "前の一覧のまま出した" if shown.kept else "前の一覧が無いので、一覧は出せない",
+                    "共有フォルダなら: ネットワーク・サーバ・権限を確かめ、少しして「再読込」"),
+                folder=root, reason=reason, kept=shown.kept, elapsed_ms=inventory.scan_ms)
+        elif not inventory.root_exists:
             self.log.warning("点検表フォルダが見つかりません: %s", root)
             event_log.record(
                 "scan", event_log.NG, code="FOLDER_NOT_FOUND", message="点検表フォルダが見つかりません",

@@ -13,14 +13,13 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from . import app_config, shared_db, tab_rights
+from . import app_config, shared_db, tab_rights, user_settings
 from .catalog import Catalog
 from .identity import Identity
 from .logging_utils import get_logger
@@ -69,21 +68,40 @@ class Store:
         self._checked_at = 0.0
         self._last_error = ""
         self._syncing: Optional[threading.Thread] = None
+        #: 最後に読めた(書いた)手元の写し。**写しを一瞬読めないときはこれで決める**
+        self._last_cache: Optional[dict[str, Any]] = None
 
     # -- 手元の写し --------------------------------------------------
     def _read_cache(self) -> dict[str, Any]:
+        """手元の写し。無ければ空。
+
+        **あるのに読めない**(置き換えの最中・ロック・権限・壊れている)ときは、このプロセスで最後に
+        読めた写し(無ければ空)。以前は読めないと空 =「まだ一度も読めていない」とみなし、
+        タブを絞っている端末に一瞬すべてのタブを出し、大設定の表の一覧も空で出していた。
+        """
+        target = cache_path()
         try:
-            data = json.loads(cache_path().read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            if app_config.confirmed_missing(target):
+                self._last_cache = None
+                return {}
+            return dict(self._last_cache or {})
+        except (OSError, ValueError) as exc:
+            log.warning("タブ表示権限の手元の写しを読めません(前に読めた中身で決めます): %s", exc)
+            return dict(self._last_cache or {})
+        if not isinstance(data, dict):
+            return dict(self._last_cache or {})
+        self._last_cache = data
+        return dict(data)
 
     def _write_cache(self, data: dict[str, Any]) -> None:
         target = cache_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, target)
+        user_settings.replace(tmp, target)
+        self._last_cache = dict(data)
 
     def snapshot(self) -> Snapshot:
         data = self._read_cache()

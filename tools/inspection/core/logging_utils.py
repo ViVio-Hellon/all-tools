@@ -104,7 +104,10 @@ def read_settings_checked() -> Dict[str, Any]:
         with open(settings_path(), "r", encoding="utf-8") as fp:
             data = json.load(fp)
     except FileNotFoundError:
-        return {}
+        # 「無い」は、親フォルダを一覧できて本当に無いときだけ(届かないのは読めないのと同じ)
+        if app_config.confirmed_missing(settings_path()):
+            return {}
+        raise
     if not isinstance(data, dict):
         raise ValueError("中身の形が違います")
     return data

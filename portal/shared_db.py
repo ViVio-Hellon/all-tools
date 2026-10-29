@@ -159,8 +159,12 @@ def _is_wal(conn: sqlite3.Connection) -> bool:
 
 
 def _query_only(path: Path) -> sqlite3.Connection:
-    """書かない約束(`query_only`)で普通に開く。閉じるときに -wal / -shm を片付ける。"""
-    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT_SEC,
+    """書かない約束(`query_only`)で普通に開く。閉じるときに -wal / -shm を片付ける。
+
+    **無ければ作らない**(`mode=rw`)。以前は素のパスで開いていたので、読み取り専用で開いたあと・
+    開き直すまでのあいだに共有が一瞬切れる・マスタを差し替えている最中だと、空の DB を共有に作っていた。
+    """
+    conn = sqlite3.connect(to_uri(path, create=False), uri=True, timeout=BUSY_TIMEOUT_SEC,
                            isolation_level=None, check_same_thread=False)
     try:
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SEC * 1000}")

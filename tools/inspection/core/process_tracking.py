@@ -286,6 +286,15 @@ def terminate_verified(pid: int, create_time: Optional[int],
     return _wait_exit_raw(pid, wait_sec)
 
 
+class RegistryUnreadable(RuntimeError):
+    """起動した処理の記録はあるのに読めない(**無いのとは違う**)。読めないあいだは書かない。"""
+
+
+#: 記録を読めなかったとき、読み直す回数と間(秒)
+READ_TRIES = 3
+READ_RETRY_SEC = 0.05
+
+
 class TrackedProcessRegistry:
     """このアプリが起動した子プロセス（Excel 等）を記録し、残留を確実に片付ける。"""
 
@@ -295,12 +304,58 @@ class TrackedProcessRegistry:
         self._lock = threading.Lock()
 
     def _load(self) -> List[Dict[str, Any]]:
+        """画面に出すだけの読み。読めなければ空(**書く前は `_load_checked`**)。"""
         try:
-            with open(self.path, "r", encoding="utf-8") as fp:
-                data = json.load(fp)
-            return data if isinstance(data, list) else []
-        except (OSError, ValueError):
+            return self._load_checked()
+        except RegistryUnreadable:
             return []
+
+    def _load_checked(self) -> List[Dict[str, Any]]:
+        """記録の中身。**無ければ空、あるのに読めなければ `RegistryUnreadable`。**
+
+        以前は読めない(stop.bat・2つ目の起動が置き換えている最中・ロック)と空とみなし、1件足す・
+        片付けるたびに**空から書き直して**、ほかの記録(使い回し中の Excel・前回の残り)を消していた
+        (消えた記録の Excel は、あとで片付けられずに残る)。壊れているときだけ脇へ移して空から始める。
+        """
+        last: Any = None
+        for attempt in range(READ_TRIES):
+            try:
+                with open(self.path, "r", encoding="utf-8") as fp:
+                    text = fp.read()
+            except FileNotFoundError as exc:
+                from . import app_config
+                if app_config.confirmed_missing(self.path):
+                    return []
+                last = exc
+            except (OSError, ValueError) as exc:
+                last = exc
+            else:
+                try:
+                    data = json.loads(text)
+                except ValueError as exc:
+                    last = exc
+                    if attempt + 1 >= READ_TRIES:
+                        return self._set_aside(exc)
+                else:
+                    return data if isinstance(data, list) else self._set_aside("中身の形が違います")
+            if attempt + 1 < READ_TRIES:
+                time.sleep(READ_RETRY_SEC)
+        raise RegistryUnreadable(f"{self.path}: {last}")
+
+    def _set_aside(self, why: Any) -> List[Dict[str, Any]]:
+        """中身が本当に壊れている。脇へ移して(消さない)空から始める。"""
+        aside = f"{self.path}.broken-{datetime.now():%Y%m%d%H%M%S}"
+        try:
+            os.replace(self.path, aside)
+        except OSError as exc:
+            raise RegistryUnreadable(f"{self.path}: 壊れていて、脇へも移せません({why} / {exc})") from exc
+        if self.log:
+            self.log.warning("起動した処理の記録が壊れていたため、脇へ移して空から始めます: %s(%s)", aside, why)
+        return []
+
+    def _warn_unreadable(self, exc: Exception, what: str) -> None:
+        if self.log:
+            self.log.warning("起動した処理の記録を読めないため、%s(記録は書き換えません): %s", what, exc)
 
     def _save(self, entries: List[Dict[str, Any]]) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -319,7 +374,11 @@ class TrackedProcessRegistry:
 
     def add(self, identity: ProcessIdentity, label: str) -> None:
         with self._lock:
-            entries = [e for e in self._load() if e.get("pid") != identity.pid]
+            try:
+                entries = [e for e in self._load_checked() if e.get("pid") != identity.pid]
+            except RegistryUnreadable as exc:
+                self._warn_unreadable(exc, f"pid={identity.pid}({label})を記録に足しません")
+                return
             me = current_identity()
             entries.append({**identity.to_dict(), "label": label,
                             "registered_at": datetime.now().isoformat(timespec="seconds"),
@@ -328,7 +387,11 @@ class TrackedProcessRegistry:
 
     def remove(self, pid: int) -> None:
         with self._lock:
-            entries = self._load()
+            try:
+                entries = self._load_checked()
+            except RegistryUnreadable as exc:
+                self._warn_unreadable(exc, f"pid={pid} を記録から外しません")
+                return
             remaining = [e for e in entries if e.get("pid") != pid]
             if len(remaining) != len(entries):
                 self._save(remaining)
@@ -343,7 +406,11 @@ class TrackedProcessRegistry:
         kept: List[Dict[str, Any]] = []
         me = os.getpid()
         with self._lock:
-            entries = self._load()
+            try:
+                entries = self._load_checked()
+            except RegistryUnreadable as exc:
+                self._warn_unreadable(exc, f"残った処理を片付けません({reason}。次の起動・終了で片付けます)")
+                return cleaned
             for entry in entries:
                 pid, ctime = int(entry.get("pid", 0)), entry.get("create_time")
                 owner, owner_ctime = int(entry.get("owner_pid", 0) or 0), entry.get("owner_create_time")
