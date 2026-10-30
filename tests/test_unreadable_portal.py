@@ -166,7 +166,10 @@ class VanishWhileReopeningTests(unittest.TestCase):
 
         def vanish(conn):
             real_is_wal(conn)
-            path.unlink()                          # 読み取り専用で開いたあと、開き直す前に見えなくなった
+            # 読み取り専用で開いたあと、開き直す前に見えなくなった。Windows は開いている
+            # ファイルを消せないので、先に閉じてから消す(呼ぶ側も閉じてから開き直す)
+            conn.close()
+            path.unlink()
             return True
 
         with mock.patch.object(shared_db, "_is_wal", vanish):
