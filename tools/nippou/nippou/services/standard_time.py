@@ -90,13 +90,12 @@ def _quote(name: str) -> str:
 
 
 def _connect(path: Path) -> sqlite3.Connection:
-    """開く(無ければ作る)。**フォルダが無ければ作らない**(共有が繋がって
-    いないのに手元に見当違いのファイルを作らないため)。"""
-    if not Path(path).parent.is_dir():
-        raise sqlite3.OperationalError(f"フォルダがありません: {Path(path).parent}")
+    """開く(無ければ作る)。**作るのは、置き場所に届いて本当に無いと確かめたときだけ**
+    (`db.connection.open_rw`)。フォルダが無い・届かない・確かめられないときは作らない
+    (共有が繋がっていないのに見当違いのファイルや空の共有DBを作らないため)。"""
     from ..access_bridge import sqlite_backend
 
-    return sqlite_backend._connect(Path(path))
+    return sqlite_backend._connect(Path(path), create=True)
 
 
 def ensure_tables(conn: sqlite3.Connection) -> list[str]:

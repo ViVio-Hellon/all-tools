@@ -427,8 +427,12 @@ def open_source(path: Path):
 # ==================================================================
 # 読む
 # ==================================================================
-def list_tables(path: Path) -> list[str]:
-    """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。"""
+def list_tables(path: Path, *, strict: bool = False) -> list[str]:
+    """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。
+
+    読めなければ空(画面に並べるだけのとき)。**`strict=True` なら `SourceError`**
+    ── 「表が無い」で何かを決める(作る・送る・無いとみなす)ときはこちら。
+    """
     try:
         with open_source(path) as conn:
             rows = conn.execute(
@@ -436,18 +440,25 @@ def list_tables(path: Path) -> list[str]:
                 " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         return [r["name"] for r in rows]
     except SourceError as exc:
+        if strict:
+            raise
         log.warning("テーブル一覧を引けません (%s): %s", path, exc)
         return []
 
 
-def columns(path: Path, table: str) -> list[str]:
-    """テーブルの列名。読む前に「その列があるか」を見るのに使う。"""
+def columns(path: Path, table: str, *, strict: bool = False) -> list[str]:
+    """テーブルの列名。読む前に「その列があるか」を見るのに使う。
+
+    読めなければ空。**`strict=True` なら `SourceError`**(`list_tables` と同じ)。
+    """
     try:
         with open_source(path) as conn:
             rows = conn.execute(
                 f"PRAGMA table_info({quote_identifier(table)})").fetchall()
         return [r["name"] for r in rows]
     except SourceError:
+        if strict:
+            raise
         return []
 
 
@@ -640,10 +651,13 @@ class SourceConnection:
     """書き込み用に開いた取り込み元。**書けるのはここだけ。**"""
 
     def __init__(self, path: Path, *, foreign_keys: bool = False) -> None:
+        from .db.connection import open_rw
+
         self.path = Path(path)
         try:
-            self._conn = sqlite3.connect(str(self.path),
-                                         timeout=BUSY_TIMEOUT_MS / 1000)
+            # **無ければ作らない**(`mode=rw`)。読んで「ある」と見てから開くまでに共有が
+            # 一瞬見えなくなると、素の道の connect は空の新しいマスタを共有に作っていた
+            self._conn = open_rw(self.path, timeout=BUSY_TIMEOUT_MS / 1000)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
             if foreign_keys:

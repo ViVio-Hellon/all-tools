@@ -291,21 +291,33 @@ def add_missing_columns(conn: sqlite3.Connection, table: str,
     return added
 
 
-def _connect(path: Path) -> sqlite3.Connection:
+def _connect(path: Path, *, create: bool = False) -> sqlite3.Connection:
     """書き込み用に開く。**共有フォルダの上に置かれる前提。**
 
     WAL には**しません**。WAL は共有メモリ(`-shm`)を使い、SMB の上では
     そもそも開けないことがあります(`source_db` の説明と同じ理由)。
     手元のDBと違って、ここは共有に置かれるほうです。
+
+    **無いファイルは作りません**(`db.connection.open_rw`)。`create=True`(共有へ保存)でも、
+    置き場所に届いて**本当に無い**と確かめたときだけ作ります(初めての共有へ保存)。
+    届かない・確かめられないときは `SharedUnreadable`(sqlite3 のエラー)── 作らずに、
+    次の共有へ保存でやり直します。以前は開くだけで、一瞬見えなかった共有に空の
+    日報データを作り、そこへ表を作って書いていました。
     """
-    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT_MS / 1000)
-    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    from ..db.connection import open_rw
+
+    conn = open_rw(path, create=create, timeout=BUSY_TIMEOUT_MS / 1000)
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    """書き込み用に開く(コンバート `services/line_rename` も同じ開き方をする)。"""
-    return _connect(path)
+def connect(path: Path, *, create: bool = False) -> sqlite3.Connection:
+    """書き込み用に開く(コンバート `services/line_rename` も同じ開き方をする)。**無ければ作らない。**"""
+    return _connect(path, create=create)
 
 
 def _header_values(header: HeaderRecord, saved_at: str) -> tuple[Any, ...]:
@@ -390,7 +402,7 @@ def push_records_batch(db_path: Path, items: list[RecordItem],
         return ScriptResult(success=True, rows=0)
     saved_at = saved_at or datetime.now().isoformat(timespec="seconds")
     try:
-        conn = _connect(db_path)
+        conn = _connect(db_path, create=True)
     except sqlite3.Error as exc:
         return _failure(f"{db_path.name} を開けません: {exc}", exc)
 
@@ -516,7 +528,7 @@ def push_summary_batch(db_path: Path, items: list[SummaryItem],
         return ScriptResult(success=True, rows=0)
     saved_at = saved_at or datetime.now().isoformat(timespec="seconds")
     try:
-        conn = _connect(db_path)
+        conn = _connect(db_path, create=True)
     except sqlite3.Error as exc:
         return _failure(f"{db_path.name} を開けません: {exc}", exc)
 
@@ -575,15 +587,16 @@ def read_table(db_path: Path, table: str) -> list[dict[str, Any]]:
 
 
 def table_exists(db_path: Path, table: str) -> bool:
-    if not Path(db_path).exists():
-        return False
+    """表があるか。**確かめられなければ例外**(`SharedUnreadable` など。「無い」とは言わない)。"""
+    from ..db.connection import file_state
+
+    if not file_state(db_path):
+        return False                              # 置き場所は見えて、ファイルが無い
     conn = _connect(db_path)
     try:
         row = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
             (table,)).fetchone()
         return row is not None
-    except sqlite3.Error:
-        return False
     finally:
         conn.close()

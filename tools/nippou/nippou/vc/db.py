@@ -102,16 +102,37 @@ def who() -> tuple[str, str]:
 # 開く
 # ------------------------------------------------------------------
 def _open(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT_SEC,
-                           isolation_level=None, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_SEC * 1000)}")
+    """開く。**無いファイルは作らない**(`mode=rw`。`db.connection.open_rw`)。
+
+    `_require_file` で「ある」と見てから開くまでに共有が一瞬見えなくなると、素の道の
+    connect は**空のマスタを共有に作って**いました(以後「表が1つもありません」で止まる)。
+    """
+    from ..db.connection import open_rw
+
+    conn = open_rw(path, timeout=BUSY_TIMEOUT_SEC, isolation_level=None,
+                   check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_SEC * 1000)}")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
 def _require_file(path: Path) -> None:
-    if not path.exists():
+    if not _state(path):
         raise DbUnavailable(f"マスタが見つかりません: {path}")
+
+
+def _state(path: Path) -> bool:
+    """マスタが**ある**か・**確かめたうえで無い**か。確かめられなければ `DbUnavailable`。"""
+    from ..db.connection import SharedUnreadable, file_state
+
+    try:
+        return file_state(path)
+    except SharedUnreadable as exc:
+        raise DbUnavailable(f"VC計算マスタを確かめられません(作りません): {exc}") from exc
 
 
 @contextmanager
@@ -438,13 +459,13 @@ def ensure_database(path: Path) -> str:
     起動しても、中途半端なファイルを他の端末に読ませない。先に置けた
     ほうが勝ち、後の1台は自分の一時ファイルを捨てる。
     """
-    if path.exists():
-        return _upgrade(path)
+    # **「無い」と言うのは、置き場所に届いて一覧が取れ、そこに無いときだけ**(`file_state`)。
+    # 届かない・権限・見えているのに開けないときは作らない(`DbUnavailable`)。
     # **フォルダまでは作らない。** 参照用マスタのフォルダが無いのは設定の
     # 間違いか共有に届かないかで、ここで作ると黙って別の場所にマスタが
     # できる(日報管理ツールへ移したときに足した関門)
-    if not path.parent.is_dir():
-        raise DbUnavailable(f"VC計算マスタの置き場所(フォルダ)がありません: {path.parent}")
+    if _state(path):
+        return _upgrade(path)
     # 一時ファイルは**要求(スレッド)ごとに別の名前。** 画面を開くと計算と設定の
     # 要求が同時に来る。同じ名前だと、同じ一時ファイルへ初期値を2度入れて
     # 片方が「UNIQUE constraint failed」で落ちていた(v3.96.0)

@@ -1707,7 +1707,15 @@ def stop_reason_template():
         current = {}
     text = stop_csv.as_csv(_stop_reason_rows(current))
 
-    out = target if not target.exists() else target.with_suffix(".見本.csv")
+    from nippou.db.connection import SharedUnreadable, file_state
+
+    try:
+        # **いまのファイルが本当に無いと確かめたときだけ**、その名前で書く。届かない・
+        # 確かめられないのを「無い」とみなすと、手で直した一覧を見本で上書きする
+        there = file_state(target)
+    except SharedUnreadable as exc:
+        return jsonify(error_body("unreadable", f"{exc}(見本は書いていません)")), 503
+    out = target if not there else target.with_suffix(".見本.csv")
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8-sig", newline="")
@@ -1810,10 +1818,17 @@ def stop_reasons_upload():
             note += f"(使えない行が {len(preview['problems'])}行)"
         return jsonify({**preview, "applied": False, "message": note})
 
+    from nippou.db.connection import SharedUnreadable, file_state
+
     kept = ""
     try:
+        there = file_state(target)
+    except SharedUnreadable as exc:
+        # 届かない・確かめられないのに書くと、前のファイルを残さずに置き換える
+        return jsonify(error_body("unreadable", f"{exc}(書き換えていません)")), 503
+    try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
+        if there:
             previous = target.with_suffix(".前回.csv")
             previous.write_bytes(target.read_bytes())
             kept = str(previous)

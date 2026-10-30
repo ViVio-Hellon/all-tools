@@ -104,6 +104,24 @@ class ImportResult:
     error: Optional[AccessBridgeError] = None
 
 
+#: Access の取り込みの失敗のうち「その場の事情で読めなかった」もの。表が無い・形が違う
+#: (`UNKNOWN` など)とは分ける ── VBScript の答えからは、それ以上は見分けられない
+UNREAD_KINDS = (ErrorKind.LOCK_CONFLICT, ErrorKind.NETWORK_UNREACHABLE, ErrorKind.TIMEOUT)
+
+
+def failed_to_read(path: Path, result: "ImportResult") -> bool:
+    """取り込みの失敗が**その場の事情で読めなかった**ものか(「表が無い・空」とみなしてはいけない)。
+
+    sqlite3 は、写せない・開けない・表を読めない、がどれも読めなかった(表があるかは
+    呼ぶ側が `source_db.list_tables(strict=True)` で先に見る)。Access は `UNREAD_KINDS` だけ。
+    """
+    if result.success:
+        return False
+    if Path(path).suffix.lower() in source_db.SUFFIXES:
+        return True
+    return result.error is not None and result.error.kind in UNREAD_KINDS
+
+
 def import_table(
     accdb_path: Path,
     table_name: str,

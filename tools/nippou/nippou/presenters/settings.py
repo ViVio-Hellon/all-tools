@@ -817,11 +817,15 @@ def _file_view(key: str, label: str, getter) -> FileView:
     view.is_write_target = key == WRITE_TARGET_KEY
     from datetime import datetime
     view.checked_at = datetime.now().strftime("%H:%M:%S")
+    from ..db.connection import SharedUnreadable, file_state
+
     try:
-        view.exists = path.exists()
+        # **「無い」は、置き場所に届いて一覧が取れ、そこに無いときだけ**(`file_state`)。
+        # 届かないのを「まだありません(初回の保存で作られます)」と出さない
+        view.exists = file_state(path)
         if view.exists:
             view.size = path.stat().st_size
-    except OSError as exc:
+    except (OSError, SharedUnreadable) as exc:
         view.error = str(exc)
         return view
     if not view.exists and not view.is_write_target:
@@ -870,10 +874,10 @@ def _file_view(key: str, label: str, getter) -> FileView:
 
 
 def _sqlite_tables(path: Path) -> list[str]:
-    """そのファイルの表の一覧。**開くだけで写さない。**"""
-    import sqlite3
+    """そのファイルの表の一覧。**開くだけで写さない。** 読むだけで開く(無ければ作らない)。"""
+    from ..db.connection import connect_readonly
 
-    conn = sqlite3.connect(str(path), timeout=5)
+    conn = connect_readonly(path, timeout=5)
     try:
         return [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]

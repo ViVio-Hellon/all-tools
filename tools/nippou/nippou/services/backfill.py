@@ -36,17 +36,21 @@ def shared_pages(report_date: str, line: str, shift: str) -> Optional[list[int]]
     try:
         if not pusher.is_sqlite_target(path):
             return None                          # Access は読めない
-        if not path.exists():
-            # フォルダはあるのにファイルが無い = まだ1度も送っていない。
-            # フォルダごと見えない = 届かない(確かめられない)
-            return [] if path.parent.is_dir() else None
+        from ..db.connection import file_state
+
+        # 置き場所に届いて一覧が取れ、ファイルが無い = まだ1度も送っていない。
+        # 届かない・権限・見えているのに開けない = 確かめられない(例外 → None)
+        if not file_state(path):
+            return []
         from ..access_bridge import sqlite_backend
 
         table = pusher.header_table_name(line)
-        if table not in source_db.list_tables(path):
+        # **表の一覧・列を読めなければ確かめられない**(`strict`)。前は読めないと空の一覧に
+        # なり「そのラインはまだ1度も送っていない」= 共有にページが無い、と答えていた
+        if table not in source_db.list_tables(path, strict=True):
             return []                            # そのラインはまだ1度も送っていない
         page = sqlite_backend.PageColumn(
-            sqlite_backend.page_names_of(source_db.columns(path, table)))
+            sqlite_backend.page_names_of(source_db.columns(path, table, strict=True)))
         rows = source_db.read_query(
             path,
             f'SELECT {page.sql()} AS p FROM {source_db.quote_identifier(table)}'

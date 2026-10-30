@@ -140,25 +140,44 @@ def lines_available() -> list[str]:
 # 開く
 # ----------------------------------------------------------------------
 def _open_write(path: Path) -> sqlite3.Connection:
-    """書くために開く。**WAL にしない**(共有のフォルダでは働かないことがある)。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=DELETE")
-    conn.execute("PRAGMA foreign_keys=ON")
-    ensure_schema(conn)
+    """書くために開く。**WAL にしない**(共有のフォルダでは働かないことがある)。
+
+    **控えのファイルを新しく作るのは、置き場所に届いて本当に無いと確かめたときだけ**
+    (`db.connection.open_rw`。`LocalBackup` とライン名のフォルダは控えの置き場所の下なら
+    作る)。一瞬見えなかった・権限・0バイトのときは作らずに `SharedUnreadable`(写す待ちに
+    残し、次の回にやり直す)。以前は開くだけで、見えなかった控えの場所に空の控えを作っていた。
+    """
+    from ..db.connection import open_rw
+
+    conn = open_rw(path, create=True, base=SETTINGS.local_backup_base, timeout=10)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA foreign_keys=ON")
+        ensure_schema(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
+
+
+def _exists(path: Path) -> bool:
+    """そのラインの控えが**ある**か・**確かめたうえで無い**か。確かめられなければ `SharedUnreadable`。"""
+    from ..db.connection import file_state
+
+    return file_state(path, base=SETTINGS.local_backup_base)
 
 
 @contextmanager
 def reader(line: str) -> Iterator[Optional[NippouRepository]]:
-    """そのラインの控えを**読むだけ**で開く。無ければ None。"""
+    """そのラインの控えを**読むだけ**で開く。**確かめたうえで無ければ** None。
+
+    届かない・権限・見えているのに開けないときは `SharedUnreadable`(sqlite3 のエラー)。
+    「無い」と同じにすると、起動のときに手元の全ページを「控えに無い」として写す待ちに
+    入れ、記録を見るでは「控えがありません」と出ていた。
+    """
     path = path_for(line)
-    try:
-        exists = path.is_file()
-    except OSError:
-        exists = False
-    if not exists:
+    if not _exists(path):
         yield None
         return
     # 共有(UNC)の上でも開ける形で(`db.connection.readonly_uri`)。以前は
@@ -457,6 +476,19 @@ def pull(repo: NippouRepository, line: str) -> Result:
     if not reachable():
         result.error = _base_missing()
         return result
+    try:
+        return _pull(repo, line, result)
+    except sqlite3.Error as exc:
+        # **控えを読めなかった。** 「控えに無い」とみなして全ページを写す待ちに入れない
+        # (戻すものも分からない)。次の起動・保存のときにやり直す
+        log.warning("控えを読めませんでした(手元はそのまま。次の回にやり直します) %s: %s",
+                    path_for(line), exc)
+        result.error = f"{path_for(line)} を読めませんでした: {exc}"
+        result.pending = len(repo.backup_pending())
+        return result
+
+
+def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
     pulled: set[ShiftKey] = set()
     to_send: list[PageKey] = []
     with reader(line) as backup:

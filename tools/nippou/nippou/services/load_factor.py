@@ -106,6 +106,16 @@ def factors() -> dict[str, float]:
         return {}
 
 
+def _factors_checked() -> tuple[dict[str, float], str]:
+    """(用途コード → 換算係数, 読めなかった理由)。理由が空でなければ読めなかった。"""
+    from ..access_bridge import factor_master
+
+    try:
+        return factor_master.read_factors()
+    except Exception as exc:                      # noqa: BLE001 - 保存を止めない
+        return {}, f"用途名負荷係数算出を読めませんでした: {exc}"
+
+
 def recalculate(repo: NippouRepository, report_date: str, line: str,
                 shift: str, *, table: Optional[dict[str, float]] = None
                 ) -> Applied:
@@ -117,6 +127,17 @@ def recalculate(repo: NippouRepository, report_date: str, line: str,
     """
     if not load_factor.applies(line):
         return Applied(Result(applied=False))
+
+    if table is None:
+        table, problem = _factors_checked()
+        if problem and load_factor.counts_coefficient(line):
+            # **係数の表を読めなかった。** 読めないまま計算すると全部の行の係数が1になり、
+            # そのページを書き直して共有へも送ってしまう。今回は何も書き直さず、
+            # 次の保存(読めるようになってから)で計算し直す
+            log.warning("用途名負荷係数算出を読めなかったので、係数を計算し直しませんでした"
+                        "(次の保存でやり直します) %s %s %s: %s",
+                        report_date, line, shift, problem)
+            return Applied(Result(applied=False))
 
     pages = repo.saved_pages(report_date, line, shift)
     loaded: list[tuple[HeaderRecord, list[DetailRecord]]] = []
@@ -133,7 +154,7 @@ def recalculate(repo: NippouRepository, report_date: str, line: str,
     before = [(d.page, d.row_no, d.keisu) for d in rows]
     result = load_factor.recalculate(
         rows, line=line,
-        factors=factors() if table is None else table,
+        factors=table,
         previous=previous_pages(repo, report_date, line, shift))
 
     changed = {(d.page, d.row_no) for d, (p, r, keisu) in zip(rows, before)

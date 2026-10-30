@@ -103,6 +103,13 @@ class PasswordGateTests(WebTestCase):
         self.assertEqual(res.get_json()["changing"], ["日報データのファイル名"])
 
     def test_書き先をsqlite3にできる(self) -> None:
+        from nippou import config, user_settings
+
+        # 置き場所はあって、ファイルがまだ無い(置き場所ごと無いのは「読めない」と出る)。
+        # 置き場所は**この試験の一時フォルダ**(既定のままだと試験の外に作ってしまう)
+        share = self.tmp / "share"
+        share.mkdir()
+        user_settings.save_many({config.KEY_ACCESS_DIR: str(share)})
         res = self.post("/api/settings/paths",
                         {"access_db_filename": "日報管理.sqlite3",
                          "password": "nisk"})
@@ -293,6 +300,7 @@ class MasterAdminTests(WebTestCase):
         return path
 
     def test_無いファイルは無いと言う(self) -> None:
+        (self.tmp / "ref").mkdir(parents=True, exist_ok=True)   # 置き場所はあって、ファイルが無い
         state = self.get("/api/settings/state").get_json()
         material = next(f for f in state["files"] if f["key"] == "material")
         self.assertFalse(material["exists"])

@@ -381,11 +381,17 @@ def _shared_month_pages(line: str, year: int, month: int
     try:
         if not pusher.is_sqlite_target(path):
             return None
-        if not path.is_file():
-            if path.parent.is_dir() or not _shared_place_set():
-                # 本当に無い(まだ1度も送っていない・置き場所を決めていない端末)
-                return None
-            raise _SharedUnread(f"共有の日報データの置き場所に届きません: {path.parent}")
+        from ..db.connection import SharedUnreadable, file_state
+
+        try:
+            there = file_state(path)
+        except SharedUnreadable as exc:
+            if not _shared_place_set():
+                return None                       # 置き場所を決めていない端末(今までどおり)
+            raise _SharedUnread(str(exc)) from exc
+        if not there:
+            # 本当に無い(置き場所に届いて一覧が取れ、そこに無い = まだ1度も送っていない)
+            return None
         table = pusher.header_table_name(line)
         conn = sqlite_backend.connect(path)
         try:

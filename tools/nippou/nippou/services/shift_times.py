@@ -33,8 +33,13 @@ from ..logging_setup import get_logger
 log = get_logger("services.shift_times")
 
 
-#: マスタのファイルを最後に読んだときの (更新時刻, 大きさ)。ファイルごと
+#: マスタのファイルを最後に**読めた**ときの (更新時刻, 大きさ)。ファイルごと
 _seen: dict[str, tuple[int, int]] = {}
+#: 読めなかったときの ((更新時刻, 大きさ), いつ)。**読めたことにはしない**(`_seen` に入れない)。
+#: 同じファイルを毎回の要求で読みに行かないよう、`RETRY_FAILED_SEC` は間を空ける
+_failed: dict[str, tuple[tuple[int, int], float]] = {}
+#: 読めなかったファイルを、変わっていなくても読み直すまでの秒
+RETRY_FAILED_SEC = 300.0
 #: 変わったかを見るのは、これより間を空けて(秒)。画面の1分の見張りで足りる
 CHECK_EVERY = 30.0
 #: 最後に見に行ったとき(`time.monotonic`)。**間を空けるかの判断は設定もファイルも読まずに**
@@ -56,6 +61,7 @@ def reset() -> None:
     global _last_check
     with _lock:
         _seen.clear()
+        _failed.clear()
         _last_check = None
 
 
@@ -92,6 +98,9 @@ def refresh_if_changed(repo, *, now: Optional[float] = None,
     stamp = _stamp(path)
     if stamp is None or _seen.get(key) == stamp:
         return None
+    failed = _failed.get(key)
+    if failed is not None and failed[0] == stamp and t - failed[1] < RETRY_FAILED_SEC:
+        return None                               # 読めなかったばかり。少し間を空ける
     if guard is not None and not guard.acquire(timeout=0.5):
         with _lock:
             _last_check = None                    # 次の要求でもう一度
@@ -101,9 +110,14 @@ def refresh_if_changed(repo, *, now: Optional[float] = None,
     finally:
         if guard is not None:
             guard.release()
-    # 読めなかったときも覚える(壊れたファイルを30秒ごとに読みに行かない。次に変わったら読む)
+    # **読めなかったときは「読めた」と覚えない**(前は覚えていたので、ロック中・一瞬届かない
+    # ときに読み損ねると、マスタが次に変わるまで新しい時刻を読み直さなかった)。
+    # 同じファイルを毎回読みに行かないよう、間だけ空ける(`RETRY_FAILED_SEC`)
     with _lock:
-        _seen[key] = stamp
+        if times is None:
+            _failed[key] = (stamp, t)
+        else:
+            _failed.pop(key, None)
     if times is not None:
         log.info("マスタの時間用が変わっていたので読み直しました: %s", describe(times))
     return times
@@ -120,15 +134,16 @@ def reload(repo: NippouRepository) -> Optional[dict[str, tuple[str, str]]]:
     stamp = _stamp(path)
     times = importer.import_shift_times(
         path, table_name=SETTINGS.shift_time_table)
-    # 読んだときの更新時刻を覚える(`refresh_if_changed` が同じものを読み直さない)
-    if stamp is not None:
-        with _lock:
-            _seen[str(path)] = stamp
     if not times:
         log.warning("直の時間をマスタから読めませんでした: %s",
                     SETTINGS.transmission_master_path)
         return None
     repo.replace_shift_times(times)
+    # **写せたときだけ**、読んだときの更新時刻を覚える(`refresh_if_changed` が同じものを
+    # 読み直さない)。読めなかったのを覚えると、次に変わるまで読み直さない
+    if stamp is not None:
+        with _lock:
+            _seen[str(path)] = stamp
     log.info("直の時間をマスタから写しました: %d件", len(times))
     return times
 

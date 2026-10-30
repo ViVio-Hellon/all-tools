@@ -30,6 +30,16 @@ from .runner import ScriptRunner
 
 _logger = get_logger("access_bridge.stop_master")
 
+#: CSVの置き場所ごとに、**最後に読めた**使う一覧(分類 → (理由, 出どころ))。
+#: CSVを一瞬読めない回は、空でも表でもなく、これを使う(画面の選択欄から消さない・
+#: 段取り/VC交換の停止の見分けを変えない)。読めた回だけ覚え直す
+_LAST_READ: dict[str, dict[str, tuple[list[StopReason], str]]] = {}
+
+
+def forget_last_read() -> None:
+    """覚えている「最後に読めた一覧」を忘れる(試験用)。"""
+    _LAST_READ.clear()
+
 # port of Table内訳1/2/3 (boxin()) -- カテゴリ名(表示用) -> テーブル名。
 CATEGORY_TABLES: dict[str, str] = {
     "設備停止": "作業停止時間内訳_1",
@@ -101,10 +111,10 @@ class Sources:
     master_errors: dict[str, str] = field(default_factory=dict)
 
 
-def read_csv_text(path: Path) -> str:
+def read_csv_text(path: Path, raw: Optional[bytes] = None) -> str:
     """CSVの文字。**メモ帳・Excel で保存されたものを読めるように**
     UTF-8(BOM付きも)→ cp932 の順に試す。"""
-    raw = path.read_bytes()
+    raw = path.read_bytes() if raw is None else raw
     for encoding in ("utf-8-sig", "utf-8", "cp932"):
         try:
             return raw.decode(encoding)
@@ -120,12 +130,21 @@ def read_csv(csv_path: Optional[Path] = None) -> tuple[stop_csv.Parsed, bool, st
     (共有に届かない等)も表で動きます ── 停止理由が読めないことを
     理由に日報入力を止めません。
     """
+    from ..db.connection import SharedUnreadable, file_state
+
     path = Path(csv_path) if csv_path else SETTINGS.stop_reason_csv_path
     try:
-        if not path.is_file():
+        # **「無い」は、置き場所に届いて一覧が取れ、そこに無いときだけ**(`file_state`)。
+        # 届かない・権限で見えないのを「無い」とすると、表(伝送用ファイル)の一覧に
+        # 黙って入れ替わり、CSVで直した名前・消した理由が戻っていた
+        if not file_state(path):
             return stop_csv.Parsed(source=str(path)), False, ""
-        text = read_csv_text(path)
-    except OSError as exc:
+        raw = path.read_bytes()
+        if not raw:
+            # 0バイト(メモ帳・Excel が書いている最中など)。**空の一覧として使わない**
+            raise OSError("ファイルの中身が空(0バイト)です")
+        text = read_csv_text(path, raw)
+    except (OSError, SharedUnreadable) as exc:
         _logger.warning("停止内訳CSVを読めませんでした path=%s error=%s", path, exc)
         return stop_csv.Parsed(source=str(path)), False, f"読めません: {exc}"
     return stop_csv.parse(text, source=str(path)), True, ""
@@ -147,6 +166,28 @@ def load_sources(
     parsed, exists, error = read_csv(csv_path)
     out = Sources(csv=parsed, csv_path=parsed.source, csv_exists=exists,
                   csv_error=error)
+    if error:
+        # **CSVを読めなかった。** どの分類をCSVが持っているか分からないので、表の一覧で
+        # 入れ替えない(入れ替えると、CSVで直した名前・消した理由・足した理由が変わる)。
+        # 使う一覧は**最後に読めた一覧**(`_LAST_READ`)。このプロセスでまだ一度も読めて
+        # いなければ空(選択欄は自由入力・記号の確認は飛ばす)。集計の名前はどちらでも
+        # 前の集計のまま(`month_rollover.read_stop_labels` が理由を返す)。
+        # 設定画面のために、頼まれれば表は読んで見せる
+        if read_master:
+            for category in CATEGORY_TABLES:
+                reasons, why = _read_master(category, master_path, runner)
+                out.master[category] = reasons
+                if why:
+                    out.master_errors[category] = why
+        last = _LAST_READ.get(parsed.source, {})
+        for category in CATEGORY_TABLES:
+            reasons, origin = last.get(category, ([], ""))
+            out.effective[category] = list(reasons)
+            out.origins[category] = origin
+        if last:
+            _logger.warning("停止内訳CSVを読めないので、最後に読めた一覧のまま使います path=%s",
+                            parsed.source)
+        return out
     covered = set(parsed.categories())
     for category in CATEGORY_TABLES:
         if category in covered and not read_master:
@@ -167,6 +208,12 @@ def load_sources(
             # 表から来たものは**そのまま**(記号の無い行も残す ── 従来どおり)
             out.effective[category] = list(out.master.get(category, []))
         out.origins[category] = picked.origins.get(category, "")
+    # 読めた回だけ覚え直す。表から来る分類は、表も読めたときだけ
+    remembered = dict(_LAST_READ.get(parsed.source, {}))
+    for category in CATEGORY_TABLES:
+        if out.origins[category] == stop_csv.FROM_CSV or category not in out.master_errors:
+            remembered[category] = (list(out.effective[category]), out.origins[category])
+    _LAST_READ[parsed.source] = remembered
     return out
 
 

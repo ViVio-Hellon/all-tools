@@ -48,11 +48,35 @@ def load_factors(
     同じ用途コードが2行あるときは**先に出てきたほう**を採ります
     (VBA `If Not dic.Exists(key) Then dic.Add`)。
     """
-    master_path = master_path or SETTINGS.transmission_master_path
+    return read_factors(master_path, runner)[0]
+
+
+def read_factors(
+    master_path: Optional[Path] = None,
+    runner: Optional[ScriptRunner] = None,
+) -> tuple[dict[str, float], str]:
+    """(用途コード → 換算係数, 読めなかった理由)。**理由が空でなければ読めなかった**
+    (空の表とは分ける ── 読めないのに係数を全部1で書き直さないため。`services/load_factor`)。"""
+    from .. import source_db
+    from ..db.connection import SharedUnreadable, file_state
+    from .importer import failed_to_read
+
+    master_path = Path(master_path or SETTINGS.transmission_master_path)
+    try:
+        if not file_state(master_path):
+            return {}, ""                         # 本当に無い(係数は1 ── 今までどおり)
+        if master_path.suffix.lower() in source_db.SUFFIXES and TABLE_NAME not in (
+                source_db.list_tables(master_path, strict=True)):
+            return {}, ""                         # 表が無い(今までどおり)
+    except (SharedUnreadable, source_db.SourceError) as exc:
+        _logger.warning("用途名負荷係数算出を読めませんでした: %s", exc)
+        return {}, str(exc)
     result = import_table(master_path, TABLE_NAME, runner=runner)
     if not result.success:
         _logger.warning("用途名負荷係数算出を読めませんでした error=%s", result.error)
-        return {}
+        if failed_to_read(master_path, result):
+            return {}, str(result.error or "用途名負荷係数算出を読めませんでした")
+        return {}, ""                             # Access の表が無い など(今までどおり)
 
     factors: dict[str, float] = {}
     for row in result.rows:
@@ -61,4 +85,4 @@ def load_factors(
         if not code or code in factors or not is_numeric(raw):
             continue
         factors[code] = to_float(raw)
-    return factors
+    return factors, ""

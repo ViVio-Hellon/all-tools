@@ -809,8 +809,11 @@ def survey(source: object = "") -> Report:
     except SourceError as exc:
         report.error = str(exc)
         return report
+    from ..db.connection import file_state
+
     try:
-        if dest.is_file():
+        # **写す先を確かめられなければ下見もしない**(無いとみなすと全部「足す」と出る)
+        if file_state(dest):
             with source_db.open_source(dest) as conn:
                 tables = _tables(conn)
                 for src in sources:
@@ -844,14 +847,23 @@ def run(source: object = "") -> Report:
     except SourceError as exc:
         report.error = str(exc)
         return report
-    existed = dest.is_file()
+    from ..db.connection import SharedUnreadable, file_state
+
+    # **あるか無いかは、置き場所に届いて確かめてから**(`file_state`)。届かない・確かめられない
+    # のに「無い」とみなすと、控えを取らずに**新しい空の日報データを作って**写していた
+    try:
+        existed = file_state(dest)
+    except SharedUnreadable as exc:
+        report.error = f"{exc}(何も写していません)"
+        return report
     if existed:
         why = _not_sqlite(dest)
         if why:
             report.error = why
             return report
     try:
-        conn = backend.connect(dest)
+        # 作るのは、確かめたうえで無いときだけ(初めて写す)
+        conn = backend.connect(dest, create=not existed)
     except sqlite3.Error as exc:
         report.error = f"{dest.name} を開けません: {exc}"
         return report

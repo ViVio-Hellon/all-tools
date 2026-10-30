@@ -208,10 +208,18 @@ class LoaderTests(unittest.TestCase):
         got = self.load()
         self.assertEqual([r.label for r in got["ハンドリング"]], ["内径カット"])
 
-    def test_unreadable_csv_falls_back_to_the_table(self):
+    def test_unreadable_csv_does_not_fall_back_to_the_table(self):
+        """**読めないCSVを表の一覧で入れ替えない**。CSVで消した・直した理由が戻るので。
+
+        前は「表に落ちる」でしたが、共有を読めないのを「無い」と取り違えない決まりに合わせ、
+        読めないときの一覧は空(選択欄は自由入力・記号の確認は飛ばす)にして理由を出します。
+        """
+        from nippou.access_bridge import stop_master
+
         self.csv.mkdir(parents=True)                 # 名前はあるがファイルではない
-        got = self.load()
-        self.assertEqual([r.code for r in got["設備停止"]], ["0", "2"])
+        src = stop_master.load_sources(self.master, csv_path=self.csv)
+        self.assertTrue(src.csv_error)
+        self.assertEqual(src.effective["設備停止"], [])
 
     def test_sources_show_both_and_origins(self):
         from nippou.access_bridge import stop_master

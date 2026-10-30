@@ -66,7 +66,10 @@ class RepoCase(unittest.TestCase):
         return SimpleNamespace(succeeded=list(ok), failed=failed)
 
     def make_shared(self) -> None:
-        sqlite3.connect(self.shared).close()        # 共有のファイルがある状態
+        # 共有のファイルがある状態(**中身のある** sqlite3。0バイトは「読めない」扱い)
+        conn = sqlite3.connect(self.shared)
+        conn.execute("VACUUM")
+        conn.close()
 
 
 class RecordTests(RepoCase):

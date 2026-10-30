@@ -49,7 +49,13 @@ class LoadStopReasonsTests(unittest.TestCase):
         self.assertEqual(reasons, [])
 
     def test_load_all_categories_covers_all_three(self) -> None:
-        result = stop_master.load_all_categories(master_path=Path("dummy.accdb"), runner=FakeCsvRunner(REASON_CSV))
+        import tempfile
+
+        # 停止内訳.csv は「置き場所はあって、ファイルが無い」(置き場所ごと無いのは「読めない」)
+        with tempfile.TemporaryDirectory() as folder:
+            result = stop_master.load_all_categories(
+                master_path=Path("dummy.accdb"), runner=FakeCsvRunner(REASON_CSV),
+                csv_path=Path(folder) / "停止内訳.csv")
         self.assertEqual(set(result.keys()), {"設備停止", "不稼働", "ハンドリング"})
         for reasons in result.values():
             self.assertEqual(len(reasons), 2)

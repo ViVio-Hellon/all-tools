@@ -164,13 +164,14 @@ def _find_table(path: Path) -> Optional[str]:
 
     want = logic.fold(logic.TABLE_NAME)
     if Path(path).suffix.lower() in source_db.SUFFIXES:
-        try:
-            names = source_db.list_tables(Path(path))
-        except Exception:                         # noqa: BLE001 - 読めないファイルは飛ばす
-            log.exception("表の一覧を読めませんでした: %s", path)
-            return None
+        # **読めなければ例外**(`strict`)── 「表が無い」と取り違えて次のファイルの表で決めない
+        names = source_db.list_tables(Path(path), strict=True)
         return next((n for n in names if logic.fold(n) == want), None)
     return logic.TABLE_NAME                       # Access は名前で取りに行く
+
+
+#: 読めなかったときの一言の頭(`load` が前の結果を残すかを見分ける)
+UNREAD_PREFIX = "アクセス権限の表を読めませんでした"
 
 
 def read(me: Optional[logic.Identity] = None) -> tuple[list[dict[str, str]], str, str]:
@@ -181,30 +182,52 @@ def read(me: Optional[logic.Identity] = None) -> tuple[list[dict[str, str]], str
     「アクセス権限」があると読まれず、mode:fullaccess が効きませんでした。
     どの表にもこのPCの行が無ければ、これまでどおり最初に読めた表を使います。
     """
-    from ..access_bridge.importer import import_table
+    from ..access_bridge.importer import failed_to_read, import_table
+    from ..db.connection import SharedUnreadable, file_state
 
     me = me or identity()
     looked: list[str] = []
     first: Optional[tuple[list[dict[str, str]], str, str]] = None
+    #: **その場の事情で読めなかった**ファイル(届かない・ロック・開けない)。無いのとは別
+    unread: list[str] = []
     for _, label, path_of in CANDIDATES:
         try:
             path = Path(path_of())
         except Exception:                         # noqa: BLE001 - 設定が壊れていても次へ
             continue
-        if not path.exists():
+        try:
+            if not file_state(path):
+                continue                          # 置き場所は見えて、ファイルが無い
+        except SharedUnreadable as exc:
+            unread.append(f"{label}: {exc}")
             continue
         looked.append(label)
-        table = _find_table(path)
+        try:
+            table = _find_table(path)
+        except Exception as exc:                  # noqa: BLE001 - 読めなかった(無いとは言わない)
+            log.warning("表の一覧を読めませんでした: %s: %s", path, exc)
+            unread.append(f"{label}: {exc}")
+            continue
         if table is None:
             continue
         result = import_table(path, table)
         if result.success:
             found = (list(result.rows), f"{label} の {table}", "")
             if found[0] and logic.decide(found[0], me).found_row:
+                if unread:
+                    # **先に見るファイルを読めなかった。** そちらにこのPCの行があるかもしれない
+                    # ので、後ろのファイルの行では決めない(ラインを当て直さない)
+                    break
                 return found
             first = first or found
             continue
         log.info("アクセス権限を読めませんでした(%s): %s", label, result.error)
+        if failed_to_read(path, result):
+            unread.append(f"{label}: {result.error}")
+    if unread:
+        # どこかを読めなかった。**読めた分だけで決めない**(このPCの行が読めなかったほうに
+        # あるかもしれない)。次に読み直したときに決める
+        return [], "", f"{UNREAD_PREFIX}({' / '.join(unread)})"
     if first is not None:
         return first
     where = "・".join(looked) if looked else "マスタのファイル"
@@ -212,14 +235,30 @@ def read(me: Optional[logic.Identity] = None) -> tuple[list[dict[str, str]], str
 
 
 def load() -> Status:
-    """表を読んで判断する(当てはしない)。**結果を覚える。**"""
+    """表を読んで判断する(当てはしない)。**結果を覚える。**
+
+    **読めなかったときは、前に読めた結果を覚えたまま**(理由だけ差し替える)。空の結果で
+    置き換えると、共有が一瞬届かないだけで Administrator の PC がほかのラインを見られなく
+    なり、タブの出し方も変わっていた。
+    """
     global _status
     me = identity()
     try:
         rows, source, problem = read(me)
     except Exception as exc:                      # noqa: BLE001 - 読めなくても動く
         log.exception("アクセス権限の読み込みで予期しないエラー")
-        rows, source, problem = [], "", f"アクセス権限を読めませんでした: {exc}"
+        rows, source, problem = [], "", f"{UNREAD_PREFIX}: {exc}"
+    if not rows and problem.startswith(UNREAD_PREFIX):
+        log.warning("%s(前に読めた結果のまま。次に読み直します)", problem)
+        with _lock:
+            previous = _status
+        if previous is not None and previous.checked:
+            kept = Status(decision=previous.decision, identity=me, source=previous.source,
+                          problem=f"{problem}。前に読めた結果のまま使っています",
+                          findings=previous.findings, checked=previous.checked)
+            with _lock:
+                _status = kept
+            return kept
     decision = logic.decide(rows, me) if rows else logic.Decision()
     findings = logic.inspect(rows) if rows else []
     status = Status(decision=decision, identity=me, source=source, problem=problem,

@@ -573,7 +573,9 @@ class RebuildTests(SummaryTestCase):
 class PushTests(SummaryTestCase):
     def _shared(self) -> Path:
         shared = self.tmp / "日報データ.sqlite3"
-        sqlite3.connect(str(shared)).close()
+        conn = sqlite3.connect(str(shared))
+        conn.execute("VACUUM")                    # 中身のある sqlite3(0バイトは「読めない」扱い)
+        conn.close()
         return shared
 
     def test_共有に3つの表として残る(self) -> None:

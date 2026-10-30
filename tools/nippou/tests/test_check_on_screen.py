@@ -108,6 +108,9 @@ class CoefficientLineTests(WebTestCase):
     terminal_line = "機側"
 
     def test_保存した直後は未保存と言わない(self) -> None:
+        # 参照用マスタの置き場所はあって、伝送用ファイルが無い(= 本当に無い。係数は1)。
+        # 置き場所ごと無いのは「読めない」で、係数を計算し直さない
+        (self.tmp / "ref").mkdir(parents=True, exist_ok=True)
         saved = self.post("/api/entry/save", {"rows": {"1": WORK},
                                               "header": {"worker": WORKER}}).get_json()
         _, rows = self.repo().load(*self.repo().list_keys()[0])

@@ -312,9 +312,9 @@ class PushPendingTests(unittest.TestCase):
         opened = []
         real = fresh._connect
 
-        def counting(path):
+        def counting(path, **kwargs):
             opened.append(path)
-            return real(path)
+            return real(path, **kwargs)
 
         with patch.object(fresh, "_connect", counting):
             summary = p.push_pending(self.repo, self.target)

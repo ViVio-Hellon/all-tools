@@ -1824,7 +1824,9 @@ class E_AccessTests(ScenarioCase):
         self.assertIn(res.get_json()["warning"], res.get_json()["message"])
 
     def test_E4_同じ名前のsqlite3があればそちらへ書く(self) -> None:
-        sqlite3.connect(self.shared_path).close()
+        conn = sqlite3.connect(self.shared_path)
+        conn.execute("VACUUM")                    # 中身のある sqlite3(0バイトは「読めない」扱い)
+        conn.close()
         from nippou.config import SETTINGS
         self.assertEqual(SETTINGS.access_db_path, self.shared_path)
         self.two_shifts()

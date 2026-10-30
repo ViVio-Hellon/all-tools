@@ -420,6 +420,12 @@ class ServiceTests(unittest.TestCase):
 class ScreenTests(WebTestCase):
     """画面まで通す。"""
 
+    def setUp(self) -> None:
+        super().setUp()
+        # 参照用マスタの置き場所はあって、伝送用ファイルが無い(= 本当に無い。係数は1)。
+        # 置き場所ごと無いのは「読めない」で、係数を計算し直さない
+        (self.tmp / "ref").mkdir(parents=True, exist_ok=True)
+
     def _use_line(self, line: str) -> None:
         # ラインを変えるのは管理者モードだけ(据え付けの設定)
         self.post("/api/settings/admin", {"enable": True, "password": "nisk"})

@@ -440,9 +440,15 @@ def read(repo: NippouRepository, db_path: Optional[Path]) -> Readout:
     local = repo.push_history()
     if db_path is None or not pusher.is_sqlite_target(db_path):
         return Readout(local, "この端末の記録(書き先が Access のため共有には写していません)")
-    if not Path(db_path).exists():
+    from ..db.connection import SharedUnreadable, file_state
+
+    try:
+        there = file_state(db_path)
+    except SharedUnreadable as exc:
+        return Readout(local, "この端末の記録だけ", warning=str(exc))
+    if not there:
         return Readout(local, f"この端末の記録だけ(共有の {Path(db_path).name} が"
-                              "まだ無い・見つからないため)")
+                              "まだ無いため)")
     try:
         shared = _read_shared(db_path)
     except sqlite3.Error as exc:

@@ -1102,7 +1102,8 @@ def _staff_checks(path: Path, table: str) -> list[str]:
 
     column = SETTINGS.staff_operator_column
     try:
-        if column not in source_db.columns(path, table):
+        # **列を読めなければ点検できない**(`strict`)。前は読めないと「列が無い = 指摘なし」になった
+        if column not in source_db.columns(path, table, strict=True):
             return []
         rows = source_db.read_table(path, table)
     except source_db.SourceError as exc:
