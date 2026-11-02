@@ -25,6 +25,9 @@ export function start(initial) {
   const line = document.getElementById('line');
   if (line) line.addEventListener('change', onLineChange);
 
+  const viewSite = document.getElementById('view-site');
+  if (viewSite) viewSite.addEventListener('change', onViewSiteChange);
+
   const save = document.getElementById('save-accdb');
   if (save) save.addEventListener('click', onAccdbChange);
   wireSource();
@@ -881,6 +884,32 @@ async function onLineChange(ev) {
     reloadSoon(note ? 2500 : 900, document.getElementById('line'));
   } catch (e) {
     ev.target.value = state.line;
+    bad(e.message);
+  }
+}
+
+// ------------------------------------------------------------------
+// 倉庫参照 + 現場のライン1つ
+// ------------------------------------------------------------------
+// 倉庫参照モードのときだけ出る。関門はモードと同じアクセス権限(現場モード)で、パスワードは
+// 訊かない。**すぐ効く**(モードは倉庫参照のままなので開き直さなくてよい)。担当ラインの欄を
+// 出し入れするので、終わったら読み直す
+async function onViewSiteChange(ev) {
+  const on = ev.target.checked;
+  ev.target.disabled = true;
+  try {
+    const r = await api.post('/api/view-site', { on });
+    if (!r.changed) { ok('変更はありません'); ev.target.disabled = false; return; }
+    state.view_site = r.on;
+    ok(r.message || (on ? '現場との併用にしました。' : '現場との併用をやめました。'));
+    reloadSoon(1200, ev.target);
+  } catch (e) {
+    ev.target.checked = !on;
+    ev.target.disabled = false;
+    if (e.code === 'no_permission') {
+      showModeNotice('', e.message);
+      if (e.body && e.body.access) renderAccess(e.body.access);
+    }
     bad(e.message);
   }
 }

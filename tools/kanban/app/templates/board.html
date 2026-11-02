@@ -14,6 +14,12 @@
 
 {% block content %}
 
+{#
+  土曜・日曜・祝日は「発注のできない日」と出す(案内だけ。発注は止めない。kanban/closed_day.py)。
+  開いたままでも日付が変われば JS が出し直す・消す(/api/status の closed_day)
+#}
+<div class="banner banner--warn" id="closed-day" role="status" {% if not closed_day %}hidden{% endif %}>{{ closed_day }}</div>
+
 {% if not lines %}
   <div class="empty">
     <p><b>表示できるラインがありません。</b></p>
@@ -36,8 +42,13 @@
     <button class="btn" type="button" id="refresh"
             title="共有DBから最新を取り込み直します">↻ 更新</button>
 
-    {% if mode == 'site' %}
+    {#
+      倉庫参照で現場のライン1つを併用している端末は、担当ラインのタブ(現場の盤)でだけ出す。
+      出し入れは JS が盤の mode で行う
+    #}
+    {% if site_board %}
     <button class="btn btn--primary" type="button" id="batch-reset"
+            {% if state and state.mode and state.mode != 'site' %}hidden{% endif %}
             title="赤と緑が両方点いている資材を、届いたものとしてまとめて戻します">
       届いた資材を一括確認 <span class="count" id="c-reset">0</span>
     </button>
@@ -58,7 +69,8 @@
   </div>
 
   {% if read_only %}
-  <div class="banner banner--warn">
+  <div class="banner banner--warn" id="read-only-note"
+       {% if state and state.mode == 'site' %}hidden{% endif %}>
     参照専用モードです。押しても状態は変わりません。
   </div>
   {% endif %}

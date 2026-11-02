@@ -493,8 +493,10 @@ def _prepare(args):
 
     # --- アクセス権限の表のライン(この端末の行に 1 つだけ書いてあれば) ---
     # **起動するたびに表のラインにする。** 管理者パスワードで変えた担当ラインは、その起動の
-    # あいだだけ ── 次も変えたままにしたいなら、マスタ(アクセス権限)を書き換える
-    if not args.line and mode == config.MODE_SITE:
+    # あいだだけ ── 次も変えたままにしたいなら、マスタ(アクセス権限)を書き換える。
+    # 倉庫参照で現場のライン1つを併用している端末も同じ(担当ラインで現場の操作をする)
+    view_site = _view_site_on(mode, store, grant, report=True)
+    if not args.line and (mode == config.MODE_SITE or view_site):
         from kanban import access_control
 
         code = access_control.line_at_startup(grant)
@@ -520,19 +522,44 @@ def _prepare(args):
     line = args.line or cfg.line
     from kanban import trace
 
-    trace.set_context(mode=mode, line=line if mode == config.MODE_SITE else "")
+    trace.set_context(mode=mode, line=line if (mode == config.MODE_SITE or view_site) else "")
     trace.write("startup", f"起動: {config.mode_display_name(mode)}", extra={
         "頼まれたモード": args.mode or store.get_device_mode() or "",
+        "現場の併用": (f"する(担当ライン {line or '未設定'})" if view_site else "しない"),
         "アクセス権限": _describe_grant(grant),
         "共有DB": cfg.resolved_shared_db_path(), "看板履歴": cfg.resolved_history_db_path(),
         "梱包資材マスタ": cfg.resolved_access_db_path(), "手元のSQLite": cfg.resolved_sqlite_path(),
         "ログ": str(applog.log_path() or ""), "Python": sys.version.split()[0],
         "画面": "デスクトップ版(ポートなし)" if getattr(args, "desktop", False) else "ブラウザ版",
     })
-    if mode == config.MODE_SITE and not config.is_supported_line(line):
+    if (mode == config.MODE_SITE or view_site) and not config.is_supported_line(line):
         log.warning("担当ラインが未設定/未登録です: %r", line)
 
     return cfg, store, mode, line, grant, access_notice
+
+
+def _view_site_on(mode: str, store, grant, *, report: bool = False) -> bool:
+    """倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用して開くか(設定 → この端末)。
+
+    倉庫参照モードのときだけ。**現場モードの権限が要る**(無ければ倉庫参照だけで開く。
+    保存してある選択は書き換えない ── 権限の行を足せば、次に開いたときから併用する)。
+    記録の無い端末(前の版から使っている端末)は併用しない。
+    """
+    if mode != config.MODE_WAREHOUSE_VIEW:
+        return False
+    try:
+        wanted = store.get_view_site()
+    except Exception:  # noqa: BLE001 - 読めなければ今までどおり倉庫参照だけ
+        log.exception("現場の併用を読めませんでした(倉庫参照だけで開きます)")
+        return False
+    if not wanted:
+        return False
+    if grant is not None and not grant.allows(config.MODE_SITE):
+        if report:
+            log.warning("現場モードの権限が無いので、現場は併用せずに倉庫参照だけで開きます: %s",
+                        grant.identity.label())
+        return False
+    return True
 
 
 def _start_records(cfg) -> None:
@@ -659,9 +686,11 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     srv.mark_stage("アプリを準備中", "prepare")
     gateway = importer = exporter = None
     startup_error = ""
+    # 倉庫参照で現場のライン1つを併用するか(設定 → この端末。開き直さずに切り替えられる)
+    view_site = _view_site_on(mode, store, grant)
     try:
         gateway, importer, exporter = _prepare_data(
-            args, cfg, store, mode, line, srv
+            args, cfg, store, mode, line, srv, view_site=view_site
         )
     except Exception as exc:  # noqa: BLE001 - 理由を画面へ出して起動は続ける
         log.exception("初期化に失敗しました")
@@ -697,6 +726,15 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
         """
         from kanban.db.shared import SharedDb
 
+        # **変える前に、前の接続先宛ての未送信を前の接続先へ送っておく。** 変えたあとは
+        # 新しい接続先へは送らない(:meth:`kanban.db.store.Store.adopt_source`。送れずに
+        # 残った分は看板の画面の帯で知らせる)
+        if exporter is not None and not store.same_source(exporter.gateway.path, new_path):
+            try:
+                if store.unsent().to_shared_db():
+                    exporter.run_once()
+            except Exception:  # noqa: BLE001 - 送れなくても繋ぎ直しは続ける
+                log.exception("接続先を変える前の書き戻しに失敗")
         fresh = SharedDb(
             new_path, busy_timeout_ms=cfg.busy_timeout_ms, max_retry=cfg.max_retry
         )
@@ -735,6 +773,7 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     srv.build(
         store=store,
         line=line,
+        view_site=view_site,
         on_manual_refresh=_manual_refresh if importer else None,
         on_reconnect=_reconnect,
         # **押した直後に書き戻す。** 周期(export_interval_sec)を待たない。
@@ -753,6 +792,38 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     srv.app.config["STARTUP_NOTICE"] = access_notice
     # 看板履歴の置き場所を変えたら、送り先を差し替えて表を用意する(開き直さなくてよい)
     srv.app.config["SET_HISTORY_DB"] = _change_history
+
+    def _apply_view_site(on: bool) -> None:
+        """倉庫参照で現場のライン1つを併用する / やめる(設定 → この端末)。**開き直さずに効かせる。**
+
+        モードは倉庫参照のまま(ポート・錠・多重起動の見分けは変わらない)。起動したときに
+        現場の端末がしていることを、ここで足す:
+
+        * 書き戻しを回す(倉庫参照だけのときは回していない)。やめるときも止めない ──
+          預かった操作を送り終えるため
+        * 看板履歴・看板コメントの表を用意する(現場の操作は記録を書く)
+        * 状態管理に担当ラインの現場として名乗る(やめたら「閉」を書いて名乗りをやめる)
+        * 担当ラインを取り込む(倉庫対象でないラインは、まだ取り込んでいない)
+        """
+        app = srv.app
+        current = app.config.get("GATEWAY") or gateway
+        if on:
+            if exporter is not None:
+                exporter.start()
+            if current is not None:
+                _prepare_history(current, config.MODE_SITE,
+                                 getattr(exporter, "history_gateway", None))
+            _prepare_access(cfg, config.MODE_SITE)
+        target = presence.registered_line(mode, app.config.get("LINE") or "", on)
+        if presence.get() is None:
+            if target and current is not None:
+                presence.install(current, store, target)
+        else:
+            presence.set_line(target)
+        if importer is not None:
+            _manual_refresh()
+
+    srv.app.config["APPLY_VIEW_SITE"] = _apply_view_site
 
     # エラーのときに「その時の状態」として記録に添えるもの(なぜなぜの材料)
     from kanban import trace
@@ -794,9 +865,9 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     # 倉庫が確認している最中に現場が開いていれば、看板が出るかもしれないと
     # 身構えられる。**倉庫参照モードは名乗らない**(読むだけの端末を
     # 数えると、本物の倉庫と見分けが付かなくなる)
-    if presence.registers(mode) and gateway is not None:
+    if presence.registers(mode, view_site) and gateway is not None:
         presence.install(
-            gateway, store, presence.registered_line(mode, line)
+            gateway, store, presence.registered_line(mode, line, view_site)
         )
     else:
         log.info("このモードは状態管理には名乗りません: %s", mode)
@@ -820,8 +891,12 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     return 0
 
 
-def _prepare_data(args, cfg, store, mode: str, line: str, srv):
-    """Access への接続と、定期取り込み・書き戻しを用意する。"""
+def _prepare_data(args, cfg, store, mode: str, line: str, srv, *, view_site: bool = False):
+    """Access への接続と、定期取り込み・書き戻しを用意する。
+
+    ``view_site`` は倉庫参照で現場のライン1つを併用するとき。担当ラインも取り込み、
+    現場の端末と同じく書き戻しを回し、記録の表を用意する。
+    """
     from kanban.db import sync
     from kanban.db.shared import SharedDb
 
@@ -830,7 +905,7 @@ def _prepare_data(args, cfg, store, mode: str, line: str, srv):
         busy_timeout_ms=cfg.busy_timeout_ms,
         max_retry=cfg.max_retry,
     )
-    lines = _relevant_lines(mode, line)
+    lines = _relevant_lines(mode, line, view_site)
     # 倉庫の端末だけが「倉庫に表示」(出した看板が倉庫の画面に初めて出た時刻)を書く
     store.records_seen = mode == config.MODE_WAREHOUSE
 
@@ -842,8 +917,10 @@ def _prepare_data(args, cfg, store, mode: str, line: str, srv):
     from kanban.db import history as history_db
 
     history = history_db.open_db(cfg)
-    _prepare_history(gateway, mode, history)
-    _prepare_access(cfg, mode)
+    # 倉庫参照で現場を併用する端末は、現場の端末として用意する(記録を書くので)
+    writes_as = config.MODE_SITE if view_site else mode
+    _prepare_history(gateway, writes_as, history)
+    _prepare_access(cfg, writes_as)
 
     def current_line() -> str:
         """**いまの**担当ライン。起動したときのラインではない。
@@ -855,9 +932,14 @@ def _prepare_data(args, cfg, store, mode: str, line: str, srv):
         app = getattr(srv, "app", None)
         return (app.config.get("LINE") if app is not None else "") or line
 
+    def current_view_site() -> bool:
+        """**いまの**併用(設定画面で切り替えられる。起動したときのものではない)。"""
+        app = getattr(srv, "app", None)
+        return bool(app.config.get("VIEW_SITE")) if app is not None else view_site
+
     importer = sync.Importer(
         store, gateway,
-        lines=lambda: _relevant_lines(mode, current_line()),
+        lines=lambda: _relevant_lines(mode, current_line(), current_view_site()),
         interval_sec=cfg.import_interval_sec,
     )
     # 出来事(看板履歴)は看板マスタとは別のファイル(看板履歴.sqlite3)へ送る
@@ -865,11 +947,22 @@ def _prepare_data(args, cfg, store, mode: str, line: str, srv):
                              history_gateway=history)
 
     # **倉庫参照モードは書き戻さない。** 状態を変えないモードなので、
-    # 送るものがそもそも出ない。走らせておく理由が無い
-    if mode != config.MODE_WAREHOUSE_VIEW:
+    # 送るものがそもそも出ない。走らせておく理由が無い。
+    # ただし現場のライン1つを併用している端末は、そのラインの操作を送る。併用をやめて
+    # 開き直したときに、送り終えていない操作が手元に残っていれば、それも送り終える
+    if mode != config.MODE_WAREHOUSE_VIEW or view_site or _has_unsent(store):
         exporter.start()
     importer.start()
     return gateway, importer, exporter
+
+
+def _has_unsent(store) -> bool:
+    """手元に、共有へ送り終えていないものがあるか(倉庫参照で現場の併用をやめて開き直したとき)。"""
+    try:
+        unsent = store.unsent()
+        return bool(unsent.to_shared_db() or unsent.to_history())
+    except Exception:  # noqa: BLE001 - 数えられなければ今までどおり(倉庫参照は回さない)
+        return False
 
 
 def _prepare_history(gateway, mode: str, history=None) -> None:
@@ -928,15 +1021,19 @@ def _prepare_access(cfg, mode: str) -> None:
         log.exception("アクセス権限の表を用意できませんでした")
 
 
-def _relevant_lines(mode: str, line: str) -> list[str]:
+def _relevant_lines(mode: str, line: str, view_site: bool = False) -> list[str]:
     """このモードで取り込むライン。
 
     現場は担当ラインだけ、倉庫・倉庫参照は倉庫対象のライン全部。無駄な
-    取り込みは Access への往復を増やし、他端末を待たせる。
+    取り込みは Access への往復を増やし、他端末を待たせる。倉庫参照で現場を
+    併用している(``view_site``)ときは、担当ラインも(倉庫対象でないラインのため)。
     """
     if mode == config.MODE_SITE:
         return [line] if line else []
-    return config.warehouse_line_codes()
+    lines = config.warehouse_line_codes()
+    if mode == config.MODE_WAREHOUSE_VIEW and view_site and line and line not in lines:
+        lines = lines + [line]
+    return lines
 
 
 def _busy_reason(store) -> str:

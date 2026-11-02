@@ -22,7 +22,7 @@ from kanban import config
 from kanban.applog import get_logger
 from kanban.domain import printing
 
-from .. import current_mode, get_service
+from .. import get_service, mode_for
 from .board import visible_lines
 
 log = get_logger("app.routes.report")
@@ -61,7 +61,8 @@ def available():
 
     items = get_service().items(line)
     out = []
-    for kind in MODE_KINDS.get(current_mode(), ()):
+    # 倉庫参照で現場を併用している端末は、担当ラインでだけ注文票を出せる(:func:`app.mode_for`)
+    for kind in MODE_KINDS.get(mode_for(line), ()):
         build, label = KINDS[kind]
         doc = build(line, items)
         out.append(
@@ -80,12 +81,11 @@ def render(kind: str):
     """帳票そのもの(印刷用 HTML)。新しいタブで開く。"""
     if kind not in KINDS:
         abort(404)
-    if kind not in MODE_KINDS.get(current_mode(), ()):
-        log.info("このモードでは出せない帳票です: %s (%s)", kind, current_mode())
-        abort(404)
-
     line = request.args.get("line", "")
     if line not in visible_lines():
+        abort(404)
+    if kind not in MODE_KINDS.get(mode_for(line), ()):
+        log.info("このモードでは出せない帳票です: %s (%s)", kind, mode_for(line))
         abort(404)
 
     build, label = KINDS[kind]

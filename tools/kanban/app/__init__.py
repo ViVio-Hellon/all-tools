@@ -74,6 +74,7 @@ def create_app(
     port: int | None = None,
     store: Store | None = None,
     line: str = "",
+    view_site: bool = False,
     on_manual_refresh=None,
     on_reconnect=None,
     on_changed=None,
@@ -83,7 +84,8 @@ def create_app(
     ``store`` を渡すと、その接続をそのまま使う(起動側が既に開いている
     ものを引き継ぐ)。省略するとテスト用にメモリ上へ作る。
 
-    ``line`` は現場モードの担当ライン。倉庫・倉庫参照では使わない。
+    ``line`` は現場モードの担当ライン。倉庫では使わない。倉庫参照では、
+    ``view_site``(現場モードのライン1つを併用する)のときだけ使う。
     """
     if mode not in config.ALL_MODES:
         raise ValueError(f"未知のモード: {mode!r} (使えるのは {', '.join(config.ALL_MODES)})")
@@ -97,6 +99,9 @@ def create_app(
     app.config.update(
         MODE=mode,
         LINE=line,
+        # 倉庫参照モードで、担当ライン1つの現場を併用するか(設定 → この端末)。
+        # 倉庫参照のときだけ意味を持つ。開き直さずに切り替えられる(``POST /api/view-site``)
+        VIEW_SITE=bool(view_site) and mode == config.MODE_WAREHOUSE_VIEW,
         # 起動ごとの合言葉。同じ PC 上の別プロセスや、利用者が偶然開いた
         # 外部の Web ページから叩かれないようにする
         TOKEN=token or secrets.token_urlsafe(32),
@@ -137,8 +142,9 @@ def create_app(
     _register_static_version(app)
     _register_routes(app)
 
-    log.info("create_app: mode=%s port=%s line=%s", mode,
-             app.config["PORT"] or "なし(デスクトップ版)", line or "-")
+    log.info("create_app: mode=%s port=%s line=%s%s", mode,
+             app.config["PORT"] or "なし(デスクトップ版)", line or "-",
+             "(倉庫参照+現場)" if app.config["VIEW_SITE"] else "")
     return app
 
 
@@ -156,6 +162,44 @@ def current_line() -> str:
     from flask import current_app
 
     return current_app.config["LINE"]
+
+
+def view_site() -> bool:
+    """倉庫参照モードで、担当ライン1つの現場を併用しているか。"""
+    from flask import current_app
+
+    conf = current_app.config
+    return conf["MODE"] == config.MODE_WAREHOUSE_VIEW and bool(conf.get("VIEW_SITE"))
+
+
+def site_line() -> str:
+    """この端末が**現場として操作する**ライン。無ければ空。
+
+    現場モードは担当ライン。倉庫参照モードは、現場を併用している(:func:`view_site`)
+    ときだけ担当ライン。倉庫・ふつうの倉庫参照は空。
+    """
+    if current_mode() == config.MODE_SITE:
+        return current_line()
+    return current_line() if view_site() else ""
+
+
+def mode_for(line: str) -> str:
+    """そのラインの看板を、どのモードとして出す・操作するか。
+
+    ふだんは端末のモードそのもの。**倉庫参照で現場を併用している端末の担当ラインだけ
+    現場**(ほかのラインは倉庫参照のまま = 見るだけ)。押せるか・コメントを書けるか・
+    出せる帳票は、どれもこのモードで決める。
+    """
+    if line and current_mode() == config.MODE_WAREHOUSE_VIEW and line == site_line():
+        return config.MODE_SITE
+    return current_mode()
+
+
+def presence_line() -> str:
+    """心拍(状態管理)で名乗る行。表示から自分を外すのにも同じ値を使う。"""
+    from kanban import presence
+
+    return presence.registered_line(current_mode(), current_line() or "", view_site())
 
 
 def require_mode(*allowed: str):

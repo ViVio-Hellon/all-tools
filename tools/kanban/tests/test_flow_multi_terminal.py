@@ -195,7 +195,8 @@ class Terminal:
     """端末1台。別プロセスで立てて、HTTP で操作する。"""
 
     def __init__(self, case: "_Flow", name: str, *, mode: str, line: str = "",
-                 login: str = "", import_sec: int = 30, export_sec: int = 60) -> None:
+                 login: str = "", import_sec: int = 30, export_sec: int = 60,
+                 view_site: bool = False) -> None:
         self.case = case
         self.name = name
         self.pc = f"PC-{name}"
@@ -221,6 +222,9 @@ class Terminal:
         try:
             store.ensure_schema()
             store.set_device_mode(mode)
+            if view_site:
+                # 倉庫参照 + 現場のライン1つ(設定 →「この端末」と同じ置き場所)
+                store.set_view_site(True)
         finally:
             store.close()
         self.proc: Optional[subprocess.Popen] = None
@@ -1126,6 +1130,81 @@ class SwitchTest(_Flow):
         self.settle(self.a, self.w, line=HVC)
         self.assert_everywhere(HVC, "1", (ON, "", ""), self.a, self.w)
         self.assertEqual(self.shared_marks(L1, "1"), (ON, "", ""))
+
+
+# ---------------------------------------------------------------------------
+# 倉庫参照 + 現場のライン1つ(担当ラインだけ現場の操作。ほかは見るだけ)
+# ---------------------------------------------------------------------------
+class ViewWithSiteFlowTest(_Flow):
+    """倉庫参照の端末V(担当ライン HVC を現場として併用)と倉庫W。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.w = self.warehouse(import_sec=5)
+
+    def state_of(self, line: str) -> tuple[str, str]:
+        row = next(r for r in self.state_rows() if r["ライン名"] == line)
+        return str(row["状態"] or ""), str(row["ホスト名"] or "")
+
+    def assert_view_only_elsewhere(self, v: Terminal) -> None:
+        for kind in ("order", "ship", "hold"):
+            status, body = v.press(kind, L1, "2")
+            self.assertIn(status, (403, 404), f"倉庫参照のラインで {kind} が通った: {body}")
+        status, body = v.press("hold", HVC, "1")
+        self.assertEqual(status, 403, f"担当ラインで倉庫の操作(注文中)が通った: {body}")
+        self.assertEqual(self.shared_marks(L1, "2"), ("", "", ""))
+
+    def test_起動したときから担当ラインの発注が届き_ほかのラインは見るだけ(self) -> None:
+        v = self.terminal("V", mode=config.MODE_WAREHOUSE_VIEW, line=HVC, import_sec=5, view_site=True)
+        self.assertEqual(v.mode, config.MODE_WAREHOUSE_VIEW)
+        self.assertEqual(v.board(HVC)["board"]["mode"], config.MODE_SITE)
+        self.assertTrue(v.board(L1)["board"]["read_only"])
+        v.ok("order", HVC, "1")
+        v.wait_sent()
+        self.assertEqual(self.shared_marks(HVC, "1"), (ON, "", ""), "担当ラインの発注が共有DBへ届かない")
+        self.w.wait_for(lambda: self.w.marks(HVC, "1") == (ON, "", ""), what="倉庫に届く")
+        self.assert_view_only_elsewhere(v)
+        # 状態管理には担当ラインの現場として名乗る(倉庫としては名乗らない)
+        v.wait_for(lambda: self.state_of(HVC) == ("開", v.pc), what="V が HVC を名乗る")
+        self.assertNotEqual(self.state_of(config.WAREHOUSE_LINE_NAME)[1], v.pc)
+        # 開き直しても併用のまま
+        v.restart()
+        self.assertEqual(v.board(HVC)["board"]["mode"], config.MODE_SITE)
+        v.stop()
+        self.assertEqual(self.state_of(HVC)[0], "閉")
+
+    def test_設定で併用にするとその場で効き_やめると見るだけに戻る(self) -> None:
+        v = self.terminal("V", mode=config.MODE_WAREHOUSE_VIEW, line=HVC, import_sec=5)
+        status, body = v.press("order", HVC, "1")
+        self.assertIn(status, (403, 404), f"併用していないのに発注が通った: {body}")
+        self.assertEqual(self.state_of(HVC)[0], "閉")
+
+        status, body = v.post("/api/view-site", {"on": True})
+        self.assertEqual(status, 200, body)
+        v.ok("order", HVC, "1")                    # 開き直さずに押せる
+        v.wait_sent()                              # 書き戻しもその場で回り出す
+        self.assertEqual(self.shared_marks(HVC, "1"), (ON, "", ""))
+        v.wait_for(lambda: self.state_of(HVC) == ("開", v.pc), what="V が HVC を名乗る")
+        self.assert_view_only_elsewhere(v)
+
+        status, body = v.post("/api/view-site", {"on": False})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.state_of(HVC)[0], "閉", "やめたのに HVC を名乗ったまま")
+        status, body = v.press("order", HVC, "2")
+        self.assertIn(status, (403, 404), body)
+        self.assertEqual(self.shared_marks(HVC, "2"), ("", "", ""))
+
+    def test_送る前に併用をやめて開き直しても_預かった発注は送られる(self) -> None:
+        v = self.terminal("V", mode=config.MODE_WAREHOUSE_VIEW, line=HVC, import_sec=5, view_site=True)
+        v.go_offline()
+        v.ok("order", HVC, "3")
+        self.assertEqual(v.status()["pending"], 1)
+        self.assertEqual(v.post("/api/view-site", {"on": False})[0], 200)
+        v.restart()                                # 倉庫参照だけで開き直す
+        self.assertEqual(v.board(HVC)["board"]["mode"], config.MODE_WAREHOUSE_VIEW)
+        v.go_online()
+        v.wait_sent()
+        self.assertEqual(self.shared_marks(HVC, "3"), (ON, "", ""), "併用をやめたら預かった発注が届かない")
 
 
 # ---------------------------------------------------------------------------

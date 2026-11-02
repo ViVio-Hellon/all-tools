@@ -83,7 +83,7 @@ from kanban import admin_lock, app_config, config
 from kanban.applog import get_logger
 from kanban.db import store as store_module
 
-from .. import current_mode, get_store
+from .. import current_mode, get_store, presence_line, view_site
 from ..shell import shell_context
 
 log = get_logger("app.routes.settings")
@@ -132,6 +132,10 @@ def _state(cfg: config.Config, store) -> dict:
             for key in config.ALL_MODES
         ],
         "access": _access_state(grant),
+        # 倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用しているか。
+        # 使えるかは現場モードの権限で決まる(起動したときに読んだもの。押したときにまた確かめる)
+        "view_site": view_site(),
+        "view_site_allowed": True if grant is None else grant.allows(config.MODE_SITE),
         "line_names": _line_names(),
         "history": _history_state(cfg),
         "csv_dir": cfg.resolved_csv_dir(),
@@ -979,6 +983,76 @@ def set_mode():
     })
 
 
+@bp.post("/api/view-site")
+def set_view_site():
+    """倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用する / やめる。
+
+    併用すると、倉庫の画面は見るだけのまま、担当ラインの看板だけ現場の操作(発注・届いた
+    資材の確認・注文票・コメント)ができる。**倉庫(操作可)との併用はしない。**
+
+    関門はモードの切り替えと同じ**アクセス権限**(現場モードの権限 ``mode:field``)。
+    パスワードは訊かない。担当ラインを変えるのは今までどおり管理者パスワード(``/api/line``)。
+
+    **開き直さずに効く。** モードは倉庫参照のまま(ポートと錠は変わらない)なので、
+    走っているプロセスへその場で当てる(書き戻し・状態管理の名乗り・担当ラインの取り込み。
+    ``start_app._serve`` が ``APPLY_VIEW_SITE`` に入れる)。次に起動したときも同じ形で開く。
+    """
+    from kanban import access_control
+
+    if current_mode() != config.MODE_WAREHOUSE_VIEW:
+        return jsonify(_err("wrong_mode", "現場との併用は、倉庫参照モードのときだけ選べます")), 403
+    body = request.get_json(silent=True) or {}
+    on = body.get("on") is True or str(body.get("on", "")).strip().lower() in ("1", "true")
+
+    grant = current_app.config.get("ACCESS_GRANT")
+    if on:
+        # **切り替えるたびに読み直す。** マスタ管理で行を足した直後にも効くように
+        grant = access_control.grant_for(_cfg(), get_store())
+        current_app.config["ACCESS_GRANT"] = grant
+        if not grant.allows(config.MODE_SITE):
+            label = config.mode_display_name(config.MODE_SITE)
+            log.info("現場の併用を断りました(権限なし): %s", grant.identity.label())
+            out = _err("no_permission",
+                       f"この端末({grant.identity.label()})には{label}の権限がありません。"
+                       f"{grant.how_to_allow(config.MODE_SITE)}"
+                       + (f"\n({grant.reason})" if grant.reason else ""))
+            out["access"] = _access_state(grant)
+            return jsonify(out), 403
+
+    store = get_store()
+    if on == view_site() and store.get_view_site() == on:
+        return jsonify({"ok": True, "changed": False, "on": on})
+    store.set_view_site(on)
+    current_app.config["VIEW_SITE"] = on
+
+    # 担当ラインが未設定で、アクセス権限の表で決まっていれば、それにする(起動したときと同じ)
+    note = ""
+    line = current_app.config.get("LINE", "")
+    if on and not line and grant is not None:
+        code = access_control.line_at_startup(grant)
+        if code:
+            _switch_line(code, "アクセス権限の表から")
+            access_control.mark_line_applied(store, code)
+            line = code
+    hook = current_app.config.get("APPLY_VIEW_SITE")
+    if hook is not None:
+        try:
+            hook(on)
+        except Exception:  # noqa: BLE001 - 併用にしたことは変わらない(次の起動でも当てる)
+            log.exception("現場の併用をその場で当てられませんでした")
+            note = "その場で当てきれませんでした。アプリを開き直すと効きます。"
+    log.info("倉庫参照で現場を%s(担当ライン %s)", "併用します" if on else "併用しません", line or "未設定")
+    if on and not line:
+        message = "現場との併用にしました。担当ラインを選んでください(管理者パスワードが要ります)。"
+    elif on:
+        message = (f"現場との併用にしました。担当ライン「{config.display_name(line)}」の看板は"
+                   "現場の操作ができます(ほかのラインは見るだけ)。")
+    else:
+        message = "現場との併用をやめました。倉庫参照(見るだけ)に戻りました。"
+    return jsonify({"ok": True, "changed": True, "on": on, "line": line,
+                    "message": message + (f"\n{note}" if note else "")})
+
+
 # ------------------------------------------------------------------
 # アクセス権限(kanban/access_control.py)
 # ------------------------------------------------------------------
@@ -1273,8 +1347,9 @@ def set_line():
     設定画面で守らないのは「マスタを読むこと」だけ、という方針
     (:mod:`app.routes.settings` のモジュール docstring)に合わせています。
     """
-    if current_mode() != config.MODE_SITE:
-        return jsonify(_err("wrong_mode", "担当ラインは現場モードでのみ変更できます")), 403
+    if current_mode() != config.MODE_SITE and not view_site():
+        return jsonify(_err("wrong_mode", "担当ラインは現場モード(倉庫参照で現場を併用しているときも)でのみ"
+                                          "変更できます")), 403
 
     body = request.get_json(silent=True) or {}
     line = str(body.get("line", "")).strip()
@@ -1320,7 +1395,7 @@ def _switch_line(line: str, how: str) -> tuple[bool, str]:
     # (ラインを切り替えながら試すと必ず踏む)
     from kanban import presence
 
-    presence.set_line(presence.registered_line(current_mode(), line))
+    presence.set_line(presence_line())
     from kanban import trace
 
     trace.set_context(line=line)
@@ -1356,7 +1431,8 @@ def _switch_line(line: str, how: str) -> tuple[bool, str]:
 def _apply_line_from_access(grant) -> str:
     """アクセス権限の表のラインを担当ラインに当てる(表のラインが前に当てたものから変わったときだけ)。
 
-    当てたら、その一言を返す(画面に出す)。現場モードの端末だけ(倉庫・倉庫参照は担当ラインを使わない)。
+    当てたら、その一言を返す(画面に出す)。現場モードの端末だけ(倉庫・倉庫参照は担当ラインを使わない。
+    倉庫参照で現場を併用している端末は使う)。
     """
     from kanban import access_control
 
@@ -1364,7 +1440,7 @@ def _apply_line_from_access(grant) -> str:
     code = access_control.line_to_apply(grant, store)
     if not code:
         return ""
-    if current_mode() != config.MODE_SITE:
+    if current_mode() != config.MODE_SITE and not view_site():
         return ""
     if current_app.config.get("LINE") != code:
         _switch_line(code, "アクセス権限の表から")

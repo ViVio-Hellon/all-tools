@@ -82,25 +82,32 @@ def host_name() -> str:
         return "?"
 
 
-def registers(mode: str) -> bool:
+def registers(mode: str, view_site: bool = False) -> bool:
     """このモードは「開いています」と名乗るか。
 
     **倉庫参照モードは名乗りません。** 読むだけの端末なので、誰かを
     身構えさせる理由がありません。ここを名乗らせると「倉庫が開いている」が
     常時点灯し、本物の倉庫と見分けが付かなくなります。
+
+    ただし倉庫参照で**現場のライン1つを併用している**(``view_site``)端末は、
+    そのラインの現場として名乗ります(倉庫としては名乗らない)。そのラインの発注は
+    この端末でするので、倉庫からは現場が開いているように見えるべき。
     """
+    if mode == config.MODE_WAREHOUSE_VIEW:
+        return bool(view_site)
     return mode in (config.MODE_SITE, config.MODE_WAREHOUSE)
 
 
-def registered_line(mode: str, line: str) -> str:
+def registered_line(mode: str, line: str, view_site: bool = False) -> str:
     """この端末が ``Form状態管理`` のどの行を名乗るか(VBA と同じ)。
 
     **名乗らないモードでは空。** 表示から自分を外すのにも同じ値を使うので、
     ここで ``line`` を返してしまうと、倉庫参照の端末が「設定に書いてある
     ライン」を**自分だと勘違いして隠します** ── 名乗っていないのに、
-    その現場が開いていることだけ見えなくなる。
+    その現場が開いていることだけ見えなくなる。倉庫参照で現場を併用している
+    (``view_site``)ときは、その担当ライン。
     """
-    if not registers(mode):
+    if not registers(mode, view_site):
         return ""
     if mode == config.MODE_WAREHOUSE:
         return config.WAREHOUSE_LINE_NAME

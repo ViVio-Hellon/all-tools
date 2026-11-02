@@ -33,7 +33,8 @@ class NavItem:
     """``todo`` | ``done``。"""
 
 
-def nav_items(mode: str, badges: dict[str, tuple[str, str]] | None = None) -> list[NavItem]:
+def nav_items(mode: str, badges: dict[str, tuple[str, str]] | None = None,
+              *, view_site: bool = False) -> list[NavItem]:
     """レールの項目。``badges`` は ``{key: (文言, 種別)}``。
 
     バッジは「その先に何があるか」を行く前に示すためのもの。未反映件数など。
@@ -48,6 +49,12 @@ def nav_items(mode: str, badges: dict[str, tuple[str, str]] | None = None) -> li
     elif mode == config.MODE_WAREHOUSE:
         source = (
             ("board", "看板", "/board", "発送する・注文中にする"),
+            ("settings", "設定", "/settings", "接続先とモード"),
+        )
+    elif view_site:
+        # 倉庫参照で現場のライン1つを併用している端末
+        source = (
+            ("board", "看板", "/board", "状況を見る・担当ラインの発注"),
             ("settings", "設定", "/settings", "接続先とモード"),
         )
     else:
@@ -104,20 +111,23 @@ def shell_context(active: str, *, badges: dict[str, tuple[str, str]] | None = No
     """
     conf = current_app.config
     mode = conf["MODE"]
+    # 倉庫参照で現場のライン1つを併用している(担当ラインは現場の操作ができる)
+    view_site = mode == config.MODE_WAREHOUSE_VIEW and bool(conf.get("VIEW_SITE"))
     return {
         "active": active,
-        "nav": nav_items(mode, badges),
+        "nav": nav_items(mode, badges, view_site=view_site),
         "mode": mode,
-        "mode_label": config.mode_display_name(mode),
+        "mode_label": config.mode_display_name(mode) + ("+現場" if view_site else ""),
         "mode_tone": mode_tone(mode),
         "read_only": mode == config.MODE_WAREHOUSE_VIEW,
         # デスクトップ版(Rust/Tauri の窓。ポートを使わない ``bridge.py``)で動いているか
         "desktop": bool(conf.get("BRIDGE")),
         "line": conf["LINE"],
         # **担当ラインは現場モードだけ。** 倉庫・倉庫参照は全ラインを見るので、
-        # 設定に残っている現場の頃のラインを出すと「倉庫なのに担当 L-1」になる
+        # 設定に残っている現場の頃のラインを出すと「倉庫なのに担当 L-1」になる。
+        # 倉庫参照で現場を併用しているときは、そのライン(現場の操作ができる)
         "line_label": (config.display_name(conf["LINE"])
-                       if conf["LINE"] and mode == config.MODE_SITE else ""),
+                       if conf["LINE"] and (mode == config.MODE_SITE or view_site) else ""),
         "display_name": conf["DISPLAY_NAME"],
         # 帯に常時出す版。**どれが入っている端末か**を聞かれたときに、画面を
         # 見れば答えられるようにする(出どころは config/app.json)

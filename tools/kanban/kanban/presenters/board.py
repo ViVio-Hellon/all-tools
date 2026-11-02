@@ -120,7 +120,9 @@ class RowView:
     """「発送処理中に注文が取り消されました」など、確かめてほしいこと。空なら無い。"""
 
     comments: int = 0
-    """いまのやり取りのコメント数(届いたら片付く)。"""
+    """いまのやり取りの、**共有DBにある**コメント数(届いたら片付く)。"""
+    comments_unsent: int = 0
+    """いまのやり取りの、この端末で書いてまだ共有DBへ届いていないコメント数(ほかの端末には見えない)。"""
     unread: int = 0
     """そのうち相手側が書いて、この端末でまだ開いていないもの。"""
     batch_reset: bool = False
@@ -193,28 +195,42 @@ class BoardView:
     """この画面が書くときの名乗り(現場 / 倉庫)。"""
     missing_table: str = ""
     """共有DBにこのラインの看板の表が無いときの説明。空なら問題なし。"""
+    mode: str = ""
+    """この盤をどのモードとして出したか(``site`` / ``warehouse`` / ``view``)。
+
+    倉庫参照で現場のライン1つを併用している端末は、ラインのタブで現場の盤と
+    倉庫参照の盤が入れ替わる。画面は一括確認のボタン・「参照専用」の帯をこれで出し入れする。"""
 
 
 # ------------------------------------------------------------------
 # 組み立て
 # ------------------------------------------------------------------
-def build(service: KanbanService, line: str, mode: str) -> BoardView:
-    """1 ラインのビューモデルを作る。"""
+def build(service: KanbanService, line: str, mode: str, *, site_line: str = "") -> BoardView:
+    """1 ラインのビューモデルを作る。
+
+    ``site_line`` は倉庫参照で現場を併用している端末の担当ライン(その盤は ``mode`` を
+    現場にして作る)。倉庫参照の盤の「新しいコメント」から外す ── そのラインのやり取りは
+    この端末が現場として書いているので、自分の書いたものを「新しいコメント」と出さない。
+    """
     policy = policy_for(mode, line, service.storable_columns(line))
     groups = service.groups(line)
     side = comment_side(mode)
     counts = service.store.comment_counts(line, side)
+    unsent = service.store.unsent_comment_counts(line)
 
     view = BoardView(
         line=line,
         line_label=config.display_name(line),
         read_only=policy.read_only,
+        mode=mode,
     )
     for group in groups:
         view.groups.append(_group(group, policy))
     for g in view.groups:
         for r in g.rows:
             r.comments, r.unread = counts.get(r.mgmt_no, (0, 0))
+            r.comments_unsent = min(unsent.get(r.mgmt_no, 0), r.comments)
+            r.comments -= r.comments_unsent
     view.can_comment = mode in (config.MODE_SITE, config.MODE_WAREHOUSE)
     if service.table_missing(line):
         view.missing_table = (
@@ -231,7 +247,8 @@ def build(service: KanbanService, line: str, mode: str) -> BoardView:
     view.batch_reset_count = sum(1 for i in items if i.is_delivered_candidate)
     view.batch_ship_count = sum(1 for i in items if i.needs_shipping)
     view.alerts = _alerts(service, line, mode, policy, items)
-    view.comment_alerts = _comment_alerts(service, line, mode, side, counts, items)
+    view.comment_alerts = _comment_alerts(service, line, mode, side, counts, items,
+                                          skip=site_line if mode == config.MODE_WAREHOUSE_VIEW else "")
     if any(g.is_non_permanent for g in groups):
         view.note = "※文字色青は非常設品"
     return view
@@ -273,10 +290,11 @@ def comment_side(mode: str) -> str:
 
 def _comment_alerts(
     service: KanbanService, line: str, mode: str, side: str,
-    counts: dict[str, tuple[int, int]], items: list[KanbanItem],
+    counts: dict[str, tuple[int, int]], items: list[KanbanItem], skip: str = "",
 ) -> list[CommentAlertView]:
     """未読のコメントがある看板。現場は自分のライン、倉庫は倉庫の全ライン(帯と同じ)。"""
-    lines = [line] if mode == config.MODE_SITE else config.warehouse_line_codes()
+    lines = [line] if mode == config.MODE_SITE else [
+        c for c in config.warehouse_line_codes() if c != skip]
     out: list[CommentAlertView] = []
     for code in lines:
         mine = counts if code == line else service.store.comment_counts(code, side)

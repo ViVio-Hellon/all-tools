@@ -94,6 +94,14 @@ function render(board) {
 
   setCount('c-reset', board.batch_reset_count);
   setCount('c-ship', board.batch_ship_count);
+  // 倉庫参照で現場のライン1つを併用している端末は、ラインのタブで現場の盤と倉庫参照の盤が
+  // 入れ替わる。一括確認は現場の盤でだけ、「参照専用」の帯は倉庫参照の盤でだけ出す
+  if (board.mode) {
+    const reset = document.getElementById('batch-reset');
+    if (reset) reset.hidden = board.mode !== 'site';
+    const readOnly = document.getElementById('read-only-note');
+    if (readOnly) readOnly.hidden = board.mode !== 'view';
+  }
   renderAlerts(board.alerts || []);
   const missing = document.getElementById('table-missing');
   if (missing) { missing.hidden = !board.missing_table; missing.textContent = board.missing_table || ''; }
@@ -140,15 +148,20 @@ function row(r) {
   return el;
 }
 
-/** 💬 ボタン。数はいまのやり取りの件数、赤い点は未読 */
+/**
+ * 💬 ボタン。数は**共有DBにある**いまのやり取りの件数、赤い点は未読。
+ * この端末で書いてまだ共有DBへ届いていないもの(ほかの端末には見えない)は「+N未送信」と別に出す
+ */
 function commentCell(r) {
   const el = document.createElement('button');
   el.type = 'button';
-  el.className = 'cell cell--comment' + (r.comments ? ' has-comments' : '') + (r.unread ? ' is-unread' : '');
+  const unsent = r.comments_unsent || 0;
+  el.className = 'cell cell--comment' + (r.comments || unsent ? ' has-comments' : '') + (r.unread ? ' is-unread' : '');
   el.dataset.kind = 'comment';
-  el.textContent = r.comments ? `💬${r.comments}` : '💬';
-  el.title = r.comments
+  el.textContent = `💬${r.comments || ''}` + (unsent ? `+${unsent}未送信` : '');
+  el.title = r.comments || unsent
     ? `コメント ${r.comments} 件${r.unread ? `(未読 ${r.unread} 件)` : ''}`
+      + (unsent ? `・この端末からまだ共有へ届いていないコメント ${unsent} 件(ほかの端末には見えていません)` : '')
     : 'コメントを書く・読む';
   el.setAttribute('aria-label', el.title);
   return el;
@@ -217,6 +230,7 @@ function applyPayload(payload, seq) {
     setUndelivered(payload.undelivered, payload.undelivered_since, payload.undelivered_why,
                    payload.undelivered_events);
   }
+  if ('draft_scope' in payload) setDraftScope(payload.draft_scope);
   if ('dropped' in payload) setDropped(payload.dropped);
   if ('presence' in payload) setOpenTerminals(payload.presence);
   return drawn;
@@ -402,26 +416,61 @@ function renderCommentAlerts(list) {
 // 開き直すと欄を空にしていた。覆いが外れたときの自動の読み直し、窓を閉じる・
 // 再読込でも、書きかけは消えた。相手が状態を変えて書けなくなると、欄ごと隠した。
 // いまは看板ごと(ライン:管理番号)にこの端末へ置き(打つたびに)、開いたら戻す。
+//
+// **接続先(共有DB)ごとに分けて置く**(`draft_scope`。サーバが接続先から作る印)。以前は
+// ライン:管理番号だけで置いていたので、参照パスを変えても前の接続先で打った書きかけが残り、
+// 新しい接続先の同じ番号の看板に出た・閉じるたびに「送っていないコメント(書きかけ)」と訊かれた。
+// 置き方: { scopes: { 接続先の印: { 'ライン:管理番号': 書きかけ } } }
 const DRAFT_KEY = 'kanban.comments.drafts';
-const drafts = loadDrafts();
+let draftScope = null;    // いまの接続先の印(盤が届くまでは決まっていない)
+let drafts = new Map();
 let draftsSaved = true;   // この端末に置けたか(置けない = 読み直すと消える)
 
-function loadDrafts() {
+function readDraftStore() {
   try {
     const raw = JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}');
-    return new Map(Object.entries(raw).filter(([, v]) => typeof v === 'string' && v.trim()));
+    return raw && typeof raw === 'object' ? raw : {};
   } catch (e) {
-    return new Map();
+    return {};
   }
 }
 
+function loadDrafts(scope) {
+  const all = readDraftStore();
+  const mine = (all.scopes && typeof all.scopes === 'object' && all.scopes[scope]) || {};
+  const out = new Map(Object.entries(mine).filter(([, v]) => typeof v === 'string' && v.trim()));
+  // 前の版の置き方(接続先で分けていない)の書きかけは、はじめに見た接続先のものとして引き取る
+  for (const [k, v] of Object.entries(all)) {
+    if (k !== 'scopes' && typeof v === 'string' && v.trim() && !out.has(k)) out.set(k, v);
+  }
+  return out;
+}
+
 function persistDrafts() {
+  if (draftScope === null) return;
   try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(Object.fromEntries(drafts)));
+    const all = readDraftStore();
+    const scopes = all.scopes && typeof all.scopes === 'object' ? all.scopes : {};
+    if (drafts.size) scopes[draftScope] = Object.fromEntries(drafts);
+    else delete scopes[draftScope];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ scopes }));
     draftsSaved = true;
   } catch (e) {
     draftsSaved = false;   // この画面のあいだだけ覚える
   }
+}
+
+/** 接続先の印が届いた・変わった。その接続先の書きかけだけを使う(ほかの接続先の分は持ち込まない) */
+function setDraftScope(scope) {
+  const next = String(scope || '');
+  if (next === draftScope) return;
+  if (draftScope !== null) {
+    saveOpenDraft();
+    persistDrafts();
+  }
+  draftScope = next;
+  drafts = loadDrafts(next);
+  if (drafts.size) persistDrafts();   // 前の版の置き方から引き取った分を、この接続先の下に置き直す
 }
 
 function threadKey(t) {
@@ -438,6 +487,16 @@ function setDraft(key, text) {
 /** まだ送っていない書きかけの数 */
 function draftCount() {
   return [...drafts.values()].filter((v) => v.trim()).length;
+}
+
+/** 書きかけがどの看板か(「AIM 3番」など。訊くときに添える ── どこに残っているか分からないと消せない) */
+function draftPlaces(max = 3) {
+  const keys = [...drafts.entries()].filter(([, v]) => v.trim()).map(([k]) => k);
+  const names = keys.slice(0, max).map((k) => {
+    const [l, no] = k.split(':');
+    return `${l} ${no}番`;
+  });
+  return names.join('・') + (keys.length > max ? ` ほか ${keys.length - max} 件` : '');
 }
 
 /** いま開いているやり取りの書きかけ(欄の中身)を置く */
@@ -489,7 +548,7 @@ function wireLeaving() {
       if (n) {
         // 外枠は「受けた」のあと「済んだ」を待つ(本人が読むあいだ見切らない)。
         // この端末に残せないときは、閉じると消えるので「閉じない」を既定にする
-        okToClose = await ask(`まだ送っていないコメント(書きかけ)が ${n} 件あります。\n`
+        okToClose = await ask(`まだ送っていないコメント(書きかけ)が ${n} 件あります(${draftPlaces()})。\n`
           + (draftsSaved ? 'この端末に下書きとして残し、次に開いたときに出します。' : 'この端末に残せません。閉じると消えます。')
           + '\n\n閉じますか？', { ok: '閉じる', cancel: '閉じない', danger: !draftsSaved });
       }
@@ -682,6 +741,14 @@ function bubble(c, mySide) {
   text.className = 'cm-text';
   text.textContent = c.body;
   el.append(meta, text);
+  // この端末で書いて、まだ共有DBへ届いていない(ほかの端末には見えていない)
+  if (c.unsent) {
+    const read = document.createElement('div');
+    read.className = 'cm-read cm-unsent';
+    read.textContent = 'まだ共有へ届いていません(この端末だけ。届きしだい送ります)';
+    el.append(read);
+    return el;
+  }
   // 自分の側が書いたものは、**相手側が読んだか**を添える(既読は側ごとに共有している)
   if (c.side === mySide) {
     const read = document.createElement('div');
@@ -1201,9 +1268,11 @@ function startPolling() {
       setPending(s.pending, s.failures);
       setUndelivered('undelivered' in s ? s.undelivered : s.pending, s.undelivered_since,
                      s.undelivered_why, s.undelivered_events);
+      if ('draft_scope' in s) setDraftScope(s.draft_scope);
       if ('dropped' in s) setDropped(s.dropped);
       setOpenTerminals(s.presence);
       setFreshness(s.import_age_sec, s.import_stale, s.last_import_at, s.import_problem);
+      if ('closed_day' in s) setClosedDay(s.closed_day);
       if (s.token !== lastToken) {
         if (!lastToken) lastToken = s.token;
         else if (!busy && !acting && await reload()) lastToken = s.token;
@@ -1257,11 +1326,12 @@ function setUndelivered(count, since, why, events) {
   el.hidden = true;
 }
 
-// 届かなかった操作(発注・発送など)。理由は 2 つ(`reason`):
+// 届かなかった操作(発注・発送など)。理由は 3 つ(`reason`):
 // ・removed … マスタ管理で消された(入れ替わった)看板への操作。消せるのは共有DBで発注・発送・
 //   注文中でない看板だけだが、ほかの端末が押してまだ送っていない操作は消す端末から見えない
 // ・conflict … ほかの端末が先に同じ看板を操作していた(古い盤のまま押した)。書き戻しは押した
 //   ときに見えていた値の行にだけ書くので、送らずに下ろした(相手の発送・発注を消さない)
+// ・switched … 接続先(共有DB)を変えた。前の接続先宛ての操作・コメントを新しい接続先へは送らない
 // 黙っていると、押した人は届いたと思ったままになる。「わかった」で閉じる(この端末に覚えている)
 function setDropped(list) {
   const el = document.getElementById('dropped');
@@ -1274,9 +1344,14 @@ function setDropped(list) {
     return `${n.label || n.line} ${n.mgmt_no}番${what ? `(${what})` : ''}の${n.what}`
       + (withTime && n.at ? `(${String(n.at).slice(5, 16)})` : '');
   };
-  const removed = notes.filter((n) => n.reason !== 'conflict').map((n) => describe(n, true));
+  const removed = notes.filter((n) => n.reason !== 'conflict' && n.reason !== 'switched').map((n) => describe(n, true));
   const conflict = notes.filter((n) => n.reason === 'conflict').map((n) => describe(n, false));
+  const switched = notes.filter((n) => n.reason === 'switched').map((n) => describe(n, true));
   const parts = [];
+  if (switched.length) {
+    parts.push(`⚠ 接続先(共有DB)を変えたので、前の接続先へ送れていなかった${switched.join('、')}は`
+      + '新しい接続先へは送りませんでした。要るなら、いまの盤で押し直す・書き直してください。');
+  }
   if (conflict.length) {
     parts.push(`⚠ ほかの端末が先に操作していたので、${conflict.join('、')}は送りませんでした。`
       + '盤を見直して、要ればもう一度押してください。');
@@ -1304,6 +1379,15 @@ function wireDropped() {
 // フォルダが落ちていると、画面は元気に動いているのに中身だけ古いまま
 // になる ── VBA 版の「更新できていないのに気付かない」と同じ形。
 // 取り込めていない時間が延びたら、そう言う。
+// 土曜・日曜・祝日の「発注のできない日です」(案内だけ。発注は止めない)。日付はサーバ
+// (この端末の時計)が決める。開いたままでも、日付が変われば次の確かめで出し直す・消す
+function setClosedDay(text) {
+  const el = document.getElementById('closed-day');
+  if (!el) return;
+  if (el.textContent !== (text || '')) el.textContent = text || '';
+  el.hidden = !text;
+}
+
 function setFreshness(ageSec, stale, at, problem) {
   const slot = document.getElementById('rb-fresh-slot');
   const el = document.getElementById('rb-fresh');

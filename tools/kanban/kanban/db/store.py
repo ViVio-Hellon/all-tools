@@ -135,6 +135,10 @@ _META_SYNC_GEN = "sync_gen"
 #: config.json ではなくここへ保存する理由は Store.get_device_mode 参照。
 _META_DEVICE_MODE = "device_mode"
 
+#: 倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用するか(``"1"`` で併用)。
+#: モードと同じく端末ごとの選択なのでここに持つ(:meth:`Store.get_view_site`)
+_META_VIEW_SITE = "device_view_site"
+
 
 #: 書き戻し対象になりうる状態列(論理名)。dirty_columns にはこの部分集合が入る
 STATE_COLUMNS = MUTABLE_FIELDS
@@ -144,6 +148,12 @@ NOTICE_REMOVED = "removed"
 """マスタ管理で消された・入れ替わった看板への操作だった。"""
 NOTICE_CONFLICT = "conflict"
 """ほかの端末が先に同じ看板を操作していた(書き戻しが共有DBと照らして弾いた)。"""
+NOTICE_SWITCHED = "switched"
+"""接続先(共有DB)を変えたので、前の接続先へ送っていなかった操作・コメントを新しい接続先へは送らなかった。"""
+
+#: 手元の作業用DBの中身(看板・コメント・未送信の印)が、どの接続先(共有DB)から来たものか
+#: (:meth:`Store.adopt_source`)
+META_DATA_SOURCE = "data_source"
 
 #: 書き戻しで「押した看板と同じ看板か」を見る列(論理名)。**押したときの資材の看板にだけ書く。**
 #:
@@ -202,9 +212,15 @@ class Unsent:
 
     items: int              #: 看板の状態の未反映(諦めた行も含む。画面の「未反映」)
     retryable_items: int    #: そのうち、まだ送る見込みのあるもの(諦めた行を除く)
-    comments: int           #: 送っていないコメント
+    comments: int           #: 送っていないコメント(**この端末で人が書いたもの**だけ)
     events: int             #: 送っていない出来事(看板履歴)
     recent_events: int      #: そのうち :data:`UNSENT_EVENT_WAIT_HOURS` 以内に積んだもの
+    marks: int = 0
+    """送っていない既読・確認・片付けの印。開いた・押しただけで積む(人が書いたコメントではない)。
+
+    送り直しはするが、「送っていないコメント」とは言わない。以前はこれも数えていたので、
+    コメントを書いていないのに、開いて閉じただけで終わるときに「送っていないコメントが
+    あります」と出た。"""
 
     def worth_waiting(self) -> bool:
         """止める前に待つ価値があるか(待てば減るものだけ)。"""
@@ -212,7 +228,7 @@ class Unsent:
 
     def to_shared_db(self) -> bool:
         """看板マスタ(共有DB)へ送り直すものがあるか(諦めた行は送り直しても減らない)。"""
-        return bool(self.retryable_items or self.comments)
+        return bool(self.retryable_items or self.comments or self.marks)
 
     def to_history(self) -> bool:
         """看板履歴へ送り直すものがあるか。"""
@@ -539,6 +555,18 @@ class Store:
     def set_device_mode(self, mode: str) -> None:
         self.set_meta(_META_DEVICE_MODE, mode)
 
+    def get_view_site(self) -> bool:
+        """倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用するか。
+
+        倉庫の画面は見るだけのまま、担当ラインの看板だけ現場の操作ができる。倉庫参照モード
+        のときだけ効く(ほかのモードでは見ない)。**記録が無い端末(前の版から使っている
+        端末)は併用しない** ── 今までどおり、倉庫参照だけ・現場だけで動く。
+        """
+        return self.get_meta(_META_VIEW_SITE, "") == "1"
+
+    def set_view_site(self, on: bool) -> None:
+        self.set_meta(_META_VIEW_SITE, "1" if on else "")
+
     # -- 取り込み --------------------------------------------------------
     def import_line(
         self,
@@ -764,7 +792,8 @@ class Store:
             notes.append({"at": at, "line": line, "label": config.display_name(line),
                           "mgmt_no": row.get("mgmt_no", ""),
                           "material": row.get("material", "") or "", "size": row.get("size", "") or "",
-                          "what": _dropped_what(row), "reason": reason or NOTICE_REMOVED})
+                          "what": row.get("what") or _dropped_what(row),
+                          "reason": reason or NOTICE_REMOVED})
         self.set_meta(self.META_DROPPED, json.dumps(notes[-self.DROPPED_KEEP:], ensure_ascii=False))
 
     def dropped_notices(self) -> list[dict[str, Any]]:
@@ -1485,9 +1514,12 @@ class Store:
         events, recent = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(CASE WHEN at >= ? THEN 1 ELSE 0 END), 0)"
             " FROM kanban_event WHERE sent = 0", (since,)).fetchone()
-        comments = conn.execute("SELECT COUNT(*) FROM kanban_comment WHERE sent = 0").fetchone()[0]
+        comments, marks = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END), 0),"
+            " COALESCE(SUM(CASE WHEN kind <> ? THEN 1 ELSE 0 END), 0)"
+            " FROM kanban_comment WHERE sent = 0", (COMMENT, COMMENT)).fetchone()
         return Unsent(items=int(items), retryable_items=int(retryable), comments=int(comments),
-                      events=int(events), recent_events=int(recent))
+                      events=int(events), recent_events=int(recent), marks=int(marks))
 
     def pending_count(self) -> int:
         """共有DBへ届いていない行の数。**諦めた行も含みます。**
@@ -1762,10 +1794,13 @@ class Store:
         日時と端末)。読まれていなければ空。
         """
         rows = [dict(r) for r in self.connection.execute(
-            "SELECT id, uid, at, kind, side, host, body FROM kanban_comment"
+            "SELECT id, uid, at, kind, side, host, body, sent FROM kanban_comment"
             " WHERE line = ? AND mgmt_no = ? ORDER BY id",
             (line, mgmt_no),
         )]
+        for r in rows:
+            # この端末で書いて、まだ共有DBへ届いていない(ほかの端末には見えていない)
+            r["unsent"] = not r.pop("sent")
         # いまの回か前の回かは :data:`_OPEN_COMMENT` と同じ決め方(届いた順か日時の
         # どちらかで片付けより後ならいまの回)。並びは**この端末に届いた順**
         close_id = max((r["id"] for r in rows if r["kind"] == COMMENT_CLOSE), default=0)
@@ -1901,9 +1936,134 @@ class Store:
 
         self.retry(_apply, "mark_comments_sent")
 
-    def unsent_comment_count(self) -> int:
+    def unsent_comment_count(self, include_marks: bool = True) -> int:
+        """送っていない行の数。``include_marks`` が偽なら、人が書いたコメントだけ(既読・確認の印を除く)。"""
+        if include_marks:
+            return int(self.connection.execute(
+                "SELECT COUNT(*) FROM kanban_comment WHERE sent = 0").fetchone()[0])
         return int(self.connection.execute(
-            "SELECT COUNT(*) FROM kanban_comment WHERE sent = 0").fetchone()[0])
+            "SELECT COUNT(*) FROM kanban_comment WHERE sent = 0 AND kind = ?", (COMMENT,)).fetchone()[0])
+
+    def unsent_comment_counts(self, line: str) -> dict[str, int]:
+        """看板ごとの、この端末で書いてまだ共有DBへ届いていない、いまの回のコメント数。
+
+        盤の 💬 は共有DBにあるコメントを数え、これは別に出す(ほかの端末にはまだ見えていない)。
+        """
+        return {str(r[0]): int(r[1]) for r in self.connection.execute(
+            "SELECT c.mgmt_no, COUNT(*) FROM kanban_comment c"
+            f" WHERE c.line = ? AND c.sent = 0 AND {self._OPEN_COMMENT} GROUP BY c.mgmt_no",
+            (line,))}
+
+    def delivered_comment_ids(self, lines: Sequence[str]) -> set[int]:
+        """共有DBから届いた・共有DBへ送れた行(``sent = 1``)の番号。取り込みが**読み始める前**に控える
+        (:meth:`prune_comments`)。"""
+        if not lines:
+            return set()
+        marks = ", ".join("?" for _ in lines)
+        return {int(r[0]) for r in self.connection.execute(
+            f"SELECT id FROM kanban_comment WHERE sent = 1 AND line IN ({marks})", list(lines))}
+
+    def prune_comments(self, candidates: set[int], on_shared: set[str]) -> int:
+        """共有DBに無くなったコメント・印を手元からも消す。消した件数。
+
+        ``candidates`` は読み始める前に控えた :meth:`delivered_comment_ids`、``on_shared`` は**読めた**
+        共有DBの [看板コメント] にある ID(そのラインの全部。古さで絞らない)。
+
+        * 消すのは共有DBから届いた・共有DBへ送れた行だけ。**この端末で書いてまだ送っていない
+          ものは消さない**(次の書き戻しで送る)
+        * 読み始めたあとに送れた行(ほかのプロセスが送った。この回の写しには入っていない)は
+          ``candidates`` に入っていないので消さない
+        * 読めなかった回はここへ来ない(呼ぶ側が読めたときだけ呼ぶ)
+        """
+        if not candidates:
+            return 0
+        rows = [(int(r[0]),) for r in self.connection.execute(
+            "SELECT id, uid FROM kanban_comment WHERE sent = 1")
+            if int(r[0]) in candidates and str(r[1]) not in on_shared]
+        if not rows:
+            return 0
+
+        def _apply() -> int:
+            with self.write_transaction() as conn:
+                conn.executemany("DELETE FROM kanban_comment WHERE id = ? AND sent = 1", rows)
+                return len(rows)
+
+        return int(self.retry(_apply, "prune_comments"))
+
+    # -- 接続先(共有DB)を変えたとき ------------------------------------------
+    @staticmethod
+    def source_key(path: str) -> str:
+        """接続先の比べ方(大文字小文字・/ と \\ ・末尾の区切りの違いは同じ場所)。"""
+        return str(path or "").strip().replace("/", "\\").rstrip("\\").casefold()
+
+    @classmethod
+    def same_source(cls, a: str, b: str) -> bool:
+        return cls.source_key(a) == cls.source_key(b)
+
+    def adopt_source(self, path: str) -> dict[str, int] | None:
+        """手元の作業用DBの中身が ``path``(いまの接続先)から来たものかを確かめ、違えば片付ける。
+
+        **前の接続先の中身を新しい接続先へ持ち込まない。** 以前は接続先を変えても、手元の
+        看板・コメント・未送信の印をそのまま使い続けた:
+
+        * 前の接続先のコメントが新しい接続先の盤に出続けた(取り込みはコメントを足すだけ)。
+          行き来するたびに両方の分が溜まり、「看板マスタに無いコメントが残る・増える」
+        * 前の接続先宛てに書いて送れていないコメント・押して送れていない操作を、新しい接続先へ
+          送った(同じ番号の別の看板に発注が乗る)
+        * 新しい接続先が読めないと、前の接続先の盤をそのまま新しい接続先のものとして出した
+
+        変わっていたら、看板・コメント・既読・状態管理の写しを捨て(次の取り込みで新しい接続先から
+        入れ直す)、「最後に取り込めた時刻」も消す(読めるまで「取り込めていません」を出す)。
+        前の接続先へ送っていなかった操作・この端末で書いたコメントは**新しい接続先へは送らず**、
+        看板の画面の帯で知らせる(:data:`NOTICE_SWITCHED`)。片付けたら件数を返す。変わって
+        いなければ ``None``。
+
+        前の接続先は :data:`META_DATA_SOURCE`。無ければ(前の版の作業用DB)最後に取り込みに
+        行った接続先(``last_import_source``)。どちらも無ければ、いまの接続先を覚えるだけ。
+        """
+        if not self.source_key(path):
+            return None
+        before = self.get_meta(META_DATA_SOURCE, "") or self.get_meta("last_import_source", "")
+        if not before or self.same_source(before, path):
+            if not self.get_meta(META_DATA_SOURCE, ""):
+                self.set_meta(META_DATA_SOURCE, path)
+            return None
+
+        def _apply() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            with self.write_transaction() as conn:
+                items = {(r["line"], r["mgmt_no"]): dict(r) for r in conn.execute(
+                    "SELECT * FROM kanban_item")}
+                dirty = [r for r in items.values() if r.get("dirty")]
+                for r in dirty:
+                    self._drop_unsent_events(conn, r["line"], r)
+                held = []
+                for r in conn.execute(
+                        "SELECT line, mgmt_no, body FROM kanban_comment WHERE sent = 0 AND kind = ?"
+                        " ORDER BY id", (COMMENT,)):
+                    item = items.get((r["line"], r["mgmt_no"])) or {}
+                    body = str(r["body"] or "")
+                    held.append({"line": r["line"], "mgmt_no": r["mgmt_no"],
+                                 "material": item.get("material", ""), "size": item.get("size", ""),
+                                 "what": f"コメント「{body[:30]}{'…' if len(body) > 30 else ''}」"})
+                for table in ("kanban_comment", "comment_read", "kanban_item", "line_source", "line_status"):
+                    conn.execute(f"DELETE FROM {table}")
+                for key, value in ((META_DATA_SOURCE, path), ("last_import_at", ""),
+                                   ("last_import_problem", ""), ("missing_line_tables", ""),
+                                   ("undelivered_since", ""), ("undelivered_why", "")):
+                    conn.execute("INSERT INTO meta(key, value) VALUES(?, ?)"
+                                 " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+                return dirty, held
+
+        dirty, held = self.retry(_apply, "adopt_source")
+        applog.warning("接続先が変わったので、前の接続先の看板・コメントを手元から片付けました: %s → %s"
+                       "(前の接続先へ送っていなかった操作 %d 件・コメント %d 件は新しい接続先へは送りません)",
+                       before, path, len(dirty), len(held))
+        by_line: dict[str, list[dict[str, Any]]] = {}
+        for r in dirty + held:
+            by_line.setdefault(r["line"], []).append(r)
+        for line, rows in by_line.items():
+            self._remember_dropped(line, rows, reason=NOTICE_SWITCHED)
+        return {"items": len(dirty), "comments": len(held)}
 
     def merge_comments(self, rows: Sequence[dict[str, Any]]) -> int:
         """共有DBから取り込んだコメント・片付けの印を足す(同じ uid は入れない)。足した件数。"""

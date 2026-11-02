@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from kanban import config
+from kanban import closed_day, config
 from kanban.applog import get_logger
 from kanban.db.store import ConflictError, LockTimeout
 from kanban.db.sync import META_IMPORT_PROBLEM, TABLE_MISSING
@@ -33,7 +33,7 @@ from kanban.domain.models import (
 )
 from kanban.presenters import board as presenter
 
-from .. import current_line, current_mode, get_service, get_store
+from .. import current_line, current_mode, get_service, get_store, mode_for, presence_line, site_line
 from ..shell import shell_context
 
 log = get_logger("app.routes.board")
@@ -54,6 +54,9 @@ def visible_lines() -> list[str]:
     いるライン全部。いずれも**実際に取り込めているものだけ**に絞る ──
     Access に無いラインのタブを出しても空の画面が出るだけで、利用者には
     壊れて見える。
+
+    倉庫参照で現場を併用している端末は、担当ラインを**先頭**に足す(倉庫対象でない
+    ラインでも)。開いたときに出るのは、操作する現場の盤。
     """
     store = get_store()
     available = set(store.imported_lines())
@@ -61,7 +64,11 @@ def visible_lines() -> list[str]:
     if mode == config.MODE_SITE:
         line = current_line()
         return [line] if line in available else []
-    return [code for code in config.warehouse_line_codes() if code in available]
+    lines = [code for code in config.warehouse_line_codes() if code in available]
+    mine = site_line()
+    if mine:
+        lines = ([mine] if mine in available else []) + [c for c in lines if c != mine]
+    return lines
 
 
 def _resolve_line(requested: str) -> str | None:
@@ -97,19 +104,26 @@ def page():
     line = _resolve_line(request.args.get("line", "")) or ""
 
     stamp = get_store().state_stamp()
-    view = presenter.build(get_service(), line, mode) if line else None
+    view = presenter.build(get_service(), line, mode_for(line), site_line=site_line()) if line else None
     store = get_store()
+    mine = site_line() if mode == config.MODE_WAREHOUSE_VIEW else ""
     # ``shell_context`` は現場モードの担当ラインを ``line`` として渡す。
     # 盤面がいま表示しているラインは倉庫モードだとタブで変わるので、
     # 名前を分けて渡す(同じ名前で2度渡すと Flask が TypeError を出す)
     return render_template(
         "board.html",
-        lines=[{"code": c, "label": config.display_name(c), "current": c == line} for c in lines],
+        # 倉庫参照で現場を併用している端末は、操作できる担当ラインのタブにそう書く
+        lines=[{"code": c, "label": config.display_name(c) + ("(現場)" if c == mine else ""),
+                "current": c == line} for c in lines],
+        # 現場の盤を出すことがあるか(一括確認のボタンを置く。出し入れは盤の ``mode`` で)
+        site_board=mode == config.MODE_SITE or bool(mine),
         shown_line=line,
         state=board_dict(view, stamp) if view else None,
         empty_reason="" if lines else _empty_reason(store, mode),
         pending=store.pending_count(),
         switch_modes=_switch_modes(mode),
+        # 土曜・日曜・祝日なら「発注のできない日」の帯(日付が変わったら /api/status で出し直す)
+        closed_day=closed_day.notice(),
         **shell_context("board"),
     )
 
@@ -175,7 +189,7 @@ def status():
     from kanban import presence
 
     store = get_store()
-    mine = presence.registered_line(current_mode(), current_line() or "")
+    mine = presence_line()
     age, stale, at = _import_freshness(store)
     return jsonify(
         {
@@ -190,6 +204,9 @@ def status():
             # 読めなかった表と理由(「取り込めていません」に添える。共有フォルダは見えているのに
             # 1 つの表だけ読めない、を「共有フォルダに届いているか」と取り違えさせない)
             "import_problem": store.get_meta(META_IMPORT_PROBLEM, "") if stale else "",
+            # 土曜・日曜・祝日なら「発注のできない日」の案内(空ならふつうの日)。画面を開いた
+            # ままでも、日付が変わればここで出し直す・消す
+            "closed_day": closed_day.notice(),
         }
     )
 
@@ -204,7 +221,8 @@ def _undelivered(store) -> dict:
     見に行かない)。
     """
     rows = store.pending_count()
-    comments = store.unsent_comment_count()
+    # 人が書いたコメントだけ(開いた・押しただけで積む既読・確認の印は数えない)
+    comments = store.unsent_comment_count(include_marks=False)
     waiting = rows + comments
     return {
         "undelivered": waiting,
@@ -216,7 +234,23 @@ def _undelivered(store) -> dict:
         "undelivered_why": store.get_meta("undelivered_why", "") if waiting else "",
         # マスタ管理で消された看板に残っていて届かなかった操作(帯で知らせる。「わかった」で消す)
         "dropped": store.dropped_notices(),
+        # 画面がコメントの書きかけを接続先ごとに分けて置くための印(前の接続先の書きかけを持ち込まない)
+        "draft_scope": _draft_scope(store),
     }
+
+
+def _draft_scope(store) -> str:
+    """いまの接続先(共有DB)の印。パスそのものは出さない(画面の保存場所に置くので短い印にする)。"""
+    import hashlib
+
+    from kanban.db.store import META_DATA_SOURCE
+
+    path = store.get_meta(META_DATA_SOURCE, "")
+    if not path:
+        gateway = current_app.config.get("GATEWAY")
+        path = getattr(gateway, "path", "") or ""
+    key = store.source_key(path)
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12] if key else ""
 
 
 #: 取り込み間隔の何倍まで待つか。1 回や 2 回の失敗で騒がない
@@ -269,8 +303,10 @@ def order():
     決める(現場は ``発送無効`` のラインだけサイズを押せる)。発送ボタンと
     同じく**ここでも判断を引き直す** ── 画面が出したボタンだけを信じると、
     URL を直接叩かれたときに素通しになる。
+
+    倉庫参照で現場を併用している端末は、担当ラインでだけ押せる(:func:`app.mode_for`)。
     """
-    if current_mode() != config.MODE_SITE:
+    if _line_mode() != config.MODE_SITE:
         return _wrong_mode(config.MODE_SITE)
     return _apply_guarded(
         "size",
@@ -317,7 +353,7 @@ def acknowledge():
     資材を確かめて押すと、発送の印を消して元に戻す。サイズを押せるラインで
     だけ受け付ける(現場の画面に確認の道があるライン)。
     """
-    if current_mode() != config.MODE_SITE:
+    if _line_mode() != config.MODE_SITE:
         return _wrong_mode(config.MODE_SITE)
     return _apply_guarded(
         "size",
@@ -345,21 +381,25 @@ def _comment_target():
     return (line, item), None
 
 
-def _write_rule(item, thread) -> tuple[bool, str]:
-    """この端末(モード)がいまこの看板に書けるか(:mod:`kanban.domain.comments`)。"""
+def _write_rule(item, thread, line: str = "") -> tuple[bool, str]:
+    """この端末(モード)がいまこの看板に書けるか(:mod:`kanban.domain.comments`)。
+
+    モードはその看板のラインで決める(倉庫参照で現場を併用している担当ラインは現場)。
+    """
     from kanban.domain import comments as rules
 
-    if current_mode() not in (config.MODE_SITE, config.MODE_WAREHOUSE):
+    mode = mode_for(line or getattr(item, "line", ""))
+    if mode not in (config.MODE_SITE, config.MODE_WAREHOUSE):
         return False, "倉庫参照は読むだけです。"
-    return rules.can_write(item, presenter.comment_side(current_mode()), thread["open"])
+    return rules.can_write(item, presenter.comment_side(mode), thread["open"])
 
 
 def _thread_reply(line: str, item) -> dict:
     from kanban.domain import comments as rules
 
     thread = get_store().comment_thread(line, item.mgmt_no)
-    can, why = _write_rule(item, thread)
-    side = presenter.comment_side(current_mode())
+    can, why = _write_rule(item, thread, line)
+    side = presenter.comment_side(mode_for(line))
     return {
         "line": line, "line_label": config.display_name(line), "mgmt_no": item.mgmt_no,
         "material": item.material, "size": item.size,
@@ -385,7 +425,7 @@ def comments():
     if problem:
         return problem
     line, item = target
-    mode = current_mode()
+    mode = mode_for(line)
     share = presenter.comment_side(mode) if mode in (config.MODE_SITE, config.MODE_WAREHOUSE) else ""
     if get_store().mark_comments_read(line, item.mgmt_no, share_side=share):
         # 既読の印を積んだ。**すぐ送る**(同じ側の端末の未読の帯を早く消す)
@@ -400,8 +440,9 @@ def comments():
 
 @write_bp.post("/api/comments")
 def post_comment():
-    """コメントを書く。**現場・倉庫だけ**(倉庫参照は読むだけ)。押した直後に共有DBへ送る。"""
-    if current_mode() not in (config.MODE_SITE, config.MODE_WAREHOUSE):
+    """コメントを書く。**現場・倉庫だけ**(倉庫参照は読むだけ。現場を併用している担当ラインは現場)。
+    押した直後に共有DBへ送る。"""
+    if _line_mode() not in (config.MODE_SITE, config.MODE_WAREHOUSE):
         return _wrong_mode(config.MODE_SITE, config.MODE_WAREHOUSE)
     target, problem = _comment_target()
     if problem:
@@ -415,12 +456,12 @@ def post_comment():
     # **段階に合わないときは書かせない**(現場は赤のあいだ、倉庫は黄・緑のあと。
     # 赤のあいだの倉庫は現場への返事だけ)。画面は書けないときは欄を出さないが、
     # 開いたあとに相手が状態を変えたときのために、ここでも確かめる
-    can, why = _write_rule(item, get_store().comment_thread(line, item.mgmt_no))
+    can, why = _write_rule(item, get_store().comment_thread(line, item.mgmt_no), line)
     if not can:
         body = _err("comment_closed", why)
         body.update(_thread_reply(line, item))
         return jsonify(body), 409
-    side = presenter.comment_side(current_mode())
+    side = presenter.comment_side(mode_for(line))
     get_store().add_comment(line, item.mgmt_no, side, text)
     log.info("コメント: line=%s no=%s side=%s", line, item.mgmt_no, side)
     hook = current_app.config.get("ON_CHANGED")
@@ -441,8 +482,8 @@ def current_line_or(line: str) -> str:
 
 @write_bp.post("/api/board/batch-reset")
 def batch_reset():
-    """届いた資材を一括確認(リセット)。**現場モードだけ。**"""
-    if current_mode() != config.MODE_SITE:
+    """届いた資材を一括確認(リセット)。**現場モードだけ**(倉庫参照で現場を併用している担当ラインも)。"""
+    if _line_mode() != config.MODE_SITE:
         return _wrong_mode(config.MODE_SITE)
     line = _resolve_line((request.get_json(silent=True) or {}).get("line", ""))
     if line is None:
@@ -596,8 +637,8 @@ def _payload(line: str) -> dict:
 
     stamp = get_store().state_stamp()
     store = get_store()
-    view = presenter.build(get_service(), line, current_mode())
-    mine = presence.registered_line(current_mode(), current_line() or "")
+    view = presenter.build(get_service(), line, mode_for(line), site_line=site_line())
+    mine = presence_line()
     return {
         "board": board_dict(view, stamp),
         "pending": store.pending_count(),
@@ -614,7 +655,7 @@ def _apply_guarded(kind: str, action):
     if line is None:
         return jsonify(_err("no_line", "対象のラインがありません")), 400
     policy = presenter.policy_for(
-        current_mode(), line, get_service().storable_columns(line)
+        mode_for(line), line, get_service().storable_columns(line)
     )
     if not getattr(policy, kind):
         return (
@@ -687,15 +728,23 @@ def _unread_guard(line: str, nos: list[str]):
     (画面は中身を見せ = 開いて既読にし、押し直す)。読んだかどうかは盤の未読の印と同じ
     (この端末か、同じ側のほかの端末で開いた)。断らなければ ``None``。
     """
-    if current_mode() not in (config.MODE_SITE, config.MODE_WAREHOUSE) or not nos:
+    mode = mode_for(line)
+    if mode not in (config.MODE_SITE, config.MODE_WAREHOUSE) or not nos:
         return None
-    counts = get_store().comment_counts(line, presenter.comment_side(current_mode()))
+    counts = get_store().comment_counts(line, presenter.comment_side(mode))
     unread = [no for no in nos if counts.get(str(no), (0, 0))[1]]
     if not unread:
         return None
     log.info("未読のコメントがあるので押せません: line=%s no=%s", line, ",".join(unread))
     body = _err("unread_comments", "相手からのコメントがあります。読んでから押してください。")
     return jsonify({**_payload(line), **body, "unread_nos": unread}), 409
+
+
+def _line_mode() -> str:
+    """要求のラインを、どのモードとして操作するか(:func:`app.mode_for`)。見てよいラインでなければ端末のモード。"""
+    body = request.get_json(silent=True) or {}
+    line = _resolve_line(str(body.get("line", "") or ""))
+    return mode_for(line) if line else current_mode()
 
 
 def _wrong_mode(*allowed: str):

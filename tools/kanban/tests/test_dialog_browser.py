@@ -323,8 +323,9 @@ class LeaveWithDraftTests(_ShippedRowCase):
         self.write_draft(page, "急ぎでお願いします")
         self.assertFalse(page.evaluate(self.LEAVE_JS), "下書きを置けたのに「このページを離れますか？」で止めた")
         # 置いた下書き(次に開いたときに戻すもの。戻すことは test_flow_single_browser で見ている)
+        # 接続先ごとに分けて置く({scopes: {接続先の印: {ライン:管理番号: 書きかけ}}})
         drafts = page.evaluate("JSON.parse(localStorage.getItem('kanban.comments.drafts') || '{}')")
-        self.assertIn("急ぎでお願いします", drafts.values())
+        self.assertIn("急ぎでお願いします", [v for scope in drafts["scopes"].values() for v in scope.values()])
 
     def test_下書きを置けないときだけ止めて訊く(self) -> None:
         # この端末の保存場所が使えない(いっぱい・使えない設定)
@@ -333,6 +334,32 @@ class LeaveWithDraftTests(_ShippedRowCase):
         page = self.open_board()
         self.write_draft(page, "急ぎでお願いします")
         self.assertTrue(page.evaluate(self.LEAVE_JS), "置けない書きかけがあるのに止めずに離れる(消える)")
+
+    def test_ほかの接続先で打った書きかけは持ち込まない(self) -> None:
+        """参照パス(接続先)を変える前に打った書きかけを、変えた先の同じ番号の看板に出さない・数えない。"""
+        self.ctx.add_init_script(
+            "localStorage.setItem('kanban.comments.drafts', JSON.stringify("
+            "{scopes: {'0123456789ab': {'LVC:1': '前の接続先で打った'}}}));")
+        page = self.open_board()
+        page.click('#board .row[data-no="1"] .cell[data-kind="size"]')
+        page.wait_for_selector('#board .row[data-no="1"] .cell[data-kind="size"][data-state="ordered"]')
+        self.open_comment(page)
+        self.assertEqual(page.input_value("#cm-body"), "", "ほかの接続先の書きかけが出た")
+        page.fill("#cm-body", "いまの接続先で打った")
+        drafts = page.evaluate("JSON.parse(localStorage.getItem('kanban.comments.drafts') || '{}')")
+        self.assertEqual(drafts["scopes"]["0123456789ab"], {"LVC:1": "前の接続先で打った"},
+                         "ほかの接続先の書きかけを消した(戻したときに出せない)")
+        mine = [v for k, v in drafts["scopes"].items() if k != "0123456789ab"]
+        self.assertEqual(mine, [{"LVC:1": "いまの接続先で打った"}])
+
+    def test_前の版の書きかけは引き取る(self) -> None:
+        self.ctx.add_init_script(
+            "localStorage.setItem('kanban.comments.drafts', JSON.stringify({'LVC:1': '前の版で打った'}));")
+        page = self.open_board()
+        page.click('#board .row[data-no="1"] .cell[data-kind="size"]')
+        page.wait_for_selector('#board .row[data-no="1"] .cell[data-kind="size"][data-state="ordered"]')
+        self.open_comment(page)
+        self.assertEqual(page.input_value("#cm-body"), "前の版で打った")
 
     def test_書きかけが無ければ訊かない(self) -> None:
         page = self.open_board()

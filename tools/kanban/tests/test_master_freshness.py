@@ -31,7 +31,7 @@ from unittest import mock
 
 from kanban import admin_lock, config
 from kanban.db import sync
-from kanban.db.shared import SharedDb
+from kanban.db.shared import SharedDb, SharedDbError
 from kanban.db.store import Store
 from kanban.domain import events
 
@@ -309,8 +309,14 @@ class ImportFailureIsVisibleTest(MasterFreshnessBase):
 
     def test_master_edit_does_not_say_reflected_when_the_import_failed(self):
         """書けたあと、この端末へ取り込めなかったら「看板画面にもすぐ反映されます」と言わない。"""
-        broken = SharedDb(str(self.dir / "届かない.sqlite3"), cache_dir=str(self.dir / "cache_x"))
-        self.importer.gateway = broken     # この端末の取り込みだけが共有DBを読めない
+        # この端末の取り込みだけが共有DBを読めない(同じ接続先。別の場所を指すと「接続先を変えた」
+        # になり、前の接続先の盤は片付く ── kanban.db.store.Store.adopt_source)
+        class Unreachable(SharedDb):
+            def _connect(self, *, read_only):
+                raise SharedDbError("共有DBを手元へ写せませんでした(届かない)")
+
+        broken = Unreachable(str(self.shared), cache_dir=str(self.dir / "cache_x"))
+        self.importer.gateway = broken
         res = self.edit(1, "サイズ", "1600 × 150M:5本")
         self.assertEqual(res.status_code, 200, res.json)
         self.assertNotIn("すぐ反映", res.json["message"], "取り込めていないのに反映されると言った")

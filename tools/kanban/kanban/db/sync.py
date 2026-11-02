@@ -143,6 +143,10 @@ def _import_all(
     progress: Callable[[str, int, int], None] | None,
 ) -> ImportResult:
     codes = list(lines) if lines is not None else config.all_line_codes()
+    # **接続先を変えていたら、前の接続先の中身(看板・コメント・未送信の印)を先に片付ける**
+    # (:meth:`kanban.db.store.Store.adopt_source`)。読めるかどうかに関係なく、ここから先は
+    # この接続先のものだけを手元に置く
+    store.adopt_source(gateway.path)
     # **読み始める前の書き戻しの番号を控える。** 別のプロセス(``main.py --export-only``)の
     # 書き戻しは錠では止められないので、読んだあとに送れた行はこれで見分ける
     synced_before = store.sync_generation()
@@ -366,6 +370,8 @@ def export_pending(
 
 
 def _export_pending(store: Store, gateway: SharedDb, use_lock: bool, result: ExportResult) -> ExportResult:
+    # 前の接続先宛ての未送信を、変えた先の接続先へ送らない(取り込みより先に回っても)
+    store.adopt_source(gateway.path)
     pending = store.pending_items()
     if not pending:
         return result
@@ -897,6 +903,8 @@ COMMENT_IMPORT_DAYS = 180
 
 def export_comments(store: Store, gateway: SharedDb, limit: int = 500) -> int:
     """手元に積んだコメント・片付けの印を共有DBの ``看板コメント`` へ送る(二重に入れない)。"""
+    # 前の接続先宛てに書いたコメントを、変えた先の接続先へ送らない
+    store.adopt_source(gateway.path)
     rows = store.unsent_comments(limit)
     if not rows or not gateway.can_write:
         return 0
@@ -916,30 +924,50 @@ def export_comments(store: Store, gateway: SharedDb, limit: int = 500) -> int:
 
 
 def import_comments(store: Store, gateway: SharedDb, lines: Sequence[str]) -> int:
-    """他の端末が書いたコメント・片付けの印を受け取る。表が無ければ何もしない。"""
+    """他の端末が書いたコメント・片付けの印を受け取り、**共有DBで消えたものは手元からも消す。**
+
+    以前は足すだけだった。共有DBのコメントが消されても(看板マスタを作り直した・表を空にした)
+    手元には残り続け、その端末の盤にだけ 💬 の数が出続けた ── ほかの端末には見えない。
+
+    * 消すのは**読めた回だけ**。表の列・行を読めない(共有フォルダに届かない・写せない)回は
+      足しも消しもしない(1.5.79〜1.5.81 の決まり: 読めないのを「無い」と取り違えない)
+    * 読めたうえで表が無ければ、共有DBにコメントは無い(手元の届いた分を消す)
+    * この端末で書いてまだ送っていないものは消さない(:meth:`kanban.db.store.Store.prune_comments`)
+    """
     if not lines:
         return 0
+    # 読み始める前に、消してよい候補(届いた・送れた行)を控える
+    candidates = store.delivered_comment_ids(lines)
+    marks = ", ".join("?" for _ in lines)
     try:
         if not gateway.column_names(COMMENT_TABLE):
-            return 0
-        since = (datetime.now() - timedelta(days=COMMENT_IMPORT_DAYS)).strftime("%Y/%m/%d %H:%M:%S")
-        marks = ", ".join("?" for _ in lines)
-        rows = gateway.select(
-            f"SELECT {', '.join(f'[{n}] AS {k}' for n, k in COMMENT_COLUMNS)}"
-            f" FROM {_quote(COMMENT_TABLE)} WHERE [ライン] IN ({marks}) AND [日時] >= ?"
-            # **共有DBに届いた順に足す。** いまの回か前の回かは、この端末に届いた順でも
-            # 決める(:data:`kanban.db.store.Store._OPEN_COMMENT`)ので、片付けの印と
-            # その前後のコメントの順番を崩さない
-            " ORDER BY rowid",
-            [*lines, since],
-        )
+            rows: list[dict[str, Any]] = []
+            on_shared: set[str] = set()
+        else:
+            since = (datetime.now() - timedelta(days=COMMENT_IMPORT_DAYS)).strftime("%Y/%m/%d %H:%M:%S")
+            rows = gateway.select(
+                f"SELECT {', '.join(f'[{n}] AS {k}' for n, k in COMMENT_COLUMNS)}"
+                f" FROM {_quote(COMMENT_TABLE)} WHERE [ライン] IN ({marks}) AND [日時] >= ?"
+                # **共有DBに届いた順に足す。** いまの回か前の回かは、この端末に届いた順でも
+                # 決める(:data:`kanban.db.store.Store._OPEN_COMMENT`)ので、片付けの印と
+                # その前後のコメントの順番を崩さない
+                " ORDER BY rowid",
+                [*lines, since],
+            )
+            # 消すかどうかは古さで絞らずに見る(取り込む古さの上限より前のものも、共有DBにあれば残す)
+            on_shared = {str(r["uid"]) for r in gateway.select(
+                f"SELECT [ID] AS uid FROM {_quote(COMMENT_TABLE)} WHERE [ライン] IN ({marks})",
+                list(lines)) if r.get("uid") is not None}
     except Exception as exc:  # noqa: BLE001 - 看板の取り込みは止めない
-        applog.warning("コメントを取り込めませんでした: %s", exc)
+        applog.warning("コメントを取り込めませんでした(手元のコメントはそのまま): %s", exc)
         return 0
     clean = [
         {k: ("" if r.get(k) is None else str(r.get(k))) for _, k in COMMENT_COLUMNS}
         for r in rows if r.get("uid")
     ]
+    removed = store.prune_comments(candidates, on_shared)
+    if removed:
+        applog.info("共有DBに無くなったコメント・印 %d 件を手元からも消しました", removed)
     return store.merge_comments(clean)
 
 
@@ -1074,7 +1102,7 @@ class Exporter:
         数える(`/api/status` の ``undelivered_events``)。
         """
         try:
-            if self.store.pending_count() or self.store.unsent_comment_count():
+            if self.store.pending_count() or self.store.unsent_comment_count(include_marks=False):
                 if not self.store.get_meta(self.META_UNDELIVERED_SINCE, ""):
                     self.store.set_meta(self.META_UNDELIVERED_SINCE,
                                         datetime.now().strftime("%Y/%m/%d %H:%M:%S"))

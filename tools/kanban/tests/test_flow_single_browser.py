@@ -660,7 +660,8 @@ class SiteFlowTest(FlowCase):
             self.assertIn("急ぎでお願いします", self.text(page, "#cm-thread"))
             page.click("#cm-close")
             page.wait_for_selector("#comment-modal", state="hidden")
-            page.wait_for_function("document.querySelector('#board .row[data-no=\"1\"] .cell--comment').textContent === '💬1'")
+            # 共有DBへ届くまでは、ほかの端末に見えている数(💬)とは別に「未送信」と出す
+            page.wait_for_function("document.querySelector('#board .row[data-no=\"1\"] .cell--comment').textContent === '💬+1未送信'")
             self.send()
             conn = sqlite3.connect(str(self.shared))
             try:
@@ -669,6 +670,8 @@ class SiteFlowTest(FlowCase):
                 conn.close()
             self.assertEqual(len(rows), 1, rows)
             self.assertIn("急ぎでお願いします", rows[0])
+            page.reload(wait_until="load")
+            page.wait_for_function("document.querySelector('#board .row[data-no=\"1\"] .cell--comment').textContent === '💬1'")
         self.assert_quiet()
 
     def test_取り込みの状態に送っていない操作が並び_いま取り込むでも消えない(self) -> None:
