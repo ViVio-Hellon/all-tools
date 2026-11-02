@@ -53,9 +53,13 @@ ORDER_CSV = (
 
 
 class _AccdbCase(unittest.TestCase):
-    """**Access の名前のファイルを本当に置く**(v4.40.0)。仕掛は Access の名前でも手元へ写してから
-    読むので(`source_db.local_copy_file`)、無いファイルは写す前に断られる。中身は偽物の runner が返す。
-    写しは試験の一時フォルダへ。"""
+    """**仕掛は sqlite3 だけを読む**(Access の名前を渡しても、同じ名前の .sqlite3 を読む)。
+
+    前(v4.40.0〜4.44.18)は Access の名前のファイルを手元へ写し、偽物の runner(VBScript の代わり)が
+    中身を返していました。いまは仕掛を Access の道で読まないので(`config._pick_wip_source`)、
+    同じ中身を `dummy.sqlite3` に置き、**`dummy.accdb` の名前で渡して** .sqlite3 を読むことを確かめます。
+    runner を渡しても使われません。写しは試験の一時フォルダへ。
+    """
 
     def setUp(self) -> None:
         from unittest.mock import patch
@@ -74,10 +78,28 @@ class _AccdbCase(unittest.TestCase):
         source_db.forget()
         self.addCleanup(source_db.forget)
 
+    def master(self, csv_text: str) -> Path:
+        """CSV の中身を `dummy.sqlite3` の「仕掛」に置き、**Access の名前(dummy.accdb)を返す**。"""
+        import csv
+        import io
+        import sqlite3
+
+        rows = list(csv.reader(io.StringIO(csv_text)))
+        target = self.dummy.with_suffix(".sqlite3")
+        target.unlink(missing_ok=True)
+        conn = sqlite3.connect(str(target))
+        with conn:
+            conn.execute('CREATE TABLE "仕掛" (%s)' % ", ".join(f'"{c}"' for c in rows[0]))
+            conn.executemany('INSERT INTO "仕掛" VALUES (%s)' % ", ".join("?" for _ in rows[0]),
+                             rows[1:])
+        conn.close()
+        return self.dummy
+
 
 class SearchLotTests(_AccdbCase):
     def test_parses_matching_row(self) -> None:
-        info = gw_master.search_lot("R4085Q0", master_path=self.dummy, runner=FakeCsvRunner(LOT_CSV))
+        info = gw_master.search_lot("R4085Q0", master_path=self.master(LOT_CSV),
+                                    runner=FakeEmptyRunner())
         self.assertIsNotNone(info)
         self.assertEqual(info.order_no, "06016307")
         self.assertEqual(info.material, "R61S")
@@ -90,17 +112,21 @@ class SearchLotTests(_AccdbCase):
 
     def test_returns_none_when_not_found(self) -> None:
         empty_csv = "ﾛｯﾄ番号,ｵｰﾀﾞｰ番号\r\n"
-        info = gw_master.search_lot("NOPE", master_path=self.dummy, runner=FakeCsvRunner(empty_csv))
+        info = gw_master.search_lot("NOPE", master_path=self.master(empty_csv),
+                                    runner=FakeCsvRunner(LOT_CSV))
         self.assertIsNone(info)
 
-    def test_returns_none_on_connection_failure_without_raising(self) -> None:
-        info = gw_master.search_lot("R4085Q0", master_path=self.dummy, runner=FakeEmptyRunner())
-        self.assertIsNone(info)
+    def test_sqlite3が無ければ無いとは言わずAccessも読まない(self) -> None:
+        """Access の名前のファイルしか無い。**Access の道へ行かず、「dummy.sqlite3 がありません」。**"""
+        with self.assertRaises(gw_master.WipUnreadable) as caught:
+            gw_master.search_lot("R4085Q0", master_path=self.dummy, runner=FakeCsvRunner(LOT_CSV))
+        self.assertIn("dummy.sqlite3 がありません", str(caught.exception))
 
 
 class SearchOrderTests(_AccdbCase):
     def test_parses_matching_row(self) -> None:
-        info = gw_master.search_order("06016307", master_path=self.dummy, runner=FakeCsvRunner(ORDER_CSV))
+        info = gw_master.search_order("06016307", master_path=self.master(ORDER_CSV),
+                                      runner=FakeEmptyRunner())
         self.assertIsNotNone(info)
         self.assertEqual(info.vc_front, "K21S-VC-A")
         self.assertEqual(info.vc_back, "")
@@ -110,7 +136,8 @@ class SearchOrderTests(_AccdbCase):
 
     def test_interleaf_false_when_not_one(self) -> None:
         csv_text = "受注番号,VC_表,VC_裏,取引先名称,納入先名称,送り先名称,合紙,製品単重\r\n06016307,,,,,,0,0\r\n"
-        info = gw_master.search_order("06016307", master_path=self.dummy, runner=FakeCsvRunner(csv_text))
+        info = gw_master.search_order("06016307", master_path=self.master(csv_text),
+                                      runner=FakeEmptyRunner())
         self.assertFalse(info.has_interleaf)
 
 

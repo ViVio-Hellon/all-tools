@@ -77,6 +77,11 @@ class WorkContext:
     # とき)ので、戻る先をここに別に持ちます。保存するのはこちらだけ
     terminal_line: str = constants.LINE_NAMES[0]
     terminal_maru_sub: str = ""
+    # `terminal_line` を**この端末の設定から**決めたか。False のあいだ(起動したときに設定を
+    # 読めなかった・まだ決めていない)は、読めるようになった時点で設定のラインに合わせる
+    # (`get_context`)。以前は最初の1回で決めた L-1 をその起動のあいだずっと使い、
+    # 端末は HVC なのに L-1 のキーで保存し得た
+    line_from_settings: bool = False
 
     # 記録を見るの「保存した直」で**最後に選んだライン**(v4.35.3。Administrator・
     # 管理者モードだけに欄が出る)。空ならこの端末のライン。日報入力や設定へ行って
@@ -100,7 +105,27 @@ class WorkContext:
             sub = str(user_settings.get(config.KEY_TERMINAL_MARU) or "")
             if line == MARU_LINE and sub in MARU_SUBS:
                 ctx.maru_sub = ctx.terminal_maru_sub = sub
+            ctx.line_from_settings = True
         return ctx
+
+    def adopt_stored_line(self) -> None:
+        """起動したときに設定のラインを読めなかった(または決めていなかった)なら、
+        **いま読めるラインに合わせる**。呼び出して別のラインの紙を見ているあいだは、
+        戻る先(`terminal_line`)だけを合わせる。"""
+        if self.line_from_settings:
+            return
+        from . import config, user_settings
+
+        line = stored_terminal_line()
+        if line not in constants.LINE_NAMES:
+            return
+        sub = str(user_settings.get(config.KEY_TERMINAL_MARU) or "")
+        sub = sub if (line == MARU_LINE and sub in MARU_SUBS) else ""
+        viewing_other = self.line != self.terminal_line
+        self.terminal_line, self.terminal_maru_sub = line, sub
+        if not viewing_other:
+            self.line, self.maru_sub = line, sub
+        self.line_from_settings = True
 
     def set_terminal_line(self, line: str, maru_sub: str = "") -> bool:
         """この端末のラインを変えて**覚える**。覚えられなければ False。
@@ -114,6 +139,7 @@ class WorkContext:
         sub = maru_sub if (line == MARU_LINE and maru_sub in MARU_SUBS) else ""
         self.line = self.terminal_line = line
         self.maru_sub = self.terminal_maru_sub = sub
+        self.line_from_settings = True
         return user_settings.save_many({config.KEY_TERMINAL_LINE: line,
                                         config.KEY_TERMINAL_MARU: sub})
 
@@ -380,6 +406,8 @@ def get_context() -> WorkContext:
     with _lock:
         if _context is None:
             _context = WorkContext.from_settings()
+        else:
+            _context.adopt_stored_line()
         return _context
 
 

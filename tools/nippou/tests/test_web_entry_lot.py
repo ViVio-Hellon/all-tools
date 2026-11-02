@@ -42,6 +42,8 @@ class LotLookupTests(WebTestCase):
     lot_course = ""
     odr_export = ""
     odr_interleaf = "1"
+    #: SIKALOT の製品単重(引当が無いときだけ使う)。None なら列を作らない
+    lot_unit = None
 
     def setUp(self) -> None:
         super().setUp()
@@ -67,6 +69,14 @@ class LotLookupTests(WebTestCase):
             self.lot_course, "取引先", "ﾅﾒｶﾜｱﾙﾐ(ｶ", "送り先",
             "9", "0", "C1",
         )])
+        if getattr(self, "lot_unit", None) is not None:
+            # SIKALOT の製品単重(引当が無いときだけ使う)。列を足すのはこの試験だけ
+            # (LOT_COLUMNS はほかの試験も使う)
+            conn = sqlite3.connect(str(self.ref / "SIKALOT.sqlite3"))
+            with conn:
+                conn.execute('ALTER TABLE "仕掛" ADD COLUMN "製品単重" TEXT')
+                conn.execute('UPDATE "仕掛" SET "製品単重" = ?', (self.lot_unit,))
+            conn.close()
         self._write("SIKAHIKI.sqlite3", HIKI_COLUMNS, self.hiki_rows)
         self._write("SIKAODR.sqlite3", ODR_COLUMNS, [
             ("AB2234", "VE-20NF", "VE-20NF", self.odr_interleaf, 250.04314,
@@ -158,15 +168,50 @@ class LotLookupTests(WebTestCase):
 
 
 class NoAllocationTests(LotLookupTests):
-    """引当が無いと、そこから先へ進めない。"""
+    """引当が無い(SIKAHIKI は読めて、このロットの行が無い)。
+
+    現場の決め:「本当に無かった場合は SIKALOT の製品単重を入れてください」。前は何も入れずに
+    止まり(「SIKAHIKI に引当がありません」)、単重も重量も出なかった。
+    """
+
+    hiki_rows = ()
+    lot_unit = "338.0947"
+
+    def test_引当が無ければSIKALOTの製品単重で単重と重量が出る(self) -> None:
+        body = self.lookup("H5422S0")
+        self.assertEqual(body["lot"]["state"], "filled")
+        self.assertIn("SIKAHIKI", body["lot"]["message"])
+        self.assertIn("SIKALOT の製品単重", body["lot"]["message"])
+        self.assertIn("ＶＣ", body["lot"]["message"])
+        row = body["rows"]["1"]
+        self.assertEqual(row["UNI"], "338.0947")
+        self.assertEqual(row["ZAI"].replace(" ", ""), "52S-R")
+        self.assertEqual(row["VC"], "")                  # 受注が分からないので VC は手で
+        # 枚数・包数を入れれば重量が出る(重量 = 枚数 × 単重)
+        rows = body["rows"]
+        rows["1"].update({"MAI": "10", "TUT": "2"})
+        body = self.post("/api/entry/state", {"rows": rows, "row": 1}).get_json()
+        self.assertEqual(float(body["rows"]["1"]["WEI"]), round(20 * 338.0947, 1))
+
+    # 親の「埋まるか」系は受注(SIKAODR)の値を見るので、引当が無いと通らない。ここでは見ない
+    test_紙と同じ文字で埋まる = None
+    test_合紙は受注のものを使う = None
+    test_印刷範囲外の6つも埋まる = None
+    test_使った引当を持ち帰る = None
+    test_保存すると引当番号も残る = None
+    test_引いた値が画面に残る = None
+
+
+class NoAllocationNoUnitTests(LotLookupTests):
+    """引当が無く、SIKALOT にも製品単重が無い。単重は空のまま、そう言う。"""
 
     hiki_rows = ()
 
-    def test_引当が無ければVCも単重も出ないと言う(self) -> None:
+    def test_引当もSIKALOTの単重も無ければ空と言う(self) -> None:
         body = self.lookup("H5422S0")
-        self.assertEqual(body["lot"]["state"], "no_hiki")
-        self.assertIn("SIKAHIKI", body["lot"]["message"])
-        self.assertIn("ＶＣ", body["lot"]["message"])
+        self.assertEqual(body["lot"]["state"], "filled")
+        self.assertIn("SIKALOT にも無い", body["lot"]["message"])
+        self.assertEqual(body["rows"]["1"]["UNI"], "")
 
     # 親の「埋まるか」系は引当が無いので通らない。ここでは見ない
     test_紙と同じ文字で埋まる = None

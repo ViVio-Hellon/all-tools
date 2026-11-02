@@ -263,30 +263,31 @@ class WipPathsTests(WebTestCase):
             self.assertIn(name, copied, f"{name} を写していません")
 
     def test_Accessの名前でも写してから読む(self) -> None:
-        """ファイル名を決められるので `.accdb` も通る。**Access の道にも写しを渡す。**"""
+        """ファイル名を決められるので `.accdb` も打てる。**読むのは同じ名前の .sqlite3 の写し**
+        (仕掛は Access を読まない ── `test_wip_sqlite_only`)。前は .accdb を写して Access の道で読んでいた。"""
         self.use(wip_master_dir_2=str(self.second), wip_master_2_lot_file="SIKALOT2.accdb")
         share = self.second / "SIKALOT2.accdb"
         share.write_bytes(b"Standard ACE DB" + b"\0" * 64)
+        self.write(self.second / "SIKALOT2.sqlite3", LOT_COLUMNS, [_lot("H5422S0")])
         seen: list[Path] = []
 
-        from nippou.access_bridge import gw_master
-        from nippou.access_bridge.importer import ImportResult
+        from nippou.access_bridge import gw_master, importer
 
-        def fake_import(path, *args, **kwargs):
+        real_import = importer.import_table
+
+        def spy(path, *args, **kwargs):
             seen.append(Path(path))
-            return ImportResult(success=True, rows=[])
+            return real_import(path, *args, **kwargs)
 
-        with patch.object(gw_master, "import_table", side_effect=fake_import):
-            gw_master.search_lot("H5422S0")
-        accdb = [p for p in seen if p.suffix == ".accdb"]
-        self.assertTrue(accdb, seen)
+        with patch.object(gw_master, "import_table", side_effect=spy):
+            info = gw_master.search_lot("H5422S0")
+        self.assertIsNotNone(info)
+        self.assertEqual([p for p in seen if p.suffix == ".accdb"], [], seen)
+        self.assertIn(self.second / "SIKALOT2.sqlite3", seen)
         from nippou import source_db
 
-        for path in accdb:
-            self.assertNotEqual(path, share)
-            self.assertIn(source_db.copy_dir(), path.parents)
-        self.assertEqual(accdb[0].read_bytes(), share.read_bytes())
-
+        copied = {Path(k).name for k in source_db._COPIES}
+        self.assertIn("SIKALOT2.sqlite3", copied)
 
 if __name__ == "__main__":
     unittest.main()

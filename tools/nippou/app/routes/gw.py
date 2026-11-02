@@ -570,14 +570,25 @@ def search_lot():
     if not lot_no:
         return jsonify(error_body("empty", "LotNoを入力してください",
                                   field="lot_no")), 400
-    info = gw_master.search_lot(lot_no)
+    try:
+        info = gw_master.search_lot(lot_no)
+    except gw_master.WipUnreadable as exc:
+        # **読めないのを「該当データがありません」と言わない**(SIKALOT.sqlite3 が無い・届かない)
+        return jsonify({"found": False, "allocations": [], "unreadable": True,
+                        "message": f"仕掛ロットを読めませんでした: {exc}。手入力してください。"})
     if info is None:
         # **見つからないのは失敗ではない。** VBA も「データなし 手入力
         # よろしく」と案内して続行させていた
         return jsonify({"found": False, "allocations": [],
                         "message": "該当データがありません。手入力してください。"})
 
-    allocations = gw_master.search_allocations(lot_no)
+    try:
+        allocations = gw_master.search_allocations(lot_no)
+    except gw_master.WipUnreadable as exc:
+        log.warning("仕掛引当を読めませんでした lot_no=%s: %s", lot_no, exc)
+        allocations, unread_hiki = [], f"仕掛引当を読めませんでした: {exc}。"
+    else:
+        unread_hiki = ""
     # 製品の寸法。**Gコース(設計_設備ｺｰｽ に GCT/GFS/GSS)なら BOX最終実績**(v4.17.0)
     # ── 日報入力と同じ寸法(`logic/g_course`)。画面はこの3つを欄へ入れ、
     # Gコースなら寸法の上にそう書く(製造の寸法も並べる)
@@ -593,8 +604,8 @@ def search_lot():
     if not allocations:
         # 受注番号が分からないので、ＶＣ・合紙・単重は手で決めることになる
         body["message"] = (
-            "SIKAHIKI にこのロットの引当がありません。"
-            "オーダーNoが分からないので、ＶＣ・合紙・単重は手で入れてください。")
+            (unread_hiki or "SIKAHIKI にこのロットの引当がありません。")
+            + "オーダーNoが分からないので、ＶＣ・合紙・単重は手で入れてください。")
         return jsonify(body)
 
     if len(allocations) == 1:
@@ -613,7 +624,11 @@ def _order_body(order_no: str, payload: dict) -> dict[str, Any]:
     とき)の**両方が同じものを返す**ようにここへ置きます ── 別々に組むと、
     片方だけ自動選択を忘れる、という食い違いが起きます。
     """
-    info = gw_master.search_order(order_no)
+    try:
+        info = gw_master.search_order(order_no)
+    except gw_master.WipUnreadable as exc:
+        return {"order": None, "auto": None,
+                "message": f"仕掛受注を読めませんでした: {exc}。ＶＣ・合紙・単重は手で入れてください。"}
     if info is None:
         return {"order": None, "auto": None,
                 "message": f"SIKAODR に受注 {order_no} がありません。"

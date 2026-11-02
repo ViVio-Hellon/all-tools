@@ -608,7 +608,7 @@ class Settings:
         second = self.wip_master_dir_2
         if second is None:
             return None
-        return _pick_source(second, self.wip2_filename(filename))
+        return _pick_wip_source(second, self.wip2_filename(filename))
 
     def _wip_paths(self, filename: str) -> list[Path]:
         """仕掛のファイルを探す順(1つ目 → 2つ目)。同じファイルなら1つにまとめる。
@@ -616,7 +616,7 @@ class Settings:
         2つ目は**名前も決められる**(`wip2_filename`)ので、同じフォルダでも名前が違えば
         別のファイルとして探します。
         """
-        paths = [_pick_source(self.wip_master_dir, filename)]
+        paths = [_pick_wip_source(self.wip_master_dir, filename)]
         candidate = self.wip2_path(filename)
         if candidate is not None and candidate != paths[0]:
             paths.append(candidate)
@@ -681,15 +681,15 @@ class Settings:
 
     @property
     def gw_lot_master_path(self) -> Path:
-        return _pick_source(self.wip_master_dir, self.gw_lot_master_filename)
+        return _pick_wip_source(self.wip_master_dir, self.gw_lot_master_filename)
 
     @property
     def gw_order_master_path(self) -> Path:
-        return _pick_source(self.wip_master_dir, self.gw_order_master_filename)
+        return _pick_wip_source(self.wip_master_dir, self.gw_order_master_filename)
 
     @property
     def gw_hiki_master_path(self) -> Path:
-        return _pick_source(self.wip_master_dir, self.gw_hiki_master_filename)
+        return _pick_wip_source(self.wip_master_dir, self.gw_hiki_master_filename)
 
     # 探す順(1つ目 → 2つ目)。**引く側(`access_bridge/gw_master`)はこちらを使う**
     @property
@@ -736,11 +736,11 @@ class Settings:
 
         置き場所を移していない端末も読める。同じファイルは1つにまとめる。
         """
-        paths = [_pick_source(self.coil_master_dir, self.coil_master_filename)]
+        paths = [_pick_wip_source(self.coil_master_dir, self.coil_master_filename)]
         second = self.wip2_path(self.gw_coil_master_filename)
         if second is not None and second not in paths:
             paths.append(second)
-        legacy = _pick_source(self.material_master_dir, self.coil_master_filename)
+        legacy = _pick_wip_source(self.material_master_dir, self.coil_master_filename)
         if legacy not in paths:
             paths.append(legacy)
         return paths
@@ -965,6 +965,28 @@ def _pick_source(directory: Path, filename: str) -> Path:
             except OSError:                           # 共有に届かない
                 return directory / filename
     return directory / filename
+
+
+
+def _pick_wip_source(directory: Path, filename: str) -> Path:
+    """仕掛のファイル(SIKALOT / SIKAHIKI / SIKAODR / LS4LOT)で読むファイル。**sqlite3 だけ。**
+
+        SIKALOT は Access を読んでるの？全部 sqlite を読め
+
+    設定の名前が ``.accdb`` / ``.mdb`` でも、**同じ名前の ``.sqlite3``** を読みます(``.db`` が
+    あればそれ・旧名は ``_pick_source`` と同じ)。どれも無い・確かめられないときも
+    ``.sqlite3`` の道を返します ── 読む側が「SIKALOT.sqlite3 がありません/読めません」と言い、
+    **Access の道(cscript + ACE・ODBC)へは行きません。**
+
+    前は ``_pick_source`` のままで、名前が ``.accdb`` だと(``.sqlite3`` を確かめる瞬間に共有へ
+    届かなかったときも)設定の名前を返して Access の道で読んでいました。
+    """
+    from .source_db import SUFFIXES
+
+    picked = _pick_source(directory, filename)
+    if picked.suffix.lower() in SUFFIXES:
+        return picked
+    return picked.with_suffix(".sqlite3")
 
 
 SETTINGS = Settings()

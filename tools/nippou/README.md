@@ -12960,3 +12960,21 @@ v4.44.15・v4.44.16 の点検の第2弾。現場の声:「無い、とするの�
   「いま確かめられません(時刻)」と出し、理由を吹き出しに、数秒後に自動で確かめ直す
 - 試験: `tests/test_file_recheck.py`・`tests/test_reads_normally.py`(14件)・`tests/test_unreadable_create.py` の
   「作っていない既定のフォルダがあってもアクセス権限は決まる」(直す前は落ちる)
+
+## 引当が無ければ SIKALOT の製品単重・仕掛は sqlite3 だけ・起動時のライン (v4.44.19)
+
+現場の声:「重量計算しなくなっている」(ロット番号を入れても単重・重量が空/枚数を入れても重量が出ない)。現場の仕掛のファイルで
+試すと、SIKALOT のロットのうち SIKAHIKI に引当があるのは一部だけで、**引当の無いロットは「SIKAHIKI に引当がありません」で止まり、
+材質・寸法・検入も単重も何も入らなかった**(重量 = 枚数 × 単重 なので重量も出ない)。現場の決め:「本当に無かった場合は SIKALOT の
+製品単重を入れてください」。
+
+- **SIKAHIKI を読めたうえで引当が無ければ、SIKALOT から行を埋め、単重は SIKALOT の製品単重**(`lot_lookup.fetch`・`LotInfo.unit_weight`)。
+  ＶＣ・合紙は受注が分からないので手で(画面の一言で言う)。機側・NS1 は今までどおり単重を入れない。SIKAHIKI を読めなかったときは
+  今までどおり断る(無いとは言わない)
+- **仕掛のファイルは sqlite3 だけを読む**: 第2パスやコイル割り数の名前が .accdb でも、同じ名前の .sqlite3 を読む(`config._pick_wip_source`・
+  `gw_master._search_wip_at`)。どの置き場所も読めなければ「SIKALOT.sqlite3 がありません」/「…を読めません」と分けて言う
+  (前は届かないのも「SIKALOT に ロット … がありません」と言っていた)。GW計算の引きも読めないときに 500 で落ちない
+- **起動したときにこの端末の設定を読めなかったら、その起動のあいだずっと L-1 として動いていた**(端末は HVC でも。別のラインの
+  キーで保存し得た)→ 読めるようになった時点でこの端末のラインに合わせる(`WorkContext.adopt_stored_line`)
+- 試験: `tests/test_web_entry_lot.py` NoAllocationTests・NoAllocationNoUnitTests(直す前は落ちる)・`tests/test_wip_sqlite_only.py`(8件)・
+  `tests/test_line_after_unreadable_start.py`(3件)

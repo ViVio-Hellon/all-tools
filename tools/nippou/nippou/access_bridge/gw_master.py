@@ -83,6 +83,9 @@ class LotInfo:
     #: 1つ目の SIKALOT に BOX最終実績が無く、**2つ目の SIKALOT の BOX設計**を使ったら
     #: `BOX_DESIGN_SECOND`(v4.25.0)
     box_source: str = ""
+    #: SIKALOT の製品単重。**SIKAHIKI に引当が無いときだけ**単重に使う(受注が分からないので
+    #: SIKAODR の製品単重を引けない ── `services/lot_lookup`)
+    unit_weight: str = ""
 
     @property
     def box_course(self) -> str:
@@ -198,40 +201,68 @@ def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRu
     2つ目を決めていなければ1つ目だけ(これまでどおり)。`keep` は使える行だけに絞る
     (引当なら受注番号のある行)。絞って空なら「無い」とみなして次へ。
 
-    「読めない」には、壊れている・0 バイト・中に「仕掛」の表が無い、が入る(どれも
+    「読めない」には、無い・壊れている・0 バイト・中に「仕掛」の表が無い、が入る(どれも
     読む側が失敗を返す)。中身が空(表はあるが行が無い)は「無い」と同じで次へ。
     返すのは (行, 何番目の置き場所で見つけたか)。見つからなければ ([], -1)。
+
+    **sqlite3 だけを読みます**(`config._pick_wip_source`)。渡された名前が Access(.accdb)でも
+    同じ名前の .sqlite3 を読み、Access の道へは行きません。
+
+    **どの置き場所も読めなかったら `WipUnreadable`**(「SIKALOT.sqlite3 がありません」など)。
+    前は、ファイルが無い・届かないのを「読めた、ロットが無い」と数えていたので、日報入力が
+    「SIKALOT に ロット … がありません」と言っていました。1つでも読めた置き場所があれば、
+    これまでどおり「無い」(第2パスは1つ目に無いときの控えなので)。
     """
-    failure: Optional[Exception] = None
+    from ..config import _pick_wip_source
+
+    problems: list[str] = []
     answered = False
     for index, path in enumerate(paths):
+        if path.suffix.lower() not in source_db.SUFFIXES:
+            path = _pick_wip_source(path.parent, path.name)
         try:
-            # **手元に写してから読む**(v4.40.0)。sqlite3 は読む側(`importer._import_sqlite` →
-            # `source_db.local_copy`)が写す。Access(.accdb)はここで写して、写したほうを開く
-            # ── 共有のファイルを Access の道で直接開かない
-            read_from = (path if path.suffix.lower() in source_db.SUFFIXES
-                         else source_db.local_copy_file(path))
-            result = import_table(read_from, SETTINGS.gw_shared_table_name,
+            result = import_table(path, SETTINGS.gw_shared_table_name,
                                   sql_filter=sql_filter, runner=runner)
         except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
             _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + first_no, path, exc)
-            failure = exc
+            problems.append(_unread_text(path, exc))
             continue
-        answered = True
         if not result.success:
             _logger.warning("%sに失敗しました(%dつ目 %s) error=%s",
                             label, index + first_no, path, result.error)
+            problems.append(_unread_text(path, result.error))
             continue
+        answered = True
         rows = keep(result.rows) if keep else list(result.rows)
         if rows:
             if index > 0:
                 _logger.info("%s: 1つ目に無かったので %dつ目で見つけました(%s)",
                              label, index + 1, path)
             return rows, index
-    if failure is not None and not answered:
+    if problems and not answered:
         # どの置き場所でも読めなかった。**「無い」とは言わない**(呼ぶ側が「読めません」と出す)
-        raise failure
+        raise WipUnreadable(" / ".join(problems))
     return [], -1
+
+
+class WipUnreadable(RuntimeError):
+    """仕掛のファイル(sqlite3)を**どの置き場所でも読めなかった**。「ロットが無い」とは別。"""
+
+
+def _unread_text(path: Path, error: object) -> str:
+    """「SIKALOT.sqlite3 がありません(道)」/「SIKALOT.sqlite3 を読めません: 理由」。"""
+    detail = str(getattr(error, "message", "") or error or "")
+    if "見つかりません" in detail:
+        # **「無い」は、置き場所に届いて一覧が取れ、そこに無いときだけ**(`file_state`)。
+        # Windows は届かない共有も「見つかりません」になるので、ここで確かめ分ける
+        from ..db.connection import SharedUnreadable, file_state
+
+        try:
+            if not file_state(path):
+                return f"{path.name} がありません({path})"
+        except SharedUnreadable as exc:
+            return f"{path.name} を読めません: {exc}"
+    return f"{path.name} を読めません({path}): {detail}"
 
 
 def _paths(master_path: Optional[Path], default: list[Path]) -> list[Path]:
@@ -277,6 +308,7 @@ def search_lot(
         box_width_mm=_to_float(box[1]),
         box_length_mm=_to_float(box[2]),
         box_source=box_source,
+        unit_weight=str(row.get("製品単重", "") or "").strip(),
     )
 
 

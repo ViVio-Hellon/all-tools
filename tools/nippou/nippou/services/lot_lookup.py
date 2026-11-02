@@ -82,12 +82,25 @@ def fetch(lot_no: str, *, line: str = "", hiki_no: str = "") -> LotLookup:
             f"仕掛引当(SIKAHIKI)を読めませんでした: {exc}"))
 
     if not allocations:
-        # **ここで止まると VC も単重も出ません。** ロット番号から受注番号を
-        # 知る道はここしか無いので、その旨まで書きます
-        return LotLookup(refusal=lot_fill.Refusal(
-            lot_fill.REFUSE_NO_HIKI,
-            f"SIKAHIKI に ロット {lot_no} の引当がありません。"
-            "受注が分からないので、ＶＣ・単重・合紙は手で入れてください。"))
+        # **SIKAHIKI を読めたうえで、このロットの引当が無い。** 受注が分からないので
+        # SIKAODR の製品単重・ＶＣは引けない。**単重は SIKALOT の製品単重を入れる**
+        # (現場の決め:「本当に無かった場合は SIKALOT の製品単重を入れてください」)。
+        # 材質・寸法・検入枚数なども SIKALOT から入れる(前は何も入れずに止まっていた)。
+        # SIKAHIKI を**読めなかった**ときはここへ来ない(上で断る ── 無いとは言わない)
+        coil = _coil_split(lot_no, line)
+        fill = lot_fill.build(line=line, lot=lot, allocation=None, order=None,
+                              coil=coil, note=_pack_note(lot, None))
+        unit = lot_fill.unit_weight(getattr(lot, "unit_weight", ""), line=line)
+        if unit:
+            fill.values["UNI"] = unit
+        log.info("SIKAHIKI に引当が無いので SIKALOT の製品単重を使います lot_no=%s 単重=%s",
+                 lot_no, unit or "(なし)")
+        return LotLookup(
+            fill=fill,
+            message=f"ロット {lot_no}: SIKAHIKI に引当が無いので、"
+                    + ("単重は SIKALOT の製品単重を入れました。" if unit
+                       else "単重は SIKALOT にも無いので空のままです。")
+                    + "ＶＣ・合紙は手で入れてください。")
 
     picked = _pick(allocations, hiki_no)
     if picked is None:
@@ -99,19 +112,21 @@ def fetch(lot_no: str, *, line: str = "", hiki_no: str = "") -> LotLookup:
             for a in allocations])
 
     order = None
+    unread_order = ""
     try:
         order = gw_master.search_order(picked.order_no)
-    except Exception:                             # noqa: BLE001 - 続ける
+    except Exception as exc:                      # noqa: BLE001 - 続ける
         # **止めない。** VBA も受注が引けないときは
-        # 「VC/単重/包装仕様は空のまま続行」していた
+        # 「VC/単重/包装仕様は空のまま続行」していた。読めなかった訳は一言に添える
         log.exception("SIKAODR を読めませんでした order_no=%s", picked.order_no)
+        unread_order = f"仕掛受注を読めませんでした: {exc}。"
 
     coil = _coil_split(lot_no, line)
     note = _pack_note(lot, order)
 
     fill = lot_fill.build(line=line, lot=lot, allocation=picked, order=order,
                           coil=coil, note=note)
-    missing = "" if order is not None else "(受注が引けませんでした。ＶＣ・単重は空のままです)"
+    missing = "" if order is not None else f"({unread_order}受注が引けませんでした。ＶＣ・単重は空のままです)"
     return LotLookup(
         fill=fill,
         message=f"ロット {lot_no} / 受注 {picked.order_no}"
