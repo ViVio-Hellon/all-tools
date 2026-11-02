@@ -108,17 +108,38 @@ class ImportResult:
 #: (`UNKNOWN` など)とは分ける ── VBScript の答えからは、それ以上は見分けられない
 UNREAD_KINDS = (ErrorKind.LOCK_CONFLICT, ErrorKind.NETWORK_UNREACHABLE, ErrorKind.TIMEOUT)
 
+#: Access の「**その表が無い**」の答え。ADO の番号(DB_E_NOTABLE)と、ACE/Jet の文言(3078 ──
+#: 「入力テーブルまたはクエリ '…' が見つかりませんでした」)。文言に「見つかりません」が入るので、
+#: 分け方(`errors.classify_error`)では `NETWORK_UNREACHABLE`(届かない)に入ってしまう
+MISSING_TABLE_NUMBERS = (-2147217865,)
+MISSING_TABLE_SNIPPETS = ("入力テーブルまたはクエリ", "input table or query")
+
+
+def missing_table(error: Optional[AccessBridgeError]) -> bool:
+    """Access の答えが「その表が無い」か(ファイルには届いて開けている)。"""
+    if error is None:
+        return False
+    if error.err_number in MISSING_TABLE_NUMBERS:
+        return True
+    text = error.message or ""
+    return any(s in text or s in text.lower() for s in MISSING_TABLE_SNIPPETS)
+
 
 def failed_to_read(path: Path, result: "ImportResult") -> bool:
     """取り込みの失敗が**その場の事情で読めなかった**ものか(「表が無い・空」とみなしてはいけない)。
 
     sqlite3 は、写せない・開けない・表を読めない、がどれも読めなかった(表があるかは
     呼ぶ側が `source_db.list_tables(strict=True)` で先に見る)。Access は `UNREAD_KINDS` だけ。
+    **Access の「表が無い」は読めている**(`missing_table`)── 文言に「見つかりません」が入るので
+    「届かない」に分けられていた。読めないとみなすと、表を持たない Access のファイルでは
+    係数Lot数を一度も計算し直さず・アクセス権限も決めなくなる。
     """
     if result.success:
         return False
     if Path(path).suffix.lower() in source_db.SUFFIXES:
         return True
+    if missing_table(result.error):
+        return False
     return result.error is not None and result.error.kind in UNREAD_KINDS
 
 

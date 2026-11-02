@@ -661,5 +661,22 @@ class AccessRightsUnreadableTests(WebTestCase):
                         "読めないだけで Administrator の結果を空で置き換えた")
 
 
+    def test_作っていない既定のフォルダがあってもアクセス権限は決まる(self) -> None:
+        """伝送用ファイルの置き場所(既定のフォルダ)をこの端末にまだ作っていない(先に見る)。
+
+        上のフォルダは一覧できて、そこにフォルダが無い ──「確かめたうえで無い」。1.5.81 では
+        親のフォルダが無いのを「読めない」にしていたので、アクセス権限が決まらなかった。
+        """
+        from nippou.config import SETTINGS
+
+        self.master("material", "HVC")
+        missing = self.tmp / "作っていないフォルダ" / "伝送用ファイル.sqlite3"
+        with patch.object(type(SETTINGS), "transmission_master_path", new_callable=PropertyMock,
+                          return_value=missing):
+            status = self.svc.load()
+        self.assertTrue(status.decision.found_row, status.problem)
+        self.assertNotIn("読めませんでした", status.problem)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -316,12 +316,24 @@ class MonthUnverifiedTests(_Case):
 
         self.shared = self.tmp / "届かない" / "日報データ.sqlite3"
         self.path = PropertyMock(side_effect=lambda: self.shared)
+        # 届かない共有: Windows では一覧も断られる(WinError 53)。フォルダを作ると届く
+        # (フォルダが本当に無いだけなら、上から確かめて「無い」になる ── `file_state`)
+        import os
+        real_listdir = os.listdir
+        unreachable = os.path.normcase(os.path.abspath(self.tmp / "届かない"))
+
+        def listdir(name=".", *args, **kwargs):
+            if (os.path.normcase(os.path.abspath(os.fspath(name))) == unreachable
+                    and not os.path.isdir(unreachable)):
+                raise OSError(53, "ネットワーク パスが見つかりません", os.fspath(name))
+            return real_listdir(name, *args, **kwargs)
         for patcher in (
                 patch.object(type(config.SETTINGS), "access_db_path", new_callable=lambda: self.path),
                 # 置き場所は設定で決めてある(決めていない端末は今までどおり ── 下の試験)
                 patch.object(month_rollover, "_shared_place_set", create=True, return_value=True),
                 patch.object(work_context, "terminal_line_decided", return_value=True),
-                patch.object(work_context, "stored_terminal_line", return_value="L-1")):
+                patch.object(work_context, "stored_terminal_line", return_value="L-1"),
+                patch("os.listdir", listdir)):
             patcher.start()
             self.addCleanup(patcher.stop)
 

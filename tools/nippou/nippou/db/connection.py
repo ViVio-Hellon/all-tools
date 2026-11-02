@@ -95,14 +95,14 @@ def _unreadable(path, exc: object = "") -> SharedUnreadable:
 def file_state(path, *, base=None) -> bool:
     """ファイルが**ある**(True)か、**確かめたうえで無い**(False)か。確かめられなければ `SharedUnreadable`。
 
-    「無い」と言うのは、置き場所(親のフォルダ)に届いて一覧が取れ、そこに無いときだけ。
-    親のフォルダが無い・届かないのは「読めない」です(Windows では、届かない共有も
+    「無い」と言うのは、いちばん近い在るフォルダに届いて一覧が取れ、次の名前がそこに無いときだけ
+    (親のフォルダが無ければ上へたどる)。いちばん上(共有のサーバ・ドライブ)まで届かない・
+    一覧が取れない・一覧には出ているのに開けない、は「読めない」です(Windows では、届かない共有も
     `FileNotFoundError`(WinError 53 など)になるので、`exists()` / `is_file()` が False でも
     「無い」とは言えません)。
 
-    `base` を渡すと、`base` の下のフォルダが無いのも「確かめたうえで無い」に数えます
-    (`base` そのものは届いて一覧が取れること。控えの LocalBackup とライン名の
-    フォルダなど、こちらが作るフォルダのため)。
+    `base` は前の版との互換のために残しています(いまは使いません。上へたどるので、
+    `base` の下のフォルダが無いのも「確かめたうえで無い」に数えます)。
     """
     target = Path(path)
     try:
@@ -112,16 +112,22 @@ def file_state(path, *, base=None) -> bool:
         pass
     except OSError as exc:
         raise _unreadable(target, exc) from exc
-    stop = Path(base) if base is not None else None
     child, folder = target, target.parent
     while True:
         try:
             names = os.listdir(folder)
         except FileNotFoundError as exc:
-            if stop is not None and folder != stop and stop in folder.parents:
-                child, folder = folder, folder.parent
-                continue
-            raise _unreadable(folder, exc) from exc
+            # **親のフォルダも無ければ、さらに上をたどる。** いちばん近い在るフォルダを一覧でき、
+            # 次の名前がそこに無ければ「確かめたうえで無い」(この端末にまだ作っていない既定の
+            # フォルダなど)。いちばん上(共有のサーバ・ドライブ)まで届かなければ「読めない」
+            # (Windows は届かない共有も FileNotFoundError を返す)。1.5.81 では親が無いのを
+            # すぐ「読めない」にしていたので、作っていない既定のフォルダがある端末で、
+            # アクセス権限が決まらない・停止理由の一覧が空になる、が起きていた
+            up = folder.parent
+            if up == folder:
+                raise _unreadable(folder, exc) from exc
+            child, folder = folder, up
+            continue
         except OSError as exc:
             raise _unreadable(folder, exc) from exc
         if child.name.casefold() in {n.casefold() for n in names}:

@@ -466,6 +466,8 @@ def ensure_database(path: Path) -> str:
     # できる(日報管理ツールへ移したときに足した関門)
     if _state(path):
         return _upgrade(path)
+    if not path.parent.is_dir():
+        raise DbUnavailable(f"VC計算マスタの置き場所(フォルダ)がありません: {path.parent}")
     # 一時ファイルは**要求(スレッド)ごとに別の名前。** 画面を開くと計算と設定の
     # 要求が同時に来る。同じ名前だと、同じ一時ファイルへ初期値を2度入れて
     # 片方が「UNIQUE constraint failed」で落ちていた(v3.96.0)

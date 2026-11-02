@@ -2038,9 +2038,16 @@ export function start() {
       if (code) code.textContent = kid.path;
       const badge = li.querySelector(".badge + .badge") || null;
       if (!badge) return;
-      // 吹き出しは「いま見つかりません」のときだけ(見つかって「読めます」になったら外す)
+      // 吹き出しは「いま見つかりません」「いま確かめられません」のときだけ(見つかって「読めます」になったら外す)
       badge.removeAttribute("title");
-      if (kid.is_write_target && !kid.exists && kid.writable) {
+      if (kid.unreadable) {
+        // **確かめられなかった。「このファイルがありません」とは出さない**(届かない・権限・
+        // 一覧には出ているのに開けない)。理由は吹き出しに。数秒後に確かめ直す
+        badge.className = "badge badge--alert";
+        badge.dataset.recheck = "";
+        badge.textContent = `いま確かめられません(${kid.checked_at})`;
+        badge.title = `${kid.error}。数秒後に確かめ直します`;
+      } else if (kid.is_write_target && !kid.exists && kid.writable) {
         badge.className = "badge";
         badge.textContent = "初回の保存で作られます";
       } else if (!kid.exists && kid.recheck) {
@@ -2066,6 +2073,7 @@ export function start() {
     **一瞬の「見つかりません」を確かめ直す**(v4.31.1)。フォルダは見えるのにファイルだけ
     無いときは、共有のファイルを作り直している最中のことがある(仕掛の SIKALOT などは
     毎時00分)。数秒おいて2回まで取り直し、見つかればその場で「読めます」に描き直す。
+    **確かめられなかった(いま確かめられません)ときも同じ**(起動して最初に共有へ触れたときなど)。
   */
   async function recheckFiles(left = 2) {
     if (!document.querySelector(".path__file [data-recheck]")) return;

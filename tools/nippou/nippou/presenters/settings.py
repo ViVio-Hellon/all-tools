@@ -545,6 +545,11 @@ class FileView:
     # 決まった時刻に作り直す仕組み(仕掛の SIKALOT などは毎時00分)だと、入れ替えの
     # あいだの一瞬だけ「無い」に見える ── 画面は数秒後に確かめ直す(`settings.js`)
     recheck: bool = False
+    # **あるか無いかを確かめられなかった**(届かない・権限・一覧には出ているのに開けない)。
+    # 「このファイルがありません」とは出さない ── 「いま確かめられません(時刻)」と出し、理由は
+    # `error`(吹き出し)。画面は数秒後に確かめ直す(`recheck`)。起動して最初に共有へ触れたとき
+    # などに一瞬こうなる(v4.44.17 の現場の声「起動後毎回第1パスが『このファイルがありません』」)
+    unreadable: bool = False
     # いつ確かめたか(時:分:秒)。一瞬の「無い」だったと分かるように出す
     checked_at: str = ""
 
@@ -826,6 +831,11 @@ def _file_view(key: str, label: str, getter) -> FileView:
         if view.exists:
             view.size = path.stat().st_size
     except (OSError, SharedUnreadable) as exc:
+        # **確かめられなかった。** 「無い」とは言わない(前は exists=False のまま返し、画面が
+        # 「このファイルがありません」と出していた)。数秒後に確かめ直す
+        view.exists = False
+        view.unreadable = True
+        view.recheck = True
         view.error = str(exc)
         return view
     if not view.exists and not view.is_write_target:
@@ -1662,6 +1672,11 @@ def _problem_items(paths: list[PathView], files: list[FileView],
             out.append((view.tab,
                         f"{view.label}: {view.missing_text}({view.resolved})"))
     for view in files:
+        if view.unreadable:
+            # 確かめられなかった。**「ありません」とは数えない**(届けば読める)
+            out.append((FILE_TAB.get(view.key, ""),
+                        f"{view.label} をいま確かめられません: {view.error}"))
+            continue
         if view.is_write_target and not view.exists and view.writable:
             # 初回の反映で作られる。**無いことは困りごとではない**
             continue

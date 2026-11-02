@@ -67,7 +67,10 @@
       <span class="path__file-name">{{ f.label }}</span>
       <code class="path__file-path">{{ f.path }}</code>
       <span class="badge">{{ "sqlite3" if f.kind == "sqlite3" else "Access" }}</span>
-      {% if f.is_write_target and not f.exists and f.writable %}
+      {% if f.unreadable %}<span class="badge badge--alert" data-recheck
+        title="{{ f.error }}。数秒後に確かめ直します"
+        >いま確かめられません({{ f.checked_at }})</span>
+      {% elif f.is_write_target and not f.exists and f.writable %}
         <span class="badge">初回の保存で作られます</span>
       {% elif not f.exists and f.recheck %}<span class="badge badge--alert" data-recheck
         title="フォルダはあるのに、ファイルだけ見えませんでした。共有で作り直している最中(仕掛は毎時00分など)なら一瞬こう見えます。数秒後に確かめ直します"
