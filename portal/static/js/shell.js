@@ -721,18 +721,49 @@ const closeWaits = new Map();
 let closeSeq = 0;
 const ACK_MS = 1200;            // 「受けた」を待つ(受けない画面はここで見切る)
 const ACKED_MS = 10 * 60000;    // 受けたあと「済んだ」を待つ上限。来なければ閉じない
+const ASKING_MS = 700;          // 受けたあとこれだけ済まなければ、その画面が本人に訊いているとみなす
+
+/*
+  **訊いている画面のタブを前に出す**。
+
+      日報複合ツール VER1.5.81: .exe 起動にて上にある「終了」効かない。×も効かない
+
+  ツールの画面は、閉じる前の確かめ(看板の「まだ送っていないコメントがあります」など)を
+  **画面の中に**出す。ところが出していないタブの枠は見えず押せない(`.panel` は
+  visibility:hidden・inert)。日報のタブで × を押すと、看板が裏のタブで訊いたまま
+  答えを待ち、何も出ないまま 10 分止まっていた(そのあいだは × も「終了」も受けない)。
+  受けたのに少し待っても済まない画面は、本人に訊いている。そのタブを出す(2つ以上なら1つずつ)。
+  訊いているあいだにもう一度 × ・「終了」を押されたら、答えずに終えるかを訊く(`closeAgain`)。
+*/
+const askingFrames = new Map();     // key → { id, finish }(訊いている画面。古い順)
+
+function showAsking() {
+  const first = askingFrames.values().next().value;
+  if (first && current !== first.id) select(first.id);
+}
 
 function askFrameToSave(id, win) {
   const seq = ++closeSeq;
   const key = `${id}:${seq}`;
   return new Promise((resolve) => {
     let acked = false;
-    const finish = (ok) => { closeWaits.delete(key); clearTimeout(timer); resolve(ok); };
+    let asking = null;
+    const finish = (ok) => {
+      closeWaits.delete(key);
+      clearTimeout(timer);
+      clearTimeout(asking);
+      if (askingFrames.delete(key)) showAsking();
+      resolve(ok);
+    };
     let timer = setTimeout(() => finish(true), ACK_MS);
     closeWaits.set(key, (type, ok) => {
       if (type === "alltools:before-close-ack" && !acked) {
         acked = true;
         clearTimeout(timer);
+        asking = setTimeout(() => {
+          askingFrames.set(key, { id, finish });
+          showAsking();
+        }, ASKING_MS);
         timer = setTimeout(() => {
           report("error", `${TOOLS.get(id)?.title || id} が「受けた」のあと「済んだ」を返しません。閉じずに残します`);
           toast(`${TOOLS.get(id)?.title || id} の返事が無いので、閉じるのをやめました`, "ng", 9000);
@@ -791,6 +822,24 @@ window.__shell = {
     let ok = true;
     try { ok = await prepareFrames(); } catch (err) { ok = true; }
     invoke("shell_prepared", { ok }).catch(() => {});
+  },
+  /**
+   * 終わり方の途中で、もう一度 × ・「終了」が押された(外枠が呼ぶ)。
+   *
+   * 閉じる前の確認を出している画面があれば、そのタブを出して、**答えずに終えるか**を訊く。
+   * 画面が固まって答えないときも、本人が窓を閉じられるように(待つ上限は 10 分ある)。
+   */
+  closeAgain() {
+    const waiting = [...askingFrames.values()];
+    if (!waiting.length) return;
+    select(waiting[0].id);
+    const names = [...new Set(waiting.map((w) => TOOLS.get(w.id)?.title || w.id))].join("・");
+    if (!confirm(`${names}の画面に、閉じる前の確認が出ています。\n\n`
+        + "その確認に答えずに、日報複合ツールを終了しますか?\n"
+        + "(答えずに終えると、その画面でまだ保存していない入力は消えることがあります。"
+        + "「キャンセル」で確認に戻ります)")) return;
+    report("info", `閉じる前の確認に答えずに終了します: ${names}`);
+    for (const w of waiting) w.finish(true);
   },
   /** そのツールの Python を立て直した → そのタブだけ読み直す(外枠が頼む) */
   reloadTool(id) { reloadTool(id); },

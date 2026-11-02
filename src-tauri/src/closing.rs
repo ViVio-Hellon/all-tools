@@ -32,7 +32,13 @@ const ASK_LIMIT: Duration = Duration::from_secs(10);
 
 pub fn request_close(shell: Arc<Shell>, app: AppHandle, quitting: Option<String>) {
     if shell.closing.swap(true, Ordering::SeqCst) {
-        return; // もう終わり方の途中(確認は1つだけ)
+        // もう終わり方の途中(確認は1つだけ)。本人がもう一度 × ・「終了」を押したなら、
+        // 黙って捨てない: 閉じる前の確認を出している画面があれば、そのタブを出して
+        // 答えずに終えるかを訊いてもらう(画面が固まって答えないときも閉じられるように)
+        if quitting.is_none() {
+            shell.tell_shell(CLOSE_AGAIN);
+        }
+        return;
     }
     thread::spawn(move || {
         if !run(&shell, &app, quitting.as_deref()) {
@@ -40,6 +46,9 @@ pub fn request_close(shell: Arc<Shell>, app: AppHandle, quitting: Option<String>
         }
     });
 }
+
+/// 終わり方の途中で、もう一度 × ・「終了」が押されたときに大きなタブの画面へ頼むこと
+const CLOSE_AGAIN: &str = "window.__shell && window.__shell.closeAgain ? window.__shell.closeAgain() : null";
 
 /// 答えが無かった・読めなかったときの理由。**「終わってよい」とはみなさない**
 /// (処理の途中で返事ができないのかもしれない。黙って止めると、途中の処理が消える)
@@ -71,20 +80,29 @@ fn ask_all(shell: &Arc<Shell>, quitting: Option<&str>) -> Vec<(String, String)> 
     asks.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
 }
 
-/// 途中の処理があるツールを並べて、まとめて1つ訊く。終えてよければ true
-fn confirm_busy(shell: &Arc<Shell>, app: &AppHandle, head: &str, busy: &[(String, String)]) -> bool {
+/// まとめた確認の「それでも終える」ボタン。**どんな答え(処理中・読めない・返事が無い)でも、
+/// 本人はこれで終えられる**(窓を閉じられない状態を作らない)
+const QUIT_ANYWAY: &str = "終了する";
+
+/// まとめた確認の文。ツールの名前と理由を並べ、それでも終えるかを訊く
+fn busy_text(head: &str, busy: &[(String, String)]) -> String {
     let mut text = head.to_string();
     text.push_str("次のツールで処理が残っています:\n\n");
     for (title, reason) in busy {
         text.push_str(&format!("・{title}: {}\n", reason.replace('\n', " ")));
     }
     text.push_str("\nそれでも日報複合ツールを終了しますか?\n(送れなかった操作は手元に残り、次に開いたときに送ります)");
+    text
+}
+
+/// 途中の処理があるツールを並べて、まとめて1つ訊く。終えてよければ true
+fn confirm_busy(shell: &Arc<Shell>, app: &AppHandle, head: &str, busy: &[(String, String)]) -> bool {
     let mut dialog = app
         .dialog()
-        .message(text)
+        .message(busy_text(head, busy))
         .title(&shell.catalog.name)
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()));
+        .buttons(MessageDialogButtons::OkCancelCustom(QUIT_ANYWAY.into(), "やめる".into()));
     // 窓に付けて出す(確認を読んでいるあいだに、裏の画面で打てないように)
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.parent(&window);
@@ -287,6 +305,34 @@ mod tests {
         assert!(bridge.ended_by_quit(), "読み直すと「終了しました / もう一度開く」が出る");
         assert!(bridge.call("GET", "/", "", vec![], b"").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn どんな答えでも理由を出してそれでも終えるを選べる() {
+        // 未送信あり(409)・読めない(409 の理由・500)・答えない(待ちきれない・つながらない)・おかしな答え
+        let answers: Vec<(&str, Result<(u16, serde_json::Value), String>, &str)> = vec![
+            ("カレンダー", Ok((409, json!({"running": ["送信待ち 3 件"]}))), "送信待ち 3 件"),
+            ("看板", Ok((409, json!({"busy": "共有DBを読めません"}))), "共有DBを読めません"),
+            ("日報", Ok((500, json!({}))), NO_ANSWER),
+            ("点検表", Err("timeout".into()), NO_ANSWER),
+            ("入口", Ok((404, json!(null))), NO_ANSWER),
+        ];
+        for (title, reply, reason) in answers {
+            let got = reason_of(&reply);
+            assert_eq!(got.as_deref(), Some(reason), "{title}: 黙って終える・黙って止まる");
+            let text = busy_text("", &[(title.to_string(), got.unwrap())]);
+            assert!(text.contains(&format!("・{title}: {reason}")), "{text}");
+            assert!(text.contains("それでも日報複合ツールを終了しますか?"), "{text}");
+        }
+        assert_eq!(QUIT_ANYWAY, "終了する");
+    }
+
+    #[test]
+    fn 終わり方の途中でもう一度押されたら画面に訊いてもらう() {
+        // 黙って捨てると、裏のタブで確認を出したままの画面があっても「× が効かない」に見える
+        assert!(CLOSE_AGAIN.contains("window.__shell.closeAgain()"));
+        let js = include_str!("../../portal/static/js/shell.js");
+        assert!(js.contains("closeAgain() {"), "大きなタブの画面に受け口が無い");
     }
 
     #[test]

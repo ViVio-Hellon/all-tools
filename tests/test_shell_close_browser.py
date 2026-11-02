@@ -199,6 +199,105 @@ class DesktopPrepareTests(DesktopShellBrowserCase):
         self.assertEqual(order[-1], ("invoke", {"ok": False}), "ツールが閉じないを選んだ")
 
 
+#: 「受けた」をすぐ返し、画面の中で本人に訊く(看板の「まだ送っていないコメントがあります」と同じ)。
+#: 答えるのは試験が `window.__answer(ok)` を呼んだとき
+ASKING = """
+window.__alltoolsHandlesClose = true;
+window.__asked = 0;
+window.addEventListener("message", (e) => {
+  if (!e.data || e.data.type !== "alltools:before-close") return;
+  const seq = e.data.seq, to = e.origin;
+  parent.postMessage({ type: "alltools:before-close-ack", seq }, to);
+  window.__asked += 1;
+  window.__answer = (ok) => parent.postMessage({ type: "alltools:before-close-done", seq, ok }, to);
+});
+"""
+
+
+class DesktopAskingTabTests(DesktopShellBrowserCase):
+    """デスクトップ版: 閉じる前の確認を**裏のタブで**出している画面があっても、本人が答えられる・閉じられる。
+
+        日報複合ツール VER1.5.81: .exe 起動にて上にある「終了」効かない。×も効かない
+
+    看板は書きかけのコメントが残っていると、閉じる前に画面の中で「閉じますか?」と訊く。日報のタブで
+    × を押すと、看板の枠は見えず押せない(出していないタブ)ので、何も出ないまま 10 分待っていた。
+    """
+
+    def shown(self, page) -> str:
+        """いま出しているタブ(選ばれていて、枠が見えて押せる)。"""
+        return page.evaluate("""() => {
+          const tab = document.querySelector('.bigtab[aria-selected=true]')?.dataset.tab || '';
+          const panel = document.querySelector(`.panel[data-panel="${tab}"]`);
+          return panel && panel.classList.contains('is-shown') && !panel.inert ? tab : '';
+        }""")
+
+    def answers(self) -> list:
+        return [a for a in self.invokes("shell_prepared") if "waiting" not in (a or {})]
+
+    def test_裏のタブで確認を出した画面は前に出し_答えたら外枠へ返す(self) -> None:
+        self.tool_script["kanban"] = ASKING
+        page = self.open_shell(first="nippou", wait_tools=("kanban",))
+        tool = self.tool_frame(page, "kanban")
+        self.assertEqual(self.shown(page), "nippou")
+        page.evaluate("void window.__shell.prepareClose()")
+        self.wait_until(page, lambda: self.shown(page) == "kanban", "看板のタブを前に出す", timeout=5)
+        self.assertEqual(self.answers(), [], "答える前に返した")
+        tool.evaluate("window.__answer(true)")
+        self.wait_until(page, lambda: self.answers(), "外枠への答え")
+        self.assertEqual(self.answers(), [{"ok": True}])
+
+    def test_訊いている画面が2つなら1つずつ前に出す(self) -> None:
+        self.tool_script["kanban"] = ASKING
+        self.tool_script["calendar"] = ASKING
+        page = self.open_shell(first="nippou", wait_tools=("kanban", "calendar"))
+        kanban, calendar = self.tool_frame(page, "kanban"), self.tool_frame(page, "calendar")
+        page.evaluate("void window.__shell.prepareClose()")
+        self.wait_until(page, lambda: self.shown(page) in ("kanban", "calendar"), "訊いているタブ", timeout=5)
+        first = self.shown(page)
+        (kanban if first == "kanban" else calendar).evaluate("window.__answer(true)")
+        other = "calendar" if first == "kanban" else "kanban"
+        self.wait_until(page, lambda: self.shown(page) == other, "残りの訊いているタブ", timeout=5)
+        self.assertEqual(self.answers(), [])
+        (calendar if other == "calendar" else kanban).evaluate("window.__answer(false)")
+        self.wait_until(page, lambda: self.answers(), "外枠への答え")
+        self.assertEqual(self.answers(), [{"ok": False}])
+
+    def test_すぐ済む画面ではタブを替えない(self) -> None:
+        self.tool_script["kanban"] = answering("kanban")
+        page = self.open_shell(first="nippou", wait_tools=("kanban",))
+        self.tool_frame(page, "kanban").evaluate("window.__doneAfter = 100")
+        page.evaluate("void window.__shell.prepareClose()")
+        self.wait_until(page, lambda: self.answers(), "外枠への答え")
+        page.wait_for_timeout(900)
+        self.assertEqual(self.shown(page), "nippou")
+
+    def test_訊いているあいだにもう一度押されたら_答えずに終えるかを訊く(self) -> None:
+        """画面が固まって答えないときも、本人は窓を閉じられる(外枠が `closeAgain` を呼ぶ)。"""
+        self.tool_script["kanban"] = ASKING
+        page = self.open_shell(first="nippou", wait_tools=("kanban",))
+        tool = self.tool_frame(page, "kanban")
+        with self.subTest("何も訊いていなければ何もしない"):
+            page.evaluate("window.__shell.closeAgain()")
+            self.assertEqual(self.dialogs, [])
+        page.evaluate("void window.__shell.prepareClose()")
+        self.wait_until(page, lambda: self.shown(page) == "kanban", "看板のタブを前に出す", timeout=5)
+        page.click("#tab-nippou")                         # 本人が別のタブへ移った
+        with self.subTest("キャンセルなら確認に戻る"):
+            self.answers_for_dialogs = [False]
+            page.evaluate("window.__shell.closeAgain()")
+            self.assertEqual(len(self.dialogs), 1)
+            self.assertIn("看板", self.dialogs[0])
+            self.assertIn("その確認に答えずに、日報複合ツールを終了しますか?", self.dialogs[0])
+            self.assertEqual(self.shown(page), "kanban", "確認を出している画面へ戻す")
+            page.wait_for_timeout(300)
+            self.assertEqual(self.answers(), [])
+        with self.subTest("答えずに終える"):
+            page.evaluate("window.__shell.closeAgain()")
+            self.wait_until(page, lambda: self.answers(), "外枠への答え")
+            self.assertEqual(self.answers(), [{"ok": True}])
+        self.assertEqual(tool.evaluate("window.__asked"), 1)
+
+
 class ReloadTests(DesktopShellBrowserCase):
     """F5 / Ctrl+R は、打ちかけを置いてもらってから、その画面だけ読み直す。"""
 
