@@ -4,6 +4,8 @@
 - 各ツールは、そのツールの make_dist の決まりのまま `tools\\<ツール>\\` へ
 - デスクトップ版の exe は、あれば 日報複合ツール.exe の名前で直下に入れる
 - 直下に何かを足したら、配るかどうかを決めさせる(一覧と食い違えば落ちる)
+- 版は親のフォルダーに入れ、作る物は版なし(既定は一式の隣の 配布\\VER<版>\\日報複合ツール\\。
+  zip の名前には版を入れるが、中の最上位は 日報複合ツール\\。ランチャーの「道を変えない」決まり)
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -34,7 +37,11 @@ class BuildTests(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(prefix="alltools_dist_"))
         exe = cls.tmp / "AllTools.exe"
         exe.write_bytes(b"MZ-fake")
-        cls.out, cls.lines = make_dist.build(cls.tmp / "dist", exe=exe)
+        # 既定と同じ形(配布\VER<版>\<表示名>)の所に、zip も作る
+        cls.version = make_dist.version()
+        cls.name = make_dist.display_name()
+        cls.out, cls.lines = make_dist.build(cls.tmp / "配布" / f"VER{cls.version}" / cls.name,
+                                             exe=exe, make_zip=True)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -62,6 +69,24 @@ class BuildTests(unittest.TestCase):
         self.assertIn("[看板] VER", memo)
         self.assertIn("\r\n", (self.out / "配布メモ.txt").read_bytes().decode("utf-8-sig"))
 
+    def test_zipの名前には版が入り_中の最上位は版なしの名前(self) -> None:
+        archive = self.out.parent / f"{self.name}_VER{self.version}.zip"
+        self.assertTrue(archive.is_file(), list(self.out.parent.iterdir()))
+        with zipfile.ZipFile(archive) as zf:
+            names = zf.namelist()
+        tops = {n.split("/", 1)[0] for n in names}
+        self.assertEqual(tops, {self.name}, "zip の中の最上位は版なしの 日報複合ツール だけ")
+        self.assertNotIn("VER", self.name)
+        self.assertIn(f"{self.name}/配布メモ.txt", names)
+        self.assertIn(f"{self.name}/{make_dist.EXE_NAME}", names)
+        self.assertIn(f"{self.name}/tools/kanban/start_app.py", names)
+        self.assertTrue(any("zip も作りました" in line for line in self.lines))
+
+    def test_配布メモに決まった場所へ上書きすると書く(self) -> None:
+        memo = (self.out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(f"共有の決まった場所の {self.name}\\ に中身ごと上書きする", memo)
+        self.assertIn("フォルダー名を変えない・版の付いた名前で置かない", memo)
+
     def test_配ってはいけないものが入らない(self) -> None:
         for pattern in ("tests", "src-tauri", "__pycache__", "*.pyc", ".git*", "*.sqlite3"):
             with self.subTest(pattern=pattern):
@@ -71,6 +96,24 @@ class BuildTests(unittest.TestCase):
 
 
 class RuleTests(unittest.TestCase):
+    def test_既定の作る場所は一式の隣の配布_VER版_表示名(self) -> None:
+        out = make_dist.default_out()
+        self.assertEqual(out, ROOT.parent / "配布" / f"VER{make_dist.version()}" / make_dist.display_name())
+        self.assertEqual(out.name, make_dist.display_name(), "作る物のフォルダー名は版なし")
+        self.assertNotIn("VER", out.name)
+
+    def test_outを指定してもzipの最上位は版なしの表示名(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "今回"
+            (out / "sub").mkdir(parents=True)
+            (out / "sub" / "a.txt").write_text("x", encoding="utf-8")
+            archive = make_dist.make_zip_file(out, "日報複合ツール", "9.9.9")
+            self.assertEqual(archive, Path(tmp) / "日報複合ツール_VER9.9.9.zip")
+            with zipfile.ZipFile(archive) as zf:
+                names = zf.namelist()
+            self.assertIn("日報複合ツール/sub/a.txt", names)
+            self.assertEqual({n.split("/", 1)[0] for n in names}, {"日報複合ツール"})
+
     def test_exeが無ければブラウザ版で動くと書く(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out, lines = make_dist.build(Path(tmp) / "dist", exe=Path(tmp) / "無い.exe")

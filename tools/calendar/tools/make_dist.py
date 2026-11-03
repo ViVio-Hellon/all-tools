@@ -13,10 +13,18 @@ r"""配布用フォルダを作る
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
 (ツールの直下の `配布設定\`。配った先が起動時に読み込みます)。
 
-    python tools\make_dist.py                     # ツールの隣に「ライン管理カレンダー_VERx.y.z」
+    python tools\make_dist.py                     # ツールの隣に「配布\VERx.y.z\ライン管理カレンダー\」
     python tools\make_dist.py --out D:\配布\今回   # 置き場所を指定
-    python tools\make_dist.py --zip               # zip も作る
+    python tools\make_dist.py --zip               # zip も作る(「配布\VERx.y.z\ライン管理カレンダー_VERx.y.z.zip」)
     python tools\make_dist.py --no-settings       # 配布設定を入れない
+
+【置き場所 ── 版は親のフォルダーに入れ、作る物は版なし】
+業務ツール統合ランチャーの「道を変えない」決まり(起動ファイルの名前と置き場所を変えない。
+フォルダー名に版を付けない)に合わせて、版は親のフォルダー(配布\VERx.y.z\)に入れ、
+作るフォルダーの名前は ライン管理カレンダー\ だけにします。zip のファイル名
+(ライン管理カレンダー_VERx.y.z.zip)には版が入りますが、zip の中の最上位は ライン管理カレンダー\ です。
+配った先では、決まった場所の ライン管理カレンダー\ に中身ごと上書きします
+(フォルダー名を変えない・版の付いた名前で置かない)。
 
 【作ったあとに確かめること】
 できたフォルダの `配布メモ.txt` に、版・入れた配布設定・配った先ですることを
@@ -30,6 +38,7 @@ import fnmatch
 import json
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +94,11 @@ def _display_name() -> str:
             encoding="utf-8"))["display_name"]
     except (OSError, ValueError, KeyError):
         return "ライン管理カレンダー"
+
+
+def default_out() -> Path:
+    """既定の作る場所: ツールの隣の ``配布\\VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
+    return ROOT.parent / "配布" / f"VER{_version()}" / _display_name()
 
 
 def _excluded(name: str) -> bool:
@@ -179,10 +193,24 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
     (out / "配布メモ.txt").write_text(_memo(lines), encoding="utf-8-sig")
 
     if make_zip:
-        archive = shutil.make_archive(str(out), "zip", root_dir=out.parent,
-                                      base_dir=out.name)
-        lines.append(f"zip も作りました: {archive}")
+        archive = make_zip_file(out, _display_name(), _version())
+        lines.append(f"zip も作りました: {archive}(中の最上位は {_display_name()}\\)")
     return out, lines
+
+
+def make_zip_file(out: Path, name: str, ver: str) -> Path:
+    """``out`` の中身を、最上位が版なしの ``name\\`` の zip にする。
+
+    zip のファイル名には版を入れる(``<out の親>\\<name>_VER<ver>.zip``)が、展開してできる
+    フォルダーは版なしの ``name``(業務ツール統合ランチャーの「道を変えない」決まり)。
+    """
+    archive = out.parent / f"{name}_VER{ver}.zip"
+    archive.unlink(missing_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(out, f"{name}/")
+        for path in sorted(out.rglob("*")):
+            zf.write(path, f"{name}/{path.relative_to(out).as_posix()}")
+    return archive
 
 
 def _memo(lines: list[str]) -> str:
@@ -193,7 +221,9 @@ def _memo(lines: list[str]) -> str:
         *lines,
         "",
         "配った先ですること",
-        "  1. このフォルダを好きな場所に置く(以前の版のフォルダに上書きするなら、",
+        f"  1. 決まった場所の {_display_name()}\\ に中身ごと上書きする",
+        "     (フォルダー名を変えない・版の付いた名前で置かない。業務ツール統合ランチャーは",
+        "     決まった場所のフォルダーを起動するため。上書きする前に、",
         "     以前の 配布設定 フォルダを残すかどうかを先に決める)",
         "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる",
         "     (入っていなければ: python -m pip install -r requirements.txt)",
@@ -209,7 +239,7 @@ def _memo(lines: list[str]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「表示名_VER版」)")
+    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「配布\\VER版\\表示名」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(ツール直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",
@@ -217,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--zip", action="store_true", help="zip も作る")
     args = parser.parse_args(argv)
 
-    out = Path(args.out) if args.out else ROOT.parent / f"{_display_name()}_VER{_version()}"
+    out = Path(args.out) if args.out else default_out()
     try:
         _out, lines = build(out, with_settings=not args.no_settings,
                             force=args.force, make_zip=args.zip)

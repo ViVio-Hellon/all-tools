@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +56,28 @@ class MakeDistTests(unittest.TestCase):
         self.assertNotIn("pbkdf2$1$x$y", memo)
         self.assertIn("この端末のライン", memo)
         self.assertFalse((out2 / "配布設定").exists())
+
+    def test_既定の作る場所はツールの隣の配布_VER版_表示名(self) -> None:
+        """版は親のフォルダーに入れ、作る物のフォルダー名は版なし(ランチャーの「道を変えない」決まり)。"""
+        out = make_dist.default_out()
+        self.assertEqual(out, make_dist.ROOT.parent / "配布" / f"VER{make_dist._version()}" / make_dist._tool_name())
+        self.assertNotIn("VER", out.name)
+
+    def test_zipの名前には版が入り_中の最上位は版なしの名前(self) -> None:
+        name = make_dist._tool_name()
+        out, lines = make_dist.build(self.tmp / "配布" / f"VER{make_dist._version()}" / name,
+                                  with_settings=False, make_zip=True)
+        archive = out.parent / f"{name}_VER{make_dist._version()}.zip"
+        self.assertTrue(archive.is_file(), list(out.parent.iterdir()))
+        with zipfile.ZipFile(archive) as zf:
+            names = zf.namelist()
+        self.assertEqual({n.split("/", 1)[0] for n in names}, {name})
+        self.assertIn(f"{name}/配布メモ.txt", names)
+        self.assertIn(f"{name}/start_app.py", names)
+        self.assertTrue(any("zip も作りました" in line for line in lines), lines)
+        memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(f"決まった場所の {name}\\ に中身ごと上書きする", memo)
+        self.assertIn("フォルダー名を変えない・版の付いた名前で置かない", memo)
 
     def test_ツールのフォルダの中には作らない(self) -> None:
         with self.assertRaises(SystemExit):

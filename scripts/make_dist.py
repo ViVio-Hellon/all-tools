@@ -6,15 +6,27 @@ r"""日報複合ツール一式の配布用フォルダを作る
 (tests\・__pycache__・.git・src-tauri\target\(数 GB)・端末ごとの設定)。
 このスクリプトは**配るものだけ**を新しいフォルダへ写します。
 
-    python scripts\make_dist.py                     # 一式の隣に「日報複合ツール_VERx.y.z」
+    python scripts\make_dist.py                     # 一式の隣に「配布\VERx.y.z\日報複合ツール\」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
-    python scripts\make_dist.py --zip               # zip も作る
+    python scripts\make_dist.py --zip               # zip も作る(「配布\VERx.y.z\日報複合ツール_VERx.y.z.zip」)
     python scripts\make_dist.py --no-settings       # 配布設定(大設定・各ツール)を入れない
     python scripts\make_dist.py --exe D:\AllTools.exe  # 入れる exe を指定
 
+【置き場所 ── 版は親のフォルダーに入れ、作る物は版なし】
+業務ツール統合ランチャーは「道を変えない」(起動ファイルの名前と置き場所を変えない。
+フォルダー名に版を付けない)決まりで、決まった場所の 日報複合ツール\ を起動します。
+そこで版は親のフォルダー(配布\VERx.y.z\)に入れ、作るフォルダーの名前は表示名だけにします。
+zip のファイル名には版が入りますが、zip の中の最上位のフォルダーは版なしの 日報複合ツール\ です。
+配った先では、共有の決まった場所の 日報複合ツール\ に中身ごと上書きします
+(フォルダー名を変えない・版の付いた名前で置かない)。
+
+    <一式の隣>\配布\VERx.y.z\
+      日報複合ツール\               ← 作る物(版なし)
+      日報複合ツール_VERx.y.z.zip    ← --zip のとき(中の最上位は 日報複合ツール\)
+
 【中身】
 
-    日報複合ツール_VERx.y.z\
+    日報複合ツール\
       日報複合ツール.exe          デスクトップ版(GitHub Actions の成果物 AllTools-windows の
                               AllTools.exe。一式の直下に置いてあれば、この名前で入れる)
       Start.vbs / start.bat / stop.bat   ブラウザ版(予備)
@@ -44,6 +56,7 @@ import importlib.util
 import json
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -113,6 +126,9 @@ GENERIC_INCLUDE: dict[str, tuple[str, ...]] = {
 
 #: 配布設定のフォルダ名(大設定も各ツールも同じ名前。大設定のものは一式の直下)
 SETTINGS = "配布設定"
+
+#: 既定で作る場所の親(一式の隣)。この下の ``VER<版>\`` に版なしの名前で作る
+DIST_DIR = "配布"
 
 
 def _catalog(root: Path = ROOT) -> dict:
@@ -329,9 +345,24 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
                                       encoding="utf-8-sig", newline="")
 
     if make_zip:
-        archive = shutil.make_archive(str(out), "zip", root_dir=out.parent, base_dir=out.name)
-        lines.append(f"zip も作りました: {archive}")
+        archive = make_zip_file(out, display_name(root), version(root))
+        lines.append(f"zip も作りました: {archive}(中の最上位は {display_name(root)}\\)")
     return out, lines
+
+
+def make_zip_file(out: Path, name: str, ver: str) -> Path:
+    """``out`` の中身を、最上位が版なしの ``name\\`` の zip にする。
+
+    zip のファイル名には版を入れる(``<out の親>\\<name>_VER<ver>.zip``)が、展開してできる
+    フォルダーは版なしの ``name``(ランチャーの「道を変えない」決まり)。
+    """
+    archive = out.parent / f"{name}_VER{ver}.zip"
+    archive.unlink(missing_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(out, f"{name}/")
+        for path in sorted(out.rglob("*")):
+            zf.write(path, f"{name}/{path.relative_to(out).as_posix()}")
+    return archive
 
 
 def _memo(lines: list[str], root: Path) -> str:
@@ -342,7 +373,9 @@ def _memo(lines: list[str], root: Path) -> str:
         *lines,
         "",
         "配った先ですること",
-        "  1. このフォルダを好きな場所に置く(以前の版のフォルダに上書きするなら、",
+        f"  1. 共有の決まった場所の {display_name(root)}\\ に中身ごと上書きする",
+        "     (フォルダー名を変えない・版の付いた名前で置かない。業務ツール統合ランチャーは",
+        f"     決まった場所の {display_name(root)}\\ を起動するため。上書きする前に、",
         "     各ツールの 配布設定 フォルダを残すかどうかを先に決める)",
         "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる",
         "     (入っていなければ: python -m pip install -r requirements.txt)",
@@ -361,12 +394,13 @@ def _memo(lines: list[str], root: Path) -> str:
 
 
 def default_out(root: Path = ROOT) -> Path:
-    return root.parent / f"{display_name(root)}_VER{version(root)}"
+    """既定の作る場所: 一式の隣の ``配布\\VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
+    return root.parent / DIST_DIR / f"VER{version(root)}" / display_name(root)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="日報複合ツール一式の配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「日報複合ツール_VER版」)")
+    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「配布\\VER版\\日報複合ツール」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(大設定の 配布設定 と、各ツールの tools\\<ツール>\\配布設定)を入れない")
     parser.add_argument("--force", action="store_true",
