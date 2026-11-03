@@ -6,7 +6,12 @@
     手元の領域  %LOCALAPPDATA%\\AllTools\\   (`ALLTOOLS_LOCAL_DIR` で変えられる)
       ├ data\\     利用者の設定(`user_settings.json`)・タブ表示権限の手元の写し
       ├ logs\\     入口のログ・外枠の記録(`desktop_shell.log`)
+      ├ pycache\\  Python の .py の写し(`sys.pycache_prefix`。一式のフォルダに `__pycache__` を書かない)
       └ runtime\\  錠(Windows 以外)・ブラウザ版の印
+
+**一式のフォルダ(`APP_ROOT`)には、動いているあいだ何も書かない。** 共有サーバーのフォルダは
+更新のたびに丸ごと上書きされ(業務ツール統合ランチャー 1.8.9)、何台もの PC が同じフォルダから動く。
+例外は管理者が大設定で書き出す `配布設定\\`(配るための物。`distribution.py`)だけ。
 
 Store 版の Python では `%LOCALAPPDATA%` への書き込みが Python 専用の場所へ
 振り替えられる。ここ(Python)が書くものは Python からはいつも同じ場所に見える。
@@ -35,7 +40,7 @@ _DEFAULTS: dict[str, Any] = {
 #: 単体のデスクトップ版と同じこの名前に揃える(`src-tauri/src/relay.rs`)
 BRIDGE_HOSTS = ("app.localhost", "localhost")
 
-LOCAL_SUBDIRS = ("data", "logs", "runtime", "work")
+LOCAL_SUBDIRS = ("data", "logs", "pycache", "runtime", "work")
 
 _cache: Optional[dict[str, Any]] = None
 _error = ""
@@ -122,6 +127,28 @@ def local_dir(name: str) -> Path:
     path = local_root() / name
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def bytecode_to_local() -> None:
+    """Python の .py の写し(`__pycache__`)を、一式のフォルダではなく手元の領域の `pycache` に書く。
+
+    既定では読み込んだ .py の隣に `__pycache__` を作る。一式を共有サーバーに置くと、
+    **起動した PC の数だけ共有のフォルダへ書きに行き**、更新の上書きとぶつかる(書きかけの .pyc を
+    掴んで上書きが止まる・別の版の写しが残る)。起動の入口(`start_app.py`・`bridge.py`)が、
+    このモジュールを写しを作らずに読んでから呼ぶ。子のプロセス(各ツール)にも環境変数で渡す。
+    向け先が決まっている(`PYTHONPYCACHEPREFIX`)ならそちらに従う。作れなければ何もしない
+    (起動は止めない。入口が写しを書かないまま動く)。
+    """
+    if not sys.pycache_prefix:
+        fresh = _cache is None
+        try:
+            sys.pycache_prefix = str(local_dir("pycache"))
+        except OSError:
+            return
+        finally:
+            if fresh:
+                reset()                           # 読んだ app.json は覚えない(いつもどおり使うときに読む)
+    os.environ.setdefault("PYTHONPYCACHEPREFIX", sys.pycache_prefix)
 
 
 def ensure_local_dirs() -> Path:

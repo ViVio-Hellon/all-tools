@@ -28,6 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 from . import admin_password, app_config, awake_clock, catalog as catalog_mod, distribution, identity as identity_mod
 from . import shared_db, tab_rights, user_settings
+from .browser_tools import busy_line as browser_busy_line
 from .logging_utils import get_logger, log_dir
 from .rights_store import store
 
@@ -715,14 +716,17 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         body = request.get_json(silent=True) or {}
         force = bool(body.get("force"))
         if _browser_tools is not None and not force:
-            busy = _browser_tools.busy()
-            if busy:
+            tools = _busy_tools()
+            if tools:
+                busy = [f"{t['title']}: {t['message']}" for t in tools]
                 # ツールの断りがもう問いかけで終わっていれば重ねて訊かない
                 # (「中断して終了しますか? それでも終了しますか?」になっていた)
                 asked = all(b.rstrip().endswith(("?", "？")) for b in busy)
                 message = "\n".join(busy) + ("" if asked else "\n\nそれでも終了しますか?")
+                # `tools`・`line` は止める入口(stop.bat・launcher_stop.bat)の1行目に使う
                 return jsonify({"stopped": False, "reason": "busy", "running": busy,
-                                "message": message}), 409
+                                "message": message, "tools": tools,
+                                "line": browser_busy_line(tools)}), 409
         if body.get("check"):
             return jsonify({"stopped": False, "can_stop": True})
         if _shutdown_hook is None:
@@ -746,14 +750,30 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
     return app
 
 
+def _busy_tools() -> list[dict]:
+    """処理の途中のツール(`title`・`reason`・`message`)。`busy()` しか持たない係(試験の
+    代わり)は、その文(「ツール: 断りの文」)から作る。"""
+    if hasattr(_browser_tools, "busy_tools"):
+        return _browser_tools.busy_tools()
+    out = []
+    for text in _browser_tools.busy():
+        title, sep, message = str(text).partition(": ")
+        if not sep:
+            title, message = "", str(text)
+        out.append({"title": title, "reason": " ".join(message.split()), "message": message})
+    return out
+
+
 def _stop_now(*, force: bool, why: str):
     """止める(応答を返してから)。途中の処理があれば止めない(`force` 以外)。"""
     if _browser_tools is not None and not force:
-        busy = _browser_tools.busy()
-        if busy:
+        tools = _busy_tools()
+        if tools:
+            busy = [f"{t['title']}: {t['message']}" for t in tools]
             log.info("%s: 途中の処理があるので止めません", why)
             return jsonify({"stopped": False, "stopping": False, "reason": "busy", "running": busy,
-                            "message": "\n".join(busy)}), 409
+                            "message": "\n".join(busy), "tools": tools,
+                            "line": browser_busy_line(tools)}), 409
     if _shutdown_hook is None:
         return _error("no_hook", "このプロセスは停止操作に対応していません", 501)
     log.info("%sを受け付けました (force=%s)", why, force)

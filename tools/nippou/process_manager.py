@@ -35,6 +35,9 @@ from typing import Optional
 APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
+# 短い処理なので Python の .py の写しを書かない(一式を共有に置くと、全部の PC がツールのフォルダの
+# `__pycache__` へ書きに行き、更新の上書きとぶつかる)
+sys.dont_write_bytecode = True
 
 from nippou import app_config  # noqa: E402
 from nippou.logging_setup import get_launch_logger  # noqa: E402
@@ -59,6 +62,72 @@ class StopResult:
     def __str__(self) -> str:
         mark = "済" if self.stopped else "--"
         return f"[{mark}] {self.message}"
+
+
+# ------------------------------------------------------------------
+# 止める入口の決まり(業務ツール統合ランチャー 1.8.9「更新のため全 PC で止める」)
+# ------------------------------------------------------------------
+#: 終了コード: 0 = 止めた・動いていない / 3 = 処理中なので止めなかった / 1 = そのほか止められなかった。
+#: **標準出力の1行目が理由**(「実行中の処理があります: 取り込み」)。ランチャーの管理者の一覧と、
+#: 利用者への知らせに出る
+EXIT_STOPPED, EXIT_FAILED, EXIT_BUSY = 0, 1, 3
+
+#: stop.bat に渡されても読み飛ばす引数(pause を飛ばす印。bat が見る)
+NOPAUSE_ARGS = ("/nopause", "--nopause", "-nopause")
+
+# cp932 の窓で書けない字(書けずに「?」になる)を、似た字に直す
+_CONSOLE_SAFE = str.maketrans({"\u2014": "\u2015", "\u2013": "-", "\u00a0": " ", "\u2212": "-"})
+
+
+def one_line(text: str) -> str:
+    """1行にする(改行・続く空白を1つの空白に)。cp932 で書けない字を直す。"""
+    return " ".join(str(text or "").split()).translate(_CONSOLE_SAFE)
+
+
+def console_stdout() -> None:
+    """標準出力・標準エラーを、呼んだ窓(cmd。bat は chcp 932)の文字コードに合わせる。
+
+    Windows の Python は、窓へ直接書くときは化けないが、**パイプ**(ランチャーが受け取る)へは
+    既定の文字コードで書く。Python の UTF-8 モード(3.15 からは既定)では UTF-8 になり、
+    cp932 で読むランチャーの一覧で化ける。窓の文字コード(`GetConsoleOutputCP`、無ければ cp932)
+    に合わせ、書けない字は「?」にする(落ちない)。PYTHONIOENCODING を決めてあればそれに従う。
+    """
+    if os.name != "nt" or os.environ.get("PYTHONIOENCODING"):
+        return
+    encoding = "cp932"
+    try:
+        import codecs
+        import ctypes
+
+        page = int(ctypes.WinDLL("kernel32").GetConsoleOutputCP())
+        if page:
+            codecs.lookup(f"cp{page}")
+            encoding = f"cp{page}"
+    except (OSError, AttributeError, LookupError, ValueError):
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is None or stream.isatty():
+                continue
+            stream.reconfigure(encoding=encoding, errors="replace")
+        except (AttributeError, ValueError, OSError):
+            continue
+
+def report(result: StopResult) -> int:
+    """結果を出して終了コードを返す。**標準出力の1行目が理由**(止めなかったとき)。"""
+    if result.stopped:
+        lines, code = [str(result)], EXIT_STOPPED
+    elif result.busy_jobs:
+        lines = ["実行中の処理があります: " + "・".join(str(j) for j in result.busy_jobs),
+                 "    中断して止めるには stop.bat --force を実行してください(途中の処理は捨てます)"]
+        code = EXIT_BUSY
+    else:
+        lines = [line for line in result.message.splitlines() if line.strip()] or ["止められませんでした"]
+        code = EXIT_FAILED
+    print(one_line(lines[0]))
+    for line in lines[1:]:
+        print(line.translate(_CONSOLE_SAFE))
+    return code
 
 
 # ------------------------------------------------------------------
@@ -349,19 +418,19 @@ def _print_status() -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    console_stdout()
     parser = argparse.ArgumentParser(description="日報管理ツールを停止する")
     parser.add_argument("--force", action="store_true",
                         help="実行中の処理を中断してでも止める")
     parser.add_argument("--status", action="store_true",
                         help="状態を見るだけ(止めない)")
-    args = parser.parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args([a for a in argv if a.lower() not in NOPAUSE_ARGS])
 
     if args.status:
         return _print_status()
 
-    result = stop(force=args.force)
-    print(result)
-    return 0 if result.stopped else 1
+    return report(stop(force=args.force))
 
 
 if __name__ == "__main__":

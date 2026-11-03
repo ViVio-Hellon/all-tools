@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -273,6 +274,30 @@ def local_dir(name: str) -> Path:
         raise ValueError(
             f"未知のローカル領域: {name!r} (使えるのは {', '.join(LOCAL_SUBDIRS)})")
     return local_root() / name
+
+
+def bytecode_to_local() -> None:
+    """Python の .py の写し(`__pycache__`)を、アプリのフォルダではなくローカル領域の `pycache` に書く。
+
+    既定では読み込んだ .py の隣に `__pycache__` を作る。アプリを共有サーバーに置くと、
+    **起動した PC の数だけ共有のフォルダへ書きに行き**、更新の上書き(業務ツール統合ランチャー 1.8.9)と
+    ぶつかる。起動の入口(`start_app.py`)がこのモジュールを写しを作らずに読んでから呼ぶ。
+    子のプロセスにも環境変数で渡す。向け先が決まっている(`PYTHONPYCACHEPREFIX`)ならそちらに従う。
+    作れなければ何もしない(起動は止めない)。読んだ `config/app.json` は覚えない。
+    """
+    global _cache
+    if not sys.pycache_prefix:
+        fresh = _cache is None
+        try:
+            target = local_dir("pycache")
+            target.mkdir(parents=True, exist_ok=True)
+            sys.pycache_prefix = str(target)
+        except OSError:
+            return
+        finally:
+            if fresh:
+                _cache = None
+    os.environ.setdefault("PYTHONPYCACHEPREFIX", sys.pycache_prefix)
 
 
 def ensure_local_dirs() -> Path:

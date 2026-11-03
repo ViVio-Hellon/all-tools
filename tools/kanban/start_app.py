@@ -792,7 +792,7 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
         on_changed=(lambda _line: exporter.request_now()) if exporter else None,
     )
     # ``--config`` を渡されたときだけ、そのファイル 1 つを読み書きさせる。
-    # ふだんはアプリのフォルダの data\config.json(+ 担当ラインは %APPDATA%)
+    # ふだんはこの端末の設定(%APPDATA%\KanbanSystem\config.json。アプリのフォルダの外)
     srv.app.config["CONFIG_PATH"] = args.config or ""
     # 「どれだけ取り込めていなければ異常か」を画面側が決められるようにする
     srv.app.config["IMPORT_INTERVAL_SEC"] = cfg.import_interval_sec if importer else 0

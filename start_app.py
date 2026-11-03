@@ -37,6 +37,16 @@ APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+# **一式のフォルダに `__pycache__` を書かない**(共有サーバーに置くと全部の PC が同じ所へ書き、
+# 更新の上書きとぶつかる)。置き場所(手元の領域の pycache)を決める import でも書かせない
+_WROTE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+from portal import app_config as _app_config  # noqa: E402
+
+_app_config.bytecode_to_local()
+if sys.pycache_prefix:
+    sys.dont_write_bytecode = _WROTE_BYTECODE
+
 MIN_PYTHON = (3, 9)
 REQUIRED_PACKAGES = (("flask", "Flask"), ("waitress", "waitress"))
 

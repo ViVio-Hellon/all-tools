@@ -28,9 +28,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
-from kanban import applog, config
+# アプリのフォルダに ``__pycache__`` を書かない(``start_app.py`` と同じ。共有に置くと全部の PC が
+# 同じ所へ書き、更新の上書きとぶつかる)。置き場所を決める import でも書かせない
+_WROTE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+from kanban import app_config as _app_config  # noqa: E402
+
+try:
+    if not sys.pycache_prefix:
+        _app_config.ensure_local_dirs()
+        sys.pycache_prefix = str(_app_config.local_dir("pycache"))
+    os.environ.setdefault("PYTHONPYCACHEPREFIX", sys.pycache_prefix)
+except OSError:
+    pass  # 作れなくても続ける(置き場所が無いなら書かないまま)
+finally:
+    if sys.pycache_prefix:
+        sys.dont_write_bytecode = _WROTE_BYTECODE
+
+from kanban import applog, config  # noqa: E402
 from kanban.db.shared import SharedDb
 from kanban.db import sync
 from kanban.db.store import Store

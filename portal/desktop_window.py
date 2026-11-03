@@ -133,3 +133,57 @@ def ask_to_close(hwnds: list[int]) -> int:
         if user32.PostMessageW(hwnd, WM_CLOSE, 0, 0):
             asked += 1
     return asked
+
+
+def exe_pids(exe_names: tuple[str, ...]) -> Optional[list[int]]:
+    """日報複合ツールの exe のプロセス(**この利用者のログオンの分だけ**)。Windows でなければ None。
+
+    `stop.bat --force`・`launcher_stop.bat --force` が、閉じない窓の exe を止めるのに使う。
+    名前で探すのは日報複合ツールの exe だけ(ほかの exe・Python は止めない)。共有の PC
+    (リモートデスクトップ)で、ほかの人の日報複合ツールを止めないよう、セッションを合わせる。
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.Process32FirstW.restype = wintypes.BOOL
+    k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    k32.Process32NextW.restype = wintypes.BOOL
+    k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    k32.ProcessIdToSessionId.restype = wintypes.BOOL
+    k32.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    def session(pid: int) -> int:
+        out = wintypes.DWORD()
+        return int(out.value) if k32.ProcessIdToSessionId(pid, ctypes.byref(out)) else -1
+
+    wanted = {name.lower() for name in exe_names}
+    mine = session(os.getpid())
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)         # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return []
+    found: list[int] = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            pid = int(entry.th32ProcessID)
+            if entry.szExeFile.lower() in wanted and session(pid) == mine:
+                found.append(pid)
+            ok = k32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(snap)
+    return found

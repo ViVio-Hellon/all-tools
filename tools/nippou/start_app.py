@@ -28,6 +28,16 @@ APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+# **アプリのフォルダに `__pycache__` を書かない**(共有サーバーに置くと全部の PC が同じ所へ書き、
+# 更新の上書きとぶつかる)。置き場所(ローカル領域の pycache)を決める import でも書かせない
+_WROTE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+from nippou import app_config as _app_config  # noqa: E402
+
+_app_config.bytecode_to_local()
+if sys.pycache_prefix:
+    sys.dont_write_bytecode = _WROTE_BYTECODE
+
 # 待機画面が出るまでにかかった時間を測る起点
 _BOOT_AT = time.monotonic()
 

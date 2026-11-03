@@ -88,11 +88,13 @@ class ContentTests(unittest.TestCase):
             self.assertIn('endlocal & exit /b %code%', text, "終了コードをそのまま返す")
 
     def test_stop_batは戻り値をそのまま返す(self) -> None:
-        """0 止めた / 1 デスクトップ版 / 2 止めなかった / 3 Python が無い(docs/ランチャー連携.md)。"""
+        """0 止めた・動いていない / 3 処理中 / 1 そのほか(デスクトップ版・Python が無い)。
+        docs/ランチャー連携.md。決まりの全体は test_stop_entries.py。"""
         text = self.text("stop.bat")
         self.assertIn('set "code=%errorlevel%"', text)
         self.assertIn("endlocal & exit /b %code%", text)
-        self.assertIn("exit /b 3", text)
+        self.assertNotIn("exit /b 3", text, "3 は処理中(Python が無いのは 1)")
+        self.assertIn("exit /b 1", text)
 
     def test_呼ぶファイルがある(self) -> None:
         self.assertIn("python start_app.py --check", self.text("start.bat"))

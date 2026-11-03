@@ -60,6 +60,28 @@ def _request(url: str, *, data: Optional[bytes] = None, headers: Optional[dict] 
         return exc.code, body
 
 
+def busy_reason(body: dict) -> str:
+    """ツールの「処理の途中」の答え(409)を、何をしているかの短い1行にする。
+
+    何をしているか(`running` の一覧)を先に使う ── `message` は単体の画面向けの
+    「中断して終了しますか?」で、止める入口の1行目(ランチャーの一覧・利用者への知らせ)には
+    向かない。日報複合ツールの外枠の `closing.rs` の `busy_reason` と同じ順。
+    """
+    body = body if isinstance(body, dict) else {}
+    running = [str(x).strip() for x in (body.get("running") or []) if str(x).strip()] \
+        if isinstance(body.get("running"), list) else []
+    error = body.get("error") if isinstance(body.get("error"), dict) else {}
+    text = "・".join(running) or body.get("busy") or error.get("message") or body.get("message") or ""
+    text = " ".join(str(text).split())
+    return text or "実行中の処理があります"
+
+
+def busy_line(tools: list[dict]) -> str:
+    """止める入口の1行目: 「実行中の処理があります: 日報(標準作業時間の取り込み)、看板(…)」。"""
+    parts = [f"{t.get('title') or '?'}({t.get('reason') or '処理の途中'})" for t in tools]
+    return "実行中の処理があります: " + "、".join(parts) if parts else "実行中の処理があります"
+
+
 def is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -268,7 +290,12 @@ class BrowserTools:
         return [r for r in (find_running(t) for t in self.catalog.tools) if r is not None]
 
     def busy(self) -> list[str]:
-        """処理の途中のツール(「終わってよいか」を訊いて、断ったもの)。"""
+        """処理の途中のツール(「終わってよいか」を訊いて、断ったもの)。画面の確認に出す文。"""
+        return [f"{item['title']}: {item['message']}" for item in self.busy_tools()]
+
+    def busy_tools(self) -> list[dict]:
+        """処理の途中のツール。`title`(タブの名前)・`reason`(何をしているかの短い1行)・
+        `message`(ツールの断りの文。画面の確認向け)。"""
         found = []
         for running in self.running():
             try:
@@ -279,8 +306,8 @@ class BrowserTools:
             except (urllib.error.URLError, OSError, ValueError):
                 continue
             if status == 409:
-                reason = body.get("message") or body.get("busy") or (body.get("error") or {}).get("message") or "処理の途中です"
-                found.append(f"{running.tool.title}: {reason}")
+                message = body.get("message") or body.get("busy") or (body.get("error") or {}).get("message") or "処理の途中です"
+                found.append({"title": running.tool.title, "reason": busy_reason(body), "message": message})
         return found
 
     def stop_all(self, *, force: bool = False) -> None:

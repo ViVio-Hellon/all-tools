@@ -28,6 +28,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+# 短い処理なので Python の .py の写しを書かない(一式を共有に置くと、全部の PC がツールのフォルダの
+# `__pycache__` へ書きに行き、更新の上書きとぶつかる)
+sys.dont_write_bytecode = True
 
 import launch_guard  # noqa: E402
 from kanban import app_config, config  # noqa: E402
@@ -39,6 +42,8 @@ log = get_logger("process_manager")
 GRACEFUL_WAIT_SEC = 12.0
 #: 強制終了のあと、消えたことを確かめるまで(秒)
 KILL_WAIT_SEC = 5.0
+#: 停止の頼みに答えなかったときの理由(処理中とみなす。--force なら止める)
+NO_ANSWER = "停止の頼みに答えません(処理の途中かもしれません)"
 
 
 class StopResult:
@@ -48,6 +53,8 @@ class StopResult:
         self.stopped = False
         self.how = ""
         self.message = ""
+        #: 処理中で断られた理由(``/api/shutdown`` の 409)。空なら処理中ではない
+        self.busy = ""
 
     def __str__(self) -> str:
         label = config.mode_display_name(self.mode)
@@ -86,7 +93,8 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
     # Access へ書き戻す(``start_app._shutdown``)。プロセスを殺すとそれが
     # 走らず、押した操作が手元に取り残される。
     log.info("正常終了を要求します: mode=%s port=%s", mode, info.port)
-    if launch_guard.request_shutdown(info.port, info.token):
+    accepted, busy = _ask_shutdown(info.port, info.token)
+    if accepted:
         if _wait_gone(info.pid, GRACEFUL_WAIT_SEC):
             launch_guard.remove_lock(mode)
             result.stopped = True
@@ -94,9 +102,11 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
             return result
         log.warning("停止要求は通りましたが、プロセスが残っています")
     elif not force:
-        # 処理中で断られた(409)。**勝手に落とさない**
-        busy = (health or {}).get("busy", "")
-        result.message = busy or "処理中のため停止しませんでした"
+        # 処理中で断られた(409)・答えない。**勝手に落とさない**(答えないのは書き戻しの最中
+        # かもしれない)。理由は断りの答えから(以前は止める前に見た /api/health の busy を
+        # 使っていて、そこに無いと「処理中のため」としか出なかった)
+        result.busy = busy or NO_ANSWER
+        result.message = result.busy
         log.info("停止しません: %s", result.message)
         return result
     else:
@@ -145,6 +155,40 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
 
     result.message = f"pid={info.pid} を停止できませんでした"
     return result
+
+
+def _ask_shutdown(port: int, token: str) -> tuple[bool, str]:
+    """``POST /api/shutdown``。(受け付けられたか, 処理中で断られた理由)。
+
+    答えない・501 などは (False, "")(理由は ``NO_ANSWER``)。
+    """
+    import json
+    import urllib.error
+
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Tool-Token"] = token
+    try:
+        with launch_guard.local_request(
+            f"http://{app_config.host()}:{port}/api/shutdown",
+            timeout=5, data=json.dumps({"force": False}).encode("utf-8"),
+            method="POST", headers=headers,
+        ) as res:
+            return bool(json.loads(res.read().decode("utf-8")).get("stopped")), ""
+    except urllib.error.HTTPError as exc:
+        if exc.code != 409:
+            log.info("停止要求が %s で断られました", exc.code)
+            return False, ""
+        try:
+            body = json.loads(exc.read().decode("utf-8") or "{}")
+        except ValueError:
+            body = {}
+        running = [str(x) for x in (body.get("running") or []) if str(x).strip()]
+        return False, ("・".join(running) or body.get("busy") or body.get("message")
+                       or "処理中のため停止しませんでした")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.info("停止要求を送れませんでした (%s)", exc)
+        return False, ""
 
 
 def _looks_like_ours(cmdline: str, info: launch_guard.LockInfo) -> bool:
@@ -196,7 +240,73 @@ def _kill(pid: int) -> bool:
         return False
 
 
+# ------------------------------------------------------------------
+# 止める入口の決まり(業務ツール統合ランチャー 1.8.9「更新のため全 PC で止める」)
+# ------------------------------------------------------------------
+#: 終了コード: 0 = 止めた・動いていない / 3 = 処理中なので止めなかった / 1 = そのほか止められなかった。
+#: **標準出力の1行目が理由**(「実行中の処理があります: 取り込み」)。ランチャーの管理者の一覧と、
+#: 利用者への知らせに出る
+EXIT_STOPPED, EXIT_FAILED, EXIT_BUSY = 0, 1, 3
+
+#: stop.bat に渡されても読み飛ばす引数(pause を飛ばす印。bat が見る)
+NOPAUSE_ARGS = ("/nopause", "--nopause", "-nopause")
+
+# cp932 の窓で書けない字(書けずに「?」になる)を、似た字に直す
+_CONSOLE_SAFE = str.maketrans({"\u2014": "\u2015", "\u2013": "-", "\u00a0": " ", "\u2212": "-"})
+
+
+def one_line(text: str) -> str:
+    """1行にする(改行・続く空白を1つの空白に)。cp932 で書けない字を直す。"""
+    return " ".join(str(text or "").split()).translate(_CONSOLE_SAFE)
+
+
+def console_stdout() -> None:
+    """標準出力・標準エラーを、呼んだ窓(cmd。bat は chcp 932)の文字コードに合わせる。
+
+    Windows の Python は、窓へ直接書くときは化けないが、**パイプ**(ランチャーが受け取る)へは
+    既定の文字コードで書く。Python の UTF-8 モード(3.15 からは既定)では UTF-8 になり、
+    cp932 で読むランチャーの一覧で化ける。窓の文字コード(`GetConsoleOutputCP`、無ければ cp932)
+    に合わせ、書けない字は「?」にする(落ちない)。PYTHONIOENCODING を決めてあればそれに従う。
+    """
+    if os.name != "nt" or os.environ.get("PYTHONIOENCODING"):
+        return
+    encoding = "cp932"
+    try:
+        import codecs
+        import ctypes
+
+        page = int(ctypes.WinDLL("kernel32").GetConsoleOutputCP())
+        if page:
+            codecs.lookup(f"cp{page}")
+            encoding = f"cp{page}"
+    except (OSError, AttributeError, LookupError, ValueError):
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is None or stream.isatty():
+                continue
+            stream.reconfigure(encoding=encoding, errors="replace")
+        except (AttributeError, ValueError, OSError):
+            continue
+
+
+def headline(results: list[StopResult]) -> tuple[int, str]:
+    """(終了コード, 標準出力の1行目)。"""
+    name = app_config.display_name()
+    running = [r for r in results if r.was_running]
+    if not running:
+        return EXIT_STOPPED, f"{name}は動いていません"
+    busy = [r for r in running if not r.stopped and r.busy]
+    if busy:
+        return EXIT_BUSY, "実行中の処理があります: " + "・".join(r.busy for r in busy)
+    failed = [r for r in running if not r.stopped]
+    if failed:
+        return EXIT_FAILED, "停止できませんでした: " + "・".join(r.message or "理由不明" for r in failed)
+    return EXIT_STOPPED, f"{name}を止めました"
+
+
 def main(argv: list[str] | None = None) -> int:
+    console_stdout()
     p = argparse.ArgumentParser(
         prog="process_manager",
         description="資材発注看板システムのバックエンドを停止する",
@@ -207,23 +317,22 @@ def main(argv: list[str] | None = None) -> int:
                    help="全モードを止める(省略時と同じ。stop.bat から明示的に渡す)")
     p.add_argument("--force", action="store_true",
                    help="処理中でも止める(未反映の書き戻しが残る場合があります)")
-    args = p.parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = p.parse_args([a for a in argv if a.lower() not in NOPAUSE_ARGS])
 
     modes = [args.mode] if args.mode else list(config.ALL_MODES)
     results = [stop_mode(m, force=args.force) for m in modes]
 
+    # **1行目が理由**(止める入口の決まり)。モードごとの結果はそのあと
+    code, first = headline(results)
+    print(one_line(first))
     for r in results:
-        print(r)
-
-    if not any(r.was_running for r in results):
-        print("\n動いているものはありませんでした。")
-        return 0
-    failed = [r for r in results if r.was_running and not r.stopped]
-    if failed:
-        print("\n停止できなかったものがあります。", file=sys.stderr)
-        print("処理中で断られた場合は、少し待つか --force を付けてください。", file=sys.stderr)
-        return 1
-    return 0
+        print(str(r).translate(_CONSOLE_SAFE))
+    if code == EXIT_BUSY:
+        print("中断して止めるときは stop.bat --force(未反映の書き戻しが残る場合があります)")
+    elif code != EXIT_STOPPED:
+        print("停止できなかったものがあります。少し待つか --force を付けてください。", file=sys.stderr)
+    return code
 
 
 if __name__ == "__main__":

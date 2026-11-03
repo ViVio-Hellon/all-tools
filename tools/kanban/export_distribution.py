@@ -32,6 +32,9 @@ from typing import Any
 APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
+# 短い処理なので Python の .py の写しを書かない(一式を共有に置くと、全部の PC がツールのフォルダの
+# `__pycache__` へ書きに行き、更新の上書きとぶつかる)
+sys.dont_write_bytecode = True
 
 
 def run() -> dict[str, Any]:

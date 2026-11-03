@@ -25,6 +25,15 @@ APP_ROOT = Path(__file__).resolve().parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+# 一式のフォルダに `__pycache__` を書かない(ブラウザ版の入口と同じ。置き場所は手元の領域の pycache)
+_WROTE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+from portal import app_config as _app_config  # noqa: E402
+
+_app_config.bytecode_to_local()
+if sys.pycache_prefix:
+    sys.dont_write_bytecode = _WROTE_BYTECODE
+
 from portal import bridge_proto  # noqa: E402
 
 WORKERS = 6

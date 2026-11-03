@@ -10,13 +10,25 @@ rem  影響を受けません(基盤仕様書 2.8)。
 rem
 rem  Access へ未反映の操作が残っているときは、止めずに理由を出します。
 rem  それでも止めるときは stop.bat --force を使ってください。
+rem
+rem  終了コード: 0 = 止めた・動いていない / 3 = 処理中なので止めなかった /
+rem    1 = そのほか止められなかった。止めなかったときは標準出力の1行目が理由
+rem    (業務ツール統合ランチャーの一覧と利用者への知らせに出る)
+rem  stop.bat --force   処理中でも止める(途中の処理は捨てます)
+rem  stop.bat /nopause  最後の pause を飛ばす(環境変数 STOP_NOPAUSE=1 でも同じ)
 rem ===================================================================
 setlocal
 
+rem  pause を飛ばすか(業務ツール統合ランチャーは STOP_NOPAUSE=1 を付けて呼ぶ)
+set "NOPAUSE="
+if /i "%STOP_NOPAUSE%"=="1" set "NOPAUSE=1"
+for %%A in (%*) do if /i "%%~A"=="/nopause" set "NOPAUSE=1"
+
 rem  共有フォルダに置かれていても動くよう pushd を使う(start.bat と同じ)
 pushd "%~dp0" || (
-    echo [エラー] このフォルダに移動できませんでした: %~dp0
-    pause
+    echo [エラー] このフォルダに移動できませんでした: "%~dp0"
+    if not defined NOPAUSE pause
+    endlocal
     exit /b 1
 )
 title 資材発注看板システム - 停止
@@ -24,24 +36,21 @@ title 資材発注看板システム - 停止
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [エラー] Python が見つかりません。
-    goto :failed
+    if not defined NOPAUSE pause
+    popd
+    endlocal
+    exit /b 1
 )
 
 python process_manager.py --all %*
-if errorlevel 1 (
+set "code=%errorlevel%"
+if not "%code%"=="0" (
     echo.
     echo 止められなかったものがあります。上のメッセージを確認してください。
     echo 実行中の処理があるときは、中断してよければ次を実行してください:
     echo     stop.bat --force
     echo.
-    goto :failed
+    if not defined NOPAUSE pause
 )
 popd
-endlocal
-exit /b 0
-
-:failed
-pause
-popd
-endlocal
-exit /b 1
+endlocal & exit /b %code%
