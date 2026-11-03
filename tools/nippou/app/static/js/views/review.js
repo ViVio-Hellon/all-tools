@@ -15,7 +15,7 @@
 
 import { api } from "../api.js";
 import { toast, toastError } from "../toast.js";
-import { paintCharts } from "../chart.js";
+import { paintCharts, paintTile } from "../chart.js";
 import { confirmPush, watch as watchJob } from "../progress.js";
 import { cue } from "../sound.js";
 
@@ -32,6 +32,20 @@ export function start() {
                   JSON.parse(seed.textContent), { fit: true });
     } catch { /* 絵が出なくても、表は出ている */ }
   }
+
+  // 停止の絵(集計・グラフと同じタイル)。**隠れていても描いておく** ── 棒は枠の
+  // 大きさで描くので、隠れている間は描かず、出たときに描き直されます(`chart.js`)
+  const stopSeed = document.getElementById("review-stop-data");
+  if (stopSeed) {
+    try {
+      for (const tile of JSON.parse(stopSeed.textContent) || []) {
+        paintTile(document.querySelector(
+          `#review-stop-charts [data-tile-body="${tile.key}"]`), tile, { fit: true });
+      }
+    } catch { /* 絵が出なくても、左の表は出ている */ }
+  }
+
+  wireSwitch();
 
   /*
     本当の全画面にする。
@@ -168,6 +182,61 @@ export function start() {
       }
       location.href = "/";
     } catch (err) { toastError(err); }
+  }
+}
+
+/* ==================================================================
+   切り替え ── 実数 / 停止
+
+       左の数値画面は切り替え可能にして、切り替えには『実数』と『停止』をつけ
+       (…)『停止』に切り替えで右グラフを停止のグラフに切り替えてください
+
+   **左と右をまとめて入れ替えます**(`data-review-pane`)。選んだほうは端末が
+   覚えます(`localStorage`)── 読めない・書けない端末(プライベート窓など)でも
+   切り替えは効き、開き直すと既定の「実数」に戻るだけです。
+   ================================================================== */
+const VIEW_KEY = "nippou.review.view";
+const VIEWS = ["figures", "stops"];
+
+function rememberedView() {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    return VIEWS.includes(v) ? v : VIEWS[0];
+  } catch { return VIEWS[0]; }
+}
+
+function showView(view) {
+  const body = document.querySelector(".review__body");
+  if (body) body.dataset.reviewView = view;
+  for (const pane of document.querySelectorAll("[data-review-pane]")) {
+    pane.hidden = pane.dataset.reviewPane !== view;
+  }
+  for (const tab of document.querySelectorAll("[data-review-tab]")) {
+    const on = tab.dataset.reviewTab === view;
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+    tab.tabIndex = on ? 0 : -1;
+  }
+}
+
+function wireSwitch() {
+  const tabs = [...document.querySelectorAll("[data-review-tab]")];
+  if (!tabs.length) return;
+  showView(rememberedView());
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => {
+      const view = tab.dataset.reviewTab;
+      showView(view);
+      try { localStorage.setItem(VIEW_KEY, view); } catch { /* 覚えられなくても切り替わる */ }
+    });
+    // 左右の矢印でも動く(タブの決まりどおり)
+    tab.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const next = tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : -1)
+                         + tabs.length) % tabs.length];
+      next.focus();
+      next.click();
+      event.preventDefault();
+    });
   }
 }
 

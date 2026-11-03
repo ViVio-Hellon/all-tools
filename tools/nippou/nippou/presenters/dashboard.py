@@ -772,6 +772,31 @@ class Dashboard:
                 if t.kind in (KIND_BAR, KIND_LINE, KIND_DONUT, KIND_COMBO)]
 
 
+#: 直の実績(`/graph/review`)の「実数」に出す札。**集計・グラフの上の7つそのもの**
+#: (`today_tiles`)── 並びも同じ
+REVIEW_FIGURE_KEYS = ("today_weight", "today_count", "today_rate", "today_stop",
+                      "today_operating", "today_productivity", "cumulative_count")
+
+#: 直の実績の「停止」に出す絵。**集計・グラフにある停止の絵**(その日のぶん)
+REVIEW_STOP_KEYS = ("stop_kinds", "stop_items", "shift_stop")
+
+
+def review_parts(board: Dashboard) -> dict[str, list[dict[str, Any]]]:
+    """直の実績に出すぶんを、集計・グラフの1画面から抜き出す。
+
+        実数に切り替えで「集計・グラフ」で確認できる 本日の合計重量/本日の合計枚数/
+        本日の稼働率/本日の停止時間/本日の稼働時間/本日の生産性/累積枚数 を
+        「集計・グラフ」と同じように表示させてください
+
+    **数え直しません。** 集計・グラフと同じ `build` を通したタイルをそのまま渡す
+    ので、2つの画面の数字が食い違うことはありません(式を2か所に持たない)。
+    """
+    def pick(keys):
+        return [t.as_dict() for key in keys if (t := board.tile(key)) is not None]
+
+    return {"figures": pick(REVIEW_FIGURE_KEYS), "stops": pick(REVIEW_STOP_KEYS)}
+
+
 def build(repo: NippouRepository, *, report_date: str, line: str,
           start: date, end: date, pending: int = 0,
           target: Optional[float] = None,

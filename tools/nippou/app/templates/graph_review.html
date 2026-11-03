@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_number_tile.html" import number_body %}
 {% block title %}直の実績確認 — {{ display_name }}{% endblock %}
 
 {% block content %}
@@ -44,11 +45,19 @@
     </div>
   </div>
 
-  {# **画面最大化で1画面に収める**(v3.86.0)。左に締めくくりと表、右に推移。
+  {# **画面最大化で1画面に収める**(v3.86.0)。左に締めくくりと数値、右にグラフ。
      はみ出すぶんは箱の中だけで流し、画面ごとは動かしません ──
      「大きすぎて見えません 画面最大化で収まるサイズに表示してください」。
-     狭い画面(幅1100px未満・高さ540px未満)では縦に流します #}
-  <div class="review__body">
+     狭い画面(幅1100px未満・高さ540px未満)では縦に流します。
+
+         グラフに7割使用してください。左の数値画面は切り替え可能にして、
+         切り替えには『実数』と『停止』をつけ(…)『停止』に切り替えで
+         右グラフを停止のグラフに切り替えてください
+
+     **左3割・右7割。** 切り替え(`data-review-view`)は左の数値と右の絵を
+     **まとめて**入れ替えます ── 左が停止なのに右が重量の推移、では並べる意味が
+     ありません。選んだほうは端末が覚えます(`views/review.js`)。既定は実数 #}
+  <div class="review__body" data-review-view="figures">
    <div class="review__side">
     {# なぜ出ているか。時計で出したときは画面が訊きに行き、共有へ保存のあとに出した
        ときはサーバがここに描いておきます(訊くと時計の答え ── 別の直の話 ── が来るため) #}
@@ -79,70 +88,116 @@
       </ul>
     </div>
 
-    <div class="card review__card">
-      <div class="card__head"><h2>この日の直別</h2></div>
-      <div class="scroll-x">
-        <table class="list">
-          <thead>
-            <tr><th>直</th><th class="num">枚数</th><th class="num">重量(t)</th>
-                <th class="num">実働(分)</th><th class="num">管理ロス</th>
-                <th class="num">突発</th><th class="num">ハンドリング</th>
-                {# 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`) #}
-                <th class="num">その他</th>
-                <th class="num">稼働率(%)</th><th class="num">生産性(t/h)</th></tr>
-          </thead>
-          <tbody>
-            {% for r in today.table %}
-            <tr>
-              <td>{{ r.shift }}</td>
-              <td class="num">{{ r.count }}</td>
-              <td class="num">{{ r.weight_ton }}</td>
-              <td class="num">{{ r.work_minutes }}</td>
-              <td class="num">{{ r.loss }}</td>
-              <td class="num">{{ r.sudden }}</td>
-              <td class="num">{{ r.handling }}</td>
-              <td class="num">{{ r.other }}</td>
-              <td class="num">{{ r.rate }}</td>
-              <td class="num">{{ r.productivity }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="10" class="empty">この日の保存データがありません。</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+    {# ================================================================
+       切り替え ── **実数 / 停止**
+
+       知らせの帯と締めくくりは切り替えの上に残します(どちらでも見えるように)
+       ================================================================ #}
+    {# 見た目は設定画面の「面の中の面」と同じ部品(`.tabs--inner`) #}
+    <div class="tabs tabs--inner review-switch">
+      <div class="tabs__bar" role="tablist" aria-label="左の数値と右のグラフ">
+        <button type="button" class="tab" role="tab"
+                id="review-tab-figures" data-review-tab="figures"
+                aria-controls="review-figures review-charts-card"
+                aria-selected="true">実数</button>
+        <button type="button" class="tab" role="tab" tabindex="-1"
+                id="review-tab-stops" data-review-tab="stops"
+                aria-controls="review-stops review-stop-charts"
+                aria-selected="false">停止</button>
       </div>
     </div>
 
-    {# 直の終わりに見るなら、停止は**項目まで**出す。3分類の合計だけでは
+    {# ---- 実数 ── 集計・グラフの上の7つ(同じ組み立て・同じ部品) ----
+       数はサーバが `presenters/dashboard.py` の同じ式で作ったもの
+       (`dashboard.review_parts`)。**ここでは数え直しません** #}
+    <div class="review__pane" id="review-figures" data-review-pane="figures"
+         role="tabpanel" aria-labelledby="review-tab-figures">
+      <div class="tiles review__tiles" id="review-tiles">
+        {% for tile in figures %}
+        <div class="tile" data-tile="{{ tile.key }}"{% if tile.tone %} data-tone="{{ tile.tone }}"{% endif %}>
+          <div class="tile__head">
+            <h2 class="tile__title">{{ tile.title }}</h2>
+            <span class="tile__note">{{ tile.note }}</span>
+          </div>
+          {# 「紙を見る」などの行き先は置きません ── この画面を出る道は
+             「確認しました」だけ(押さずに出ると、見たことが残りません) #}
+          <div class="tile__body" data-tile-body="{{ tile.key }}">
+            {{ number_body(tile) }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {# 直ごとの表。**3割の幅では10列が窮屈なので畳んでおく**(開けば今までどおり)。
+         上の札は日の合計、こちらは直ごと #}
+      <details class="card review__card review__fold" id="review-shifts">
+        <summary class="card__head"><h2>この日の直別</h2>
+          <span class="lead">{{ today.table | length }}直ぶん・開くと表</span></summary>
+        <div class="scroll-x">
+          <table class="list">
+            <thead>
+              <tr><th>直</th><th class="num">枚数</th><th class="num">重量(t)</th>
+                  <th class="num">実働(分)</th><th class="num">管理ロス</th>
+                  <th class="num">突発</th><th class="num">ハンドリング</th>
+                  {# 分類1・内訳番号99(管理ロスに入れない。`aggregation.OTHER_STOP_CODES`) #}
+                  <th class="num">その他</th>
+                  <th class="num">稼働率(%)</th><th class="num">生産性(t/h)</th></tr>
+            </thead>
+            <tbody>
+              {% for r in today.table %}
+              <tr>
+                <td>{{ r.shift }}</td>
+                <td class="num">{{ r.count }}</td>
+                <td class="num">{{ r.weight_ton }}</td>
+                <td class="num">{{ r.work_minutes }}</td>
+                <td class="num">{{ r.loss }}</td>
+                <td class="num">{{ r.sudden }}</td>
+                <td class="num">{{ r.handling }}</td>
+                <td class="num">{{ r.other }}</td>
+                <td class="num">{{ r.rate }}</td>
+                <td class="num">{{ r.productivity }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="10" class="empty">この日の保存データがありません。</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+    {# ---- 停止 ── この日の停止(項目ごと) ----
+       直の終わりに見るなら、停止は**項目まで**出す。3分類の合計だけでは
        「今日は何に時間を取られたのか」が分からない(VBA `Stop_Agg`) #}
-    <div class="card review__card review__card--grow">
-      <div class="card__head">
-        <h2>この日の停止(項目ごと)</h2>
-        <span class="lead">長い順</span>
-      </div>
-      <div class="scroll-x">
-        <table class="list">
-          <thead>
-            <tr><th>記号・内訳</th><th>分類</th>
-                <th class="num">回数</th><th class="num">時間(分)</th></tr>
-          </thead>
-          <tbody>
-            {% for s in today.stops %}
-            <tr>
-              <td>{{ s.text }}</td><td>{{ s.kind }}</td>
-              <td class="num">{{ s.count }}</td><td class="num">{{ s.minutes }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="empty">この日の停止入力はありません。</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+    <div class="review__pane" id="review-stops" data-review-pane="stops"
+         role="tabpanel" aria-labelledby="review-tab-stops" hidden>
+      <div class="card review__card review__card--grow">
+        <div class="card__head">
+          <h2>この日の停止(項目ごと)</h2>
+          <span class="lead">長い順</span>
+        </div>
+        <div class="scroll-x">
+          <table class="list">
+            <thead>
+              <tr><th>記号・内訳</th><th>分類</th>
+                  <th class="num">回数</th><th class="num">時間(分)</th></tr>
+            </thead>
+            <tbody>
+              {% for s in today.stops %}
+              <tr>
+                <td>{{ s.text }}</td><td>{{ s.kind }}</td>
+                <td class="num">{{ s.count }}</td><td class="num">{{ s.minutes }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="empty">この日の停止入力はありません。</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
-
    </div>
 
-    <div class="card review__charts">
+    <div class="card review__charts" id="review-charts-card" data-review-pane="figures">
       <div class="card__head">
         <h2>今月の推移</h2>
         <span class="lead">月初から今日まで</span>
@@ -150,12 +205,39 @@
       {# 絵は枠の大きさで描く(`chart.js` の `paintCharts(…, {fit})`) #}
       <div class="fit-charts" id="review-charts"></div>
     </div>
+
+    {# 停止の絵。**集計・グラフにある停止の絵そのもの**(分類の輪・項目の輪・直別の棒)。
+       色も凡例も同じ部品(`chart.js` の `paintTile`)で描きます #}
+    <div class="card review__charts review__stops" id="review-stop-charts"
+         data-review-pane="stops" hidden>
+      <div class="card__head">
+        <h2>この日の停止</h2>
+        <span class="lead">{{ report_date }}</span>
+      </div>
+      <div class="review__stop-tiles">
+        {% for tile in stop_tiles %}
+        <div class="tile{% if tile.kind == 'bar' %} review__stop-bar{% endif %}"
+             data-tile="{{ tile.key }}"{% if tile.tone %} data-tone="{{ tile.tone }}"{% endif %}>
+          <div class="tile__head">
+            <h2 class="tile__title">{{ tile.title }}</h2>
+            <span class="tile__note">{{ tile.note }}</span>
+          </div>
+          <div class="tile__body" data-tile-body="{{ tile.key }}">
+            {# 絵は JS が入れる。**入らなくても題は出ている** #}
+            <p class="lead tile__empty">{{ tile.empty if not tile.has_data else '…' }}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script id="review-data" type="application/json">{{ history | tojson }}</script>
+{# 停止の絵(集計・グラフと同じタイル)。描くのは `chart.js` の `paintTile` #}
+<script id="review-stop-data" type="application/json">{{ stop_tiles | tojson }}</script>
 {# 締めくくりの成り行き。**サーバが描いたぶんをそのまま持つ** ── 応答を
    1つ待つあいだ空の帯が見える、をなくします(v3.59.0 と同じ作り) #}
 <script id="closing-data" type="application/json">{{ closing.as_dict() | tojson }}</script>

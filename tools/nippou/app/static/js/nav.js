@@ -221,6 +221,11 @@ export async function go(href, push = true) {
   if (push) history.pushState({ nav: 1 }, "", landed);
   here = push ? landed : location.href;
   document.title = next.title;
+  // **いまどの画面か(`<body data-page>`)も移す。** ネオンの濃紺の島
+  // (`tokens.css` の `body[data-page="graph"]`)はこれを見ています ── 移さないと、
+  // 日報入力から「共有へ保存」で直の実績へ来たとき、札がくすんだ灰色になり
+  // 推移の題が濃紺に沈んでいました(開き直すと直る、の食い違い)
+  if (next.body?.dataset.page !== undefined) document.body.dataset.page = next.body.dataset.page;
   swapStyles(next);
   for (const sel of SWAP) swap(sel, next);
   afterSwap();

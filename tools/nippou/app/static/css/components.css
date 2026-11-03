@@ -1354,7 +1354,10 @@ input.is-auto::after, select.is-auto::after{ content:none; }
 }
 .donut__unit{ font-size:11px; fill:var(--muted); font-family:var(--sans); }
 .donut__empty{ fill:none; stroke:var(--hairline); }
-.donut__ring{ fill:none; }
+/* 輪は**線で**描く(中を塗らない)。`.donut` を前に付けて強くしてあるのは、
+   後ろの `.mark-stop-sudden{ fill:… }` などに中を塗られないため ── 1分類だけの
+   日(100%)に、輪ではなく塗りつぶした円になっていました */
+.donut .donut__ring{ fill:none; }
 /* **隣り合う輪の間に地の色の隙間を空ける。** 同じなかまの濃淡が
    並ぶので、境目が触れていると1つに見える(2px は画面でも紙でも残る) */
 .donut__slice{ stroke:var(--surface); stroke-width:2; }
@@ -1710,6 +1713,47 @@ input.is-auto::after, select.is-auto::after{ content:none; }
 .review .card{ margin:0; }
 .review .closing{ margin:0; }
 
+/* 切り替え(実数 / 停止)。部品は `.tabs--inner`。**下に余白を持たない**
+   (並びの間は `.review__side` の gap が受け持つ) */
+.review .review-switch > .tabs__bar{ margin:0; }
+.review__pane{ display:flex; flex-direction:column; gap:var(--sp-3); min-width:0; }
+
+/* 実数の札。**集計・グラフと同じ `.tiles` / `.tile`**。3割の幅に収まるよう
+   2列に並べ、数字だけ一回り小さくする(色・縁・途中式は同じまま) */
+.review .review__tiles{
+  margin:0; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--sp-2);
+}
+.review .review__tiles .tile{ padding:var(--sp-2) var(--sp-3); }
+.review .review__tiles .tile[data-tone]{ padding-left:calc(var(--sp-3) - 3px); }
+.review .review__tiles .tile__head{ margin-bottom:var(--sp-1); }
+.review .review__tiles .tile__value{ font-size:clamp(24px, 2.1vw, 40px); }
+/* 札は7枚。最後の1枚(累積枚数)は2列ぶん取って、半端な空きを作らない */
+.review .review__tiles .tile:last-child:nth-child(odd){ grid-column:1 / -1; }
+
+/* 直ごとの表は畳む(3割の幅では10列が窮屈)。開けば今までどおり */
+.review__fold > summary{ cursor:pointer; list-style:none; margin:0; }
+.review__fold > summary::-webkit-details-marker{ display:none; }
+.review__fold > summary h2::before{ content:"▸ "; color:var(--muted); }
+.review__fold[open] > summary h2::before{ content:"▾ "; }
+.review__fold[open] > summary{ margin-bottom:var(--sp-2); }
+
+/* 停止の絵。**集計・グラフの停止のタイルそのもの**。輪2枚を横に、直別の棒を下に */
+.review__stop-tiles{
+  display:grid; gap:var(--sp-2);
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+}
+@media (max-width:720px){
+  .review__stop-tiles{ grid-template-columns:minmax(0, 1fr); }
+}
+.review__stop-tiles .review__stop-bar{ grid-column:1 / -1; }
+/* 輪の横に凡例(縦に積むと7割の高さに収まらない) */
+.review__stop-tiles .tile:not(.review__stop-bar) .tile__body.chart-skin{
+  display:grid; grid-template-columns:minmax(120px, 220px) minmax(0, 1fr);
+  align-items:center; gap:var(--sp-3);
+}
+.review__stop-tiles .tile:not(.review__stop-bar) .tile__body .dlg{ margin:0; }
+.review__stop-tiles .donut{ max-width:220px; }
+
 /* 推移の絵の枠。**絵は枠の大きさで描く**(`chart.js` の `paintCharts(…, {fit})`) */
 .fit-charts{ display:flex; flex-direction:column; gap:var(--sp-2); }
 .fit-chart{ margin:0; display:flex; flex-direction:column; min-height:0; }
@@ -1735,7 +1779,8 @@ input.is-auto::after, select.is-auto::after{ content:none; }
 */
 @media (min-width:1100px) and (min-height:540px){
   .review__body{
-    display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr);
+    /* **左3割・右7割**(「グラフに7割使用してください」)。全画面にしても同じ */
+    display:grid; grid-template-columns:minmax(0, 3fr) minmax(0, 7fr);
     grid-template-rows:minmax(0, 1fr); min-height:0; overflow:hidden;
   }
   .review__side{ min-height:0; }
@@ -1758,6 +1803,18 @@ input.is-auto::after, select.is-auto::after{ content:none; }
   .review__charts .fit-charts{ flex:1; min-height:0; }
   .review__charts .fit-chart{ flex:1 1 0; }
   .review__charts .fit-chart__plot{ flex:1; height:auto; min-height:0; }
+  /* 左の切り替えの中身。**はみ出すぶんは箱の中だけで流す**(札が7枚あるので、
+     低い画面では札の箱の中で流れます) */
+  .review__pane{ flex:1 1 auto; min-height:6rem; overflow:auto; }
+  .review__pane > *{ flex:none; }
+  .review__pane > .review__card--grow{ flex:1 1 auto; }
+  /* 停止の絵: 輪の段は中身ぶん、直別の棒は残りの高さいっぱい(枠の大きさで描く) */
+  .review__stops .review__stop-tiles{
+    flex:1; min-height:0; grid-template-rows:auto minmax(0, 1fr);
+  }
+  .review__stop-bar{ min-height:0; }
+  .review__stop-bar .tile__body{ display:flex; flex-direction:column; min-height:0; }
+  .review__stop-bar .fit-chart__plot{ flex:1; height:auto; min-height:120px; }
 }
 
 /* 低い画面(1366×768 を最大化したときなど)は、頭と見出しを詰める */

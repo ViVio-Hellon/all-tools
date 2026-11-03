@@ -494,8 +494,11 @@ function legend(tile) {
  *
  * 数字と表は**サーバが描いたものがすでに入っている**ので触りません
  * (JSが止まっても読めるように)。ここが受け持つのは絵だけ。
+ *
+ * `fit: true` なら、棒と折れ線は**枠(`.fit-chart__plot`)の大きさで描きます**
+ * (直の実績の「停止」── 右の7割の残りの高さに収めるため。`paintCharts` と同じ描き方)。
  */
-export function paintTile(host, tile) {
+export function paintTile(host, tile, { fit = false } = {}) {
   if (!host || !tile) return;
   host.replaceChildren();
   if (!tile.has_data) {
@@ -519,14 +522,21 @@ export function paintTile(host, tile) {
     return;
   }
   if (tile.kind === "bar" || tile.kind === "line") {
-    host.append(chart({ title: tile.title, unit: tile.unit,
-                        kind: tile.kind, values: tile.values,
-                        // 棒1本ずつの色の印(直別は直の色)。サーバが決める
-                        pointClasses: tile.point_classes || [],
-                        // 45度線。**目盛りの頭は目標込みで決める** ──
-                        // 目標が実績より上だと、線が枠の外へ出てしまう
-                        target: tile.target || [] },
-                      tile.labels || []));
+    const series = { title: tile.title, unit: tile.unit,
+                     kind: tile.kind, values: tile.values,
+                     // 棒1本ずつの色の印(直別は直の色)。サーバが決める
+                     pointClasses: tile.point_classes || [],
+                     // 45度線。**目盛りの頭は目標込みで決める** ──
+                     // 目標が実績より上だと、線が枠の外へ出てしまう
+                     target: tile.target || [] };
+    if (fit) {
+      const plot = document.createElement("div");
+      plot.className = "fit-chart__plot";
+      host.append(plot);
+      fitChart(plot, (size) => chart(series, tile.labels || [], size));
+    } else {
+      host.append(chart(series, tile.labels || []));
+    }
     if ((tile.target || []).length) host.append(targetLegend(tile));
   }
 }

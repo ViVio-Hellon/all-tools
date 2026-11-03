@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_number_tile.html" import number_body %}
 {% block title %}集計・グラフ — {{ display_name }}{% endblock %}
 
 {% block content %}
@@ -150,39 +151,7 @@
 
     <div class="tile__body" data-tile-body="{{ tile.key }}">
       {% if tile.kind == 'number' %}
-      <div class="tile__value">
-        {{ tile.value }}<span class="tile__unit">{{ tile.unit }}</span>
-      </div>
-      {#
-        計算の途中式。**割り算・引き算の入るものだけ**に付きます
-        (足すだけの合計重量には付きません ── 読むものがないので)。
-
-        `<details>` にするのは、**ふだんは邪魔だから**です。数字を見に
-        来た人の前に式が広がっていると、7枚のタイルが読めません。
-        疑ったときだけ開けばよい ── 開いたかどうかはブラウザが覚えます。
-
-        中身はサーバが作った3行(式 / 数を入れた式 / 答え)をそのまま
-        出すだけです(`logic/formula.py`)── ここで式を組み立てると、
-        画面とCSVで違う式が出ます。
-      #}
-      {% if tile.steps %}
-      <details class="calc">
-        <summary class="calc__open">計算内容を見る</summary>
-        <ol class="calc__list">
-          {% for step in tile.steps %}
-          <li class="calc__step">
-            <b class="calc__name">{{ step.name }}</b>
-            <code class="calc__formula">{{ step.formula }}</code>
-            <code class="calc__sub">= {{ step.substituted }}</code>
-            <code class="calc__result">= {{ step.result }}</code>
-            {% if step.note %}
-            <span class="calc__note">{{ step.note }}</span>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ol>
-      </details>
-      {% endif %}
+      {{ number_body(tile) }}
       {% elif tile.kind == 'table' %}
       {% if tile.rows %}
       <div class="scroll-x">

@@ -657,10 +657,16 @@ def review_page():
     target_date, target_shift = after or _closing_target(ctx)
     closing = _closing(ctx, target_date, target_shift, just_pushed=bool(after),
                        after_push=bool(after))
+    # 「実数」の札と「停止」の絵。**集計・グラフと同じ組み立て・同じ期間**(月初〜当日)
+    # から抜き出す ── 数え直すと、2つの画面で同じ「本日の稼働率」が別の数になります
+    parts = dash.review_parts(
+        _dashboard(end.replace(day=1), end, report_date, ctx.line))
     return render_template(
         "graph_review.html",
         sound_cue=_daily_result_cue(target_date, target_shift),
         today=_today_shifts(report_date, ctx.line),
+        figures=parts["figures"],
+        stop_tiles=parts["stops"],
         history=_history(end.replace(day=1), end, ctx.line),
         report_date=report_date,
         line=ctx.line,
