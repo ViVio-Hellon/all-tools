@@ -21,6 +21,24 @@ export const SCREEN =
     ? crypto.randomUUID()
     : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+/**
+ * **同じタブで読み込み直した・別の画面へ移った**ときの前のページの名札(前のページが離れるとき
+ * `app.js` の pagehide が置く。タブの複製では置かれない)。心拍と、**最初の操作の要求**にも添える
+ * ── 読み込み直した直後の操作が心拍より先に届くと、前のページが持ち主のままで
+ * 「別のタブで開いています」と断られていた
+ */
+export const SCREEN_LEFT_KEY = 'kanban.screen.left';
+export const SCREEN_PRIOR = (() => {
+  try {
+    const left = JSON.parse(sessionStorage.getItem(SCREEN_LEFT_KEY) || 'null');
+    sessionStorage.removeItem(SCREEN_LEFT_KEY);
+    if (left && left.id && left.id !== SCREEN && Date.now() - (left.at || 0) < 15000) {
+      return String(left.id);
+    }
+  } catch (e) { /* 使えなくても、前のページの心拍が途切れれば移る */ }
+  return '';
+})();
+
 // 接続が切れたことを外枠へ知らせる(health.js が帯を出す)
 const listeners = new Set();
 
@@ -59,7 +77,8 @@ export class ApiError extends Error {
 async function request(path, options = {}) {
   const opts = {
     method: options.method || 'GET',
-    headers: { 'X-Tool-Token': TOKEN, 'X-Screen': SCREEN },
+    headers: { 'X-Tool-Token': TOKEN, 'X-Screen': SCREEN,
+      ...(SCREEN_PRIOR ? { 'X-Screen-Prior': SCREEN_PRIOR } : {}) },
     cache: 'no-store',
   };
   if (options.bytes !== undefined) {

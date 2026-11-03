@@ -13,14 +13,14 @@ r"""配布用フォルダを作る
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
 (ツールの直下の `配布設定\`。配った先が起動時に読み込みます)。
 
-    python tools\make_dist.py                     # ツールの隣に「配布\VERx.y.z\ライン管理カレンダー\」
+    python tools\make_dist.py                     # ツールの隣に「ライン管理カレンダー_VERx.y.z\ライン管理カレンダー\」
     python tools\make_dist.py --out D:\配布\今回   # 置き場所を指定
-    python tools\make_dist.py --zip               # zip も作る(「配布\VERx.y.z\ライン管理カレンダー_VERx.y.z.zip」)
+    python tools\make_dist.py --zip               # zip も作る(「ライン管理カレンダー_VERx.y.z\ライン管理カレンダー_VERx.y.z.zip」)
     python tools\make_dist.py --no-settings       # 配布設定を入れない
 
 【置き場所 ── 版は親のフォルダーに入れ、作る物は版なし】
 業務ツール統合ランチャーの「道を変えない」決まり(起動ファイルの名前と置き場所を変えない。
-フォルダー名に版を付けない)に合わせて、版は親のフォルダー(配布\VERx.y.z\)に入れ、
+フォルダー名に版を付けない)に合わせて、版は親のフォルダー(ライン管理カレンダー_VERx.y.z\)に入れ、
 作るフォルダーの名前は ライン管理カレンダー\ だけにします。zip のファイル名
 (ライン管理カレンダー_VERx.y.z.zip)には版が入りますが、zip の中の最上位は ライン管理カレンダー\ です。
 配った先では、決まった場所の ライン管理カレンダー\ に中身ごと上書きします
@@ -97,8 +97,8 @@ def _display_name() -> str:
 
 
 def default_out() -> Path:
-    """既定の作る場所: ツールの隣の ``配布\\VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
-    return ROOT.parent / "配布" / f"VER{_version()}" / _display_name()
+    """既定の作る場所: ツールの隣の ``<表示名>_VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
+    return ROOT.parent / f"{_display_name()}_VER{_version()}" / _display_name()
 
 
 def _excluded(name: str) -> bool:
@@ -239,7 +239,7 @@ def _memo(lines: list[str]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「配布\\VER版\\表示名」)")
+    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「ライン管理カレンダー_VER版\\表示名」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(ツール直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",

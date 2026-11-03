@@ -35,6 +35,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Optional
 
 from kanban import app_config, config
 from kanban.applog import get_logger
@@ -71,6 +72,10 @@ class LockInfo:
     # ローカルのファイルを読めないため、トークンによる防御(別オリジン
     # からの操作を弾く)はそのまま効く。
     token: str = ""
+    #: プロセスの起動した時刻(エポック秒。Windows は GetProcessTimes の作成時刻)。**PID は
+    #: 使い回される**ので、PID と起動時刻の両方が合うときだけ「動いている」とみなす(:func:`lock_owner`)。
+    #: 0 は前の版の印(起動時刻が無い)
+    process_started: float = 0.0
 
     @property
     def started_text(self) -> str:
@@ -279,6 +284,235 @@ def process_command_line(pid: int) -> str:
 
 
 # ------------------------------------------------------------------
+# 印の PID が、印を書いた本人のままか(PID の使い回し)
+# ------------------------------------------------------------------
+# 印には PID を書き、「その PID が生きていれば動いている」と見ていた。**Windows は PID を
+# 使い回す。** 動いたまま PC を終了・再起動すると印が残り、再起動のあとで**まったく別の
+# プログラムが同じ番号を持つ**ことがある。すると「起動中」と見続けて画面に接続できず、
+# stop.bat も「接続できない」で終わって印を消さなかった(別のツールで見つかった不具合)。
+#
+#     印に書くもの   PID と、そのプロセスの**起動した時刻**(`process_started`。エポック秒)
+#     本人とみなす   PID が生きていて、起動時刻が印のものと合うときだけ
+#     前の版の印     起動時刻が無い。「印を書いた時刻(ファイルの更新時刻)より後に起動した
+#                    プロセスは、書いた本人ではない」とみなす(本人は書く前に起動している)
+#
+# 本人が `NO_ANSWER_WAIT_SEC` 秒たっても答えないときは、**本人と確かめたうえで**終わらせて
+# 起動し直す(stop.bat も同じ)。関係のないプログラムは終わらせない。
+# 日報複合ツールの入口(`portal/proc_identity.py`)と同じ考え。直すときは揃える。
+
+#: 起動時刻を比べるときの許し(秒)。Windows は同じ値が返る。Linux は btime が秒単位
+START_TOLERANCE_SEC = 2.0
+#: 印の本人が答えないとき、答えるのを待つ上限(秒)。過ぎたら本人を終わらせる
+NO_ANSWER_WAIT_SEC = 5.0
+#: 残っていた印を片付けたときのログ(stop.bat・起動。日報複合ツールの入口と同じ言葉)
+CLEANED = "片付けました。Start.vbs で起動できます"
+
+OWNER_GONE, OWNER_SAME, OWNER_OTHER, OWNER_UNKNOWN = "gone", "same", "other", "unknown"
+
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _k32.OpenProcess.restype = wintypes.HANDLE
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _k32.CloseHandle.restype = wintypes.BOOL
+    _k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    _k32.GetProcessTimes.restype = wintypes.BOOL
+    _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _k32.WaitForSingleObject.restype = wintypes.DWORD
+    _k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _k32.TerminateProcess.restype = wintypes.BOOL
+    _QUERY = 0x1000                 # PROCESS_QUERY_LIMITED_INFORMATION
+    _TERMINATE = 0x0001
+    _SYNCHRONIZE = 0x00100000
+
+    def _handle_started(handle) -> Optional[float]:
+        if _k32.WaitForSingleObject(handle, 0) == 0:          # もう終わっている
+            return None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not _k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+        return filetime_to_epoch((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+
+    def _started(pid: int) -> Optional[float]:
+        handle = _k32.OpenProcess(_QUERY | _SYNCHRONIZE, False, int(pid))
+        if not handle:
+            return None             # 居ない・開けない(同じ利用者のツールなら必ず開ける)
+        try:
+            return _handle_started(handle)
+        finally:
+            _k32.CloseHandle(handle)
+
+    def _terminate(pid: int, matches, wait_sec: float) -> bool:
+        """開いた握りで起動時刻を確かめてから止める(確かめてから止めるまでに PID が入れ替わらない)。"""
+        handle = _k32.OpenProcess(_TERMINATE | _QUERY | _SYNCHRONIZE, False, int(pid))
+        if not handle:
+            return False
+        try:
+            started = _handle_started(handle)
+            if started is None:
+                return True
+            if not matches(started):
+                return False
+            _k32.TerminateProcess(handle, 1)
+            return _k32.WaitForSingleObject(handle, int(max(0.0, wait_sec) * 1000)) == 0
+        finally:
+            _k32.CloseHandle(handle)
+
+else:
+    def _boot_time() -> Optional[float]:
+        try:
+            with open("/proc/stat", encoding="ascii") as fh:
+                for line in fh:
+                    if line.startswith("btime "):
+                        return float(line.split()[1])
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _started(pid: int) -> Optional[float]:
+        try:
+            with open(f"/proc/{int(pid)}/stat", encoding="utf-8", errors="replace") as fh:
+                stat = fh.read()
+        except OSError:
+            return None
+        fields = stat[stat.rfind(")") + 2:].split()     # 名前に空白があっても崩れない
+        boot = _boot_time()
+        if len(fields) < 20 or fields[0] == "Z" or boot is None:
+            return None
+        try:
+            return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+        except (ValueError, OSError):
+            return None
+
+    def _terminate(pid: int, matches, wait_sec: float) -> bool:
+        import signal
+
+        started = _started(pid)
+        if started is None:
+            return True
+        if not matches(started):
+            return False
+        for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+            try:
+                os.kill(int(pid), sig)
+            except ProcessLookupError:
+                return True
+            except OSError:
+                return False
+            deadline = time.monotonic() + max(0.0, wait_sec) / 2
+            while time.monotonic() < deadline:
+                if _started(pid) is None:
+                    return True
+                time.sleep(0.1)
+        return _started(pid) is None
+
+
+def filetime_to_epoch(filetime: int) -> float:
+    """Windows の FILETIME(1601年からの 100ns)をエポック秒にする。"""
+    return filetime / 10_000_000 - 11_644_473_600
+
+
+def process_started(pid: int) -> Optional[float]:
+    """その PID のプロセスが起動した時刻(エポック秒)。居ない・確かめられないときは None。"""
+    if not pid or int(pid) <= 0:
+        return None
+    try:
+        return _started(int(pid))
+    except Exception:                             # noqa: BLE001 - 確かめられない
+        return None
+
+
+def my_started() -> float:
+    """自分の起動時刻(印に書く)。確かめられない環境では 0(前の版の印と同じ扱いになる)。"""
+    return process_started(os.getpid()) or 0.0
+
+
+def _start_matches(recorded: float, written: Optional[float]):
+    def matches(started: float) -> Optional[bool]:
+        if recorded:
+            return abs(started - float(recorded)) <= START_TOLERANCE_SEC
+        if written is None:
+            return None
+        return started <= float(written) + START_TOLERANCE_SEC   # 本人は印を書く前に起動している
+    return matches
+
+
+def owner_state(pid: int, recorded: float = 0.0, written: Optional[float] = None) -> str:
+    """印の PID が書いた本人か。
+
+    `OWNER_GONE` 居ない / `OWNER_SAME` 本人 / `OWNER_OTHER` 別のプロセス(PID の使い回し) /
+    `OWNER_UNKNOWN` 確かめられない(呼び出し側は今までどおり PID の生き死にだけで決める)。
+    `recorded` は印の起動時刻(無ければ 0)、`written` は印の更新時刻(読めなければ None)。
+    """
+    if int(pid or 0) == os.getpid():
+        return OWNER_UNKNOWN                      # 自分自身の印(起動時刻で見分けることではない)
+    if not is_process_alive(int(pid or 0)):
+        return OWNER_GONE
+    started = process_started(pid)
+    if started is None:
+        # 自分のは取れるのに相手のが取れない = 居ない・別の利用者・守られたプロセス。
+        # 同じ利用者のツールなら必ず取れるので、書いた本人ではない
+        return OWNER_OTHER if process_started(os.getpid()) is not None else OWNER_UNKNOWN
+    verdict = _start_matches(recorded, written)(started)
+    if verdict is None:
+        return OWNER_UNKNOWN
+    return OWNER_SAME if verdict else OWNER_OTHER
+
+
+def terminate_owner(pid: int, recorded: float = 0.0, written: Optional[float] = None,
+                    wait_sec: float = 5.0) -> bool:
+    """**本人と確かめたプロセスだけ**を止める。止まった(居なくなった)ら True。"""
+    if int(pid or 0) == os.getpid():
+        return False                              # 自分は止めない
+    check = _start_matches(recorded, written)
+    try:
+        return _terminate(int(pid), lambda started: bool(check(started)), wait_sec)
+    except Exception:                             # noqa: BLE001
+        return False
+
+
+def file_mtime(path) -> Optional[float]:
+    """印の更新時刻(前の版の印の判定に使う)。読めなければ None。"""
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def lock_owner(info: LockInfo) -> str:
+    """印(``<mode>.lock``)の PID が、印を書いた本人のままか(:func:`owner_state`)。"""
+    return owner_state(info.pid, info.process_started, file_mtime(lock_path(info.mode)))
+
+
+def remove_lock_if(info: LockInfo) -> bool:
+    """読んだ印が**まだそのまま**なら消す。
+
+    読んでから消すまでに、新しく起動したほうが印を立てていたら消さない。**読めない印も
+    消さない**(1.5.79〜1.5.81 の決まり: 読めないのを「無い・壊れている」と取り違えない)。
+    """
+    now = read_lock(info.mode)
+    if now is None or now.pid != info.pid or now.started_at != info.started_at:
+        return False
+    remove_lock(info.mode)
+    return True
+
+
+def _end_unanswered(info: LockInfo) -> bool:
+    """印の本人(PID と起動時刻が合う)が答えない。**本人だけ**を終わらせ、印を片付ける。"""
+    log.warning("pid=%s (%s:%s) が応答しません。終わらせて起動し直します",
+                info.pid, info.mode, info.port)
+    if not terminate_owner(info.pid, info.process_started, file_mtime(lock_path(info.mode))):
+        log.warning("pid=%s を終わらせられませんでした", info.pid)
+        return False
+    remove_lock_if(info)
+    log.info("応答しない前の起動を終わらせました。%s", CLEANED)
+    return True
+
+
+# ------------------------------------------------------------------
 # 起動確認 API
 # ------------------------------------------------------------------
 # 自分自身(127.0.0.1)への通信に**プロキシを通さない**ための送信口。
@@ -475,6 +709,19 @@ def _wait_until_answers(mode: str, info: LockInfo) -> dict | None:
         time.sleep(POLL_INTERVAL_SEC)
 
 
+def _wait_answer(mode: str, info: LockInfo) -> dict | None:
+    """印の本人が答えるのを ``NO_ANSWER_WAIT_SEC`` 秒まで待つ。答えたら ``/api/health`` の中身。"""
+    deadline = time.monotonic() + NO_ANSWER_WAIT_SEC
+    while True:
+        fresh = read_lock(mode) or info
+        health = probe_health(fresh.port) if fresh.port else None
+        if is_our_app(health, mode):
+            return health
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(POLL_INTERVAL_SEC)
+
+
 def find_running() -> list[tuple[str, int, dict]]:
     """**印を当てにせず、ポートを叩いて自分を探す** ``[(mode, port, health)]``。
 
@@ -504,15 +751,28 @@ def _live_instances() -> list[_Live]:
         info = read_lock(other)
         if info is None:
             continue
-        if not is_process_alive(info.pid):
+        state = lock_owner(info)
+        if state == OWNER_GONE:
             log.info("死んだロックを掃除します: %s (pid=%s は不在)", other, info.pid)
-            remove_lock(other)
+            if remove_lock_if(info):
+                log.info(CLEANED)
+            continue
+        if state == OWNER_OTHER:
+            # **PID の使い回し。** PC の終了・再起動で残った印の番号を、別のプログラムが持っている。
+            # ポート 0 の印(起動の途中で切れた)を「起動の途中」と見続けると、二度と起動できない
+            log.info("残っていた印を片付けます: %s (pid=%s は別のプロセスです。起動時刻が合いません)",
+                     other, info.pid)
+            if remove_lock_if(info):
+                log.info(CLEANED)
             continue
         if not info.port:
             # **ポートを取る前に立てた印**(:func:`claim_lock`)。相手は起動の途中なので、
             # 答えないのを「別人」と読んで消さない ── 消すと 2 つ立つ
             health = _wait_until_answers(other, info)
             if health is None:
+                if (state == OWNER_SAME and time.time() - info.started_at > STARTUP_GRACE_SEC
+                        and _wait_answer(other, info) is None and _end_unanswered(info)):
+                    continue                      # 立ち上がりきらずに固まった本人を終わらせた
                 log.info("%s は起動の途中です (pid=%s)。二重に立てないため合流します", other, info.pid)
                 live.append(_Live(other, info, "", starting=True))
                 continue
@@ -520,6 +780,11 @@ def _live_instances() -> list[_Live]:
             live.append(_Live(other, info, str(health.get("version", ""))))
             continue
         health = probe_health(info.port)
+        if not is_our_app(health, other) and state == OWNER_SAME:
+            # 起動時刻まで合った本人が答えない。少し待って、答えなければ本人だけを終わらせる
+            health = _wait_answer(other, info)
+            if health is None and _end_unanswered(info):
+                continue
         if not is_our_app(health, other):
             # プロセスは居るがこのアプリではない(PID の使い回し、または
             # 起動途中で落ちた)
@@ -778,4 +1043,5 @@ def build_lock_info(mode: str, port: int, token: str = "") -> LockInfo:
         python=sys.executable,
         app_root=str(app_config.APP_ROOT),
         token=token,
+        process_started=my_started(),
     )

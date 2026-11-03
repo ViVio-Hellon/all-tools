@@ -77,12 +77,12 @@ class MakeDistTest(unittest.TestCase):
     def test_default_out_is_dist_ver_name(self) -> None:
         """版は親のフォルダーに入れ、作る物のフォルダー名は版なし(ランチャーの「道を変えない」決まり)。"""
         out = self.make_dist.default_out()
-        self.assertEqual(out, self.make_dist.ROOT.parent / "配布" / f"VER{self.make_dist._version()}" / self.make_dist.DISPLAY_NAME)
+        self.assertEqual(out, self.make_dist.ROOT.parent / f"{self.make_dist.DISPLAY_NAME}_VER{self.make_dist._version()}" / self.make_dist.DISPLAY_NAME)
         self.assertNotIn("VER", out.name)
 
     def test_zip_name_has_version_but_top_folder_does_not(self) -> None:
         name = self.make_dist.DISPLAY_NAME
-        out, lines = self.make_dist.build(self.dir / "配布" / f"VER{self.make_dist._version()}" / name,
+        out, lines = self.make_dist.build(self.dir / f"{name}_VER{self.make_dist._version()}" / name,
                                   with_settings=False, make_zip=True)
         archive = out.parent / f"{name}_VER{self.make_dist._version()}.zip"
         self.assertTrue(archive.is_file(), list(out.parent.iterdir()))
@@ -100,8 +100,8 @@ class MakeDistTest(unittest.TestCase):
         """設定画面の「配布用フォルダを作る」は、日時を親のフォルダーに付ける(作る物は版なし)。"""
         out = self.make_dist.default_out(stamp=True)
         self.assertEqual(out.name, self.make_dist.DISPLAY_NAME)
-        self.assertEqual(out.parent.parent, ROOT.parent / "配布")
-        self.assertRegex(out.parent.name, r"^VER.+_\d{8}_\d{6}$")
+        self.assertEqual(out.parent.parent, ROOT.parent)
+        self.assertRegex(out.parent.name, r"^資材発注看板システム_VER.+_\d{8}_\d{6}$")
 
     def test_refuses_to_build_inside_the_app_folder(self):
         with self.assertRaises(SystemExit):

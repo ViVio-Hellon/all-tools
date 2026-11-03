@@ -176,7 +176,8 @@ class Screens:
         self._paused_sec = 0.0
 
     # -- 画面から ------------------------------------------------------
-    def beat(self, screen_id: str = "", *, hidden: bool = False, replaces: str = "") -> Claim:
+    def beat(self, screen_id: str = "", *, hidden: bool = False, replaces: str = "",
+             reloads: str = "") -> Claim:
         """心拍。知らない画面なら迎え入れ、持ち主が居なければ持ち主にする。
 
         ``hidden`` は「この画面は裏に回っている」。裏に回るときの合図
@@ -202,6 +203,17 @@ class Screens:
                     if self._holder == old:
                         self._holder = sid
                     log.info("捨てられて読み込み直したタブを引き継ぎました")
+            # ``reloads``: **同じタブで**読み込み直した・別の画面へ移ったときの前のページの名札
+            # (前のページが離れるときに置いた印。タブの複製では付かない)。前のページの「閉じます」が
+            # 届く前に名乗っても、前のページの席をそのまま引き継ぐ(隠れていなくてもよい)
+            prior = _clean(reloads) if reloads else ""
+            if prior and prior != sid:
+                had = self._screens.pop(prior, None) is not None
+                if self._holder == prior:
+                    self._holder = sid
+                if had:
+                    log.info("同じタブで読み込み直したページが、前のページの席を引き継ぎました")
+                self._gone[prior] = now
             known = self._screens.get(sid)
             self._screens[sid] = Screen(
                 id=sid, opened_at=known.opened_at if known else now, seen_at=now,

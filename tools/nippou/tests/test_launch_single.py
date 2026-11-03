@@ -138,6 +138,7 @@ class StartingTests(GuardTestCase):
                 launch_guard.write_lock(stored)
 
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "probe_health",
                           side_effect=lambda *a, **k: self.health()), \
              patch.object(launch_guard.time, "sleep", later_port):
@@ -155,6 +156,7 @@ class StartingTests(GuardTestCase):
         """
         launch_guard.claim_lock(self.info(pid=999, port=0))
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "looks_like_our_process", return_value=True), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "STARTUP_GRACE_SEC", 0.4), \
@@ -169,6 +171,7 @@ class StartingTests(GuardTestCase):
         launch_guard.claim_lock(old)
         started = time.monotonic()
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "process_command_line",
                           return_value="python start_app.py"):
@@ -178,7 +181,11 @@ class StartingTests(GuardTestCase):
 
 
 class HungTests(GuardTestCase):
-    """応答しないまま居座っているとき。**2つ目を立てない。**"""
+    """応答しないまま居座っているとき。**2つ目を立てない。**
+
+    ここは**起動時刻を確かめられない環境**(`process_started` が取れない)での今までどおりの扱い。
+    起動時刻まで合う本人なら、5秒待って本人だけを終わらせて起動し直す(`TakeOverTests`)。
+    """
 
     def test_応答しない自分のプロセスがあれば起動しない(self) -> None:
         """立ててしまうと2つ動きます ── 片方で打った日報は、もう片方の
@@ -187,6 +194,7 @@ class HungTests(GuardTestCase):
             pid=999, port=8733,
             started_at=time.time() - launch_guard.STARTUP_GRACE_SEC - 5))
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "process_command_line",
                           return_value="python start_app.py"):
@@ -201,6 +209,7 @@ class HungTests(GuardTestCase):
             pid=999, port=8733,
             started_at=time.time() - launch_guard.STARTUP_GRACE_SEC - 5))
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "process_command_line",
                           return_value="/usr/bin/some-other-app --serve"):
@@ -214,6 +223,7 @@ class HungTests(GuardTestCase):
             pid=999, port=8733,
             started_at=time.time() - launch_guard.STARTUP_GRACE_SEC - 5))
         with patch.object(launch_guard, "is_process_alive", return_value=True), \
+             patch.object(launch_guard, "process_started", return_value=None), \
              patch.object(launch_guard, "probe_health", return_value=None), \
              patch.object(launch_guard, "process_command_line", return_value=""):
             result = launch_guard.check_existing()

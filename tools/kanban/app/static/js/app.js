@@ -3,7 +3,7 @@
 // 画面ごとの処理は `views/*.js` にあり、テンプレートの `{% block scripts %}`
 // から読み込まれる。ここは外枠(帯・終了ボタン・接続監視)だけを持つ。
 
-import { api, SCREEN } from './api.js';
+import { api, SCREEN, SCREEN_PRIOR, SCREEN_LEFT_KEY } from './api.js';
 import * as desktop from './desktop.js';
 import { ask } from './dialog.js';
 import { startHealthWatch } from './health.js';
@@ -81,6 +81,7 @@ function reportClientErrors() {
 
 /** ブラウザが捨てて読み込み直したタブの、前の名札を覚えておく場所 */
 const SCREEN_KEY = 'kanban.screen';
+const LEFT_KEY = SCREEN_LEFT_KEY;
 
 function startHeartbeat() {
   const ms = window.APP.alivePollMs || 5000;
@@ -94,6 +95,12 @@ function startHeartbeat() {
   // 「別のタブ」と数えてしまう。名札そのものは毎回作り直す(api.js)ので、
   // 引き取るのは `document.wasDiscarded` のときだけ ── タブの複製では引き取らない
   let replaces = '';
+  // **同じタブで読み込み直した・別の画面へ移った**ときは、前のページの名札を引き継ぐ。
+  // 前のページは離れるときに「閉じます」を送るが、届く前に新しいページが名乗ると、前のページが
+  // 持ち主のまま残り、読み込み直した自分の操作が「別のタブで開いています」で断られていた
+  // (看板の設定で担当ラインを選ぶと画面を読み直す ── 続けて「なし」に戻すと断られた)。
+  // 印は離れるとき(pagehide)にだけ置くので、タブの複製では引き継がない
+  let reloads = SCREEN_PRIOR;   // 読むのは api.js(最初の操作の要求にも添えるため)
   try {
     if (document.wasDiscarded) replaces = sessionStorage.getItem(SCREEN_KEY) || '';
     sessionStorage.setItem(SCREEN_KEY, SCREEN);
@@ -114,12 +121,14 @@ function startHeartbeat() {
     // 裏に回るときの合図が届かなかった場合も、これで伝わる
     let extra = document.hidden ? '&hidden=1' : '';
     if (replaces) extra += `&replaces=${encodeURIComponent(replaces)}`;
+    if (reloads) extra += `&reloads=${encodeURIComponent(reloads)}`;
     if (takeOver) extra += '&take=1';
     try {
       // **トークンを付けない。** この経路は素通しで、返すのは「受け取った」
       // だけ。トークンが切れた画面が黙って死んだ扱いになるのを避ける
       const res = await fetch(url(extra), { method: 'POST', cache: 'no-store' });
       replaces = '';
+      reloads = '';
       takeOver = false;
       const body = await res.json();
       // `active` を返さないサーバ(古い版)では覆いを出さない
@@ -183,7 +192,14 @@ function startHeartbeat() {
   // **戻る・進むのキャッシュへ入るときは「閉じた」ではない**(`persisted`)。
   // 閉じたと伝えると、戻ってくる前に終わってしまう。隠れた扱いにしておく。
   // `beforeunload` では送らない ── キャッシュへ入るかどうかがまだ分からない
-  window.addEventListener('pagehide', (ev) => signal(ev.persisted ? 'hidden' : 'leaving'));
+  window.addEventListener('pagehide', (ev) => {
+    if (!ev.persisted) {
+      try {
+        sessionStorage.setItem(LEFT_KEY, JSON.stringify({ id: SCREEN, at: Date.now() }));
+      } catch (e) { /* 引き継げなくても、前のページの心拍が途切れれば移る */ }
+    }
+    signal(ev.persisted ? 'hidden' : 'leaving');
+  });
 }
 
 /**

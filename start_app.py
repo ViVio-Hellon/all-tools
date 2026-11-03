@@ -62,6 +62,17 @@ WAKE_GAP_SEC = 30
 
 LOCK_NAME = "portal.lock"
 
+#: 印の本人(起動時刻まで合う前回の入口)が動いているのに答えないとき、答えるのを待つ上限(秒)。
+#: 過ぎたら本人を終わらせてから起動し直す(`portal/proc_identity.py`)
+NO_ANSWER_WAIT_SEC = 5.0
+#: 前回の入口を終わらせたあと、錠(名前付きミューテックス)が空くのを待つ上限(秒)
+RECLAIM_WAIT_SEC = 5.0
+#: 錠は握られているのに印が前回のもの(起動の途中)のとき、新しい印を待つ上限(秒)
+STARTING_WAIT_SEC = 8.0
+
+#: 残っていた印を片付けたときのログ(stop.bat・起動。各ツールも同じ言葉)
+CLEANED = "片付けました。Start.vbs で起動できます"
+
 DESKTOP_RUNNING = "日報複合ツールはデスクトップ版(日報複合ツール.exe の窓)で動いています"
 DESKTOP_HINT = ("開いている窓をお使いください。ブラウザ版で開くときは、"
                 "窓の「終了」で閉じてからにしてください。")
@@ -113,6 +124,8 @@ def lock_path() -> Path:
 
 
 def read_lock() -> Optional[dict]:
+    """読めない(壊れている・書きかけ・掴まれている)ときも None。**片付けには使わない**
+    (片付けは中身を読めた印だけ。`remove_lock_if`)。"""
     try:
         data = json.loads(lock_path().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
@@ -120,11 +133,41 @@ def read_lock() -> Optional[dict]:
         return None
 
 
-def write_lock(port: int, token: str) -> None:
-    from portal import app_config
+def lock_owner(lock: Optional[dict]) -> str:
+    """印の PID が、印を書いた入口のままか(`portal.proc_identity.owner`)。
 
+    **PID は使い回される。** PC を終了・再起動したあとに残った印の PID を、まったく別の
+    プログラムが持っていることがある。起動時刻まで合うときだけ本人(`SAME`)。
+    """
+    from portal import browser_tools, proc_identity
+
+    if not lock:
+        return proc_identity.GONE
+    return proc_identity.owner(int(lock.get("pid") or 0), float(lock.get("process_started") or 0),
+                               proc_identity.file_mtime(lock_path()),
+                               lambda pid: browser_tools.is_alive(pid))
+
+
+def remove_lock_if(lock: dict) -> bool:
+    """読んだ印が**まだそのまま**なら消す(読んでから消すまでに新しい入口が書いた印を消さない)。"""
+    now = read_lock()
+    if not now or now.get("pid") != lock.get("pid") or now.get("token") != lock.get("token"):
+        return False
+    try:
+        lock_path().unlink()
+    except OSError:
+        return False
+    return True
+
+
+def write_lock(port: int, token: str) -> None:
+    from portal import app_config, proc_identity
+
+    # 起動時刻(`process_started`)も書く。PID だけでは、再起動のあとに同じ番号を持った別の
+    # プログラムを「動いている」と取り違える(`lock_owner`)
     data = {"app_id": app_config.app_id(), "pid": os.getpid(), "port": port,
             "url": f"http://127.0.0.1:{port}/", "token": token, "started_at": time.time(),
+            "process_started": proc_identity.my_started(),
             "version": app_config.version(), "app_root": str(APP_ROOT), "python": sys.executable}
     path = lock_path()
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -150,6 +193,85 @@ def port_free(port: int, host: str) -> bool:
         except OSError:
             return False
     return True
+
+
+def _answers(lock: dict, wait_sec: float) -> bool:
+    """入口が `/api/health` に自分(app_id)と答えるか。`wait_sec` 秒まで待つ。"""
+    from portal import app_config
+    from portal.browser_tools import _request
+
+    deadline = time.monotonic() + wait_sec
+    while True:
+        try:
+            status, body = _request(f"http://127.0.0.1:{int(lock.get('port') or 0)}/api/health", timeout=1.5)
+        except (OSError, ValueError):
+            status, body = 0, {}
+        if status == 200 and isinstance(body, dict) and body.get("app_id") == app_config.app_id():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.3)
+
+
+def _connect(log, lock: dict, *, open_browser: bool) -> None:
+    log.info("ブラウザ版がもう動いています。つなぎます: %s", lock.get("url"))
+    if open_browser:
+        webbrowser.open(lock["url"])
+    else:
+        print(f"もう動いています: {lock['url']}")
+
+
+def _join_or_take_over(log, *, open_browser: bool):
+    """錠(名前付きミューテックス)は別のブラウザ版の入口が握っている。つなぐか、立て直す。
+
+    戻り値: つないだ(=起動しない)なら None、立て直して錠を握れたらその `Claim`。
+
+    - 印の本人(PID と起動時刻が合う)が答える → つなぐ
+    - 本人が `NO_ANSWER_WAIT_SEC` 秒たっても答えない → **本人だけ**を終わらせて、錠を取り直して起動する
+    - 印が前回のもの(PID が居ない・別のプログラムが同じ番号を持っている)→ 錠を握っているのは
+      起動の途中の入口。新しい印が出るのを少し待ってつなぐ
+    """
+    from portal import instance_guard, proc_identity
+
+    deadline = time.monotonic() + STARTING_WAIT_SEC
+    said = False
+    while True:
+        lock = read_lock()
+        state = lock_owner(lock)
+        if lock and lock.get("url") and state == proc_identity.UNKNOWN:
+            _connect(log, lock, open_browser=open_browser)    # 確かめられない環境は今までどおり
+            return None
+        if lock and lock.get("url") and state == proc_identity.SAME:
+            if _answers(lock, NO_ANSWER_WAIT_SEC):
+                _connect(log, lock, open_browser=open_browser)
+                return None
+            pid = int(lock.get("pid") or 0)
+            log.warning("前回のブラウザ版の入口(pid=%s)が %.0f秒たっても応答しません。終わらせて起動し直します",
+                        pid, NO_ANSWER_WAIT_SEC)
+            if not proc_identity.terminate(pid, float(lock.get("process_started") or 0),
+                                           proc_identity.file_mtime(lock_path())):
+                raise StartupError("日報複合ツールのブラウザ版(前回の起動)が応答しません",
+                                   "stop.bat --force で止めてから、もう一度開いてください。")
+            remove_lock_if(lock)
+            log.info("前回の入口を終わらせました。%s", CLEANED)
+            until = time.monotonic() + RECLAIM_WAIT_SEC
+            while True:
+                claim = instance_guard.claim(instance_guard.BROWSER)
+                if claim.ok:
+                    return claim
+                if time.monotonic() >= until:
+                    break
+                time.sleep(0.2)
+            raise StartupError("日報複合ツールのブラウザ版がもう動いています",
+                               "開いているブラウザのタブをお使いください。")
+        if lock and state in (proc_identity.GONE, proc_identity.OTHER) and not said:
+            said = True
+            log.info("残っていた印は前回の起動のものです(pid=%s は%s)。起動の途中の入口を待ちます",
+                     lock.get("pid"), "居ません" if state == proc_identity.GONE else "別のプログラムです")
+        if time.monotonic() >= deadline:
+            raise StartupError("日報複合ツールのブラウザ版がもう動いています",
+                               "開いているブラウザのタブをお使いください。")
+        time.sleep(0.3)
 
 
 # ------------------------------------------------------------------
@@ -216,17 +338,10 @@ def start(*, open_browser: bool = True) -> int:
             log.warning("デスクトップ版が動いているので、ブラウザ版は起動しません")
             instance_guard.bring_desktop_to_front()
             raise StartupError(DESKTOP_RUNNING, DESKTOP_HINT)
-        # ブラウザ版がもう動いている。そこへつなぐ
-        lock = read_lock()
-        if lock and lock.get("url"):
-            log.info("ブラウザ版がもう動いています。つなぎます: %s", lock.get("url"))
-            if open_browser:
-                webbrowser.open(lock["url"])
-            else:
-                print(f"もう動いています: {lock['url']}")
+        # ブラウザ版がもう動いている。そこへつなぐ(答えない前回の入口なら終わらせて起動し直す)
+        claim = _join_or_take_over(log, open_browser=open_browser)
+        if claim is None:
             return 0
-        raise StartupError("日報複合ツールのブラウザ版がもう動いています",
-                           "開いているブラウザのタブをお使いください。")
 
     host = app_config.host()
     port = next((p for p in app_config.port_candidates() if port_free(p, host)), None)

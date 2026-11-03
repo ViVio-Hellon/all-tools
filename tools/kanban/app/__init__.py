@@ -456,6 +456,13 @@ def _register_screen_guard(app: Flask) -> None:
 
         if screen.get().is_holder(sid):
             return None
+        prior = request.headers.get("X-Screen-Prior", "")
+        if prior:
+            # 同じタブで読み込み直した直後の操作が、最初の心拍より先に届いた。前のページの席を
+            # 引き継いでから見直す(印はタブの複製では付かない ── ``static/js/api.js``)
+            screen.get().beat(sid, reloads=prior)
+            if screen.get().is_holder(sid):
+                return None
         log.info("持ち主でない画面からの操作を断りました: %s", request.path)
         return (
             jsonify(

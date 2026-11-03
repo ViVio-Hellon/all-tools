@@ -209,8 +209,11 @@ def _stop_browser(*, force: bool) -> Outcome:
     did = False                       # 止めたものがある
     killed = False                    # PID で止めたものがある(点検表の Excel を片付ける)
     lock = start_app.read_lock()
+    cleaned = _clean_stale_lock(lock, details)
+    if cleaned:
+        lock = None
     pid = int((lock or {}).get("pid") or 0)
-    if not (lock and lock.get("port") and is_alive(pid)) and instance_guard.running() == instance_guard.BROWSER:
+    if not _live(lock) and instance_guard.running() == instance_guard.BROWSER:
         # 起動の途中(錠は握ったが、まだ待ち受けの印 portal.lock を書いていない。配布設定・共有の
         # DB を読んでいる)。「動いていない」と言うと、ランチャーが起動中のフォルダーを上書きする
         deadline = time.monotonic() + STARTING_WAIT_SEC
@@ -218,11 +221,11 @@ def _stop_browser(*, force: bool) -> Outcome:
             time.sleep(0.3)
             lock = start_app.read_lock()
             pid = int((lock or {}).get("pid") or 0)
-            if (lock and lock.get("port") and is_alive(pid)) or instance_guard.running() != instance_guard.BROWSER:
+            if _live(lock) or instance_guard.running() != instance_guard.BROWSER:
                 break
-        if not (lock and lock.get("port") and is_alive(pid)) and instance_guard.running() == instance_guard.BROWSER:
+        if not _live(lock) and instance_guard.running() == instance_guard.BROWSER:
             return Outcome(EXIT_BUSY, "日報複合ツール(ブラウザ版)を起動しています(起動が済んでから止め直してください)")
-    if lock and lock.get("port") and is_alive(pid):
+    if _live(lock):
         did = True
         base = f"http://127.0.0.1:{lock['port']}"
         try:
@@ -250,6 +253,9 @@ def _stop_browser(*, force: bool) -> Outcome:
         elif status == 409:
             return Outcome(EXIT_BUSY, _portal_busy_line(body),
                            details=["止めませんでした:", str(body.get("message") or "")], hint=FORCE_HINT)
+        elif status == 0 and not force and _settle_no_answer(lock, details):
+            # 接続できない入口を、起動時刻まで確かめたうえで終わらせた(印も片付けた)
+            killed = True
         elif status != 200 and not force:
             # 入口が答えない(固まっている・組み立ての途中)。黙って待ってから「止めた」と言わない
             if not _wait_pid(pid, 3.0):
@@ -301,9 +307,110 @@ def _stop_browser(*, force: bool) -> Outcome:
     if killed:
         cleanup_inspection_excel(details)
     if not did:
+        if cleaned:
+            return Outcome(EXIT_STOPPED, "日報複合ツールは動いていません(残っていた前回の印を片付けました)",
+                           details=details)
         return Outcome(EXIT_STOPPED, "日報複合ツールは動いていません")
     return Outcome(EXIT_STOPPED, "日報複合ツール(ブラウザ版)を止めました"
                    + ("(途中の処理は捨てました)" if force else ""), details=details)
+
+
+#: 印の本人(起動時刻まで合う入口)に接続できないとき、答えるのを待つ上限(秒)。過ぎたら本人を終わらせる
+NO_ANSWER_WAIT_SEC = 5.0
+
+
+def _log():
+    from portal.logging_utils import get_logger
+
+    return get_logger("stop")
+
+
+def _live(lock: Optional[dict]) -> bool:
+    """入口の印があり、その PID が**印を書いた入口のまま**か(起動時刻まで見る。`start_app.lock_owner`)。
+
+    PID が生きているだけでは決めない。PC を終了・再起動したあとに残った印の PID を、別の
+    プログラムが持っていることがある(以前はそれを「動いている」と見て、接続できずに
+    「入口が停止の頼みに答えません」で終わり、印も消さなかった。--force ならその別の
+    プログラムを止めていた)。確かめられない環境では今までどおり PID の生き死にで見る。
+    """
+    from portal import proc_identity
+
+    import start_app
+
+    return bool(lock and lock.get("port")) and start_app.lock_owner(lock) in (proc_identity.SAME,
+                                                                               proc_identity.UNKNOWN)
+
+
+def _log_reaches_stderr(logger) -> bool:
+    """記録が標準エラーにも出るか(コンソールのあるとき、記録は画面にも出す作り)。二重に出さない。"""
+    import logging
+
+    while logger is not None:
+        for handler in logger.handlers:
+            if (isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+                    and getattr(handler, "stream", None) is sys.stderr):
+                return True
+        if not logger.propagate:
+            break
+        logger = logger.parent
+    return False
+
+
+def _say_cleaned(details: list[str], what: str) -> None:
+    """片付けたことを、ログと標準エラー(途中の経過)に1行出す。"""
+    import start_app
+
+    log = _log()
+    log.info("%s。%s", what, start_app.CLEANED)
+    # 入口のログは、試験のとき以外は標準エラーにも出る(`portal.logging_utils`)。二重に出さない
+    if not _log_reaches_stderr(log):
+        _progress(f"{what}。{start_app.CLEANED}")
+
+
+def _clean_stale_lock(lock: Optional[dict], details: list[str]) -> bool:
+    """入口の印が前回のもの(PID が居ない・別のプログラムが同じ番号を持っている)なら片付ける。
+
+    **中身を読めた印だけ**を、読んだときのままなら消す(読めない印は消さない。1.5.79〜1.5.81 の
+    決まり)。片付けたら True。
+    """
+    from portal import proc_identity
+
+    import start_app
+
+    if not lock:
+        return False
+    state = start_app.lock_owner(lock)
+    if state not in (proc_identity.GONE, proc_identity.OTHER):
+        return False
+    if not start_app.remove_lock_if(lock):
+        return False
+    why = "居ません" if state == proc_identity.GONE else "別のプログラムが同じ番号を使っています"
+    _say_cleaned(details, f"残っていたブラウザ版の入口の印を消しました(pid={lock.get('pid')} は{why})")
+    return True
+
+
+def _settle_no_answer(lock: dict, details: list[str]) -> bool:
+    """接続できない入口。**本人と確かめられたら**、`NO_ANSWER_WAIT_SEC` 秒待って答えなければ終わらせる。
+
+    終わらせて印も片付けたら True。本人と確かめられない・答えた・終わらせられないときは False
+    (今までどおりの扱いに戻す)。
+    """
+    from portal import proc_identity
+
+    import start_app
+
+    if start_app.lock_owner(lock) != proc_identity.SAME:
+        return False
+    if start_app._answers(lock, NO_ANSWER_WAIT_SEC):
+        return False
+    pid = int(lock.get("pid") or 0)
+    _progress(f"日報複合ツールの入口(pid={pid})が {NO_ANSWER_WAIT_SEC:.0f}秒たっても応答しないので終わらせます")
+    if not proc_identity.terminate(pid, float(lock.get("process_started") or 0),
+                                   proc_identity.file_mtime(start_app.lock_path())):
+        return False
+    start_app.remove_lock_if(lock)
+    _say_cleaned(details, f"応答しないブラウザ版の入口を終わらせました(pid={pid})")
+    return True
 
 
 def _wait_pid(pid: int, timeout: float) -> bool:
@@ -398,7 +505,7 @@ def _desktop_windows() -> Optional[list[int]]:
 def check() -> int:
     """起動確認(`launcher_check.bat`)。最後の1行は、起動中の窓に出る「準備の段階」。"""
     from portal import app_config, instance_guard
-    from portal.browser_tools import _request, is_alive
+    from portal.browser_tools import _request
 
     import start_app
 
@@ -411,7 +518,7 @@ def check() -> int:
         print("デスクトップ版の窓を開いています")
         return CHECK_STARTING
     lock = start_app.read_lock()
-    if lock and lock.get("port") and is_alive(int(lock.get("pid") or 0)):
+    if _live(lock):
         try:
             status, body = _request(f"http://127.0.0.1:{lock['port']}/api/health", timeout=3)
         except (urllib.error.URLError, OSError, ValueError):

@@ -60,12 +60,12 @@ class MakeDistTests(unittest.TestCase):
     def test_既定の作る場所はツールの隣の配布_VER版_表示名(self) -> None:
         """版は親のフォルダーに入れ、作る物のフォルダー名は版なし(ランチャーの「道を変えない」決まり)。"""
         out = make_dist.default_out()
-        self.assertEqual(out, make_dist.ROOT.parent / "配布" / f"VER{make_dist._version()}" / make_dist._tool_name())
+        self.assertEqual(out, make_dist.ROOT.parent / f"{make_dist._tool_name()}_VER{make_dist._version()}" / make_dist._tool_name())
         self.assertNotIn("VER", out.name)
 
     def test_zipの名前には版が入り_中の最上位は版なしの名前(self) -> None:
         name = make_dist._tool_name()
-        out, lines = make_dist.build(self.tmp / "配布" / f"VER{make_dist._version()}" / name,
+        out, lines = make_dist.build(self.tmp / f"{name}_VER{make_dist._version()}" / name,
                                   with_settings=False, make_zip=True)
         archive = out.parent / f"{name}_VER{make_dist._version()}.zip"
         self.assertTrue(archive.is_file(), list(out.parent.iterdir()))

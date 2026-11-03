@@ -87,6 +87,11 @@ class StopModeTests(unittest.TestCase):
             mock.patch.object(launch_guard, "read_lock",
                               side_effect=lambda mode: self.info if mode == config.MODE_SITE else None),
             mock.patch.object(launch_guard, "is_process_alive", side_effect=lambda pid: self.alive),
+            # 起動時刻を確かめられない環境として、今までどおり PID の生き死にで見る
+            # (起動時刻で見分けるところは test_pid_reuse.py)
+            mock.patch.object(launch_guard, "lock_owner", side_effect=lambda info: (
+                launch_guard.OWNER_UNKNOWN if self.alive else launch_guard.OWNER_GONE)),
+            mock.patch.object(launch_guard, "remove_lock_if"),
             mock.patch.object(launch_guard, "probe_health", return_value={"app_id": "x"}),
             mock.patch.object(launch_guard, "is_our_app", return_value=True),
             mock.patch.object(launch_guard, "remove_lock"),

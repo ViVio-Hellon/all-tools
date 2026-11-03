@@ -138,6 +138,20 @@ def wait_gone(runs: "list[Running]", timeout: float) -> "list[Running]":
     return [r for r in left if is_alive(r.pid)]
 
 
+def lock_alive(info: dict, path: Path) -> bool:
+    """ツールの印の PID が、**印を書いたツールのまま**か(起動時刻まで見る。`portal.proc_identity`)。
+
+    PID が生きているだけでは決めない。PC を終了・再起動したあとに残った印の PID を、別の
+    プログラムが持っていることがある(それを「まだ動いている」と見て、タブが「終わった」に
+    ならなかった)。確かめられない環境では今までどおり PID の生き死にで見る。
+    """
+    from . import proc_identity
+
+    state = proc_identity.owner(int(info.get("pid") or 0), float(info.get("process_started") or 0),
+                                proc_identity.file_mtime(path), lambda pid: is_alive(pid))
+    return state in (proc_identity.SAME, proc_identity.UNKNOWN)
+
+
 class Running:
     def __init__(self, tool: Tool, info: dict) -> None:
         self.tool = tool
@@ -176,7 +190,7 @@ def find_running(tool: Tool, *, check_pid: bool = True) -> Optional[Running]:
         if app_id and info.get("app_id") and info.get("app_id") != app_id:
             continue
         running = Running(tool, info)
-        if check_pid and not is_alive(running.pid):
+        if check_pid and not lock_alive(info, path):
             continue
         try:
             status, health = _request(f"{running.base}/api/health")
@@ -188,7 +202,8 @@ def find_running(tool: Tool, *, check_pid: bool = True) -> Optional[Running]:
 
 
 def has_live_lock(tool: Tool) -> bool:
-    """そのツールのブラウザ版の印(`runtime/*.lock`)が残っていて、その PID が生きているか。
+    """そのツールのブラウザ版の印(`runtime/*.lock`)が残っていて、その PID が印を書いた本人のまま
+    生きているか(`lock_alive`)。
 
     待ち受けが答えない(重い処理の途中・一時停止)だけでは「終わった」と言えない。
     終わったと言えるのは、**印が消えたか、印の PID が居ない**ときだけ。
@@ -208,7 +223,7 @@ def has_live_lock(tool: Tool) -> bool:
             continue
         if app_id and info.get("app_id") and info.get("app_id") != app_id:
             continue
-        if is_alive(int(info.get("pid") or 0)):
+        if lock_alive(info, path):
             return True
     return False
 

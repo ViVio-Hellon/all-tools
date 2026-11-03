@@ -4,7 +4,7 @@
 - 各ツールは、そのツールの make_dist の決まりのまま `tools\\<ツール>\\` へ
 - デスクトップ版の exe は、あれば 日報複合ツール.exe の名前で直下に入れる
 - 直下に何かを足したら、配るかどうかを決めさせる(一覧と食い違えば落ちる)
-- 版は親のフォルダーに入れ、作る物は版なし(既定は一式の隣の 配布\\VER<版>\\日報複合ツール\\。
+- 版は親のフォルダーに入れ、作る物は版なし(既定は一式の隣の 日報複合_VER<版>\\日報複合ツール\\。
   zip の名前には版を入れるが、中の最上位は 日報複合ツール\\。ランチャーの「道を変えない」決まり)
 """
 from __future__ import annotations
@@ -37,10 +37,10 @@ class BuildTests(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(prefix="alltools_dist_"))
         exe = cls.tmp / "AllTools.exe"
         exe.write_bytes(b"MZ-fake")
-        # 既定と同じ形(配布\VER<版>\<表示名>)の所に、zip も作る
+        # 既定と同じ形(日報複合_VER<版>\<表示名>)の所に、zip も作る
         cls.version = make_dist.version()
         cls.name = make_dist.display_name()
-        cls.out, cls.lines = make_dist.build(cls.tmp / "配布" / f"VER{cls.version}" / cls.name,
+        cls.out, cls.lines = make_dist.build(cls.tmp / f"日報複合_VER{cls.version}" / cls.name,
                                              exe=exe, make_zip=True)
 
     @classmethod
@@ -98,7 +98,7 @@ class BuildTests(unittest.TestCase):
 class RuleTests(unittest.TestCase):
     def test_既定の作る場所は一式の隣の配布_VER版_表示名(self) -> None:
         out = make_dist.default_out()
-        self.assertEqual(out, ROOT.parent / "配布" / f"VER{make_dist.version()}" / make_dist.display_name())
+        self.assertEqual(out, ROOT.parent / f"日報複合_VER{make_dist.version()}" / make_dist.display_name())
         self.assertEqual(out.name, make_dist.display_name(), "作る物のフォルダー名は版なし")
         self.assertNotIn("VER", out.name)
 

@@ -140,6 +140,8 @@ def alive():
             sid,
             hidden=request.args.get("hidden") == "1",
             replaces=request.args.get("replaces", ""),
+            # ``reloads=`` … 同じタブで読み込み直した・移ったときの前のページの名札
+            reloads=request.args.get("reloads", ""),
         )
     return jsonify(
         {

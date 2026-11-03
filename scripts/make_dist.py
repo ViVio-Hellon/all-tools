@@ -6,21 +6,21 @@ r"""日報複合ツール一式の配布用フォルダを作る
 (tests\・__pycache__・.git・src-tauri\target\(数 GB)・端末ごとの設定)。
 このスクリプトは**配るものだけ**を新しいフォルダへ写します。
 
-    python scripts\make_dist.py                     # 一式の隣に「配布\VERx.y.z\日報複合ツール\」
+    python scripts\make_dist.py                     # 一式の隣に「日報複合_VERx.y.z\日報複合ツール\」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
-    python scripts\make_dist.py --zip               # zip も作る(「配布\VERx.y.z\日報複合ツール_VERx.y.z.zip」)
+    python scripts\make_dist.py --zip               # zip も作る(「日報複合_VERx.y.z\日報複合ツール_VERx.y.z.zip」)
     python scripts\make_dist.py --no-settings       # 配布設定(大設定・各ツール)を入れない
     python scripts\make_dist.py --exe D:\AllTools.exe  # 入れる exe を指定
 
 【置き場所 ── 版は親のフォルダーに入れ、作る物は版なし】
 業務ツール統合ランチャーは「道を変えない」(起動ファイルの名前と置き場所を変えない。
 フォルダー名に版を付けない)決まりで、決まった場所の 日報複合ツール\ を起動します。
-そこで版は親のフォルダー(配布\VERx.y.z\)に入れ、作るフォルダーの名前は表示名だけにします。
+そこで版は親のフォルダー(日報複合_VERx.y.z\)に入れ、作るフォルダーの名前は表示名だけにします。
 zip のファイル名には版が入りますが、zip の中の最上位のフォルダーは版なしの 日報複合ツール\ です。
 配った先では、共有の決まった場所の 日報複合ツール\ に中身ごと上書きします
 (フォルダー名を変えない・版の付いた名前で置かない)。
 
-    <一式の隣>\配布\VERx.y.z\
+    <一式の隣>\日報複合_VERx.y.z\
       日報複合ツール\               ← 作る物(版なし)
       日報複合ツール_VERx.y.z.zip    ← --zip のとき(中の最上位は 日報複合ツール\)
 
@@ -128,7 +128,8 @@ GENERIC_INCLUDE: dict[str, tuple[str, ...]] = {
 SETTINGS = "配布設定"
 
 #: 既定で作る場所の親(一式の隣)。この下の ``VER<版>\`` に版なしの名前で作る
-DIST_DIR = "配布"
+#: 版を入れる親のフォルダーの頭(「日報複合_VER<版>\\日報複合ツール\\」)
+DIST_PREFIX = "日報複合"
 
 
 def _catalog(root: Path = ROOT) -> dict:
@@ -394,13 +395,13 @@ def _memo(lines: list[str], root: Path) -> str:
 
 
 def default_out(root: Path = ROOT) -> Path:
-    """既定の作る場所: 一式の隣の ``配布\\VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
-    return root.parent / DIST_DIR / f"VER{version(root)}" / display_name(root)
+    """既定の作る場所: 一式の隣の ``日報複合_VER<版>\\<表示名>``(作る物のフォルダー名は版なし)。"""
+    return root.parent / f"{DIST_PREFIX}_VER{version(root)}" / display_name(root)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="日報複合ツール一式の配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「配布\\VER版\\日報複合ツール」)")
+    parser.add_argument("--out", help="作る場所(既定: 一式の隣に「日報複合_VER版\\日報複合ツール」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(大設定の 配布設定 と、各ツールの tools\\<ツール>\\配布設定)を入れない")
     parser.add_argument("--force", action="store_true",

@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 import process_manager
-from portal import browser_tools, instance_guard
+from portal import browser_tools, instance_guard, proc_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -171,6 +171,11 @@ class BrowserStopTests(unittest.TestCase):
             mock.patch.object(process_manager, "PORTAL_EXIT_WAIT_SEC", 0.3),
             mock.patch.object(process_manager, "PORTAL_FORCE_WAIT_SEC", 0.3),
             mock.patch.object(process_manager, "cleanup_inspection_excel"),
+            # 印の本人か(起動時刻まで)は確かめられない環境として、今までどおり PID の生き死にで見る。
+            # 起動時刻で見分けるところは `PidReuseStopTests`
+            mock.patch("start_app.lock_owner", side_effect=lambda lock: (
+                proc_identity.UNKNOWN if lock and browser_tools.is_alive(int(lock.get("pid") or 0))
+                else proc_identity.GONE)),
         ]
         for p in patches:
             p.start()
@@ -276,7 +281,8 @@ class BrowserStopTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         process_manager.cleanup_inspection_excel.assert_called_once()
 
-    def test_入口が答えなければ1(self) -> None:
+    def test_入口が答えなければ1_起動時刻を確かめられないとき(self) -> None:
+        """本人と確かめられたときは、5秒待って終わらせて 0(`PidReuseStopTests`)。"""
         portal = Portal(0, {}, exits=False)
 
         def unreachable(*a, **kw):          # noqa: ANN002, ANN003

@@ -72,14 +72,42 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
     if info is None:
         return result
 
-    if not launch_guard.is_process_alive(info.pid):
+    state = launch_guard.lock_owner(info)
+    if state == launch_guard.OWNER_GONE:
         log.info("ロックは残っていますが pid=%s は不在です", info.pid)
-        launch_guard.remove_lock(mode)
+        if launch_guard.remove_lock_if(info):
+            _say_cleaned(f"残っていた印を消しました({config.mode_display_name(mode)}: pid={info.pid} は居ません)")
+        return result
+    if state == launch_guard.OWNER_OTHER:
+        # **PID の使い回し。落としてはいけない。** PC を終了・再起動したあとに残った印の番号を、
+        # 別のプログラムが持っている(起動時刻が合わない)。印だけ片付ける
+        log.warning("pid=%s は別のプロセスです(起動時刻が合いません)。触りません", info.pid)
+        launch_guard.remove_lock_if(info)
+        _say_cleaned(f"残っていた印を消しました({config.mode_display_name(mode)}: "
+                     f"pid={info.pid} は別のプログラムが同じ番号を使っています)")
+        result.message = "ロックのプロセスは別物でした(触っていません)"
         return result
 
     health = launch_guard.probe_health(info.port)
+    if not launch_guard.is_our_app(health, mode) and state == launch_guard.OWNER_SAME and info.port:
+        # 起動時刻まで合った本人が答えない。少し待って、答えなければ本人だけを終わらせる
+        health = _wait_answer(info)
+        if health is None:
+            result.was_running = True
+            log.warning("pid=%s が %.0f秒たっても応答しません。終わらせます",
+                        info.pid, launch_guard.NO_ANSWER_WAIT_SEC)
+            if launch_guard.terminate_owner(info.pid, info.process_started,
+                                            launch_guard.file_mtime(launch_guard.lock_path(mode)),
+                                            KILL_WAIT_SEC):
+                launch_guard.remove_lock_if(info)
+                _say_cleaned(f"応答しない前回の起動を終わらせました({config.mode_display_name(mode)}: pid={info.pid})")
+                result.stopped = True
+                result.how = "応答が無いので終了"
+            else:
+                result.message = f"応答しない pid={info.pid} を停止できませんでした"
+            return result
     if not launch_guard.is_our_app(health, mode):
-        # PID の使い回し。**落としてはいけない**
+        # PID の使い回し(確かめられない環境)。**落としてはいけない**
         log.warning("pid=%s は別のプロセスです。触りません", info.pid)
         launch_guard.remove_lock(mode)
         result.message = "ロックのプロセスは別物でした(触っていません)"
@@ -123,6 +151,20 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
             log.warning("押し切りの停止要求も通りましたが、プロセスが残っています")
 
     # --- 2. PID で止める(中身を確かめてから) --------------------------
+    if launch_guard.lock_owner(info) == launch_guard.OWNER_SAME:
+        # 起動時刻まで合った本人だけを止める(コマンドラインは Windows 11 24H2 から取れないことがある)
+        log.info("PID で停止します(起動時刻まで確かめました): pid=%s", info.pid)
+        if launch_guard.terminate_owner(info.pid, info.process_started,
+                                        launch_guard.file_mtime(launch_guard.lock_path(mode)), KILL_WAIT_SEC):
+            launch_guard.remove_lock_if(info)
+            result.stopped = True
+            result.how = "PID で停止"
+            return result
+    elif launch_guard.lock_owner(info) in (launch_guard.OWNER_GONE, launch_guard.OWNER_OTHER):
+        launch_guard.remove_lock_if(info)
+        result.stopped = True
+        result.how = "すでに終わっていました"
+        return result
     cmdline = launch_guard.process_command_line(info.pid)
     if cmdline and not _looks_like_ours(cmdline, info):
         log.warning("pid=%s の中身がこのアプリと一致しません。触りません: %s",
@@ -155,6 +197,40 @@ def stop_mode(mode: str, *, force: bool = False) -> StopResult:
 
     result.message = f"pid={info.pid} を停止できませんでした"
     return result
+
+
+def _log_reaches_stderr(logger) -> bool:
+    """記録が標準エラーにも出るか(コンソールのあるとき、記録は画面にも出す作り)。二重に出さない。"""
+    import logging
+
+    while logger is not None:
+        for handler in logger.handlers:
+            if (isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+                    and getattr(handler, "stream", None) is sys.stderr):
+                return True
+        if not logger.propagate:
+            break
+        logger = logger.parent
+    return False
+
+
+def _say_cleaned(what: str) -> None:
+    """片付けたことを、ログと標準エラーに出す(標準出力の1行目は結果のために空けておく)。"""
+    log.info("%s。%s", what, launch_guard.CLEANED)
+    if not _log_reaches_stderr(log):
+        print(f"{what}。{launch_guard.CLEANED}", file=sys.stderr, flush=True)
+
+
+def _wait_answer(info: launch_guard.LockInfo) -> dict | None:
+    """印の本人が答えるのを ``NO_ANSWER_WAIT_SEC`` 秒まで待つ。答えたら ``/api/health`` の中身。"""
+    deadline = time.monotonic() + launch_guard.NO_ANSWER_WAIT_SEC
+    while True:
+        health = launch_guard.probe_health(info.port)
+        if launch_guard.is_our_app(health, info.mode):
+            return health
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.3)
 
 
 def _ask_shutdown(port: int, token: str) -> tuple[bool, str]:

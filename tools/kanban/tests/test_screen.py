@@ -99,6 +99,27 @@ class HolderTest(unittest.TestCase):
         self.assertEqual(len(self.screens.live()[0].id), screen.MAX_ID_LEN)
 
 
+class ReloadTest(unittest.TestCase):
+    """同じタブで読み込み直したページは、前のページの席を引き継ぐ(前のページの「閉じます」が届く前でも)。
+
+    看板の設定で担当ラインを選ぶと画面を読み直す。続けて「なし」を選ぶと「別のタブで開いています」で
+    断られていた(読み込み直したページが持ち主になっていなかった)。
+    """
+
+    def test_reloads_takes_the_seat_before_leaving_arrives(self) -> None:
+        screens = screen.Screens(stale_sec=10.0)
+        self.assertTrue(screens.beat("old").active)
+        claim = screens.beat("new", reloads="old")
+        self.assertTrue(claim.active, "読み込み直したページが持ち主にならない")
+        self.assertEqual(claim.others, 0)
+        self.assertTrue(screens.is_holder("new"))
+
+    def test_without_reloads_a_second_page_is_not_the_holder(self) -> None:
+        screens = screen.Screens(stale_sec=10.0)
+        screens.beat("old")
+        self.assertFalse(screens.beat("dup").active)    # タブの複製は今までどおり持ち主にしない
+
+
 class CountTest(unittest.TestCase):
     def setUp(self) -> None:
         self.screens = screen.Screens(stale_sec=10.0)

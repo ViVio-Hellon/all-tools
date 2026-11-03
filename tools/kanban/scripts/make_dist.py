@@ -12,21 +12,21 @@ r"""配布用フォルダを作る(python-web-tools の ``scripts/make_dist.py``
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
 (アプリの直下の ``配布設定\``。配った先が起動時に読み込みます)。
 
-    python scripts\make_dist.py                     # アプリの隣に「配布\VERx.y.z\資材発注看板システム\」
+    python scripts\make_dist.py                     # アプリの隣に「資材発注看板システム_VERx.y.z\資材発注看板システム\」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
-    python scripts\make_dist.py --zip               # zip も作る(「配布\VERx.y.z\資材発注看板システム_VERx.y.z.zip」)
+    python scripts\make_dist.py --zip               # zip も作る(「資材発注看板システム_VERx.y.z\資材発注看板システム_VERx.y.z.zip」)
     python scripts\make_dist.py --no-settings       # 配布設定を入れない
 
 【置き場所 ── 版は親のフォルダーに入れ、作る物は版なし】
 業務ツール統合ランチャーの「道を変えない」決まり(起動ファイルの名前と置き場所を変えない。
-フォルダー名に版を付けない)に合わせて、版は親のフォルダー(配布\VERx.y.z\)に入れ、
+フォルダー名に版を付けない)に合わせて、版は親のフォルダー(資材発注看板システム_VERx.y.z\)に入れ、
 作るフォルダーの名前は 資材発注看板システム\ だけにします。zip のファイル名
 (資材発注看板システム_VERx.y.z.zip)には版が入りますが、zip の中の最上位は 資材発注看板システム\ です。
 配った先では、決まった場所の 資材発注看板システム\ に中身ごと上書きします
 (フォルダー名を変えない・版の付いた名前で置かない)。
 
 設定画面の「配布用フォルダを作る」は、前に作ったものと重ねないよう、親のフォルダーに
-日時も付けます(配布\VERx.y.z_YYYYmmdd_HHMMSS\資材発注看板システム\)。
+日時も付けます(資材発注看板システム_VERx.y.z_YYYYmmdd_HHMMSS\資材発注看板システム\)。
 
 設定画面の「配布設定」→「配布用フォルダを作る」からも同じものを作れます。
 
@@ -94,15 +94,15 @@ def _version() -> str:
 
 
 def default_out(*, stamp: bool = False) -> Path:
-    """既定の作る場所: アプリの隣の ``配布\\VER<版>\\資材発注看板システム``。
+    """既定の作る場所: アプリの隣の ``資材発注看板システム_VER<版>\\資材発注看板システム``。
 
     作る物のフォルダー名は版なし(版は親のフォルダーに入れる)。``stamp`` なら親のフォルダーに
-    日時も付けて(``VER<版>_<日時>``)、前に作ったものと重ねない。
+    日時も付けて(``資材発注看板システム_VER<版>_<日時>``)、前に作ったものと重ねない。
     """
-    parent = f"VER{_version()}"
+    parent = f"{DISPLAY_NAME}_VER{_version()}"
     if stamp:
         parent += dt.datetime.now().strftime("_%Y%m%d_%H%M%S")
-    return ROOT.parent / "配布" / parent / DISPLAY_NAME
+    return ROOT.parent / parent / DISPLAY_NAME
 
 
 def _excluded(name: str) -> bool:
@@ -241,7 +241,7 @@ def _memo(lines: list[str]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: アプリの隣に「配布\\VER版\\資材発注看板システム」)")
+    parser.add_argument("--out", help="作る場所(既定: アプリの隣に「資材発注看板システム_VER版\\資材発注看板システム」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(アプリ直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",
