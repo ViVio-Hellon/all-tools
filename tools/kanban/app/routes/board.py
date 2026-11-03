@@ -122,7 +122,7 @@ def page():
         empty_reason="" if lines else _empty_reason(store, mode),
         pending=store.pending_count(),
         switch_modes=_switch_modes(mode),
-        # 土曜・日曜・祝日なら「発注のできない日」の帯(日付が変わったら /api/status で出し直す)
+        # 土曜・日曜・祝日なら「業者に注文できない日」の帯(日付が変わったら /api/status で出し直す)
         closed_day=closed_day.notice(),
         **shell_context("board"),
     )
@@ -204,7 +204,7 @@ def status():
             # 読めなかった表と理由(「取り込めていません」に添える。共有フォルダは見えているのに
             # 1 つの表だけ読めない、を「共有フォルダに届いているか」と取り違えさせない)
             "import_problem": store.get_meta(META_IMPORT_PROBLEM, "") if stale else "",
-            # 土曜・日曜・祝日なら「発注のできない日」の案内(空ならふつうの日)。画面を開いた
+            # 土曜・日曜・祝日なら「業者に注文できない日」の案内(空ならふつうの日)。画面を開いた
             # ままでも、日付が変わればここで出し直す・消す
             "closed_day": closed_day.notice(),
         }

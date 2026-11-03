@@ -118,22 +118,40 @@
   </div>
 
   {#
-    倉庫参照モードだけ: 現場モードのライン1つを併用する(倉庫の画面は見るだけのまま、担当ラインの
-    看板だけ現場の操作ができる)。関門は現場モードの権限。開き直さずに効く
+    倉庫参照モードだけ: 担当ライン(現場モードのライン1つを併用する)。**モードのすぐ下に、選択 1 つで**
+    置く ── 以前はチェック(「現場モードのライン1つも使う」)と担当ラインの欄の 2 段で、チェックは
+    権限が無いと灰色になり、現場は見つけられなかった(VER3.6.0)。「なし」が今までの倉庫参照だけ。
+    関門は現場モードの権限(mode:field)。権限が無い端末は管理者パスワードで決められる。開き直さずに効く
   #}
   {% if state.mode == 'view' %}
-  <div class="field">
-    <label class="check" for="view-site">
-      <input type="checkbox" id="view-site" {% if state.view_site %}checked{% endif %}
-             {% if not state.view_site_allowed and not state.view_site %}disabled{% endif %}>
-      現場モードのライン1つも使う{% if not state.view_site_allowed %}(現場モードの権限なし){% endif %}
-    </label>
-    <small>倉庫の画面は見るだけのまま、担当ラインの看板だけ現場の操作(発注・届いた資材の確認・注文票・コメント)ができます。
-      使えるかは「この端末の権限」の現場モード(<code>mode:field</code>)で決まります。すぐ効きます。</small>
+  <div class="field" id="view-site-field">
+    <label for="view-site">担当ライン(倉庫参照のまま、このラインだけ現場の操作をする)</label>
+    <select id="view-site" {% if state.config_unreadable %}disabled{% endif %}>
+      <option value="" {% if not state.view_site %}selected{% endif %}>なし(倉庫参照だけ。どのラインも見るだけ)</option>
+      {% if state.view_site and not state.view_site_line %}
+      {# 併用にしてあるのにラインが決まっていない(前の版で入れたまま など)。「なし」に見せない #}
+      <option value="-" selected disabled>(未設定 ── 選んでください)</option>
+      {% endif %}
+      {% for l in state.lines %}
+      <option value="{{ l.code }}" {% if state.view_site and l.code == state.view_site_line %}selected{% endif %}>{{ l.label }}</option>
+      {% endfor %}
+    </select>
+    {# 選べない・パスワードが要るわけ。灰色にするなら、ここに理由を出す #}
+    <small id="view-site-why" class="{{ 'is-ok' if state.view_site_gate.allowed else 'is-no' }}">
+      {%- if state.config_unreadable -%}
+        この端末の設定ファイルを読めないあいだは選べません(上の帯を見てください)。
+      {%- else -%}
+        {{ state.view_site_gate.why }}
+      {%- endif -%}
+    </small>
+    <small>選んだラインの看板だけ現場の操作(発注・届いた資材の確認・注文票・コメント)ができます。
+      ほかのラインは見るだけです。「なし」に戻すと倉庫参照だけになります。すぐ効きます(開き直しは要りません)。
+      アクセス権限の表でラインが決まっている端末は、次に起動すると表のラインに戻ります。</small>
   </div>
   {% endif %}
 
-  {% if state.mode == 'site' or (state.mode == 'view' and state.view_site) %}
+  {# 倉庫参照の担当ラインは上の欄(#view-site)。ここは現場モードだけ #}
+  {% if state.mode == 'site' %}
   <div class="field">
     <label for="line">担当ライン</label>
     <select id="line">
@@ -148,7 +166,7 @@
       <option value="{{ l.code }}" {% if l.current %}selected{% endif %}>{{ l.label }}</option>
       {% endfor %}
     </select>
-    <small>現場モードで表示するラインです{% if state.mode == 'view' %}(倉庫参照と併用。このラインだけ現場の操作ができます){% endif %}。変更には管理者パスワードが要ります。
+    <small>現場モードで表示するラインです。変更には管理者パスワードが要ります。
       アクセス権限の表でラインが決まっている端末は、次に起動すると表のラインに戻ります。</small>
   </div>
   {% endif %}

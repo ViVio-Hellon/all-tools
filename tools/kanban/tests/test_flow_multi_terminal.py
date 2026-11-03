@@ -1194,6 +1194,28 @@ class ViewWithSiteFlowTest(_Flow):
         self.assertIn(status, (403, 404), body)
         self.assertEqual(self.shared_marks(HVC, "2"), ("", "", ""))
 
+    def test_担当ラインを選ぶとそのラインだけ現場になり_なしで見るだけに戻る(self) -> None:
+        """設定 → この端末 の「担当ライン」1 つ(``{"line": ...}``)。担当ラインの入れ替えと併用を一度に当てる。"""
+        v = self.terminal("V", mode=config.MODE_WAREHOUSE_VIEW, line=L1, import_sec=5)
+        status, body = v.post("/api/view-site", {"line": HVC})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["line"], HVC)
+        self.assertEqual(v.board(HVC)["board"]["mode"], config.MODE_SITE)
+        self.assertTrue(v.board(L1)["board"]["read_only"], "前の担当ラインが現場のまま")
+        v.ok("order", HVC, "1")
+        v.wait_sent()
+        self.assertEqual(self.shared_marks(HVC, "1"), (ON, "", ""))
+        v.wait_for(lambda: self.state_of(HVC) == ("開", v.pc), what="V が HVC を名乗る")
+        self.assertNotEqual(self.state_of(L1), ("開", v.pc), "前の担当ラインを名乗っている")
+        self.assert_view_only_elsewhere(v)
+
+        status, body = v.post("/api/view-site", {"line": ""})
+        self.assertEqual(status, 200, body)
+        self.assertFalse(body["on"])
+        self.assertEqual(self.state_of(HVC)[0], "閉", "「なし」にしたのに HVC を名乗ったまま")
+        status, body = v.press("order", HVC, "2")
+        self.assertIn(status, (403, 404), body)
+
     def test_送る前に併用をやめて開き直しても_預かった発注は送られる(self) -> None:
         v = self.terminal("V", mode=config.MODE_WAREHOUSE_VIEW, line=HVC, import_sec=5, view_site=True)
         v.go_offline()

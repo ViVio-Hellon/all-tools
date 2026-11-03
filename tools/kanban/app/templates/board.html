@@ -15,7 +15,7 @@
 {% block content %}
 
 {#
-  土曜・日曜・祝日は「発注のできない日」と出す(案内だけ。発注は止めない。kanban/closed_day.py)。
+  土曜・日曜・祝日は「業者に注文できない日」と出す(案内だけ。発注は止めない。kanban/closed_day.py)。
   開いたままでも日付が変われば JS が出し直す・消す(/api/status の closed_day)
 #}
 <div class="banner banner--warn" id="closed-day" role="status" {% if not closed_day %}hidden{% endif %}>{{ closed_day }}</div>
@@ -71,7 +71,11 @@
   {% if read_only %}
   <div class="banner banner--warn" id="read-only-note"
        {% if state and state.mode == 'site' %}hidden{% endif %}>
+    {%- if site_board -%}
+    このラインは参照だけです(押しても状態は変わりません)。現場の操作は担当ライン「{{ line_label }}」のタブでできます。
+    {%- else -%}
     参照専用モードです。押しても状態は変わりません。
+    {%- endif %}
   </div>
   {% endif %}
 

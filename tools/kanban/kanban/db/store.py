@@ -138,6 +138,8 @@ _META_DEVICE_MODE = "device_mode"
 #: 倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用するか(``"1"`` で併用)。
 #: モードと同じく端末ごとの選択なのでここに持つ(:meth:`Store.get_view_site`)
 _META_VIEW_SITE = "device_view_site"
+#: 併用を管理者パスワードで決めた印(現場モードの権限が無い端末。権限で決めたときは ``"1"``)
+_VIEW_SITE_BY_ADMIN = "admin"
 
 
 #: 書き戻し対象になりうる状態列(論理名)。dirty_columns にはこの部分集合が入る
@@ -562,10 +564,19 @@ class Store:
         のときだけ効く(ほかのモードでは見ない)。**記録が無い端末(前の版から使っている
         端末)は併用しない** ── 今までどおり、倉庫参照だけ・現場だけで動く。
         """
-        return self.get_meta(_META_VIEW_SITE, "") == "1"
+        return self.get_meta(_META_VIEW_SITE, "") in ("1", _VIEW_SITE_BY_ADMIN)
 
-    def set_view_site(self, on: bool) -> None:
-        self.set_meta(_META_VIEW_SITE, "1" if on else "")
+    def view_site_by_admin(self) -> bool:
+        """併用を**管理者パスワードで**決めたか(現場モードの権限が無い端末)。
+
+        権限の無い端末でも、管理者パスワードを入れれば担当ラインを決められる(設定 → この端末)。
+        そう決めた端末は、次に起動しても権限を問わずに併用する(:func:`start_app._view_site_on`)。
+        """
+        return self.get_meta(_META_VIEW_SITE, "") == _VIEW_SITE_BY_ADMIN
+
+    def set_view_site(self, on: bool, *, by_admin: bool = False) -> None:
+        """併用する / やめる。``by_admin`` は管理者パスワードで決めたとき(権限の無い端末)。"""
+        self.set_meta(_META_VIEW_SITE, (_VIEW_SITE_BY_ADMIN if by_admin else "1") if on else "")
 
     # -- 取り込み --------------------------------------------------------
     def import_line(

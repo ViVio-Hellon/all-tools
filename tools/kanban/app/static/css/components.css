@@ -155,6 +155,8 @@
   border-radius: var(--radius-sm); background: var(--surface);
 }
 .field small { color: var(--muted); font-size: var(--fs-sm); }
+/* 倉庫参照の担当ライン: パスワードが要るか・選べないわけ(settings.html の #view-site-why) */
+.field small.is-no { color: var(--warn-ink); font-weight: 700; }
 
 .rowline { display: flex; gap: .5rem; align-items: flex-end; flex-wrap: wrap; }
 .rowline .field { flex: 1 1 16rem; margin-bottom: 0; }

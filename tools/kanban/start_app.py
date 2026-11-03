@@ -543,6 +543,8 @@ def _view_site_on(mode: str, store, grant, *, report: bool = False) -> bool:
 
     倉庫参照モードのときだけ。**現場モードの権限が要る**(無ければ倉庫参照だけで開く。
     保存してある選択は書き換えない ── 権限の行を足せば、次に開いたときから併用する)。
+    ただし**管理者パスワードで決めた**端末(権限が無くても、設定 → この端末 で管理者パスワードを
+    入れて担当ラインを決めた)は、権限を問わずに併用する。
     記録の無い端末(前の版から使っている端末)は併用しない。
     """
     if mode != config.MODE_WAREHOUSE_VIEW:
@@ -555,6 +557,15 @@ def _view_site_on(mode: str, store, grant, *, report: bool = False) -> bool:
     if not wanted:
         return False
     if grant is not None and not grant.allows(config.MODE_SITE):
+        try:
+            by_admin = store.view_site_by_admin() is True
+        except Exception:  # noqa: BLE001 - 読めなければ権限どおり
+            by_admin = False
+        if by_admin:
+            if report:
+                log.info("現場モードの権限はありませんが、管理者パスワードで決めた担当ラインで併用します: %s",
+                         grant.identity.label())
+            return True
         if report:
             log.warning("現場モードの権限が無いので、現場は併用せずに倉庫参照だけで開きます: %s",
                         grant.identity.label())

@@ -136,6 +136,10 @@ def _state(cfg: config.Config, store) -> dict:
         # 使えるかは現場モードの権限で決まる(起動したときに読んだもの。押したときにまた確かめる)
         "view_site": view_site(),
         "view_site_allowed": True if grant is None else grant.allows(config.MODE_SITE),
+        # 権限が無ければ管理者パスワードで決める。画面の欄の下に、どちらかを書いて出す
+        "view_site_gate": _view_site_gate(grant),
+        # 併用しているときの担当ライン(走っているプロセスの値。設定ファイルの値ではなく)
+        "view_site_line": (current_app.config.get("LINE") or "") if view_site() else "",
         "line_names": _line_names(),
         "history": _history_state(cfg),
         "csv_dir": cfg.resolved_csv_dir(),
@@ -985,13 +989,23 @@ def set_mode():
 
 @bp.post("/api/view-site")
 def set_view_site():
-    """倉庫参照モードで、現場モードのライン1つ(担当ライン)を併用する / やめる。
+    """倉庫参照モードの「担当ライン」(現場モードのライン1つを併用する / やめる)。
 
     併用すると、倉庫の画面は見るだけのまま、担当ラインの看板だけ現場の操作(発注・届いた
     資材の確認・注文票・コメント)ができる。**倉庫(操作可)との併用はしない。**
 
-    関門はモードの切り替えと同じ**アクセス権限**(現場モードの権限 ``mode:field``)。
-    パスワードは訊かない。担当ラインを変えるのは今までどおり管理者パスワード(``/api/line``)。
+    画面(設定 → この端末)は**担当ラインの選択 1 つ**で、併用の入り切りを兼ねる
+    (VER3.6.0 の現場の声: 「倉庫参照と担当ラインの併用はどうやるんですか？」── チェックと
+    ラインの欄の 2 段で、チェックは権限が無いと灰色で、見つけられなかった)。
+
+    * ``{"line": "HVC"}`` … HVC を担当ラインにして併用する(変えるのも同じ)
+    * ``{"line": ""}`` … 「なし」。併用をやめる(今までの倉庫参照だけ)。権限もパスワードも要らない
+    * ``{"on": true / false}`` … 前の版の形(いまの担当ラインのまま入れる / やめる)。そのまま読む
+
+    関門は**現場モードの権限**(``mode:field``。モードの切り替えと同じアクセス権限)。権限のある
+    端末はパスワードを訊かない(今までどおり)。**権限の無い端末も、管理者パスワードを入れれば
+    決められる**(担当ラインの変更はもともと管理者パスワードで守っている。``/api/line``)。
+    パスワードで決めた端末は、次に起動しても併用する(:meth:`Store.view_site_by_admin`)。
 
     **開き直さずに効く。** モードは倉庫参照のまま(ポートと錠は変わらない)なので、
     走っているプロセスへその場で当てる(書き戻し・状態管理の名乗り・担当ラインの取り込み。
@@ -1002,55 +1016,116 @@ def set_view_site():
     if current_mode() != config.MODE_WAREHOUSE_VIEW:
         return jsonify(_err("wrong_mode", "現場との併用は、倉庫参照モードのときだけ選べます")), 403
     body = request.get_json(silent=True) or {}
-    on = body.get("on") is True or str(body.get("on", "")).strip().lower() in ("1", "true")
+    store = get_store()
+    line = current_app.config.get("LINE", "") or ""
+    if "line" in body:
+        wanted = str(body.get("line") or "").strip()
+        on = bool(wanted)
+        if on and not config.is_supported_line(wanted):
+            return jsonify(_err("bad_line", "そのラインは登録されていません", "line")), 400
+    else:
+        on = body.get("on") is True or str(body.get("on", "")).strip().lower() in ("1", "true")
+        wanted = line if on else ""
 
-    grant = current_app.config.get("ACCESS_GRANT")
-    if on:
-        # **切り替えるたびに読み直す。** マスタ管理で行を足した直後にも効くように
-        grant = access_control.grant_for(_cfg(), get_store())
-        current_app.config["ACCESS_GRANT"] = grant
-        if not grant.allows(config.MODE_SITE):
+    if not on:
+        if not view_site() and not store.get_view_site():
+            return jsonify({"ok": True, "changed": False, "on": False, "line": ""})
+        store.set_view_site(False)
+        current_app.config["VIEW_SITE"] = False
+        note = _apply_view_site_hook(False)
+        log.info("倉庫参照で現場を併用しません(担当ラインなし)")
+        return jsonify({"ok": True, "changed": True, "on": False, "line": "",
+                        "message": "担当ラインを「なし」にしました。倉庫参照(見るだけ)に戻りました。"
+                                   + (f"\n{note}" if note else "")})
+
+    # **選ぶたびに読み直す。** マスタ管理で行を足した直後にも効くように
+    grant = access_control.grant_for(_cfg(), get_store())
+    current_app.config["ACCESS_GRANT"] = grant
+    allowed = grant.allows(config.MODE_SITE)
+    turning_on = not view_site()
+    if not turning_on and wanted == line and (allowed or store.view_site_by_admin()):
+        return jsonify({"ok": True, "changed": False, "on": True, "line": line})
+
+    by_admin = False
+    if not allowed:
+        # **権限が無ければ管理者パスワード。** 認証済み(パスワード認証で開けてある)なら訊かない
+        if not str(body.get("password", "")) and not admin_lock.get().is_unlocked(touch=False):
             label = config.mode_display_name(config.MODE_SITE)
-            log.info("現場の併用を断りました(権限なし): %s", grant.identity.label())
+            log.info("担当ラインを断りました(権限なし・パスワードなし): %s", grant.identity.label())
             out = _err("no_permission",
                        f"この端末({grant.identity.label()})には{label}の権限がありません。"
+                       "管理者パスワードを入れれば担当ラインを決められます。"
                        f"{grant.how_to_allow(config.MODE_SITE)}"
                        + (f"\n({grant.reason})" if grant.reason else ""))
             out["access"] = _access_state(grant)
+            out["password"] = True          # 画面は、これを見て管理者パスワードを訊く
             return jsonify(out), 403
+        ok, problem = _check_admin(body)
+        if not ok:
+            return problem
+        by_admin = True
 
-    store = get_store()
-    if on == view_site() and store.get_view_site() == on:
-        return jsonify({"ok": True, "changed": False, "on": on})
-    store.set_view_site(on)
-    current_app.config["VIEW_SITE"] = on
+    # **記録を先に。** 担当ラインの名乗り・取り込みは併用しているかで行き先が決まる
+    store.set_view_site(True, by_admin=by_admin)
+    current_app.config["VIEW_SITE"] = True
+    how = "管理者パスワードで" if by_admin else "現場モードの権限で"
 
-    # 担当ラインが未設定で、アクセス権限の表で決まっていれば、それにする(起動したときと同じ)
-    note = ""
-    line = current_app.config.get("LINE", "")
-    if on and not line and grant is not None:
+    imported, import_note = False, ""
+    if not wanted and grant is not None:
+        # 前の版の形({"on": true})で、担当ラインが未設定: アクセス権限の表で決まっていればそれにする
         code = access_control.line_at_startup(grant)
         if code:
-            _switch_line(code, "アクセス権限の表から")
+            _switch_line(code, "アクセス権限の表から", refresh=not turning_on)
             access_control.mark_line_applied(store, code)
-            line = code
-    hook = current_app.config.get("APPLY_VIEW_SITE")
-    if hook is not None:
-        try:
-            hook(on)
-        except Exception:  # noqa: BLE001 - 併用にしたことは変わらない(次の起動でも当てる)
-            log.exception("現場の併用をその場で当てられませんでした")
-            note = "その場で当てきれませんでした。アプリを開き直すと効きます。"
-    log.info("倉庫参照で現場を%s(担当ライン %s)", "併用します" if on else "併用しません", line or "未設定")
-    if on and not line:
-        message = "現場との併用にしました。担当ラインを選んでください(管理者パスワードが要ります)。"
-    elif on:
-        message = (f"現場との併用にしました。担当ライン「{config.display_name(line)}」の看板は"
-                   "現場の操作ができます(ほかのラインは見るだけ)。")
+            wanted = code
+    elif wanted != line:
+        # 入れたばかりなら、取り込みは下の当てで済ます(2 回読まない)
+        imported, import_note = _switch_line(wanted, how, refresh=not turning_on)
+    line = wanted
+
+    note = _apply_view_site_hook(True) if turning_on else ""
+    log.info("倉庫参照で現場を併用します(担当ライン %s。%s)", line or "未設定", how)
+    if not line:
+        message = "現場との併用にしました。担当ラインを選んでください。"
     else:
-        message = "現場との併用をやめました。倉庫参照(見るだけ)に戻りました。"
-    return jsonify({"ok": True, "changed": True, "on": on, "line": line,
-                    "message": message + (f"\n{note}" if note else "")})
+        message = (f"担当ラインを「{config.display_name(line)}」にしました。このラインの看板だけ"
+                   "現場の操作ができます(ほかのラインは見るだけ)。")
+    # **表でラインが決まっている端末は、次に起動すると表のラインに戻る。** そう言っておく
+    table_line = getattr(grant, "line", "") if grant is not None else ""
+    later = ""
+    if line and table_line and table_line != line:
+        later = (f"次に起動すると、アクセス権限の表のライン「{config.display_name(table_line)}」に戻ります。"
+                 "変えたままにするには、マスタ管理でアクセス権限を書き換えてください。")
+    notes = [n for n in (import_note, note, later) if n]
+    return jsonify({"ok": True, "changed": True, "on": True, "line": line,
+                    "label": config.display_name(line) if line else "",
+                    "by_admin": by_admin, "imported": imported, "import_note": import_note,
+                    "note": "\n".join(n for n in (note, later) if n),
+                    "message": message + ("\n" + "\n".join(notes) if notes else "")})
+
+
+def _apply_view_site_hook(on: bool) -> str:
+    """走っているプロセスに併用を当てる(``start_app._serve`` の ``APPLY_VIEW_SITE``)。当てきれなければその一言。"""
+    hook = current_app.config.get("APPLY_VIEW_SITE")
+    if hook is None:
+        return ""
+    try:
+        hook(on)
+    except Exception:  # noqa: BLE001 - 併用にしたことは変わらない(次の起動でも当てる)
+        log.exception("現場の併用をその場で当てられませんでした")
+        return "その場で当てきれませんでした。アプリを開き直すと効きます。"
+    return ""
+
+
+def _view_site_gate(grant) -> dict:
+    """設定 → この端末 の「担当ライン」(倉庫参照)を、パスワードなしで選べるか・その理由。"""
+    allowed = True if grant is None else grant.allows(config.MODE_SITE)
+    if allowed:
+        why = "この端末には現場モード(mode:field)の権限があるので、パスワードは要りません。"
+    else:
+        why = ("この端末には現場モード(mode:field)の権限がありません。ラインを選ぶと管理者パスワードを訊きます"
+               f"(パスワードなしで選べるようにするには: {grant.how_to_allow(config.MODE_SITE)})")
+    return {"allowed": allowed, "why": why}
 
 
 # ------------------------------------------------------------------
@@ -1374,7 +1449,7 @@ def set_line():
                     "imported": imported, "import_note": import_note, "note": note})
 
 
-def _switch_line(line: str, how: str) -> tuple[bool, str]:
+def _switch_line(line: str, how: str, *, refresh: bool = True) -> tuple[bool, str]:
     """担当ラインを切り替える(設定に保存・名乗り・その場で取り込み)。``(取り込めたか, 取り込めないわけ)``。
 
     画面で選んだとき(管理者パスワード)と、アクセス権限の表から当てたときの両方が通る。
@@ -1406,7 +1481,7 @@ def _switch_line(line: str, how: str) -> tuple[bool, str]:
     # 次の定期取り込みまで(0 秒設定なら開き直すまで)空のままになる
     imported = False
     note = ""
-    hook = current_app.config.get("MANUAL_REFRESH")
+    hook = current_app.config.get("MANUAL_REFRESH") if refresh else None
     if hook is not None:
         from kanban.db.sync import TABLE_MISSING
 

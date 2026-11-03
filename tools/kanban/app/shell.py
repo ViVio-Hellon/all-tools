@@ -103,6 +103,17 @@ def mode_tone(mode: str) -> str:
     }.get(mode, "site")
 
 
+def mode_label(mode: str, line: str, view_site: bool = False) -> str:
+    """帯の右のモードの札。倉庫参照で担当ラインがあれば「倉庫参照(担当: HVC)」。
+
+    以前は「倉庫参照モード(操作不可)+現場」と出していた ── 操作不可なのか現場なのか、どの
+    ラインなのかが読めなかった(VER3.6.0 の現場の声)。担当ラインの無い倉庫参照は今までどおり。
+    """
+    if mode == config.MODE_WAREHOUSE_VIEW and view_site:
+        return f"倉庫参照(担当: {config.display_name(line) if line else '未設定'})"
+    return config.mode_display_name(mode)
+
+
 def shell_context(active: str, *, badges: dict[str, tuple[str, str]] | None = None) -> dict[str, Any]:
     """``base.html`` が必要とする値一式。
 
@@ -117,7 +128,7 @@ def shell_context(active: str, *, badges: dict[str, tuple[str, str]] | None = No
         "active": active,
         "nav": nav_items(mode, badges, view_site=view_site),
         "mode": mode,
-        "mode_label": config.mode_display_name(mode) + ("+現場" if view_site else ""),
+        "mode_label": mode_label(mode, conf["LINE"], view_site),
         "mode_tone": mode_tone(mode),
         "read_only": mode == config.MODE_WAREHOUSE_VIEW,
         # デスクトップ版(Rust/Tauri の窓。ポートを使わない ``bridge.py``)で動いているか

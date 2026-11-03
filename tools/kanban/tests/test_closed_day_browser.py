@@ -1,4 +1,4 @@
-"""「発注のできない日です」の帯を、本物のブラウザで。**開いたまま日付が変わったら出し直す。**
+"""「業者に注文できない日です」の帯を、本物のブラウザで。**開いたまま日付が変わったら出し直す。**
 
 時計(:func:`kanban.closed_day.today`)を差し替えて、金曜 → 土曜 → 月曜 と進める。画面は読み直さない
 (数秒おきの ``/api/status`` だけで出る・消える)。
@@ -41,7 +41,7 @@ class ClosedDayBannerBrowserTest(KanbanBrowserCase):
 
         self.day = dt.date(2026, 11, 7)                     # 日付が変わって土曜
         page.wait_for_selector("#closed-day:not([hidden])", timeout=20000)
-        self.assertEqual(self.text(page, "#closed-day"), "今日は土曜日です。発注のできない日です。")
+        self.assertEqual(self.text(page, "#closed-day"), "今日は土曜日です。業者に注文できない日です。")
 
         self.day = dt.date(2026, 11, 3)                     # 祝日(文化の日)
         page.wait_for_function(

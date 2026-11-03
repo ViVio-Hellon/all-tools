@@ -1,4 +1,4 @@
-"""土曜・日曜・祝日の「発注のできない日です」の案内(:mod:`kanban.closed_day`)。
+"""土曜・日曜・祝日の「業者に注文できない日です」の案内(:mod:`kanban.closed_day`)。
 
 現場の要望: 「土曜日曜祝日は現場倉庫ともに案内を出してほしい(簡易でいい)。発注のできない日だよ、
 ぐらいが分かればいい」
@@ -24,24 +24,37 @@ D = dt.date.fromisoformat
 
 class NoticeTest(unittest.TestCase):
     def test_weekend(self):
-        self.assertEqual(closed_day.notice(D("2026-11-07")), "今日は土曜日です。発注のできない日です。")
-        self.assertEqual(closed_day.notice(D("2026-11-08")), "今日は日曜日です。発注のできない日です。")
+        self.assertEqual(closed_day.notice(D("2026-11-07")), "今日は土曜日です。業者に注文できない日です。")
+        self.assertEqual(closed_day.notice(D("2026-11-08")), "今日は日曜日です。業者に注文できない日です。")
+
+    def test_wording_says_suppliers_cannot_take_orders(self):
+        """VER3.6.0 の現場の声: 「発注のできない日です。」→「業者に注文できない日」としてください。
+
+        土曜・日曜・祝日・振替休日・国民の休日のどれも同じ言い方。「発注」とは言わない
+        (現場の発注=看板を押すことは止めていない。止まるのは業者への注文)。
+        """
+        for day in ("2026-11-07", "2026-11-08", "2026-11-03", "2025-11-24", "2026-09-22"):
+            text = closed_day.notice(D(day))
+            self.assertTrue(text.endswith("です。業者に注文できない日です。"), (day, text))
+            self.assertNotIn("発注", text, day)
+        page = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "views" / "board.js")
+        self.assertNotIn("発注のできない日", page.read_text(encoding="utf-8"))
 
     def test_weekdays_have_no_notice(self):
         for day in ("2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2021-10-11"):
             self.assertEqual(closed_day.notice(D(day)), "", day)
 
     def test_holidays(self):
-        self.assertEqual(closed_day.notice(D("2026-11-03")), "今日は祝日(文化の日)です。発注のできない日です。")
+        self.assertEqual(closed_day.notice(D("2026-11-03")), "今日は祝日(文化の日)です。業者に注文できない日です。")
         self.assertIn("祝日(秋分の日)", closed_day.notice(D("2026-09-23")))
         self.assertIn("祝日(成人の日)", closed_day.notice(D("2030-01-14")))
 
     def test_substitute_and_national_holidays(self):
         # 日曜の祝日の次の月曜(振替休日)・5/3 が日曜の年の 5/6・祝日に挟まれた日(国民の休日)
-        self.assertEqual(closed_day.notice(D("2025-11-24")), "今日は振替休日です。発注のできない日です。")
-        self.assertEqual(closed_day.notice(D("2024-02-12")), "今日は振替休日です。発注のできない日です。")
-        self.assertEqual(closed_day.notice(D("2026-05-06")), "今日は振替休日です。発注のできない日です。")
-        self.assertEqual(closed_day.notice(D("2026-09-22")), "今日は国民の休日です。発注のできない日です。")
+        self.assertEqual(closed_day.notice(D("2025-11-24")), "今日は振替休日です。業者に注文できない日です。")
+        self.assertEqual(closed_day.notice(D("2024-02-12")), "今日は振替休日です。業者に注文できない日です。")
+        self.assertEqual(closed_day.notice(D("2026-05-06")), "今日は振替休日です。業者に注文できない日です。")
+        self.assertEqual(closed_day.notice(D("2026-09-22")), "今日は国民の休日です。業者に注文できない日です。")
 
     def test_special_years(self):
         """2019 の即位まわり・2020/2021 の五輪の移動も元(カレンダー)のとおり。"""
@@ -105,8 +118,8 @@ class BoardBannerTest(RouteTestBase):
                 for day in ("2026-11-07", "2026-11-08", "2026-11-03", "2025-11-24"):
                     banner = self._banner(self._page(day))
                     self.assertNotIn("hidden", banner.group(0), day)
-                    self.assertIn("発注のできない日です", banner.group(1), day)
-                    self.assertIn("発注のできない日です", self._status(day), day)
+                    self.assertIn("業者に注文できない日です", banner.group(1), day)
+                    self.assertIn("業者に注文できない日です", self._status(day), day)
                 banner = self._banner(self._page("2026-11-02"))
                 self.assertIn("hidden", banner.group(0))
                 self.assertEqual(banner.group(1), "")

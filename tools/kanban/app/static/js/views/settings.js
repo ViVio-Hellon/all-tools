@@ -605,10 +605,14 @@ function renderAccess(a) {
     if (a.line_applied) {
       ok(a.line_applied);
       state.line = a.current_line;
-      const sel = document.getElementById('line');
+      if (state.view_site) state.view_site_line = a.current_line;
+      // 現場モードは「担当ライン」、倉庫参照(併用しているとき)は「担当ライン(倉庫参照のまま…)」
+      const sel = document.getElementById('line')
+        || (state.view_site ? document.getElementById('view-site') : null);
       if (sel && a.current_line) sel.value = a.current_line;
     }
   }
+  renderViewSiteGate(g);
 
   const reason = document.getElementById('access-reason');
   reason.textContent = g.reason || '';
@@ -889,29 +893,84 @@ async function onLineChange(ev) {
 }
 
 // ------------------------------------------------------------------
-// 倉庫参照 + 現場のライン1つ
+// 倉庫参照の「担当ライン」(現場モードのライン1つを併用する)
 // ------------------------------------------------------------------
-// 倉庫参照モードのときだけ出る。関門はモードと同じアクセス権限(現場モード)で、パスワードは
-// 訊かない。**すぐ効く**(モードは倉庫参照のままなので開き直さなくてよい)。担当ラインの欄を
-// 出し入れするので、終わったら読み直す
+// 倉庫参照モードのときだけ、モードのすぐ下に出る。**選択 1 つで併用の入り切りを兼ねる**
+// (「なし」= 倉庫参照だけ)。関門は現場モードの権限(mode:field)で、権限があればパスワードは
+// 訊かない。**権限が無い端末は管理者パスワードで決められる**(認証済みなら訊かない)。
+// すぐ効く(モードは倉庫参照のままなので開き直さなくてよい)。帯の札・タブを描き直すので、
+// 終わったら読み直す
+function viewSiteValue() {
+  return state.view_site ? (state.view_site_line || '-') : '';
+}
+
+/** 現場モードの権限があるか(無ければ管理者パスワードを訊く)。権限を読み直すたびに変わる */
+function siteAllowed() {
+  return !state.view_site_gate || state.view_site_gate.allowed !== false;
+}
+
 async function onViewSiteChange(ev) {
-  const on = ev.target.checked;
-  ev.target.disabled = true;
+  const sel = ev.target;
+  const next = sel.value;
+  const before = viewSiteValue();
+  if (next === before) return;
+  const note = `担当ラインを「${labelOfLine(next)}」にします(倉庫参照のまま、このラインだけ現場の操作ができます)。\n`
+    + 'この端末には現場モードの権限が無いので、管理者パスワードが要ります。';
+  const back = () => { sel.value = before; sel.disabled = Boolean(state.config_unreadable); };
+  sel.disabled = true;
   try {
-    const r = await api.post('/api/view-site', { on });
-    if (!r.changed) { ok('変更はありません'); ev.target.disabled = false; return; }
+    let creds = {};
+    if (next && !siteAllowed()) {
+      creds = await askPassword(note);
+      if (!creds) { back(); return; }
+    }
+    let r;
+    try {
+      r = await api.post('/api/view-site', { line: next, ...creds });
+    } catch (e) {
+      // 権限の行を消された直後など(画面は「権限あり」のつもりだった)。パスワードで通せる
+      if (e.code !== 'no_permission' || !(e.body && e.body.password) || creds.password) throw e;
+      if (e.body.access) renderAccess(e.body.access);
+      creds = await askPassword(note);
+      if (!creds) { back(); showModeNotice('', e.message); return; }
+      r = await api.post('/api/view-site', { line: next, ...creds });
+    }
+    if (!r.changed) { ok('変更はありません'); back(); return; }
     state.view_site = r.on;
-    ok(r.message || (on ? '現場との併用にしました。' : '現場との併用をやめました。'));
-    reloadSoon(1200, ev.target);
+    state.view_site_line = r.line || '';
+    ok(r.message || (r.on ? '担当ラインを決めました。' : '担当ラインを「なし」にしました。'));
+    // 取り込めなかったわけ・「次に起動すると表のラインに戻る」。読み直したあとも見えるように残す
+    const later = [r.import_note, r.note].filter(Boolean).join('\n');
+    if (later) {
+      warn(later);
+      try { sessionStorage.setItem('kanban.settings.lineNote', later); } catch (e) { /* 残せなくてよい */ }
+    }
+    reloadSoon(later ? 2500 : 1200, sel);
   } catch (e) {
-    ev.target.checked = !on;
-    ev.target.disabled = false;
+    back();
     if (e.code === 'no_permission') {
       showModeNotice('', e.message);
       if (e.body && e.body.access) renderAccess(e.body.access);
     }
     bad(e.message);
   }
+}
+
+/** 担当ラインの欄の下の一言(パスワードが要るか)を、読み直した権限で書き直す */
+function renderViewSiteGate(g) {
+  const why = document.getElementById('view-site-why');
+  if (!why || !g || state.config_unreadable) return;
+  const site = (g.modes || []).find((m) => m.key === 'site');
+  if (!site) return;
+  state.view_site_gate = {
+    allowed: Boolean(site.allowed),
+    why: site.allowed
+      ? 'この端末には現場モード(mode:field)の権限があるので、パスワードは要りません。'
+      : 'この端末には現場モード(mode:field)の権限がありません。ラインを選ぶと管理者パスワードを訊きます'
+        + `(パスワードなしで選べるようにするには: ${site.how})`,
+  };
+  why.textContent = state.view_site_gate.why;
+  why.className = site.allowed ? 'is-ok' : 'is-no';
 }
 
 // ------------------------------------------------------------------
