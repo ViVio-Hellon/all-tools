@@ -263,3 +263,35 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JissekiTableTests(unittest.TestCase):
+    """実績_LS4.sqlite3 は表が「仕掛」ではなく「実績」(なぜなぜ E1104-1404-C7X)。
+
+    前は表「仕掛」だけを読んでいたので「no such table: 仕掛」で読めず、割り数が空になっていた。
+    表「仕掛」が無ければ「実績」を読む。
+    """
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db = Path(tmp.name) / "実績_LS4.sqlite3"
+        conn = sqlite3.connect(self.db)
+        conn.execute('CREATE TABLE "実績" ("ﾛｯﾄ番号" TEXT, "BOX実績_作業開始_日付" TEXT,'
+                     ' "BOX設計_縦割数" TEXT, "BOX設計_横割数" TEXT)')
+        conn.execute('INSERT INTO "実績" VALUES (?,?,?,?)',
+                     ("L815D53", "2026-11-04 09:00:00", "2", "2"))
+        conn.commit()
+        conn.close()
+
+    def test_仕掛の表が無ければ実績の表から割り数を引く(self) -> None:
+        from datetime import datetime
+
+        from nippou.access_bridge import gw_master
+        from nippou import source_db
+
+        source_db.forget()
+        found = gw_master.search_coil_split("L815D53", master_path=self.db,
+                                            now=datetime(2026, 11, 4, 14, 4))
+        self.assertIsNotNone(found, "表「実績」を読まずに割り数が空になった")
+        self.assertEqual((found.vertical, found.horizontal), ("2", "2"))

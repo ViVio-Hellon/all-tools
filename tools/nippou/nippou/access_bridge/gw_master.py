@@ -192,7 +192,8 @@ def _search_wip(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunne
 
 
 def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRunner],
-                   label: str, keep=None, first_no: int = 1) -> tuple[list[dict], int]:
+                   label: str, keep=None, first_no: int = 1,
+                   tables: Optional[tuple[str, ...]] = None) -> tuple[list[dict], int]:
     """仕掛のファイルを**1つ目 → 2つ目**の順に引く(v4.23.0)。最初に見つかった行を返す。
 
     次へ進むのは:
@@ -221,8 +222,13 @@ def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRu
         if path.suffix.lower() not in source_db.SUFFIXES:
             path = _pick_wip_source(path.parent, path.name)
         try:
-            result = import_table(path, SETTINGS.gw_shared_table_name,
-                                  sql_filter=sql_filter, runner=runner)
+            # **表の名前を順に試す**(`tables`。既定は「仕掛」だけ)。表が無い(no such table)ときだけ
+            # 次の名前へ ── 読めない・ロックなどは今までどおり読めない扱い
+            names = tables or (SETTINGS.gw_shared_table_name,)
+            for n, table in enumerate(names):
+                result = import_table(path, table, sql_filter=sql_filter, runner=runner)
+                if result.success or n + 1 >= len(names) or not _no_such_table(result.error):
+                    break
         except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
             _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + first_no, path, exc)
             problems.append(_unread_text(path, exc))
@@ -243,6 +249,17 @@ def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRu
         # どの置き場所でも読めなかった。**「無い」とは言わない**(呼ぶ側が「読めません」と出す)
         raise WipUnreadable(" / ".join(problems))
     return [], -1
+
+
+def _no_such_table(error: object) -> bool:
+    """取り込みの失敗が「その表が無い」か(sqlite3 の no such table)。"""
+    text = str(getattr(error, "message", "") or error or "")
+    return "no such table" in text.lower()
+
+
+#: コイル割り数を読む表。**「仕掛」が無ければ「実績」**(v4.45.x。実績_LS4.sqlite3 は表が「実績」で、
+#: 「no such table: 仕掛」で読めなかった ── なぜなぜ E1104-1404-C7X)
+COIL_TABLES: tuple[str, ...] = ("仕掛", "実績")
 
 
 class WipUnreadable(RuntimeError):
@@ -466,7 +483,7 @@ def search_coil_split(
             lambda rows: [r for r in rows if year_month(r.get(COIL_DATE_COLUMN)) == month])
         try:
             rows, _ = _search_wip_at([path], sql_filter, runner, f"コイル縦横 lot_no={lot_no}",
-                                     keep=keep, first_no=index + 1)
+                                     keep=keep, first_no=index + 1, tables=COIL_TABLES)
         except Exception:                         # noqa: BLE001 - 入力は止めない・次を見る
             _logger.exception("コイル割り数を読めませんでした(%dつ目 %s) lot_no=%s",
                               index + 1, path, lot_no)
