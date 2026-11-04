@@ -33,6 +33,17 @@
   {% if admin %}<span class="badge badge--done">管理者モード</span>{% endif %}
 </div>
 
+{# 「すぐ使う」── テストモードと直を消すは**面の奥にあると見つからない**(「そんなモードない」と
+   言われた)。面の外の一番上に入口を置き、押せばその面のそのカードへ飛ぶ #}
+<div class="quick-tools" id="quick-tools">
+  <span class="quick-tools__label">すぐ使う</span>
+  <a class="btn btn--sm{% if test_band and test_band.active %} btn--primary{% endif %}" href="/settings?tab=terminal#test-mode"
+     data-goto-tab="terminal" data-goto-anchor="test-mode" id="quick-test-mode">
+    {% if test_band and test_band.active %}テストモード中(抜ける・確かめる){% else %}テストモードに入る{% endif %}</a>
+  <a class="btn btn--sm" href="/settings?tab=data#removal"
+     data-goto-tab="data" data-goto-anchor="removal" id="quick-removal">直を消す(テストデータ・中身の無い直)</a>
+</div>
+
 {# 直ひと回りの動線。**3つの画面で同じ帯**(`presenters/flow.py`) #}
 {% with flow_here = "settings" %}
   {% include "_flow.html" %}
@@ -997,6 +1008,118 @@ LVC,119
            {% if default_tab != "data" %}hidden{% endif %}>
     {{ parts.lockbar(tab, admin) }}
 
+    {# ------------------------------------------------------------
+       直を消す(`services/shift_removal`)
+
+           そのPCの手元で不要なものを探す → 消す → 選択制
+           「共有の日報データからも消しますか？」yes で共有からも消す
+
+       探すもの・消してよいか・共有から消すかを決めるのはサーバ。ここは並べて、選んだものを
+       送るだけ。確かめは**画面の中の窓**(confirm はデスクトップ版で使えない)
+       ------------------------------------------------------------ #}
+    <div class="card" id="removal">
+      <div class="card__head">
+        <h2>直を消す</h2>
+        <span class="lead">この PC の手元で要らないページ(テストデータ・中身の無いページ・試しに打った分)を消す</span>
+      </div>
+      <p class="lead">
+        <b>探すのはこの PC の手元の日報</b>です。選んで「手元から消す」を押すと、消す前の控えを
+        この PC(<code>%LOCALAPPDATA%\NippouTool\消した日報</code>)に残してから消します。
+        消したあとに<b>「共有の日報データからも消しますか？」</b>と聞きます ──
+        「はい」なら共有の日報データからも、そのページ(報告日・ライン・直・ページ)の行だけを消します。
+        共有に届かないときは消さずに「共有はまだ」として残し、下の一覧からあとで消せます。
+      </p>
+      <p class="lead">
+        押した瞬間にもう一度サーバが確かめます ── 一覧を出してから押すまでのあいだに
+        <b>誰かが打ったページは消しません</b>。
+      </p>
+      <div class="row" style="margin-top:var(--sp-3)">
+        <div class="field"><label for="removal-kind">探すもの</label>
+          <select class="input" id="removal-kind">
+            <option value="test">テストデータ(テストモードで作った直)</option>
+            <option value="empty">中身の無いページ</option>
+            <option value="all">日付・ライン・直を指定して選ぶ</option>
+          </select></div>
+        <div class="field"><label for="removal-day">日付</label>
+          <input class="input" type="date" id="removal-day"></div>
+        <div class="field"><label for="removal-line">ライン</label>
+          <select class="input" id="removal-line"><option value="">すべて</option></select></div>
+        <div class="field"><label for="removal-shift">直</label>
+          <select class="input" id="removal-shift"><option value="">すべて</option></select></div>
+        <button class="btn" type="button" id="removal-find">探す</button>
+      </div>
+      <p class="lead" id="removal-head" style="margin-top:var(--sp-2)">押すと一覧が出ます</p>
+      <div class="scroll-x" id="removal-box" hidden style="margin-top:var(--sp-2)">
+        <table class="list" id="removal-table">
+          <thead>
+            <tr><th><input type="checkbox" id="removal-all" aria-label="すべて選ぶ"></th>
+                <th>報告日</th><th>ライン</th><th>直</th><th>ページ</th><th>作業者</th>
+                <th>行数</th><th>印</th><th>共有へ</th><th>保存日時</th></tr>
+          </thead>
+          <tbody id="removal-rows"></tbody>
+        </table>
+      </div>
+      <div class="btn-row" style="margin-top:var(--sp-2)">
+        <button class="btn" type="button" id="removal-pick-test" hidden>テストデータをすべて選ぶ</button>
+        <button class="btn btn--danger" type="button" id="removal-delete"
+                {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>選んだページを手元から消す</button>
+        <span class="lead" id="removal-picked"></span>
+      </div>
+      <div class="msg msg--info" id="removal-note" hidden style="margin-top:var(--sp-2)"></div>
+
+      <div id="removal-open" hidden style="margin-top:var(--sp-3)">
+        <h3>共有からまだ消していないページ</h3>
+        <p class="lead">手元からは消してあり、共有の日報データにはまだ残っているかもしれないページです
+          (共有に届かなかった・答えずに閉じた)。</p>
+        <div class="scroll-x">
+          <table class="list">
+            <thead><tr><th><input type="checkbox" id="removal-open-all" aria-label="すべて選ぶ"></th>
+              <th>ページ</th><th>消した日時</th><th>いま</th><th>わけ</th></tr></thead>
+            <tbody id="removal-open-rows"></tbody>
+          </table>
+        </div>
+        <div class="btn-row" style="margin-top:var(--sp-2)">
+          <button class="btn btn--danger" type="button" id="removal-open-shared"
+                  {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>選んだページを共有からも消す</button>
+          <button class="btn" type="button" id="removal-open-local"
+                  {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>手元だけにする(共有からは消さない)</button>
+        </div>
+      </div>
+    </div>
+
+    {# 消す前の確かめ・共有からも消すかの問い。**画面の中の窓**(confirm は使わない) #}
+    <div class="modal" id="removal-confirm" hidden role="dialog" aria-modal="true"
+         aria-labelledby="removal-confirm-title">
+      <div class="modal__box modal__box--narrow">
+        <div class="modal__head"><h2 id="removal-confirm-title">手元から消します</h2></div>
+        <div class="modal__body">
+          <p class="lead" id="removal-confirm-text"></p>
+          <ul class="lead" id="removal-confirm-list"></ul>
+        </div>
+        <div class="modal__foot">
+          <button class="btn" type="button" id="removal-confirm-no">やめる</button>
+          <button class="btn btn--danger" type="button" id="removal-confirm-yes">手元から消す</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal" id="removal-ask" hidden role="dialog" aria-modal="true"
+         aria-labelledby="removal-ask-title">
+      <div class="modal__box modal__box--narrow">
+        <div class="modal__head"><h2 id="removal-ask-title">共有の日報データからも消しますか？</h2></div>
+        <div class="modal__body">
+          <p class="lead" id="removal-ask-text"></p>
+          <p class="lead">「はい」なら、共有の日報データからも同じページ(報告日・ライン・直・ページ)の行だけを
+            消します。共有に届かないときは消さずに「共有はまだ」と残します。
+            「いいえ」なら手元だけ消したままにします。</p>
+        </div>
+        <div class="modal__foot">
+          <button class="btn" type="button" id="removal-ask-no">いいえ(手元だけ)</button>
+          <button class="btn btn--danger" type="button" id="removal-ask-yes">はい(共有からも消す)</button>
+        </div>
+      </div>
+    </div>
+
+
     {# ---- 過去の日報をCSV/Excelから取り込む ----
 
        このツールに切り替える前の日報は、VBAのブックの中にしかありません。
@@ -1311,117 +1434,6 @@ LVC,119
       </div>
       <div class="msg msg--info" id="empty-pages-note" hidden
            style="margin-top:var(--sp-2)"></div>
-    </div>
-
-    {# ------------------------------------------------------------
-       直を消す(`services/shift_removal`)
-
-           そのPCの手元で不要なものを探す → 消す → 選択制
-           「共有の日報データからも消しますか？」yes で共有からも消す
-
-       探すもの・消してよいか・共有から消すかを決めるのはサーバ。ここは並べて、選んだものを
-       送るだけ。確かめは**画面の中の窓**(confirm はデスクトップ版で使えない)
-       ------------------------------------------------------------ #}
-    <div class="card" id="removal">
-      <div class="card__head">
-        <h2>直を消す</h2>
-        <span class="lead">この PC の手元で要らないページ(テストデータ・中身の無いページ・試しに打った分)を消す</span>
-      </div>
-      <p class="lead">
-        <b>探すのはこの PC の手元の日報</b>です。選んで「手元から消す」を押すと、消す前の控えを
-        この PC(<code>%LOCALAPPDATA%\NippouTool\消した日報</code>)に残してから消します。
-        消したあとに<b>「共有の日報データからも消しますか？」</b>と聞きます ──
-        「はい」なら共有の日報データからも、そのページ(報告日・ライン・直・ページ)の行だけを消します。
-        共有に届かないときは消さずに「共有はまだ」として残し、下の一覧からあとで消せます。
-      </p>
-      <p class="lead">
-        押した瞬間にもう一度サーバが確かめます ── 一覧を出してから押すまでのあいだに
-        <b>誰かが打ったページは消しません</b>。
-      </p>
-      <div class="row" style="margin-top:var(--sp-3)">
-        <div class="field"><label for="removal-kind">探すもの</label>
-          <select class="input" id="removal-kind">
-            <option value="test">テストデータ(テストモードで作った直)</option>
-            <option value="empty">中身の無いページ</option>
-            <option value="all">日付・ライン・直を指定して選ぶ</option>
-          </select></div>
-        <div class="field"><label for="removal-day">日付</label>
-          <input class="input" type="date" id="removal-day"></div>
-        <div class="field"><label for="removal-line">ライン</label>
-          <select class="input" id="removal-line"><option value="">すべて</option></select></div>
-        <div class="field"><label for="removal-shift">直</label>
-          <select class="input" id="removal-shift"><option value="">すべて</option></select></div>
-        <button class="btn" type="button" id="removal-find">探す</button>
-      </div>
-      <p class="lead" id="removal-head" style="margin-top:var(--sp-2)">押すと一覧が出ます</p>
-      <div class="scroll-x" id="removal-box" hidden style="margin-top:var(--sp-2)">
-        <table class="list" id="removal-table">
-          <thead>
-            <tr><th><input type="checkbox" id="removal-all" aria-label="すべて選ぶ"></th>
-                <th>報告日</th><th>ライン</th><th>直</th><th>ページ</th><th>作業者</th>
-                <th>行数</th><th>印</th><th>共有へ</th><th>保存日時</th></tr>
-          </thead>
-          <tbody id="removal-rows"></tbody>
-        </table>
-      </div>
-      <div class="btn-row" style="margin-top:var(--sp-2)">
-        <button class="btn" type="button" id="removal-pick-test" hidden>テストデータをすべて選ぶ</button>
-        <button class="btn btn--danger" type="button" id="removal-delete"
-                {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>選んだページを手元から消す</button>
-        <span class="lead" id="removal-picked"></span>
-      </div>
-      <div class="msg msg--info" id="removal-note" hidden style="margin-top:var(--sp-2)"></div>
-
-      <div id="removal-open" hidden style="margin-top:var(--sp-3)">
-        <h3>共有からまだ消していないページ</h3>
-        <p class="lead">手元からは消してあり、共有の日報データにはまだ残っているかもしれないページです
-          (共有に届かなかった・答えずに閉じた)。</p>
-        <div class="scroll-x">
-          <table class="list">
-            <thead><tr><th><input type="checkbox" id="removal-open-all" aria-label="すべて選ぶ"></th>
-              <th>ページ</th><th>消した日時</th><th>いま</th><th>わけ</th></tr></thead>
-            <tbody id="removal-open-rows"></tbody>
-          </table>
-        </div>
-        <div class="btn-row" style="margin-top:var(--sp-2)">
-          <button class="btn btn--danger" type="button" id="removal-open-shared"
-                  {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>選んだページを共有からも消す</button>
-          <button class="btn" type="button" id="removal-open-local"
-                  {% if not admin %}disabled title="管理者モードにすると使えます"{% endif %}>手元だけにする(共有からは消さない)</button>
-        </div>
-      </div>
-    </div>
-
-    {# 消す前の確かめ・共有からも消すかの問い。**画面の中の窓**(confirm は使わない) #}
-    <div class="modal" id="removal-confirm" hidden role="dialog" aria-modal="true"
-         aria-labelledby="removal-confirm-title">
-      <div class="modal__box modal__box--narrow">
-        <div class="modal__head"><h2 id="removal-confirm-title">手元から消します</h2></div>
-        <div class="modal__body">
-          <p class="lead" id="removal-confirm-text"></p>
-          <ul class="lead" id="removal-confirm-list"></ul>
-        </div>
-        <div class="modal__foot">
-          <button class="btn" type="button" id="removal-confirm-no">やめる</button>
-          <button class="btn btn--danger" type="button" id="removal-confirm-yes">手元から消す</button>
-        </div>
-      </div>
-    </div>
-    <div class="modal" id="removal-ask" hidden role="dialog" aria-modal="true"
-         aria-labelledby="removal-ask-title">
-      <div class="modal__box modal__box--narrow">
-        <div class="modal__head"><h2 id="removal-ask-title">共有の日報データからも消しますか？</h2></div>
-        <div class="modal__body">
-          <p class="lead" id="removal-ask-text"></p>
-          <p class="lead">「はい」なら、共有の日報データからも同じページ(報告日・ライン・直・ページ)の行だけを
-            消します。共有に届かないときは消さずに「共有はまだ」と残します。
-            「いいえ」なら手元だけ消したままにします。</p>
-        </div>
-        <div class="modal__foot">
-          <button class="btn" type="button" id="removal-ask-no">いいえ(手元だけ)</button>
-          <button class="btn btn--danger" type="button" id="removal-ask-yes">はい(共有からも消す)</button>
-        </div>
-      </div>
     </div>
 
     {# ---- コンバート(v4.13.0)── VBA の前の名前の表を、正規の名前の表へ写す ----

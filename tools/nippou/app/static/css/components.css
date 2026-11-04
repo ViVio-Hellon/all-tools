@@ -3208,3 +3208,25 @@ dl.kv dd{ margin:0; overflow-wrap:anywhere; }
 /* 標準を大きく超過した行(標準時間タブ。v4.37.0)── 表を写す側(table.js)が tr に付ける */
 table.list tr.is-over td{ background:var(--state-warn-bg); }
 table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-line); }
+
+/* 設定の「すぐ使う」── 面の奥にあるテストモード・直を消すへの入口(settings.html) */
+.quick-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.quick-tools__label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted, inherit);
+}
+/* 飛んだ先のカードを一瞬だけ縁取る(どれに飛んだか分かるように) */
+.card--flash {
+  outline: 3px solid var(--accent, #2b6cb0);
+  outline-offset: 2px;
+  transition: outline-color .3s;
+}
+.quick-tools .btn { text-decoration: none; }

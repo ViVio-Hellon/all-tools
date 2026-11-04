@@ -1269,8 +1269,21 @@ export function start() {
       const key = link.dataset.gotoTab;
       document.querySelector(
         `#settingsTabs > .tabs__bar > .tab[data-key="${key}"]`)?.click();
-      document.querySelector("main#main")?.scrollTo({ top: 0 });
+      showCard(link.dataset.gotoAnchor);
     });
+  }
+  // 「すぐ使う」から来たとき(`?tab=data#removal`)も、そのカードを見せる
+  if (wanted && location.hash) showCard(location.hash.slice(1));
+
+  function showCard(id) {
+    const card = id ? document.getElementById(id) : null;
+    if (!card) {
+      document.querySelector("main#main")?.scrollTo({ top: 0 });
+      return;
+    }
+    card.scrollIntoView({ block: "start" });
+    card.classList.add("card--flash");
+    setTimeout(() => card.classList.remove("card--flash"), 1600);
   }
 
   /* ---- 鍵の帯 ----------------------------------------------------

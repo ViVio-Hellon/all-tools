@@ -56,6 +56,33 @@ class RemovalBrowserCase(ScreenBrowserCase):
                           for i in range(1, n + 1)])
 
 
+class QuickEntryBrowserTests(RemovalBrowserCase):
+    """「そんなモードないです」── 面の奥のカードは**見つからない**。設定を開いた最初の
+    画面(既定の面)の一番上の「すぐ使う」から、押すだけで目の前に出ること。"""
+
+    def test_すぐ使うからテストモードと直を消すへ飛べる(self) -> None:
+        page = self.open_screen("/settings", "#quick-tools")
+        for button, card in (("#quick-removal", "#removal"), ("#quick-test-mode", "#test-mode")):
+            with self.subTest(button=button):
+                page.evaluate("document.querySelector('main#main')?.scrollTo(0, 0)")
+                page.evaluate("window.scrollTo(0, 0)")
+                self.assertTrue(page.locator(button).is_visible(), "最初の画面に入口が見える")
+                page.click(button)
+                page.wait_for_timeout(400)
+                self.assertTrue(page.locator(card).is_visible())
+                top = page.evaluate(f"document.querySelector('{card}').getBoundingClientRect().top")
+                height = page.evaluate("innerHeight")
+                self.assertTrue(0 <= top < height / 2, f"{card} が画面の上半分にある: {top}/{height}")
+        self.assertEqual(self.dialogs, [])
+        self.assertEqual(self.errors, [])
+
+    def test_リンクで来てもそのカードを出す(self) -> None:
+        page = self.open_screen("/settings?tab=data#removal", "#removal")
+        page.wait_for_timeout(400)
+        top = page.evaluate("document.querySelector('#removal').getBoundingClientRect().top")
+        self.assertTrue(0 <= top < page.evaluate("innerHeight") / 2, top)
+
+
 class TestModeBrowserTests(RemovalBrowserCase):
     def test_パスワードで入ると帯が出て帯から抜けられる(self) -> None:
         page = self.open_screen("/settings?tab=terminal", "#test-mode-enter")
