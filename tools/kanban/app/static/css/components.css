@@ -10,8 +10,20 @@
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) { background: var(--surface-2); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
+/* 押せないボタン。**薄くしない**(VER3.6.2)。以前は全体を半透明にしていて、押せない
+   だけなのに文字まで読みにくかった。地を灰に寄せ、破線の枠・細い斜線・禁止のカーソルで
+   押せないことを示し、文字はいつもの濃さのまま */
+.btn:disabled {
+  cursor: not-allowed;
+  background-color: var(--surface-2); color: var(--fg);
+  border-style: dashed; border-color: var(--st-disabled-line);
+  background-image: repeating-linear-gradient(
+    135deg, var(--st-disabled-hatch) 0 2px, transparent 2px 7px);
+}
 .btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-fill); }
+.btn--primary:disabled, .btn--danger:disabled {
+  background-color: var(--surface-2); border-color: var(--st-disabled-line); color: var(--fg);
+}
 /* **地の色を指定し直す。** 上の `.btn:hover` が地を淡い色に塗り替えるので、
    指定しないと白い文字が白い地に乗って、マウスを載せたあいだ文字が消える */
 .btn--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
@@ -26,6 +38,14 @@
 }
 .toolbar__spacer { margin-left: auto; }
 
+/* 看板の頭(ラインのタブ + 道具の並び)。同じ段に並べて、看板を上へ寄せる(VER3.6.2) */
+.board-head--tabs {
+  display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 1rem;
+  border-bottom: 1px solid var(--line); margin-bottom: var(--gap);
+}
+.board-head--tabs .tabs { border-bottom: 0; margin-bottom: 0; }
+.board-head--tabs .toolbar { flex: 1 1 auto; margin-bottom: .3rem; }
+
 /* 押す前に何件動くかを見せる小さな数字 */
 .count {
   display: inline-grid; place-items: center; min-width: 1.35rem;
@@ -36,6 +56,7 @@
 .btn--primary .count, .btn--danger .count {
   background: color-mix(in srgb, var(--on-fill) 25%, transparent); border-color: transparent; color: var(--on-fill);
 }
+.btn:disabled .count { background: var(--surface); border-color: var(--line); color: var(--fg); }
 
 /* --- ラインのタブ --------------------------------------------------- */
 .tabs {
@@ -60,13 +81,22 @@
 
 /* --- 看板 ----------------------------------------------------------- */
 /* 資材フレームを敷き詰める。VBA は 1 行 4 枚に固定していたが、Web は
-   画面幅に合わせる ── 現場のモニタは端末ごとに違う */
+   画面幅に合わせる ── 現場のモニタは端末ごとに違う。
+
+   **縦に詰めて並べる(段組み。VER3.6.2)。** 以前は格子(行ごとに高さをそろえる)で、
+   背の高い資材の横に大きな空きができ、そのぶん下へはみ出していた。段組みなら
+   資材を上から順に詰めて、列の高さをそろえる(読む順は 左の列の上 → 下 → 次の列)。
+   列の幅は、いちばん長いサイズが 1 行に収まる幅(board.js の fitColumns が決める。
+   下の 17rem は JS が動く前の値)。列の数はそれと画面の幅で決まる */
 .board {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
-  gap: var(--gap);
-  align-items: start;
+  column-width: 17rem;
+  column-gap: var(--gap);
 }
+.board > .frame {
+  break-inside: avoid;
+  margin-bottom: var(--gap);
+}
+.board > .empty { column-span: all; }
 /* ラインを切り替えて、新しいラインの盤が届くまで(前のラインの盤は押せない。board.js) */
 .board[aria-busy="true"] { opacity: .45; pointer-events: none; }
 
@@ -77,45 +107,54 @@
   overflow: hidden;
 }
 .frame__title {
-  padding: .45rem .7rem;
+  padding: .25rem .6rem;
   background: var(--surface-2); border-bottom: 1px solid var(--line);
   font-weight: 700;
 }
-.frame__rows { padding: .4rem; display: flex; flex-direction: column; gap: .3rem; }
+.frame__rows { padding: .3rem; display: flex; flex-direction: column; gap: .2rem; }
 
 /* 1 行 = サイズ + 発送 + 注文中 + コメント */
 .row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  gap: .3rem;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: .2rem;
   align-items: stretch;
 }
 
 /* 看板のボタン。**色は data-state が決める**(tokens.css) */
 .cell {
   border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  padding: .4rem .55rem;
+  padding: .25rem .4rem;
   font-size: var(--fs-base); text-align: left;
   cursor: pointer; position: relative;
-  min-height: 2.1rem;
+  min-height: 1.9rem;
+  line-height: 1.3;
   display: flex; align-items: center;
 }
+/* サイズは 1 行で読みたい(「100 / 枚」と割れると読み違える)。数字の間では割らず、
+   入りきらないときだけ区切り(空白)で折り返す */
+.cell--size { word-break: keep-all; overflow-wrap: anywhere; }
 .cell--ship, .cell--hold {
   justify-content: center; text-align: center;
-  font-size: var(--fs-sm); min-width: 3.6rem;
+  font-size: var(--fs-sm); min-width: 2.9rem; padding: .25rem .2rem;
 }
 .cell:hover:not(:disabled) { filter: brightness(.96); }
 .cell:active:not(:disabled) { filter: brightness(.9); }
 
-/* 押せないものは**色を残したまま沈める**。色を消すと状態が読めなくなる */
-.cell:disabled { cursor: default; }
-.cell:disabled::after {
-  content: ""; position: absolute; inset: 0;
-  background: var(--st-disabled-veil); border-radius: inherit;
+/* 押せないもの(倉庫参照・参照だけのライン・発注の無い行の発送など)。
+   **色も文字も薄めない**(VER3.6.2)。以前は白い幕をかぶせて沈めていたので、
+   倉庫参照でサイズの文字が読みにくかった(現場の声)。状態色(赤・緑・黄)と
+   文字はふだんの濃さのまま、**破線の枠・細い斜線の地・禁止のカーソル**で
+   押せないことを示す。マウスを乗せると「押せません」と出る(board.js) */
+.cell:disabled {
+  cursor: not-allowed;
+  border-style: dashed; border-color: var(--st-disabled-line);
+  background-image: repeating-linear-gradient(
+    135deg, var(--st-disabled-hatch) 0 2px, transparent 2px 7px);
 }
 
-/* 非常設品。VBA は青字・斜体 */
-.cell--non-permanent { color: var(--non-permanent); font-style: italic; font-weight: 700; }
+/* 非常設品。VBA は青字・斜体。色の付いた看板の上では濃い紺(青では赤の上で読めない) */
+.cell--non-permanent { color: var(--non-permanent-on-state); font-style: italic; font-weight: 700; }
 .cell--non-permanent[data-state="neutral"] { color: var(--non-permanent-on-neutral); }
 
 /* 倉庫が対応中で現場が触れない行。錠前を出して理由を持たせる */
@@ -124,9 +163,34 @@
   content: "🔒"; margin-right: .35rem; font-size: .85em; font-style: normal;
 }
 
-/* 読むだけの画面ではラベルとして出す(押せる見た目にしない) */
-.cell--label { cursor: default; }
-.cell--label::after { content: none; }
+/* 読むだけの画面ではラベルとして出す(押せる見た目にしない。上の :disabled の印が付く) */
+.cell--label { cursor: not-allowed; }
+
+/* --- 下(右)にまだある印(VER3.6.2) --------------------------------------
+   看板がはみ出したときに、**見落とさないように**画面の端に出す。スクロールしきると
+   消える。押すとその向きへ送る。看板より目立つ色にはしない(赤・緑・黄と紛れない青) */
+.scroll-more {
+  position: fixed; z-index: 90;
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .35rem .9rem;
+  background: var(--accent); color: var(--on-fill);
+  border: 2px solid var(--surface); border-radius: 999px;
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-base); font-weight: 700; white-space: nowrap;
+  cursor: pointer;
+}
+.scroll-more--down { left: 50%; bottom: .6rem; transform: translateX(-50%); }
+.scroll-more--right { right: .5rem; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; padding: .9rem .35rem; }
+.scroll-more:hover { filter: brightness(1.08); }
+.scroll-more b { font-variant-numeric: tabular-nums; }
+/* 出たときに 3 回だけ小さく弾ませて目を引く(ずっと動かすと看板を見る邪魔になる) */
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-more--down { animation: scroll-more-nudge 1.2s ease-in-out 3; }
+}
+@keyframes scroll-more-nudge {
+  0%, 100% { transform: translate(-50%, 0); }
+  50% { transform: translate(-50%, 3px); }
+}
 
 .note {
   color: var(--non-permanent-text); font-weight: 700; font-size: var(--fs-sm);
@@ -535,7 +599,7 @@ table.places code { word-break: break-all; }
 
 /* コメント(倉庫 ⇔ 現場のやり取り)。無いときは目立たせない */
 .cell--comment {
-  justify-content: center; min-width: 2.4rem; padding: .3rem .35rem;
+  justify-content: center; min-width: 2.1rem; padding: .25rem .25rem;
   background: var(--surface); color: var(--muted); font-size: var(--fs-sm);
   opacity: .55;
 }

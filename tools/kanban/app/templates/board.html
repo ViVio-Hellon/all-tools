@@ -28,6 +28,11 @@
   </div>
 {% else %}
 
+  {#
+    ラインのタブと道具の並びは**同じ段に並べる**(VER3.6.2。幅が足りなければ折り返す)。
+    別々の段にすると、そのぶん看板が下へ押し出される
+  #}
+  <div class="board-head{% if lines | length > 1 %} board-head--tabs{% endif %}">
   {# ラインのタブ。現場は1本だけなので出さない #}
   {% if lines | length > 1 %}
   <div class="tabs" role="tablist" id="line-tabs">
@@ -59,6 +64,8 @@
     </button>
     {% endif %}
 
+    {# 「※文字色青は非常設品」。盤の上に 1 行使わないよう、道具の並びの中に置く(VER3.6.2) #}
+    <span id="note" class="note"></span>
     <span class="toolbar__spacer"></span>
     <span id="reports"></span>
     {# 権限のあるほかのモードへ、その場で切り替える(デスクトップ版は開き直さずに) #}
@@ -66,6 +73,7 @@
     <button class="btn btn--sm" type="button" data-switch-mode="{{ m.key }}" data-label="{{ m.label }}"
             title="{{ m.label }}に切り替えます(送っていない操作を送ってから開き直します。ブラウザ版は次に開いたときから)">⇄ {{ m.label }}へ</button>
     {% endfor %}
+  </div>
   </div>
 
   {% if read_only %}
@@ -97,8 +105,17 @@
   {# 相手側の新しいコメント。JS が出し入れする #}
   <div class="banner board-comments" id="comment-alerts" role="status" hidden></div>
 
-  <div id="note" class="note"></div>
   <div class="board" id="board"></div>
+
+  {#
+    看板が画面からはみ出しているとき、**はみ出している向きに印を出す**(VER3.6.2)。
+    見えていない看板の数(色の付いたもの)を添え、スクロールしきったら消す。
+    押すとその向きへ送る。出し入れは JS(views/board.js の updateScrollHints)
+  #}
+  <button class="scroll-more scroll-more--down" type="button" id="scroll-more" hidden
+          title="下にまだ看板があります。押すと下へ送ります"></button>
+  <button class="scroll-more scroll-more--right" type="button" id="scroll-more-right" hidden
+          title="右にまだ看板があります。押すと右へ送ります"></button>
 
 {% endif %}
 

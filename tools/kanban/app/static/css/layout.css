@@ -119,6 +119,16 @@
 }
 .offline .btn { background: var(--surface); color: var(--bad); border-color: var(--surface); }
 
+/* --- 幅が 1600px より狭いとき(1366・1280 の画面) -------------------- */
+/* 左のレールを細くして、そのぶん看板を広く出す(VER3.6.2)。行き先の名前は残し、
+   添え書き(「発注/発送の状況を見る」)だけ畳む ── 看板の列が 1 本増えると、
+   スクロールせずに見える看板がそのぶん増える */
+@media (max-width: 100rem) and (min-width: 55.01rem) {
+  :root { --rail-w: 6rem; }
+  .rail { padding: var(--gap) .35rem; }
+  .rail__text small { display: none; }
+}
+
 /* --- 画面が狭いとき ------------------------------------------------- */
 @media (max-width: 55rem) {
   .shell { grid-template-columns: 1fr; }

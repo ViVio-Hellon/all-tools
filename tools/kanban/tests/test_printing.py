@@ -116,7 +116,7 @@ class RenderTest(unittest.TestCase):
         html = printing.render_html(doc)
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<script>外装", html)
-        self.assertIn("<table>", html)
+        self.assertIn('<table class="report', html)
 
     def test_empty_document_renders_message(self):
         doc = printing.build_site_document("LVC", [])
@@ -190,7 +190,7 @@ class EditableReportTest(unittest.TestCase):
         page = self.page(editable=False)
         self.assertNotIn("contenteditable", page)
         self.assertNotIn("印刷する行", page)
-        self.assertIn("<table>", page)
+        self.assertIn('<table class="report">', page)
 
     def test_empty_report_has_no_editor(self):
         """直すものが無いなら、道具立ても出さない。"""
@@ -256,14 +256,59 @@ class PrintableAreaTest(unittest.TestCase):
         self.assertIn("margin: 0;", html)
         self.assertIn("@media screen", html, "画面では同じだけ空けて見せる")
 
-    def test_long_cells_wrap_instead_of_running_off_the_paper(self):
-        """資材・サイズは折り返す。短い列(状態・日時)は 1 字ずつ割れないよう 1 行のまま。"""
-        html = self.html()
-        self.assertIn("td.wrap { white-space: normal; overflow-wrap: anywhere; }", html)
-        row = html[html.index('<td class="pick">'):]
-        row = row[:row.index("</tr>")]
-        self.assertEqual(row.count('class="wrap"'), 2, row)
+    def test_every_cell_stays_on_one_line(self):
+        """どのマスも折り返さない(VER3.6.2)。入りきらないものは文字を小さくして収める。
 
+        以前は資材・サイズを折り返していたので「1030 × 1520」「ハードボード(大板棚)」が
+        2 行に割れた(現場の声)。紙で本当に 1 行になるかは ``test_report_print_browser``
+        が Chromium の印刷の描画で確かめる。
+        """
+        html = self.html()
+        self.assertIn("th, td { white-space: nowrap;", html)
+        self.assertNotIn('class="wrap"', html)
+        self.assertIn("window.fitCells", html, "入りきらないマスの文字を小さくするスクリプトが無い")
+        self.assertIn("beforeprint", html, "印刷の直前にも測り直す")
+
+
+class ColumnWidthTest(unittest.TestCase):
+    """列の幅は中身に合わせて配る。足すと表の幅(紙の印刷できる幅より 1mm 狭い)ちょうど。"""
+
+    def doc(self):
+        items = [
+            item("1", "ハードボード(大板棚)", "1030 × 1520 : 100枚", want="〇", permanent="×"),
+            item("2", "ハードボード(大板棚)", "1000 × 1400 : 100枚", want="〇", permanent="×",
+                 hold="〇"),
+            item("3", "外装紙", "2200 × 50M : 3本", want="〇", permanent="×", shipped="〇"),
+        ]
+        return printing.build_non_permanent_document("L1", items)
+
+    def test_widths_fill_the_printable_width_exactly(self):
+        for build in (printing.build_site_document, printing.build_warehouse_document,
+                      printing.build_non_permanent_document):
+            with self.subTest(build=build.__name__):
+                items = [item("1", "ハードボード(大板棚)", "1030 × 1520 : 100枚", want="〇",
+                              shipped="〇", permanent="×")]
+                widths = printing.column_widths(build("L1", items))
+                self.assertAlmostEqual(sum(widths), printing.TABLE_WIDTH_MM, places=1)
+                self.assertLess(printing.TABLE_WIDTH_MM, printing.PRINTABLE_WIDTH_MM)
+                self.assertTrue(all(w > 0 for w in widths), widths)
+
+    def test_material_and_size_are_wide_and_count_and_state_narrow(self):
+        material, size, qty, state = printing.column_widths(self.doc())
+        self.assertGreater(material, qty * 2)
+        self.assertGreater(size, state)
+        self.assertLess(qty, 40)
+        self.assertLess(state, 40)
+
+    def test_widths_are_written_on_the_header(self):
+        html = printing.render_html(self.doc())
+        for w in printing.column_widths(self.doc()):
+            self.assertIn(f"width:{printing._mm(w)}mm", html)
+        self.assertIn("table-layout: fixed;", html)
+        self.assertIn(f"width: {printing._mm(printing.TABLE_WIDTH_MM)}mm;", html)
+
+    def test_full_width_counts_more_than_half_width(self):
+        self.assertGreater(printing.text_width_em("大板棚"), printing.text_width_em("100"))
 
 if __name__ == "__main__":
     unittest.main()

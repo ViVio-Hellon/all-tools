@@ -57,6 +57,7 @@ export function start(initial, initialLine) {
   wireComments();
   wireLeaving();
   wireDropped();
+  wireScrollHints();
 
   if (initial) applyPayload({ board: initial });
   else if (line) reload();
@@ -70,6 +71,8 @@ export function start(initial, initialLine) {
 // ------------------------------------------------------------------
 /** いま描いている看板(管理番号 → 行)。押す前にコメントを見せるかを決めるのに使う */
 let rowsByNo = new Map();
+/** いま描いている盤が読むだけ(倉庫参照・併用時の参照だけのライン)か。押せないボタンの説明に使う */
+let readOnlyBoard = false;
 
 function render(board) {
   const host = document.getElementById('board');
@@ -80,6 +83,7 @@ function render(board) {
 
   host.dataset.line = board.line || line;
   host.removeAttribute('aria-busy');
+  readOnlyBoard = Boolean(board.read_only);
   rowsByNo = new Map();
   for (const group of board.groups) {
     for (const r of group.rows) rowsByNo.set(String(r.mgmt_no), { ...r, material: group.material });
@@ -115,7 +119,45 @@ function render(board) {
     host.innerHTML =
       '<div class="empty">このラインに表示する資材がありません。</div>';
   }
+  fitColumns(host);
+  scheduleScrollHints();
   return true;
+}
+
+let measureCtx = null;
+
+/**
+ * 段組みの 1 列の幅を、**いちばん長いサイズが 1 行に収まる幅**にする(VER3.6.2)。
+ *
+ * 決め打ちの幅だと、長いサイズ(「2000 × 90 × 18 : 10本」)のあるラインでは折り返して
+ * 行が 2 段になり、短いラインでは列が無駄に広くて列の数が減る。どちらもスクロールが
+ * 増えるので、描いた看板の文字の幅を測って決める。画面が狭くて収まらないときは
+ * (列が 1 本になるまで)折り返しに任せる
+ */
+function fitColumns(host) {
+  const sizes = host.querySelectorAll('.row .cell--size');
+  if (!sizes.length) { host.style.removeProperty('column-width'); return; }
+  measureCtx = measureCtx || document.createElement('canvas').getContext('2d');
+  let text = 0;
+  for (const el of sizes) {
+    const cs = getComputedStyle(el);
+    measureCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    // 錠前の印(::before)のぶんも見込む
+    const lock = el.closest('.row--locked') ? parseFloat(cs.fontSize) * 1.3 : 0;
+    text = Math.max(text, measureCtx.measureText(el.textContent).width + lock);
+  }
+  const first = sizes[0];
+  const cs = getComputedStyle(first);
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+    + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+  const row = first.closest('.row');
+  const frame = first.closest('.frame');
+  // 行のうちサイズ以外(発送・注文中・コメントと間)と、箱の枠と余白
+  const rest = row.getBoundingClientRect().width - first.getBoundingClientRect().width;
+  const around = frame.getBoundingClientRect().width - row.getBoundingClientRect().width;
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const want = Math.ceil(text + pad + rest + around + 2);
+  host.style.columnWidth = `${Math.max(want, 15 * rem)}px`;
 }
 
 function frame(group) {
@@ -182,7 +224,11 @@ function cell(view, r, kind, nonPermanent) {
   // 錠前の行は「なぜ押せないか」をホバーで読めるようにする。
   // 押しても何も起きないだけだと、壊れているようにしか見えない
   const tip = r.locked && kind === 'size' ? r.locked_note : view.tip;
-  if (tip) el.title = tip;
+  // 押せないものは、マウスを乗せると**押せないことを言葉でも**出す(VER3.6.2。見た目は
+  // 破線の枠と斜線。components.css)。読むだけの盤では「参照だけ」と添える
+  const why = view.enabled ? '' : (readOnlyBoard ? '参照だけ(押せません)' : '押せません');
+  const title = [tip, why].filter(Boolean).join('\n');
+  if (title) el.title = title;
   return el;
 }
 
@@ -192,7 +238,78 @@ function setCount(id, n) {
   el.textContent = n;
   // 0 件なら押しても何も起きない。押す前に分かるようにボタンごと止める
   const btn = el.closest('button');
-  if (btn) btn.disabled = !n;
+  if (!btn) return;
+  btn.disabled = !n;
+  // 止めたわけをマウスを乗せたときにも出す(元の説明は控えておく)
+  if (btn.dataset.tip === undefined) btn.dataset.tip = btn.title || '';
+  btn.title = n ? btn.dataset.tip : `${btn.dataset.tip}\n対象がないので押せません`.trim();
+}
+
+// ------------------------------------------------------------------
+// はみ出した看板の印(VER3.6.2)
+// ------------------------------------------------------------------
+// **スクロールしないと見えない看板を見落とさない。** 盤が画面に収まりきらないとき、
+// はみ出している向き(下・右)の画面の端に「▼ 下にまだあります(n 件)」を出す。
+// 見えていない看板に色の付いたもの(発注・発送・注文中)があれば、その数も添える
+// ── 見落として困るのはそちら。スクロールしきったら消す。押すとその向きへ送る。
+// 資材の箱は中でスクロールしない(段組みで全部を縦に並べる)ので、印は画面の端だけ
+
+let hintFrame = 0;
+
+/** 次に描く前に 1 回だけ数え直す(続けて呼ばれてもまとめる) */
+function scheduleScrollHints() {
+  if (hintFrame) return;
+  hintFrame = requestAnimationFrame(() => { hintFrame = 0; updateScrollHints(); });
+}
+
+/** 見えていない看板(行)の数と、そのうち色の付いたもの */
+function hiddenRows(beyond) {
+  let total = 0;
+  let lit = 0;
+  for (const el of document.querySelectorAll('#board .row')) {
+    if (!beyond(el.getBoundingClientRect())) continue;
+    total += 1;
+    if (el.querySelector('.cell[data-state]:not([data-state="neutral"])')) lit += 1;
+  }
+  return { total, lit };
+}
+
+function setHint(id, show, arrow, where, counts) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.hidden = !show;
+  if (!show) return;
+  const n = counts.total
+    ? `(<b>${counts.total}</b> 件${counts.lit ? `・うち色付き <b>${counts.lit}</b> 件` : ''})`
+    : '';
+  el.innerHTML = `${arrow} ${where}にまだあります${n}`;
+}
+
+function updateScrollHints() {
+  const root = document.scrollingElement || document.documentElement;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // 端まで 4px 以内なら「しきった」とみなす(倍率で端数が出る)
+  const moreDown = root.scrollHeight - (root.scrollTop + root.clientHeight) > 4;
+  const moreRight = root.scrollWidth - (root.scrollLeft + root.clientWidth) > 4;
+  setHint('scroll-more', moreDown, '▼', '下', moreDown ? hiddenRows((r) => r.bottom > vh + 1) : {});
+  setHint('scroll-more-right', moreRight, '▶', '右', moreRight ? hiddenRows((r) => r.right > vw + 1) : {});
+}
+
+function wireScrollHints() {
+  window.addEventListener('scroll', scheduleScrollHints, { passive: true });
+  window.addEventListener('resize', scheduleScrollHints);
+  // 帯(取り消し・コメント・届いていない操作)が出入りして盤の位置が変わったときも
+  // (body は高さが画面に固定なので、中身の入れ物を見る)
+  if (window.ResizeObserver) {
+    new ResizeObserver(scheduleScrollHints).observe(document.getElementById('main') || document.body);
+  }
+  const page = () => Math.max(120, Math.round(window.innerHeight * 0.8));
+  const down = document.getElementById('scroll-more');
+  if (down) down.addEventListener('click', () => window.scrollBy({ top: page(), behavior: 'smooth' }));
+  const right = document.getElementById('scroll-more-right');
+  if (right) right.addEventListener('click', () => window.scrollBy({ left: Math.round(window.innerWidth * 0.8), behavior: 'smooth' }));
+  scheduleScrollHints();
 }
 
 /** 盤を返す要求を出す前に呼ぶ。返ってきた盤はこの番号と一緒に `applyPayload` へ渡す */
