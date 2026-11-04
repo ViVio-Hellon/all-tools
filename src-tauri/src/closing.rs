@@ -173,6 +173,42 @@ fn end_stopped(bridges: Vec<(Duration, Arc<Bridge>)>) {
     }
 }
 
+/// 管理者以外停止(入口の Python の `remote_stop`): **確認を出さずに**全ツールに終わってもらい、窓を閉じる。
+///
+/// 期限・止めてよいかは入口が決めた(各ツールの「残っているもの」を待ち、5分で強制。画面の打ちかけは
+/// 入口が大きなタブの画面に頼んで置いてもらった)。ここで訊き直すと、管理者の停止が確認で止まる。
+/// 終わり方の途中(確認を出している)でも閉じる。各ツールの「終了してよい」で終わり方が
+/// 始まらないよう、先に `closing` を立てる。
+pub fn force_close(shell: Arc<Shell>, app: AppHandle) {
+    if shell.is_exiting() || shell.remote_stopping.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    shell.closing.store(true, Ordering::SeqCst);
+    thread::spawn(move || {
+        crate::places::shell_log(&shell.root, "管理者以外停止: 確認なしで全ツールを閉じます");
+        let targets: Vec<_> = shell
+            .all_bridges()
+            .into_iter()
+            .filter(|(tool, bridge)| !tool.is_portal() && bridge.phase() == Phase::Started)
+            .map(|(tool, bridge)| (tool.quit_wait, bridge))
+            .collect();
+        let handles: Vec<_> = targets
+            .into_iter()
+            .map(|(wait, bridge)| {
+                thread::spawn(move || {
+                    let _ = bridge.call_json("POST", "/api/shutdown", &json!({"force": true}), ASK_LIMIT);
+                    bridge.wait_quit(wait);
+                })
+            })
+            .collect();
+        for handle in handles {
+            let _ = handle.join();
+        }
+        crate::places::shell_log(&shell.root, "管理者以外停止: 閉じました");
+        app.exit(0);
+    });
+}
+
 /// 画面に打ちかけを置いてもらうのを待つ上限(共有へではなく手元の SQLite へ置くだけなので短い)
 const PREPARE_LIMIT: Duration = Duration::from_secs(15);
 

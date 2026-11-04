@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 
@@ -103,7 +104,15 @@ def health():
         "stage_key": config.get("STAGE_KEY", "prepare"),
         "startup_error": config["STARTUP_ERROR"],
         "uptime_sec": round(time.time() - config["STARTED_AT"], 1),
+        # 管理者以外停止のお願い(`remote_stop.py`)。画面の帯が `?remote_stop=1` で問い合わせる
+        "remote_stop": _remote_stop(),
     })
+
+
+def _remote_stop():
+    """管理者以外停止のお願い(`remote_stop.py`)。画面の帯が `?remote_stop=1` で問い合わせる。"""
+    mod = sys.modules.get("remote_stop")
+    return mod.from_query(request.args) if mod is not None else None
 
 
 @bp.post("/api/alive")

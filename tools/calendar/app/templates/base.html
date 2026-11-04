@@ -152,6 +152,8 @@
    (app.js の読み込みが失敗したときこそ残したい) #}
 <script src="{{ url_for('static', filename='js/errlog.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{# 管理者以外停止のお願いの帯(`remote_stop.py`。4ツールで同じ中身) #}
+<script defer src="{{ url_for('static', filename='js/remote_stop_band.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

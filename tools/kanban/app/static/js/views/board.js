@@ -649,6 +649,8 @@ function wireLeaving() {
   // 日報複合ツールの窓の×・終了(外枠が先に頼んでくる)。すぐ「受けた」を返し、書きかけを
   // 置いて、残っていれば閉じてよいかを訊いてから「済んだ」を返す(日報と同じ約束)
   window.__alltoolsHandlesClose = true;
+  // 管理者以外停止で止めると決まったら、開いているコメントの書きかけを下書きに置く(`remote_stop_band.js`)
+  window.__remoteStopFlush = () => { saveOpenDraft(); return true; };
   window.addEventListener('message', async (event) => {
     const data = event.data;
     if (event.source !== window.parent || window.parent === window) return;

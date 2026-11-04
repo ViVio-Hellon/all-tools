@@ -51,6 +51,8 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
     "process_manager.py",
+    # 管理者以外停止モード(日報複合ツールの入口と同じ中身)
+    "remote_stop.py",
     # デスクトップ版(日報複合ツールの窓)の入口(日報複合ツールの外枠が子として起動する)
     "bridge.py",
     # 配布設定を書き出すだけの入口(日報複合ツールの大設定の「まとめて書き出す」が起こす)

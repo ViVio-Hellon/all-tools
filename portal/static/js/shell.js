@@ -17,6 +17,7 @@
 import { api } from "./api.js";
 import { toast, toastError } from "./toast.js";
 import * as settingsView from "./settings.js";
+import * as remoteStop from "./remote_stop.js";
 
 const S = window.SHELL || {};
 const desktop = S.edition === "desktop";
@@ -330,6 +331,7 @@ function select(id, { stay = false } = {}) {
     document.getElementById("panel-settings").hidden = false;
     showPanel(SETTINGS);
     settingsView.opened();
+    remoteStop.cardOpened();
   } else {
     ensureFrame(id).then(() => {
       if (current !== id) return;
@@ -1140,6 +1142,34 @@ async function watchCloseAsk() {
 }
 
 settingsView.install({ desktop, invoke, tools: TOOLS, reloadTabs: followTabs });
+remoteStop.attachCard();
+
+/**
+ * 管理者以外停止: 止めると決まったら、各ツールの画面に打ちかけを置いてもらう(閉じる前の頼みと同じ)。
+ * 大設定の打ちかけは訊かない(管理者の停止なので、確認で止まらない。期限はもう決まっている)。
+ */
+async function flushForRemoteStop() {
+  quitting = true;                  // 置いているあいだに新しいツールを起こさない
+  const asks = [];
+  for (const [id, entry] of frames) {
+    const win = entry.iframe && entry.iframe.contentWindow;
+    if (win && originOf(id)) asks.push(askFrameToSave(id, win));
+  }
+  report("info", `管理者以外停止: 各ツールの画面(${asks.length})に打ちかけを置いてもらいます`);
+  const answers = await Promise.all(asks);
+  return answers.every(Boolean);
+}
+// 帯の問い合わせも「終了」で止める(終わった入口を叩き続けない)
+timers.push(remoteStop.startBand({
+  flush: flushForRemoteStop,
+  ended: (text) => {
+    const box = document.getElementById("ended-text");
+    if (box) box.textContent = text;
+    ended();
+  },
+  quit: () => document.getElementById("quit").click(),
+  unsaved: () => settingsView.unsaved().map((text) => `大設定: ${text}`),
+}));
 heartbeat();
 start();
 // デスクトップ版は外枠に訊く(安い)。ブラウザ版は入口がツールの待ち受けを叩くので間を空ける

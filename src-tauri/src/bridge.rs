@@ -5,7 +5,7 @@
 //! ```text
 //! 要求  {"id": 7, "method": "POST", "path": "/api/x", "query": "", "headers": [[k, v]], "len": 12}\n<本文>
 //! 応答  {"id": 7, "status": 200, "headers": [[k, v]], "len": 345}\n<本文>
-//! 知らせ {"event": "started" | "quit" | "fatal", ...}\n
+//! 知らせ {"event": "started" | "quit" | "fatal" | "remote_stop", ...}\n
 //! ```
 //!
 //! **ポートは使わない。** 画面(WebView)からの要求は、Tauri の独自の宛先で受けて、
@@ -126,6 +126,8 @@ pub struct Bridge {
     stderr: Arc<Mutex<VecDeque<String>>>,
     on_quit: Hook,
     on_lost: Hook,
+    /// 「確認なしで全部を閉じて」(管理者以外停止。入口の Python だけが言う)
+    on_remote_stop: Hook,
     /// 待ちの締め切りを測る時計(試験は止まっていた時間を差し込める時計を渡す)
     clock: SharedClock,
     /// 1行目を待つ上限(`FIRST_WORD_LIMIT`。試験は短くする)
@@ -158,6 +160,7 @@ impl Bridge {
             stderr: Arc::new(Mutex::new(VecDeque::new())),
             on_quit: Mutex::new(None),
             on_lost: Mutex::new(None),
+            on_remote_stop: Mutex::new(None),
             clock,
             first_word_limit,
         })
@@ -175,6 +178,11 @@ impl Bridge {
     /// 「終了してよい」と言われたときに呼ぶもの
     pub fn set_on_quit(&self, f: impl Fn() + Send + Sync + 'static) {
         *self.on_quit.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// 「確認なしで全部を閉じて」(`remote_stop`。管理者以外停止)と言われたときに呼ぶもの
+    pub fn set_on_remote_stop(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.on_remote_stop.lock().unwrap() = Some(Box::new(f));
     }
 
     /// 受け付けていた Python が、言われもせずに居なくなったときに呼ぶもの
@@ -491,6 +499,11 @@ impl Bridge {
                     f();
                 }
             }
+            "remote_stop" => {
+                if let Some(f) = self.on_remote_stop.lock().unwrap().as_ref() {
+                    f();
+                }
+            }
             _ => {}
         }
     }
@@ -737,6 +750,11 @@ while True:
     body = inp.read(n) if n else b""
     if head["path"] == "/api/slow":
         gate("FAKE_SLOW_GATE")
+    if head["path"] == "/api/say-remote-stop":
+        # 入口の管理者以外停止のまね: 答えてから「確認なしで全部を閉じて」と言う
+        out.write(json.dumps({"id": head["id"], "status": 200, "headers": [], "len": 2}).encode() + b"\n{}")
+        out.write(b'{"event": "remote_stop"}\n'); out.flush()
+        continue
     if head["path"] == "/api/shutdown":
         out.write(json.dumps({"id": head["id"], "status": 200, "headers": [], "len": 2}).encode() + b"\n{}")
         out.write(b'{"event": "quit"}\n'); out.flush()
@@ -812,6 +830,29 @@ while True:
         assert!(bridge.ended_by_quit());
         assert!(!lost.load(Ordering::SeqCst));
         assert!(bridge.call("GET", "/", "", vec![], b"").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 管理者以外停止の知らせで確認なしに閉じる口を呼び_終了してよいとは取り違えない() {
+        let (bridge, dir) = testing::fake("remote_stop", "fakeportal");
+        let asked = Arc::new(AtomicBool::new(false));
+        let flag = asked.clone();
+        bridge.set_on_remote_stop(move || flag.store(true, Ordering::SeqCst));
+        let quit = Arc::new(AtomicBool::new(false));
+        let quit_flag = quit.clone();
+        bridge.set_on_quit(move || quit_flag.store(true, Ordering::SeqCst));
+        assert!(bridge.ensure_started());
+        assert!(bridge.wait_started(Duration::from_secs(30)), "{:?}", bridge.stderr_tail());
+        assert_eq!(bridge.call("POST", "/api/say-remote-stop", "", vec![], b"{}").unwrap().status, 200);
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while !asked.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(asked.load(Ordering::SeqCst), "入口の「確認なしで閉じて」が届かない");
+        assert!(!quit.load(Ordering::SeqCst), "「終了してよい」(確認を出す終わり方)と取り違えた");
+        assert_eq!(bridge.phase(), Phase::Started, "入口はまだ動いている(外枠が閉じる)");
+        bridge.shutdown(Duration::from_secs(5));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

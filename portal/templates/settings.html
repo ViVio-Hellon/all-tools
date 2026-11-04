@@ -160,6 +160,38 @@
       </div>
     </article>
 
+    <!-- 管理者以外停止モード(`portal/stop_mode.py`・`js/remote_stop.js`)。ランチャーを介さず、ほかの PC を止める -->
+    <article class="card" id="rs-card">
+      <div class="card__head">
+        <h2>管理者以外停止モード <small>(更新のため、ほかの PC の日報複合ツールと4ツールを止める)</small></h2>
+        <span class="rs-state" id="rs-state">確かめています…</span>
+      </div>
+      <p class="msg msg--warn" id="rs-why" hidden></p>
+      <p class="msg msg--info" id="rs-request" hidden></p>
+      <form class="rs-form" id="rs-form" autocomplete="off">
+        <label>管理者パスワード<input type="password" id="rs-password" autocomplete="current-password"></label>
+        <label>理由(ほかの PC の帯に出ます)<input type="text" id="rs-reason" value="更新のため" maxlength="200"></label>
+        <button type="button" class="btn btn--danger" id="rs-start">ほかの PC を止める</button>
+        <button type="button" class="btn btn--primary" id="rs-clear" hidden>更新が終わった(解除する)</button>
+      </form>
+      <div class="tablewrap" id="rs-pcs-wrap" hidden>
+        <table class="grid" id="rs-pcs">
+          <thead><tr><th>PC</th><th>ログインID</th><th>アプリ</th><th>版</th><th>様子</th><th>残っているもの・理由</th><th>最後の知らせ</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="lead">
+        管理者パスワードと、この端末のアクセス権限(共有の DB の表「アクセス権限」の「権限」)の <b>Administrator</b> の両方が要ります。
+        押すと、共有の DB の置き場所のフォルダ(<code id="rs-folder">管理者以外停止</code>)にお願いを置き、<b>この PC 以外</b>の
+        起動中の日報複合ツール(デスクトップ版・ブラウザ版)と単体の4ツールに、画面の上の帯で知らせます。
+        保存していない入力・実行中の処理が無い PC はまもなく止まり、残っている PC は利用者が保存・終了するのを待ちます。
+        <b>5分たっても止まらなければ強制で止めます</b>(止める前に画面の打ちかけを手元に置き、残っていたものをその PC の手元の控えに書いて、
+        次の起動で知らせます)。お願いが出ているあいだ、ほかの PC では<b>起動できません</b>(更新中)。更新が終わったら「解除する」を押してください。
+        この PC のツールは止めないので、更新の前に自分で閉じてください。
+        ランチャーの「全 PC で止める」とは<b>同時に使いません</b>(お願いが出ているあいだ、stop.bat・launcher_stop.bat は止めずに理由を返します)。
+      </p>
+    </article>
+
     <!-- 管理者パスワード -->
     <article class="card">
       <h2>管理者パスワード</h2>

@@ -258,6 +258,8 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
        font-size:var(--fs-md);white-space:pre-wrap}
 .toast--ng{border-left-color:var(--state-error)}
 .toast--ok{border-left-color:var(--state-ok)}
+.toast--warn{border-left-color:var(--state-error)}
+.toast--stay{cursor:pointer}
 
 /* 窓が狭いときは、ID@PC名(大設定にも出る)→ 正式名と版(ツールの画面の帯にも出る)の順に畳む */
 @media (max-width: 1500px){
@@ -305,3 +307,20 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .grid.guide td.guide__off{color:var(--faint)}
 .guide__rules{margin:0;padding-left:1.2em;font-size:var(--fs-md)}
 .guide__rules li{margin:2px 0}
+
+/* 管理者以外停止のお願いの帯(`js/remote_stop.js`)。全ツールの画面の上に重ねる(タブを替えても消えない) */
+.stopband{position:fixed;top:var(--bar-h);left:0;right:0;z-index:40;display:flex;flex-wrap:wrap;align-items:center;
+  gap:8px 14px;padding:10px 16px;background:var(--warn-bg);color:var(--warn-fg);
+  border-bottom:3px solid var(--state-error);box-shadow:0 2px 8px #0003;font-size:var(--fs-md)}
+.stopband[hidden]{display:none}
+.stopband__text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 360px}
+.stopband__text b{font-size:var(--fs-lg, 1.05em)}
+/* 大設定の「管理者以外停止モード」 */
+.rs-form{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:8px 0}
+.rs-form label{display:flex;flex-direction:column;gap:4px;font-size:var(--fs-sm);color:var(--muted)}
+.rs-form input{height:38px;padding:0 10px;border:1px solid var(--field-line);border-radius:var(--radius-sm);
+  background:var(--field-bg, var(--surface));color:var(--ink);min-width:14em}
+.rs-state{display:inline-block;padding:2px 10px;border-radius:999px;font-size:var(--fs-sm);background:var(--ok-bg);color:var(--state-ok)}
+.rs-state.is-warn{background:var(--warn-bg);color:var(--warn-fg)}
+#rs-pcs tr.is-stale td{color:var(--state-error)}
+

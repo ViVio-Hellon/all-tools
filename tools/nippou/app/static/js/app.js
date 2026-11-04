@@ -261,6 +261,8 @@ wireShell();
 // 同じ決まり)。名乗らないと、外枠の受け皿(`embed.js`)も同じ頼みに答えて、
 // 2重に訊きます
 window.__alltoolsHandlesClose = true;
+// 管理者以外停止で止めると決まったら、打ちかけを置く(閉じる前と同じ。`remote_stop_band.js`)
+window.__remoteStopFlush = () => nav.leaving();
 window.addEventListener("message", async (event) => {
   const data = event.data;
   if (event.source !== window.parent || window.parent === window) return;

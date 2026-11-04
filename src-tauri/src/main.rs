@@ -157,6 +157,14 @@ fn main() {
                 bridge.set_on_quit(move || {
                     closing::request_close(quit_shell.clone(), quit_app.clone(), Some(quit_id.clone()));
                 });
+                if tool.is_portal() {
+                    // 管理者以外停止: 入口が「確認なしで全部を閉じて」と言ってきた
+                    let stop_shell = shell.clone();
+                    let stop_app = app.handle().clone();
+                    bridge.set_on_remote_stop(move || {
+                        closing::force_close(stop_shell.clone(), stop_app.clone());
+                    });
+                }
                 let lost_shell = shell.clone();
                 let portal = tool.is_portal();
                 bridge.set_on_lost(move || {

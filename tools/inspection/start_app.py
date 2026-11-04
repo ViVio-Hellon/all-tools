@@ -373,6 +373,12 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
             progress.note(f"起動しました: {srv.url}")
         log().info("待機画面まで %.2f秒", time.monotonic() - _BOOT_AT)
 
+        # --- 管理者以外停止モード中(更新中)なら起動しない(理由を待機画面に出して終わる) ---
+        if _blocked_by_remote_stop(srv):
+            progress.stop("[停止中] 管理者が更新のため止めています(ブラウザの画面に理由が出ています)")
+            _hold_until_stopped(srv, thread)
+            return 0
+
         # --- 本体を組み立てて差し替える ---
         progress.step("アプリを組み立てています")
         try:
@@ -381,6 +387,7 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
             progress.stop(f"[エラー] アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -389,6 +396,7 @@ def start(*, open_browser: bool = True, options: Optional[dict] = None,
         return 0
     finally:
         _shutdown_business(srv)
+        _leave_remote_stop()
         launch_guard.release_lock()
         instance_guard.release_all()
         log().info("終了しました(稼働 %.0f秒)", time.monotonic() - _BOOT_AT)
@@ -418,6 +426,7 @@ def _hard_exit(srv) -> None:
     import logging
 
     _shutdown_business(srv)
+    _leave_remote_stop()
     try:
         import launch_guard
         if not getattr(srv, "bridge", False):     # デスクトップ版はブラウザ版のロックを持たない
@@ -449,6 +458,74 @@ def _shutdown_business(srv) -> None:
 def _business(srv):
     app = getattr(srv, "app", None)
     return None if app is None else app.extensions.get("inspection")
+
+
+# ------------------------------------------------------------------
+# 管理者以外停止モード(`remote_stop.py`。日報複合ツールの大設定から管理者が出すお願い)
+# ------------------------------------------------------------------
+def _remote_stop():
+    """このツールの事情を渡した `remote_stop`(日報複合ツールと同じ中身)。"""
+    import remote_stop
+    from core import app_config
+
+    remote_stop.configure(app="点検表", app_id="inspection", version=app_config.version(),
+                          local_root=app_config.local_root(), bundle_root=remote_stop.bundle_of(APP_ROOT),
+                          hosted=remote_stop.hosted_from_env(), logger=log())
+    return remote_stop
+
+
+def _blocked_by_remote_stop(srv) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して True。**本体を組み立てる前に**見る。"""
+    try:
+        return _remote_stop().gate(srv.mark_error, srv.stop)
+    except Exception as exc:                      # noqa: BLE001 - 判定で起動を止めない
+        log().warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+
+
+def _watch_remote_stop(srv, *, bare: bool = False) -> None:
+    """お願いを見張る。止め方は `/api/shutdown` と同じ道(`srv.stop`)。
+
+    残っているもの = 印刷・プレビューの作成(途中で止めると Excel が残り、印刷が途中で切れる)。
+    強制で止めるときは、何を印刷していたかを控えに書き、次の起動で「もう一度印刷して」と知らせる。
+    """
+    try:
+        rs = _remote_stop()
+        kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
+
+        def left() -> list:
+            business = _business(srv)
+            return list(business.busy_labels()) if business is not None else []
+
+        def keep() -> list:
+            business = _business(srv)
+            what = ""
+            try:
+                status = business.printing.status() if business is not None else {}
+                if status.get("active"):
+                    what = (f"印刷({status.get('current_index', 0)}/{status.get('total', 0)}"
+                            f"{'・' + status['message'] if status.get('message') else ''})")
+            except Exception:                     # noqa: BLE001
+                what = ""
+            if not left():
+                return []
+            return [f"途中で止めた{what or '印刷・プレビュー'}は、点検表の画面でもう一度行ってください"
+                    "(印刷済みの枚数を確かめてから)。"]
+
+        rs.watch(srv.stop, (lambda: []) if bare else left, kind=kind,
+                 before_force=None if bare else keep, restore=not bare)
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:                             # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 # 点検表フォルダの確認を待つ上限。共有フォルダに届かない端末では、
@@ -485,11 +562,16 @@ def start_bridge(*, token: str = "", options: Optional[dict] = None, server_fact
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
     progress = ConsoleProgress(LAUNCH_STEPS, live=False, stream=_NoStream())
     try:
+        # 管理者以外停止モード中(更新中)なら起動しない(理由を窓に出す)
+        if _blocked_by_remote_stop(srv):
+            _hold_until_stopped(srv, thread)
+            return 0
         try:
             srv.build()
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
         # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
@@ -498,6 +580,7 @@ def start_bridge(*, token: str = "", options: Optional[dict] = None, server_fact
         return 0
     finally:
         _shutdown_business(srv)
+        _leave_remote_stop()
         log().info("終了しました(デスクトップ版・稼働 %.0f秒)", time.monotonic() - _BOOT_AT)
 
 
@@ -508,6 +591,9 @@ def _initialize(srv, progress, *, check_excel: bool = False, watch_idle: bool = 
     「接続できません」としか出ず、理由が伝わらない。画面に理由を出す。
     """
     business = _business(srv)
+    # 管理者以外停止のお願いを見張る。前に強制で止められたときの控えがあれば、画面に知らせる。
+    # **初期化より先に**立てる(初期化に失敗した PC も、お願いで止まるように)
+    _watch_remote_stop(srv)
     try:
         progress.step("前回の一覧を読み込み、前回の残りを片付けています")
         srv.mark_stage("アプリを準備中")

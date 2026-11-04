@@ -118,6 +118,8 @@ GENERIC_INCLUDE: dict[str, tuple[str, ...]] = {
         "README.md", "requirements.txt", "Start.vbs", "start.bat", "stop.bat",
         "start_app.py", "server.py", "boot_server.py", "launch_guard.py", "process_manager.py",
         "bridge.py", "loading.html",
+        # 管理者以外停止モード(日報複合ツールの入口と同じ中身)
+        "remote_stop.py",
         # 配布設定を書き出すだけの入口(大設定の「4ツールの分もまとめて書き出す」が起こす)
         "export_distribution.py",
         "app", "assets", "config", "core", "data", "docs",

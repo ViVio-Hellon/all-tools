@@ -327,6 +327,8 @@
   }, 5000);
 </script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{# 管理者以外停止のお願いの帯(`remote_stop.py`。4ツールで同じ中身) #}
+<script defer src="{{ url_for('static', filename='js/remote_stop_band.js') }}"></script>
 {#
   画面ごとのスクリプトは**この箱の中だけ**に置く。画面を移るとき、
   `nav.js` はこの箱の中身を入れ替えて動かし直す(外枠のぶんは残す)。

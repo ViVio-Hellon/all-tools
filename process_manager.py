@@ -584,9 +584,40 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if args.check:
         return check()
+    refusal = remote_stop_refusal()
+    if refusal:
+        # 管理者以外停止モード中は止めない(ランチャーの「全 PC で止める」と同時に使わない。--force でも)
+        return emit(Outcome(EXIT_BUSY, f"止めませんでした: {refusal}"), launcher=args.launcher)
     if args.launcher:
         return launcher_stop(force=args.force)
     return stop(force=args.force)
+
+
+def remote_stop_refusal() -> str:
+    """管理者以外停止のお願いが出ていて、日報複合ツールが動いていれば、断る理由(1行目)。
+
+    お願いが出ているあいだは、お願いを出した PC の管理者が止め方(帯で知らせて、5分で強制)を
+    持っている。ランチャーの「全 PC で止める」で同時に止めにかかると、知らせる前に止めたり、
+    止める途中に起動し直したりが重なる。**動いていなければ断らない**(0「動いていません」)。
+    読めなければ断らない(止める道を閉じない)。
+    """
+    try:
+        from portal import instance_guard, remote_stop, stop_mode
+
+        if not instance_guard.running() and _read_portal_lock() is None:
+            return ""
+        stop_mode.configure()
+        return remote_stop.stop_bat_refusal() or ""
+    except Exception:                             # noqa: BLE001 - 判定で止める道を閉じない
+        return ""
+
+
+def _read_portal_lock() -> Optional[dict]:
+    try:
+        import start_app
+        return start_app.read_lock()
+    except Exception:                             # noqa: BLE001
+        return None
 
 
 if __name__ == "__main__":

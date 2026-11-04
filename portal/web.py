@@ -704,6 +704,43 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         return jsonify({"ok": True, "tools": _browser_tools.status(ids)})
 
     # ------------------------------------------------------------------
+    # 管理者以外停止モード(`portal/stop_mode.py`・`portal/remote_stop.py`)
+    # ------------------------------------------------------------------
+    @app.get("/api/remote-stop")
+    def remote_stop_view():                       # noqa: ANN202
+        """大設定の欄: いまのお願いと、各 PC の様子(各 PC は Administrator の端末だけ)。"""
+        from . import stop_mode
+        return jsonify({"ok": True, **stop_mode.state()})
+
+    @app.post("/api/remote-stop/start")
+    def remote_stop_start():                      # noqa: ANN202
+        """お願いを出す。`{"password": …, "reason": …}`。管理者パスワード **かつ** Administrator。"""
+        from . import stop_mode
+        body = request.get_json(silent=True) or {}
+        return _remote_stop_reply(stop_mode.issue(str(body.get("password", "")), str(body.get("reason", ""))))
+
+    @app.post("/api/remote-stop/clear")
+    def remote_stop_clear():                      # noqa: ANN202
+        """解除する(更新が終わった)。`{"password": …}`。"""
+        from . import stop_mode
+        body = request.get_json(silent=True) or {}
+        return _remote_stop_reply(stop_mode.clear(str(body.get("password", ""))))
+
+    @app.get("/api/remote-stop/screen")
+    def remote_stop_screen():                     # noqa: ANN202
+        """大きなタブの画面の帯: お願いを受けているか・残っているもの・一度だけ出す一言。"""
+        from . import remote_stop
+        return jsonify({"ok": True, **remote_stop.for_screen(
+            take=True, page=request.args.get("page", ""), unsaved=request.args.get("unsaved"))})
+
+    @app.post("/api/remote-stop/flushed")
+    def remote_stop_flushed():                    # noqa: ANN202
+        """画面が、止める前に各ツールの打ちかけを置き終えた(待たずに閉じる)。"""
+        from . import stop_mode
+        stop_mode.screens_flushed()
+        return jsonify({"ok": True})
+
+    # ------------------------------------------------------------------
     # 終わる
     # ------------------------------------------------------------------
     @app.post("/api/shutdown")
@@ -748,6 +785,16 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         return _stop_now(force=force, why="停止要求")
 
     return app
+
+
+def _remote_stop_reply(result):
+    from . import remote_stop, stop_mode
+    payload = {"message": result.message, "state": stop_mode.state()}
+    if result.ok:
+        return jsonify({"ok": True, **payload})
+    status = {remote_stop.REFUSE_PASSWORD: 403, remote_stop.REFUSE_NOT_ADMIN: 403,
+              remote_stop.REFUSE_ALREADY: 409, remote_stop.REFUSE_NOT_ACTIVE: 409}.get(result.reason, 422)
+    return jsonify({"ok": False, **payload, "error": {"code": result.reason, "message": result.message}}), status
 
 
 def _busy_tools() -> list[dict]:

@@ -63,6 +63,10 @@ document.addEventListener("app:client-error", (event) => {
    (`leave.js`)、「済んだ」を返す。頼んでくるのは、この画面を埋め込んで
    いる親だけ(`window.parent`)。日報(`tools/nippou/app/static/js/app.js`)と同じ形。
    ------------------------------------------------------------------ */
+// 管理者以外停止(`remote_stop_band.js`): この画面で保存していない入力を「残っているもの」に数えてもらう
+// (設定の欄・マスタの行は保存するまで画面の中にしか無い。利用者が保存するのを待つ)
+window.__remoteStopUnsaved = () => leave.unsaved();
+
 window.addEventListener("message", async (event) => {
   const data = event.data;
   if (event.source !== window.parent || window.parent === window) return;

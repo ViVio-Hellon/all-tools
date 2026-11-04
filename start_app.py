@@ -353,6 +353,14 @@ def start(*, open_browser: bool = True) -> int:
     from portal import distribution
     distribution.apply_on_start()
 
+    # --- 管理者以外停止モード中(更新中)なら起動しない(お願いを出した PC は起動する)---
+    # 置き場所は大設定の「共有DBの置き場所」なので、配布設定を読んだあとに見る
+    from portal import stop_mode
+    blocked = stop_mode.startup_block()
+    if blocked:
+        head, _, rest = blocked.partition("\n")
+        raise StartupError(head, rest.strip())
+
     token = secrets.token_urlsafe(24)
     app = web.create_app(token=token, bridge=False)
     tools = BrowserTools(catalog.load())
@@ -383,6 +391,14 @@ def start(*, open_browser: bool = True) -> int:
             log.warning("停止でエラー: %s", exc)
 
     web.set_shutdown_hook(stop)
+
+    def close_for_remote_stop() -> None:
+        """管理者以外停止: 画面の打ちかけはもう置いてもらった。各ツールに確認なしで終わってもらってから止める。"""
+        tools.stop_all(force=True)
+        stop()
+
+    # 管理者以外停止のお願いを見張る(各ツールが止めてよいと答える・期限で、まとめて閉じる)
+    stop_mode.install(close_for_remote_stop, desktop=False)
     write_lock(port, token)
     thread = threading.Thread(target=server.run, name="http", daemon=True)
     thread.start()
@@ -416,6 +432,7 @@ def start(*, open_browser: bool = True) -> int:
                 stop()
         thread.join(timeout=6)
     finally:
+        stop_mode.leave()
         remove_lock()
         claim.release()
         log.info("終了しました")

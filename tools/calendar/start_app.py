@@ -422,12 +422,18 @@ def _start_locked(*, open_browser: bool) -> int:
             print(f"起動しました: {srv.url}")
         log().info("待機画面まで %.2f秒", time.monotonic() - _BOOT_AT)
 
+        # --- 管理者以外停止モード中(更新中)なら起動しない(理由を待機画面に出して終わる) ---
+        if _blocked_by_remote_stop(srv):
+            _hold_until_stopped(srv, thread)
+            return 0
+
         # --- 本体を組み立てて差し替える ---
         try:
             srv.build()
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -440,6 +446,7 @@ def _start_locked(*, open_browser: bool) -> int:
         # **待ち受けを止めてから、未送信を送れるだけ送って残りを覚える**(デスクトップ版の
         # 窓を閉じたときと同じ。``bridge.BridgeServer.stop``)
         _send_before_exit(srv)
+        _leave_remote_stop()
         keeper_stop.set()
         # **自分が書いたものだけ消す。** 無条件に消すと、あとから起動して
         # 落ちたプロセスが生きているほうのロックを持っていってしまう
@@ -497,6 +504,7 @@ def _hard_exit() -> None:
     """
     import logging
 
+    _leave_remote_stop()
     logging.shutdown()
     os._exit(0)
 
@@ -540,19 +548,106 @@ def start_bridge(*, token: str = "", server_factory) -> int:
     thread = server_module.run_in_background(srv)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
     try:
-        srv.build()
-    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
-        log().exception("アプリを組み立てられませんでした")
-        srv.mark_error(f"アプリを組み立てられませんでした: {exc}")
+        # 管理者以外停止モード中(更新中)なら起動しない(理由を窓に出す)
+        if _blocked_by_remote_stop(srv):
+            _hold_until_stopped(srv, thread)
+            return 0
+        try:
+            srv.build()
+        except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
+            log().exception("アプリを組み立てられませんでした")
+            srv.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
+            _hold_until_stopped(srv, thread)
+            return 1
+        # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない。
+        # **未送信は終わる前に送り切る**(``BridgeServer.stop`` →
+        # ``sync_service.send_before_exit``)
+        _initialize(srv, watch_idle=False)
         _hold_until_stopped(srv, thread)
-        return 1
-    # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない。
-    # **未送信は終わる前に送り切る**(``BridgeServer.stop`` →
-    # ``sync_service.send_before_exit``)
-    _initialize(srv, watch_idle=False)
-    _hold_until_stopped(srv, thread)
-    log().info("終了しました(デスクトップ版)")
-    return 0
+        log().info("終了しました(デスクトップ版)")
+        return 0
+    finally:
+        _leave_remote_stop()
+
+
+# ---------------------------------------------------------------------------
+# 管理者以外停止モード(``remote_stop.py``。日報複合ツールの大設定から管理者が出すお願い)
+# ---------------------------------------------------------------------------
+def _remote_stop():
+    """このツールの事情を渡した ``remote_stop``(日報複合ツールと同じ中身)。"""
+    import remote_stop
+    from calendar_app import app_config
+
+    remote_stop.configure(app="カレンダー", app_id="calendar", version=app_config.version(),
+                          local_root=app_config.local_root(), bundle_root=remote_stop.bundle_of(APP_ROOT),
+                          hosted=remote_stop.hosted_from_env(), logger=log())
+    return remote_stop
+
+
+def _blocked_by_remote_stop(srv) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して True。**本体を組み立てる前に**見る。"""
+    try:
+        return _remote_stop().gate(srv.mark_error, srv.stop)
+    except Exception as exc:                      # noqa: BLE001 - 判定で起動を止めない
+        log().warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+
+
+def _unsent() -> int:
+    from calendar_app import sync_service
+    return sync_service.unsent_count()
+
+
+def _remote_stop_left() -> list:
+    """止めると消える・途中で止めてはいけないもの: 取り込み元との同期・送信待ち。
+
+    送信待ちは手元(作業用DB)に残るので、強制で止めても消えない(次の起動で送る)。それでも
+    待つのは、ほかの PC がその入力を早く見られるように(タブを閉じたときの見張りと同じ考え)。
+    画面の保存していない入力(設定の欄・マスタの行)は、画面が帯の問い合わせで言い添える。
+    """
+    from calendar_app import sync_service
+    items = list(sync_service.get_service().busy_labels())
+    count = _unsent()
+    if count:
+        items.append(f"取り込み元へまだ送っていない入力 {count} 件")
+    return items
+
+
+def _remote_stop_keep() -> list:
+    """強制で止める前: 何を手元に置いたか(控えに書く。次の起動で知らせる)。"""
+    kept = []
+    try:
+        if _unsent():
+            kept.append("まだ送っていない入力は手元(作業用DB)に残しています。次に起動したときに送ります。")
+    except Exception:                             # noqa: BLE001
+        kept.append("まだ送っていない入力があれば手元(作業用DB)に残っています。")
+    import remote_stop
+    if remote_stop.screen_left():
+        kept.append("画面で保存していなかった入力(設定の欄・マスタの行)は保存されていません。開き直して確かめてください"
+                    "(連絡の本文は、閉じていなければ画面に残っています)。")
+    return kept
+
+
+def _watch_remote_stop(srv, *, bare: bool = False) -> None:
+    """お願いを見張る。止め方は ``/api/shutdown`` と同じ道(``srv.stop``)。**初期化より先に**立てる。"""
+    try:
+        rs = _remote_stop()
+        kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
+        rs.watch(srv.stop, (lambda: []) if bare else _remote_stop_left, kind=kind,
+                 before_force=None if bare else _remote_stop_keep, restore=not bare)
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:                             # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 def _open_local_db(db) -> None:
@@ -590,6 +685,10 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
     「接続できません」としか出ず、理由が伝わらない。画面に理由を出す。
     """
     from calendar_app import db, sync_service
+
+    # 管理者以外停止のお願いを見張る。前に強制で止められたときの控えがあれば、画面に知らせる。
+    # **初期化より先に**立てる(初期化に失敗した PC も、お願いで止まるように)
+    _watch_remote_stop(srv)
 
     # 配布設定(ツール直下の `配布設定/`)があれば、**同期より先に**読む
     # ── 置き場所が入っているので、読む前に同期を始めると既定の場所を見る。

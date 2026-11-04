@@ -24,6 +24,15 @@
   </div>
 </header>
 
+<!-- 管理者以外停止のお願い(`portal/remote_stop.py`・`js/remote_stop.js`)。全ツールの画面の上に重ねる -->
+<div class="stopband" id="stopband" hidden role="alert">
+  <div class="stopband__text">
+    <b id="stopband-title">管理者が更新のため停止を求めています</b>
+    <span id="stopband-line"></span>
+  </div>
+  <button type="button" class="btn btn--danger" id="stopband-quit">保存を確かめて終了する</button>
+</div>
+
 <main class="stage" id="stage">
   <section class="panel panel--note" id="panel-starting" data-panel="starting">
     <div class="note"><span class="spin" aria-hidden="true"></span>タブを用意しています…</div>

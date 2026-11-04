@@ -522,7 +522,35 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.status:
         return _print_status()
 
+    refusal = remote_stop_refusal(_lock_present)
+    if refusal:
+        print(one_line(f"止めませんでした: {refusal}"))
+        return EXIT_BUSY
     return report(stop(force=args.force))
+
+
+def _lock_present() -> bool:
+    """印(ロック)があるか(動いているかもしれない)。"""
+    import launch_guard
+    return launch_guard.read_lock() is not None
+
+
+def remote_stop_refusal(running) -> str:
+    """管理者以外停止のお願いが出ていて、このツールが動いていれば、断る理由(1行目)。
+
+    お願いが出ているあいだは、管理者が止め方(画面の帯で知らせて、5分で強制)を持っている。
+    ランチャーの「全 PC で止める」と**同時には使わない**(--force でも)。動いていなければ断らない。
+    読めなければ断らない(止める道を閉じない)。中身は `remote_stop.py`(日報複合ツールと同じ)。
+    """
+    try:
+        if not running():
+            return ""
+        import remote_stop
+
+        remote_stop.configure(bundle_root=remote_stop.bundle_of(Path(__file__).resolve().parent))
+        return remote_stop.stop_bat_refusal() or ""
+    except Exception:                             # noqa: BLE001 - 判定で止める道を閉じない
+        return ""
 
 
 if __name__ == "__main__":

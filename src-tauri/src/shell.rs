@@ -83,6 +83,8 @@ pub struct Shell {
     pub closing: AtomicBool,
     /// 全部の Python を終えているところ(標準入力を閉じた入口が「落ちた」に見えても起こし直さない)
     exiting: AtomicBool,
+    /// 管理者以外停止で、確認なしに閉じているところ([`crate::closing::force_close`]。1度だけ)
+    pub remote_stopping: AtomicBool,
     /// 帳票などの窓に付ける番号
     windows: AtomicU64,
     /// 埋め込みの台本(`portal/static/js/embed.js`)。書き換わったら読み直す
@@ -123,6 +125,7 @@ impl Shell {
             app: OnceLock::new(),
             closing: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
+            remote_stopping: AtomicBool::new(false),
             windows: AtomicU64::new(1),
             shim: Mutex::new(None),
             prepared: Mutex::new(None),
@@ -217,6 +220,11 @@ impl Shell {
                 ));
             }
         });
+    }
+
+    /// 全部の Python を終えているところか
+    pub fn is_exiting(&self) -> bool {
+        self.exiting.load(Ordering::SeqCst)
     }
 
     pub fn set_app(&self, app: AppHandle) {

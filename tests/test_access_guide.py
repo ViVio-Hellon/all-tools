@@ -77,9 +77,11 @@ class PermissionTests(unittest.TestCase):
         # カレンダーは Administrator も mode:fullaccess も読まない
         self.assertNotIn("Administrator", code_of["calendar"])
         self.assertNotIn("fullaccess", code_of["calendar"])
-        # 点検表はアクセス権限を読まない
+        # 点検表はアクセス権限を読まない(`remote_stop.py` は入口と同じ中身の管理者以外停止。
+        # 「アクセス権限に Administrator」は入口(大設定)が判定して渡すときの断りの文で、点検表は表を読まない)
         found = [p for p in (TOOLS / "inspection").rglob("*.py")
-                 if "tests" not in p.parts and "アクセス権限" in p.read_text(encoding="utf-8")]
+                 if "tests" not in p.parts and p.name != "remote_stop.py"
+                 and "アクセス権限" in p.read_text(encoding="utf-8")]
         self.assertEqual(found, [])
 
     def test_表の形(self) -> None:

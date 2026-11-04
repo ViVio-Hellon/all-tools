@@ -357,6 +357,11 @@ def start(*, open_browser: bool = True) -> int:
             print(f"起動しました: {srv.url}")
         log().info("待機画面まで %.2f秒", time.monotonic() - _BOOT_AT)
 
+        # --- 管理者以外停止モード中(更新中)なら起動しない(理由を待機画面に出して終わる) ---
+        if _blocked_by_remote_stop(srv):
+            _hold_until_stopped(srv, thread)
+            return 0
+
         # --- 本体を組み立てて差し替える ---
         srv.mark_stage("アプリを準備中", "prepare")
         try:
@@ -364,6 +369,7 @@ def start(*, open_browser: bool = True) -> int:
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(build_error_message(exc))
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -373,6 +379,7 @@ def start(*, open_browser: bool = True) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
+        _leave_remote_stop()
         # **自分が立てた印だけ**を片付ける。無条件に消すと、入れ替えの
         # ときに古いほうの後始末が新しいほうの印を消してしまい、次の
         # 起動が「誰も居ない」と読んで2つ目を立てます
@@ -419,19 +426,27 @@ def start_bridge(*, token: str = "", server_factory) -> int:
     srv = server_factory(token or secrets.token_urlsafe(24))
     thread = server_module.run_in_background(srv)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
-    srv.mark_stage("アプリを準備中", "prepare")
     try:
-        srv.build()
-    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
-        log().exception("アプリを組み立てられませんでした")
-        srv.boot.mark_error(build_error_message(exc))
+        # 管理者以外停止モード中(更新中)なら起動しない(理由を窓に出す)
+        if _blocked_by_remote_stop(srv):
+            _hold_until_stopped(srv, thread)
+            return 0
+        srv.mark_stage("アプリを準備中", "prepare")
+        try:
+            srv.build()
+        except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
+            log().exception("アプリを組み立てられませんでした")
+            srv.boot.mark_error(build_error_message(exc))
+            _watch_remote_stop(srv, bare=True)    # 理由の画面のままでも、お願いで止まる
+            _hold_until_stopped(srv, thread)
+            return 1
+        # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
+        _initialize(srv, watch_idle=False)
         _hold_until_stopped(srv, thread)
-        return 1
-    # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
-    _initialize(srv, watch_idle=False)
-    _hold_until_stopped(srv, thread)
-    log().info("終了しました(デスクトップ版)")
-    return 0
+        log().info("終了しました(デスクトップ版)")
+        return 0
+    finally:
+        _leave_remote_stop()
 
 
 # 停止を頼んでから、受付の輪が終わるのを待つ上限(秒)。ここを過ぎたら
@@ -469,8 +484,77 @@ def _hard_exit() -> None:
     """
     import logging
 
+    _leave_remote_stop()
     logging.shutdown()
     os._exit(0)
+
+
+# ------------------------------------------------------------------
+# 管理者以外停止モード(`remote_stop.py`。日報複合ツールの大設定から管理者が出すお願い)
+# ------------------------------------------------------------------
+def _remote_stop():
+    """このツールの事情を渡した `remote_stop`(日報複合ツールと同じ中身)。"""
+    import remote_stop
+    from nippou import app_config
+
+    remote_stop.configure(app="日報", app_id="nippou", version=app_config.version(),
+                          local_root=app_config.local_root(), bundle_root=remote_stop.bundle_of(APP_ROOT),
+                          hosted=remote_stop.hosted_from_env(), logger=log())
+    return remote_stop
+
+
+def _blocked_by_remote_stop(srv) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して True。**本体を組み立てる前に**見る
+    (更新の上書きの途中のファイルを読み込まない)。お願いを出した PC は止めない。"""
+    try:
+        return _remote_stop().gate(srv.mark_error, srv.stop)
+    except Exception as exc:                      # noqa: BLE001 - 判定で起動を止めない
+        log().warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+
+
+def _remote_stop_left() -> list[str]:
+    """止めると消える・途中で止めてはいけないもの: 走っている処理(共有への保存・取り込みなど)。
+
+    打ちかけ(入力中の行)は画面の中にある。止めると決めたら帯が画面に置いてもらう
+    (`window.__remoteStopFlush` = 出る前の確かめ。作業用DBへ自動保存する)。
+    """
+    from nippou import running
+    return running.labels()
+
+
+def _remote_stop_keep() -> list[str]:
+    """強制で止める前: 何を手元に置いたか(控えに書く。次の起動で知らせる)。"""
+    from nippou import running
+    kept = ["画面が開いていれば、止める前に打ちかけ(入力中の行)を手元の作業用DBへ置いてもらいました。日報入力で確かめてください。"]
+    if running.labels():
+        kept.append(f"途中で止めた処理({'、'.join(running.labels())})は、もう一度行ってください"
+                    "(共有へ保存は、まだ送っていないページを手元に残しているので、続きから送ります)。")
+    return kept
+
+
+def _watch_remote_stop(srv, *, bare: bool = False) -> None:
+    """お願いを見張る。止め方は `/api/shutdown` と同じ道(`srv.stop`)。
+
+    **初期化より先に**立てる(初期化に失敗して理由の画面のまま残った PC も、お願いで止まるように)。
+    """
+    try:
+        rs = _remote_stop()
+        kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
+        rs.watch(srv.stop, (lambda: []) if bare else _remote_stop_left, kind=kind,
+                 before_force=None if bare else _remote_stop_keep, restore=not bare)
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:                             # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 def _open_local_db(path, connect) -> None:
@@ -509,6 +593,9 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
     ここで失敗しても**サーバは落とさない**。落とすと利用者のブラウザには
     「接続できません」としか出ず、理由が伝わらない。画面に理由を出す。
     """
+    # 管理者以外停止のお願いを見張る。前に強制で止められたときの控えがあれば、画面に知らせる。
+    # **初期化より先に**立てる(初期化に失敗した PC も、お願いで止まるように)
+    _watch_remote_stop(srv)
     srv.mark_stage("接続を確認中", "connect")
     try:
         from nippou.config import SETTINGS

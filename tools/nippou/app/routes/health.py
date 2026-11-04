@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from typing import Optional
@@ -78,7 +79,14 @@ def health():
         # 居るとみなしている画面の数と、最後にスリープから戻ったとき。
         # 「裏に回したら落ちた」を調べるとき、端末に行かずに確かめられる
         "screens": _screens(),
+        # 管理者以外停止のお願い(`remote_stop.py`)。画面の帯が `?remote_stop=1` で問い合わせる
+        "remote_stop": _remote_stop(),
     })
+
+
+def _remote_stop() -> Optional[dict]:
+    mod = sys.modules.get("remote_stop")
+    return mod.from_query(request.args) if mod is not None else None
 
 
 def _screens() -> Optional[dict]:

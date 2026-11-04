@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import secrets
 import threading
 import time
@@ -105,6 +106,8 @@ def health():
         "version_on_disk": app_config.version_on_disk(),
         # 走っている処理の一言(帯と待機画面が読む)
         "job": _running_note(),
+        # 管理者以外停止のお願い(`remote_stop.py`)。画面の帯が `?remote_stop=1` で問い合わせる
+        "remote_stop": _remote_stop(),
     })
 
 
@@ -124,6 +127,12 @@ def _running_note():
         return {"label": "フォルダ検索", "message": f"{scan.get('scanned', 0)} 件確認済み",
                 "current": 0, "total": 0}
     return None
+
+
+def _remote_stop():
+    """管理者以外停止のお願い(`remote_stop.py`)。画面の帯が `?remote_stop=1` で問い合わせる。"""
+    mod = sys.modules.get("remote_stop")
+    return mod.from_query(request.args) if mod is not None else None
 
 
 @bp.post("/api/alive")

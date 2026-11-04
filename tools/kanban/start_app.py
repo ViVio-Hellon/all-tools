@@ -693,6 +693,20 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
     ブラウザ版(:func:`_run`)とデスクトップ版(:func:`start_bridge`)で共通。
     ``srv`` はもう受け付けを始めている(待機画面が出ている)。
     """
+    # --- 管理者以外停止モード中(更新中)なら起動しない(理由を待機画面に出して終わる) ---
+    if _blocked_by_remote_stop(srv):
+        try:
+            while thread.is_alive():
+                thread.join(timeout=0.5)
+        except KeyboardInterrupt:
+            srv.stop()
+        _shutdown(store, None, None)
+        _leave_remote_stop()
+        return 0
+    # お願いを見張る。前に強制で止められたときの控えがあれば、画面に知らせる。
+    # **初期化より先に**立てる(初期化に失敗した PC も、お願いで止まるように)
+    _watch_remote_stop(srv, store)
+
     # --- 重い初期化(待機画面を出したまま) ------------------------------
     srv.mark_stage("アプリを準備中", "prepare")
     gateway = importer = exporter = None
@@ -899,7 +913,72 @@ def _serve(args, cfg, store, mode: str, line: str, root: Path, srv, thread,
 
     log.info("終了処理に入ります")
     _shutdown(store, importer, exporter)
+    _leave_remote_stop()
     return 0
+
+
+# ------------------------------------------------------------------
+# 管理者以外停止モード(``remote_stop.py``。日報複合ツールの大設定から管理者が出すお願い)
+# ------------------------------------------------------------------
+def _remote_stop():
+    """このツールの事情を渡した ``remote_stop``(日報複合ツールと同じ中身)。"""
+    import remote_stop
+
+    remote_stop.configure(app="看板", app_id="kanban", version=app_config.version(),
+                          local_root=app_config.local_root(),
+                          bundle_root=remote_stop.bundle_of(Path(__file__).resolve().parent),
+                          hosted=remote_stop.hosted_from_env(), logger=log)
+    return remote_stop
+
+
+def _blocked_by_remote_stop(srv) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して True。**取り込みを始める前に**見る。"""
+    try:
+        return _remote_stop().gate(srv.mark_error, srv.stop)
+    except Exception as exc:  # noqa: BLE001 - 判定で起動を止めない
+        log.warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+
+
+def _remote_stop_keep(store) -> list:
+    """強制で止める前: 何を手元に置いたか(控えに書く。次の起動で知らせる)。
+
+    送っていない操作・コメント・出来事は手元の SQLite に残っている(次の起動で共有DBへ送る)。
+    コメントの書きかけは、止める前に画面がこの端末の下書きに置いた(次に開いたときに出す)。
+    """
+    kept = ["画面が開いていれば、コメントの書きかけはこの端末の下書きに置いてもらいました(次に開いたときに出ます)。"]
+    if _busy_reason(store):
+        kept.insert(0, "共有DBへまだ送っていない操作は手元に残しています。次に起動したときに送ります。")
+    return kept
+
+
+def _watch_remote_stop(srv, store) -> None:
+    """お願いを見張る。止め方は ``/api/shutdown`` と同じ道(``srv.stop``)。
+
+    残っているもの = 共有DBへまだ送っていない操作・コメント・出来事(待てば減るもの。
+    :func:`_busy_reason`)。止めても手元に残るが、ほかの端末に届くのが次の起動まで遅れる。
+    """
+    try:
+        rs = _remote_stop()
+        kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
+
+        def left() -> list:
+            reason = _busy_reason(store)
+            return [reason] if reason else []
+
+        rs.watch(srv.stop, left, kind=kind, before_force=lambda: _remote_stop_keep(store))
+    except Exception as exc:  # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log.warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:  # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 def _prepare_data(args, cfg, store, mode: str, line: str, srv, *, view_site: bool = False):

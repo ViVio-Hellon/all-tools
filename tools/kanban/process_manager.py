@@ -397,6 +397,10 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args([a for a in argv if a.lower() not in NOPAUSE_ARGS])
 
     modes = [args.mode] if args.mode else list(config.ALL_MODES)
+    refusal = remote_stop_refusal(lambda: _lock_present(modes))
+    if refusal:
+        print(one_line(f"止めませんでした: {refusal}"))
+        return EXIT_BUSY
     results = [stop_mode(m, force=args.force) for m in modes]
 
     # **1行目が理由**(止める入口の決まり)。モードごとの結果はそのあと
@@ -409,6 +413,30 @@ def main(argv: list[str] | None = None) -> int:
     elif code != EXIT_STOPPED:
         print("停止できなかったものがあります。少し待つか --force を付けてください。", file=sys.stderr)
     return code
+
+
+def _lock_present(modes) -> bool:
+    """どれかのモードの印(ロック)があるか(動いているかもしれない)。"""
+    import launch_guard
+    return any(launch_guard.read_lock(m) is not None for m in modes)
+
+
+def remote_stop_refusal(running) -> str:
+    """管理者以外停止のお願いが出ていて、このツールが動いていれば、断る理由(1行目)。
+
+    お願いが出ているあいだは、管理者が止め方(画面の帯で知らせて、5分で強制)を持っている。
+    ランチャーの「全 PC で止める」と**同時には使わない**(--force でも)。動いていなければ断らない。
+    読めなければ断らない(止める道を閉じない)。中身は `remote_stop.py`(日報複合ツールと同じ)。
+    """
+    try:
+        if not running():
+            return ""
+        import remote_stop
+
+        remote_stop.configure(bundle_root=remote_stop.bundle_of(Path(__file__).resolve().parent))
+        return remote_stop.stop_bat_refusal() or ""
+    except Exception:                             # noqa: BLE001 - 判定で止める道を閉じない
+        return ""
 
 
 if __name__ == "__main__":

@@ -11,12 +11,14 @@
 【知らせ】
     started  … 受け付けを始めた
     quit     … 終了してよい
+    remote_stop … 管理者以外停止: 確認なしで全部を閉じて(各ツールに強制で終わってもらう)
     fatal    … 起動できない(`message` `hint` `log_dir`)。外枠が理由を画面に出す
 """
 from __future__ import annotations
 
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
@@ -37,6 +39,8 @@ if sys.pycache_prefix:
 from portal import bridge_proto  # noqa: E402
 
 WORKERS = 6
+#: 管理者以外停止で外枠に「確認なしで閉じて」と頼んでから、閉じなければ頼み直すまで(秒)
+REMOTE_STOP_FALLBACK_SEC = 30.0
 TOKEN_ENV = "ALLTOOLS_TOKEN"
 MIN_PYTHON = (3, 9)
 
@@ -76,8 +80,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         app_config.ensure_local_dirs()
         log = get_logger("bridge")
         # 配布設定(置き場所・管理者パスワード)を、共有の DB を読みに行く前に
-        from portal import distribution
+        from portal import distribution, stop_mode
         distribution.apply_on_start()
+        # 管理者以外停止モード中(更新中)なら起動しない。理由は外枠が窓に出す(お願いを出した PC は起動する)
+        blocked = stop_mode.startup_block()
+        if blocked:
+            head, _, rest = blocked.partition("\n")
+            return fatal(head, rest.strip())
         app = web.create_app(token=os.environ.get(TOKEN_ENV, ""), bridge=True)
     except Exception as exc:                      # noqa: BLE001 - 理由を外枠へ渡す
         return fatal(f"入口を組み立てられませんでした: {exc}", "ログを確認してください。")
@@ -94,6 +103,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             pass
 
     web.set_shutdown_hook(stop)
+
+    def close_for_remote_stop() -> None:
+        """管理者以外停止: 外枠に「確認なしで閉じて」と頼む(各ツールに強制で終わってもらい、窓を閉じる)。
+
+        外枠が古くてこの知らせを知らない・閉じないときは、少し待ってから「終了してよい」で頼み直す
+        (ふだんの終わり方。途中の処理があれば外枠が確認を出す)。
+        """
+        try:
+            writer.event("remote_stop")
+        except (BrokenPipeError, OSError):
+            return
+        retry = threading.Timer(REMOTE_STOP_FALLBACK_SEC, stop)
+        retry.daemon = True
+        retry.start()
+
+    # 管理者以外停止のお願いを見張る(各ツールが止めてよいと答える・期限で、まとめて閉じる)
+    stop_mode.install(close_for_remote_stop, desktop=True)
     # タブ表示権限を裏で読み直しておく(画面を待たせない)
     store.sync_in_background()
     pool = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="portal")
@@ -140,6 +166,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             pool.submit(answer, *frame)
     finally:
         pool.shutdown(wait=True, cancel_futures=False)
+        stop_mode.leave()
     return 0
 
 

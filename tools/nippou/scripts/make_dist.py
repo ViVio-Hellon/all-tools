@@ -53,6 +53,8 @@ INCLUDE: tuple[str, ...] = (
     "README.md", "requirements.txt",
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
+    # 管理者以外停止モード(日報複合ツールの入口と同じ中身)
+    "remote_stop.py",
     "process_manager.py",
     # デスクトップ版(日報複合ツールの窓)の入口。ポートを使わない(標準入出力)
     "bridge.py",
