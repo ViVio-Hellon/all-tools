@@ -79,6 +79,11 @@
   function text() {
     if (!state) return "";
     if (state.stopping) return state.text + "。打ちかけを置いてから止めます。";
+    if ((state.writing || []).length) {
+      return state.text + "。共有へ書いている最中なので、終わるのを待っています(" + state.writing.join("、")
+        + ")。書き終わったら止めます(長くても あと " + rest(state.writing_until_ms - (Date.now() + offset))
+        + " で強制で止めます)。";
+    }
     var items = (state.left || []).filter(Boolean);
     var what = items.length
       ? "残っているもの: " + items.join("、") + "。保存する・処理が終わると自動で止まります。"
@@ -119,8 +124,10 @@
 
   function poll() {
     var url = "/api/health?remote_stop=1&page=" + encodeURIComponent(PAGE);
-    // 枠の中(日報複合ツール)でも言い添える(入口がまとめて大きなタブの帯に出す)
-    if (state && !state.stopping) {
+    // 枠の中(日報複合ツール)でも言い添える(入口がまとめて大きなタブの帯に出す)。
+    // **お願いが来る前から言い添える**: 裏に回したタブはタイマーが間引かれ(長く裏だと1分に1回)、
+    // お願いを受けてから言い添えるのでは、帯を見せる間に間に合わず「何も残っていない」で止まっていた
+    if (!(state && state.stopping)) {
       url += "&unsaved=" + encodeURIComponent(JSON.stringify(unsaved()));
     }
     fetch(url, { cache: "no-store" }).then(function (res) { return res.json(); }).then(function (body) {
@@ -151,6 +158,14 @@
       }
     });
   }
+
+  // 閉じた画面の打ちかけを、いつまでも「残っているもの」に数えない
+  window.addEventListener("pagehide", function () {
+    try {
+      fetch("/api/health?remote_stop=1&page=" + encodeURIComponent(PAGE) + "&unsaved=%5B%5D",
+        { cache: "no-store", keepalive: true }).catch(function () {});
+    } catch (err) { /* 届かなくても、しばらくで忘れる */ }
+  });
 
   var painter = null;
   function start() {

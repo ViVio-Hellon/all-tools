@@ -312,7 +312,8 @@ function cell(text, cls = "") {
 
 function backupRow(s) {
   const tr = document.createElement("tr");
-  tr.append(cell(s.report_date), cell(lineLabel(s.line)), cell(s.shift),
+  // テストの直には印(`nippou/test_mode`。控えの直も同じ)
+  tr.append(cell(s.report_date), cell(lineLabel(s.line)), cell(s.shift + (s.test ? "(テスト)" : "")),
             cell(`${s.pages.join("・")}ページ`), cell((s.workers || []).join(" ")),
             cell(s.saved_at || "―"));
   const sent = cell("");

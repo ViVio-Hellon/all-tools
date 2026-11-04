@@ -512,8 +512,14 @@ def _watch_remote_stop(srv, *, bare: bool = False) -> None:
             return [f"途中で止めた{what or '印刷・プレビュー'}は、点検表の画面でもう一度行ってください"
                     "(印刷済みの枚数を確かめてから)。"]
 
+        def writing() -> list:
+            # 印刷の最中(途中で止めると印刷が途中で切れ、Excel が残る)。期限を過ぎても終わるのを待つ(最長さらに5分)
+            business = _business(srv)
+            return list(business.printing.busy_labels()) if business is not None else []
+
         rs.watch(srv.stop, (lambda: []) if bare else left, kind=kind,
-                 before_force=None if bare else keep, restore=not bare)
+                 before_force=None if bare else keep, restore=not bare,
+                 writing=None if bare else writing)
     except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
 

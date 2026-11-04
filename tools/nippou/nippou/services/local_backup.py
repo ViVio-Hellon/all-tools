@@ -389,6 +389,9 @@ def flush(repo: NippouRepository, *, force: bool = False, wait: float = 0.0) -> 
                                 written.append(key)
                             elif theirs is not None:
                                 result.removed += 1
+                                # 消した記録も控えへ(同じラインのほかの PC が、消したときと
+                                # 同じ中身のページを控えへ戻さないように ── `_pull`)
+                                _copy_removals(repo.conn, dst, key)
                         done.append(key)
                 # 控えへ写せた(取引が通った)ページは、控えと同じ中身になった
                 with repo.conn:
@@ -408,6 +411,37 @@ def flush(repo: NippouRepository, *, force: bool = False, wait: float = 0.0) -> 
         return result
     finally:
         _flush_lock.release()
+
+
+def _copy_removals(src: sqlite3.Connection, dst: sqlite3.Connection, key: PageKey) -> None:
+    """そのページを消した記録(`page_removal`)を写す(取引は呼ぶ側)。写せなくても止めない。"""
+    try:
+        cols = [c for c in _columns(src, "page_removal") if c in set(_columns(dst, "page_removal"))]
+        if not cols:
+            return
+        names = ", ".join(f'"{c}"' for c in cols)
+        rows = src.execute(f"SELECT {names} FROM page_removal WHERE {_WHERE}", key).fetchall()
+        dst.executemany(
+            f"INSERT OR REPLACE INTO page_removal ({names}) VALUES ({', '.join('?' for _ in cols)})",
+            [tuple(r) for r in rows])
+    except sqlite3.Error:
+        log.exception("消した記録を控えへ写せませんでした key=%s", key)
+
+
+def _removed_there(backup: Optional[NippouRepository], line: str) -> dict[PageKey, set[str]]:
+    """控えにある「消した記録」: ページ → 消したときの中身の指紋。前の版の控え(表が無い)は空。"""
+    if backup is None:
+        return {}
+    try:
+        rows = backup.conn.execute(
+            "SELECT report_date, line, shift, page, content_hash FROM page_removal WHERE line=?",
+            (line,)).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[PageKey, set[str]] = {}
+    for r in rows:
+        out.setdefault((r[0], r[1], r[2], int(r[3])), set()).add(str(r[4] or ""))
+    return out
 
 
 def _note_replacing(dst: sqlite3.Connection, local: sqlite3.Connection, key: PageKey,
@@ -510,7 +544,13 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
         unsent_here = {(r[0], r[1], r[2], int(r[3])) for r in repo.conn.execute(
             f"SELECT report_date, line, shift, page FROM {HEADER} WHERE line=? AND dirty=1",
             (line,))}
+        # **この端末で消して、まだ控えから消せていないページ**(写す待ちに残っていて、手元に無い)。
+        # 控えから戻すと、消したページが起動のたびに生き返る(「直を消す」・中身の無いページ)
+        waiting = set(repo.backup_pending())
+        removed_there = _removed_there(backup, line)
         for key, stamp in theirs.items():
+            if key not in mine and key in waiting:
+                continue
             if _newer(stamp, mine.get(key)):
                 with repo.conn:
                     _copy_page(backup.conn, repo.conn, key)
@@ -528,14 +568,49 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
                         f" WHERE {_WHERE} AND dirty=1 AND content_hash=?",
                         (*sent_there[key], *key, sent_there[key][1]))
                 result.adopted += 1
+        gone: list[PageKey] = []
         for key, stamp in mine.items():
+            if key not in theirs and stamp[1] and stamp[1] in removed_there.get(key, set()):
+                # **ほかの PC で消したページ**(控えに消した記録があり、中身も消したときと同じ)。
+                # 控えへ戻さず、この端末からも消す(戻すと、消した PC の起動でまた生き返る)
+                gone.append(key)
+                continue
             if key not in theirs or _newer(stamp, theirs[key]):
                 to_send.append(key)
+        for key in gone:
+            _drop_removed(repo, key, backup)
+            result.removed += 1
     repo.queue_backup(to_send)
+    _refresh_after_drop(repo, {k[:3] for k in gone} - pulled)
     _refresh(repo, pulled)
     result.shifts = sorted(pulled)
     result.pending = len(repo.backup_pending())
     return result
+
+
+def _drop_removed(repo: NippouRepository, key: PageKey, backup: Optional[NippouRepository]) -> None:
+    """ほかの PC で消したページを、この端末からも消す(消した記録も写して残す)。"""
+    with repo.conn:
+        repo.conn.execute(f"DELETE FROM {DETAIL} WHERE {_WHERE}", key)
+        repo.conn.execute(f"DELETE FROM {HEADER} WHERE {_WHERE}", key)
+        if backup is not None:
+            _copy_removals(backup.conn, repo.conn, key)
+    log.warning("ほかの PC で消したページなので、この端末からも消しました key=%s", key)
+
+
+def _refresh_after_drop(repo: NippouRepository, shifts: set[ShiftKey]) -> None:
+    """消したページの直の集計を作り直す。ページが残っていなければ集計も消す。"""
+    from . import summary
+
+    for report_date, line, shift in sorted(shifts):
+        try:
+            if repo.saved_pages(report_date, line, shift):
+                summary.refresh_shift(repo, report_date, line, shift)
+            else:
+                repo.delete_packing_report(report_date, line, shift)
+        except Exception:                         # noqa: BLE001 - 消すのは済んでいる
+            log.exception("消した直の集計を作り直せませんでした %s/%s/%s",
+                          report_date, line, shift)
 
 
 # ----------------------------------------------------------------------
@@ -548,15 +623,17 @@ def list_shifts(line: str, limit: int = 60) -> list[dict[str, Any]]:
     with reader(line) as backup:
         if backup is None:
             return []
+        test = ", test_mark" if "test_mark" in _columns(backup.conn, HEADER) else ", 0 AS test_mark"
         rows = backup.conn.execute(
-            f"SELECT report_date, line, shift, page, saved_at, dirty, worker"
+            f"SELECT report_date, line, shift, page, saved_at, dirty, worker{test}"
             f" FROM {HEADER} WHERE line=?", (line,)).fetchall()
     found: dict[ShiftKey, dict[str, Any]] = {}
     for r in rows:
         key = (r["report_date"], r["line"], r["shift"])
         got = found.setdefault(key, {"report_date": key[0], "line": key[1], "shift": key[2],
                                      "pages": [], "saved_at_raw": "", "synced": True,
-                                     "workers": []})
+                                     "workers": [], "test": False})
+        got["test"] = got["test"] or bool(r["test_mark"])
         got["pages"].append(int(r["page"]))
         got["saved_at_raw"] = max(got["saved_at_raw"], str(r["saved_at"] or ""))
         got["synced"] = got["synced"] and not r["dirty"]

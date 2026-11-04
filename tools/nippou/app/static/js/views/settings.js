@@ -8,7 +8,7 @@ import { api, background } from "../api.js";
 import * as desktop from "../desktop.js";
 import { lineLabel } from "../line_label.js";
 import { toast, toastError } from "../toast.js";
-import { beforeLeave, refresh } from "../nav.js";
+import { beforeLeave, onUnsaved, refresh } from "../nav.js";
 import { loadCues, previewFile } from "../sound.js";
 // 面(タブ)の作りは全画面で1つ。**並びと鍵の要否はサーバが決める**
 import { attachAll } from "../tabs.js";
@@ -1240,6 +1240,8 @@ function paintStamps() {
 export function start() {
   // 打ちかけの置き場所・音を残したまま、ほかの画面へ黙って移らない
   beforeLeave(keepOrAsk);
+  // 管理者以外停止: 保存していない置き場所・音は止めると消える(帯の「残っているもの」に出して待つ)
+  onUnsaved(() => (dirtyFields().length ? ["設定で保存していない置き場所・音"] : []));
   paintStamps();
   // 面(タブ)。並びも既定もサーバが決めたものを写すだけ
   attachAll();

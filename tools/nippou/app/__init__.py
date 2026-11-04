@@ -430,6 +430,9 @@ _TAB_GUARDED_PATHS = (
     # 打てるタブの次の自動保存が、そちらのページへ向きます
     "/api/settings/backfill",       # 終わった直を後から作る(枠を開く)
     "/api/records/backup/open",     # 控えの直を手元へ入れて呼び出す
+    # 直を消す。**打てるタブからだけ**(見るだけのタブから消すと、打てるタブの画面に
+    # 出ているページを、そちらの自動保存が作り直すことがある)
+    "/api/settings/removal/delete",
 )
 
 # 上の中でも、**読むだけ / 計算するだけ**の口。ここを止めると、見るだけの
@@ -737,7 +740,7 @@ def get_repo():
 # ------------------------------------------------------------------
 def _register_routes(app: Flask) -> None:
     from .routes import (agg, entry, graph, gw, health, logs, master, pending,
-                         printing, settings, sound, staff, standard_time, tab, vc)
+                         printing, removal, settings, sound, staff, standard_time, tab, vc)
 
     app.register_blueprint(health.bp)
     # 打てるタブを1枚に絞る口。**入力より先に登録する**(画面が開いた
@@ -757,6 +760,8 @@ def _register_routes(app: Flask) -> None:
     app.register_blueprint(vc.bp)
     app.register_blueprint(printing.bp)
     app.register_blueprint(settings.bp)
+    # 直を消す・テストモード(設定・管理者の面から使う)
+    app.register_blueprint(removal.bp)
     # マスタ管理(表を見る/直す)。設定画面の面から使う ── sqlite3 は
     # 現場のPCに開く道具が無い前提なので、このツールの中で完結させる
     app.register_blueprint(master.bp)

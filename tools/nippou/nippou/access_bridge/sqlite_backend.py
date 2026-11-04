@@ -141,6 +141,19 @@ STOP_DETAIL_COLUMNS: tuple[str, ...] = (
 #: 作業停止④⑤の列(v4.24.0)。**VBA の表には無い**
 STOP45_COLUMNS: tuple[str, ...] = ("S4", "TH4", "S5", "TH5")
 
+#: テストデータの印の列(`nippou/test_mode`)。見出しの表の**いちばん後ろ**に足します。
+#:
+#:     テストの直を送るとき、表にこの列が無ければ足す(ALTER TABLE ADD COLUMN は後ろに付く)
+#:     テストの直が無ければ足さない(テストモードを使わない現場の表は今のまま)
+#:     列がある表には、普通のページは空(NULL)、テストのページは "1" を書く
+#:
+#: 前からある列の並び・名前は変えません(VBA の形のまま)。表が読めない・届かないときは
+#: 開く前に断られる(`_connect`)ので、列を足すこともありません。**この列を知らない読み手**
+#: (VBA・ほかのツール・Excel)には、テストの行も普通の行に見えます
+TEST_COLUMN = "テスト"
+#: テストのページに書く値
+TEST_VALUE = "1"
+
 # 主キー。Access側の CONSTRAINT と同じ組み合わせ
 HEADER_KEY: tuple[str, ...] = ("報告日", "ライン", "直", PAGE)
 DETAIL_KEY: tuple[str, ...] = ("報告日", "ライン", "直", PAGE, "行番号")
@@ -340,21 +353,32 @@ def _marks(columns: tuple[str, ...]) -> str:
     return ", ".join("?" for _ in columns)
 
 
+def has_test_column(conn: sqlite3.Connection, table: str) -> bool:
+    """見出しの表にテストの印の列があるか。"""
+    return TEST_COLUMN in {row[1] for row in conn.execute(f"PRAGMA table_info({quote(table)})")}
+
+
 def _write_records(conn: sqlite3.Connection, header: HeaderRecord,
                    details: list[DetailRecord], header_table: str,
                    detail_table: str, saved_at: str,
-                   pages: tuple[PageColumn, PageColumn]) -> None:
+                   pages: tuple[PageColumn, PageColumn],
+                   test_column: bool = False) -> None:
     """1キーぶんの DELETE と INSERT(確定は呼ぶ側の `with conn`)。
 
     `pages` は(見出しの表, 明細の表)のページの列。**表ごとに名前が違ってもよい**
-    (`頁` の表と `ページ` の表が混ざった共有もある)。
+    (`頁` の表と `ページ` の表が混ざった共有もある)。`test_column` は見出しの表に
+    テストの印の列があるか(あれば印も書く)。
     """
     head_page, detail_page = pages
     key = (header.report_date, header.line, header.shift, header.page)
     conn.execute(f"DELETE FROM {quote(detail_table)} WHERE {key_where(detail_page)}", key)
     conn.execute(f"DELETE FROM {quote(header_table)} WHERE {key_where(head_page)}", key)
-    conn.execute(insert_sql(header_table, HEADER_COLUMNS, head_page),
-                 head_page.values(HEADER_COLUMNS, _header_values(header, saved_at)))
+    logical, values = HEADER_COLUMNS, _header_values(header, saved_at)
+    if test_column:
+        logical = (*logical, TEST_COLUMN)
+        values = (*values, TEST_VALUE if getattr(header, "test", False) else None)
+    conn.execute(insert_sql(header_table, logical, head_page),
+                 head_page.values(logical, values))
     conn.executemany(
         insert_sql(detail_table, DETAIL_COLUMNS, detail_page),
         [detail_page.values(DETAIL_COLUMNS, _detail_values(header, d)) for d in details])
@@ -410,12 +434,21 @@ def push_records_batch(db_path: Path, items: list[RecordItem],
     try:
         with conn:                                   # 例外ならロールバック
             made: dict[tuple[str, str], tuple[PageColumn, PageColumn]] = {}
+            tested: dict[str, bool] = {}
             for header, details, header_table, detail_table in items:
                 if (header_table, detail_table) not in made:
                     made[(header_table, detail_table)] = ensure_tables(
                         conn, header_table, detail_table)
+                if header_table not in tested:
+                    tested[header_table] = has_test_column(conn, header_table)
+                if getattr(header, "test", False) and not tested[header_table]:
+                    # テストの直を初めて送る表。**後ろに**印の列を足す(`TEST_COLUMN`)
+                    add_missing_columns(conn, header_table, (TEST_COLUMN,))
+                    tested[header_table] = True
+                    _logger.info("共有の %s にテストの印の列を足しました", header_table)
                 _write_records(conn, header, details, header_table, detail_table,
-                               saved_at, made[(header_table, detail_table)])
+                               saved_at, made[(header_table, detail_table)],
+                               test_column=tested[header_table])
                 rows += len(details) + 1
     except sqlite3.Error as exc:
         keys = [(h.report_date, h.line, h.shift, h.page) for h, *_ in items]
@@ -552,6 +585,87 @@ def push_summary_batch(db_path: Path, items: list[SummaryItem],
 
     _logger.info("push ok (集計) shifts=%d rows=%d", len(items), rows)
     return ScriptResult(success=True, rows=rows)
+
+
+# ------------------------------------------------------------------
+# 共有から消す(「直を消す」 `services/shift_removal`)
+# ------------------------------------------------------------------
+#: (報告日, ライン, 直, ページ), 見出しの表, 明細の表
+DeletePage = tuple[tuple[str, str, str, int], str, str]
+#: (報告日, ライン, 直), 合計の表, ロット行の表, 停止の表
+DeleteShift = tuple[tuple[str, str, str], str, str, str]
+
+
+@dataclass
+class Deleted:
+    """共有から消した結果。`ok` でなければ**何も消していない**(取引ごと戻した)。"""
+
+    ok: bool = False
+    #: 共有の日報データが**確かめたうえで無い**(消すものが無い)
+    missing: bool = False
+    error: str = ""
+    header_rows: int = 0
+    detail_rows: int = 0
+    summary_rows: int = 0
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,)).fetchone() is not None
+
+
+def delete_pages(db_path: Path, pages: list[DeletePage],
+                 shifts: Iterable[DeleteShift] = ()) -> Deleted:
+    """そのページの行だけを共有から消す。**1回開いて、1つの取引で。**
+
+    消すのは見出しと明細の、その(報告日, ライン, 直, ページ)の行だけ。`shifts` に渡した直は、
+    集計の3つの表のその(報告日, ライン, 直)の行も消します(手元にページが1枚も残らない直)。
+
+    **開けない・届かない・読めないときは何もしません**(`_connect` が断る ── 作らない・
+    書かない)。途中で失敗したら取引ごと戻すので、半分だけ消えた形は残りません。
+    """
+    from ..db.connection import SharedUnreadable, file_state
+
+    out = Deleted()
+    try:
+        if not file_state(db_path):
+            out.missing = True
+            out.error = f"共有の日報データ {Path(db_path).name} がありません: {db_path}"
+            return out
+        conn = _connect(db_path, create=False)
+    except SharedUnreadable as exc:
+        out.error = f"共有の日報データを読めません(届かない・開けない): {exc}"
+        return out
+    except sqlite3.Error as exc:
+        out.error = f"共有の日報データを開けません: {exc}"
+        return out
+    try:
+        with conn:                                   # 1つの取引(例外なら戻す)
+            for key, header_table, detail_table in pages:
+                for table, attr in ((detail_table, "detail_rows"), (header_table, "header_rows")):
+                    if not _has_table(conn, table):
+                        continue
+                    page = page_column(conn, table)
+                    found = conn.execute(
+                        f"DELETE FROM {quote(table)} WHERE {key_where(page)}", key)
+                    setattr(out, attr, getattr(out, attr) + max(0, found.rowcount))
+            for key, *tables in shifts:
+                where = " AND ".join(f"{quote(c)}=?" for c in SUMMARY_KEY)
+                for table in tables:
+                    if _has_table(conn, table):
+                        found = conn.execute(f"DELETE FROM {quote(table)} WHERE {where}", key)
+                        out.summary_rows += max(0, found.rowcount)
+    except sqlite3.Error as exc:
+        _logger.warning("共有から消せませんでした(何も消していません) pages=%s: %s",
+                        [k for k, *_ in pages], exc)
+        out = Deleted(error=f"共有から消せませんでした(何も消していません): {exc}")
+        return out
+    finally:
+        conn.close()
+    out.ok = True
+    _logger.info("共有から消しました pages=%d 見出し=%d 明細=%d 集計=%d",
+                 len(pages), out.header_rows, out.detail_rows, out.summary_rows)
+    return out
 
 
 def _failure(message: str, exc: Exception) -> ScriptResult:

@@ -1,7 +1,7 @@
 """管理者以外停止モード(`remote_stop.py`。日報複合ツールの大設定から管理者が出すお願い)── 看板の受け方
 
 日報複合ツールの大設定で、管理者(管理者パスワード かつ Administrator)が「ほかの PC を止める」を押すと、
-共有DBの置き場所の `管理者以外停止\\お願い.json` にお願いが置かれる。単体で起動した看板も同じフォルダを見る。
+共有DBの置き場所の `日報複合ツール_管理者以外停止\\お願い.json` にお願いが置かれる。単体で起動した看板も同じフォルダを見る。
 
     何も残っていなければ        帯を見せてから、まもなく止まる
     残っているもの(共有DBへまだ送っていない操作)   利用者を待つ。期限(5分。試験は短く)で強制で止める。止める前に控えを書き、
@@ -133,7 +133,7 @@ class _Child(unittest.TestCase):
 
     def answer(self) -> dict:
         found = [json.loads(p.read_text(encoding="utf-8"))
-                 for p in (self.share / "管理者以外停止" / "稼働中").glob("*.json")]
+                 for p in (self.share / remote_stop.FOLDER / "稼働中").glob("*.json")]
         mine = [a for a in found if a.get("pc") == "PC-LINE1"]
         self.assertEqual(len(mine), 1, found)
         return mine[0]
@@ -226,10 +226,11 @@ class StopEntryTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_main(self, running: bool):
+    def run_main(self, running: bool, pc: str = "PC-LINE1"):
         import process_manager
         out = io.StringIO()
-        with redirect_stdout(out), mock.patch.object(process_manager, "_lock_present", return_value=running), \
+        with redirect_stdout(out), mock.patch.dict(os.environ, {"ALLTOOLS_PC_NAME": pc}), \
+                mock.patch.object(process_manager, "_lock_present", return_value=running), \
                 mock.patch.object(process_manager, "stop_mode") as stop:
             stop.side_effect = lambda mode, force=False: process_manager.StopResult(mode)
             code = process_manager.main(["/nopause"])
@@ -242,6 +243,12 @@ class StopEntryTests(unittest.TestCase):
         self.assertEqual(code, process_manager.EXIT_BUSY)
         self.assertTrue(out.startswith("止めませんでした: 管理者以外停止モード中"), out)
         stop.assert_not_called()
+
+    def test_お願いを出したPCでは断らずふつうに止める(self) -> None:
+        self.assertTrue(remote_stop.issue(True, True, "更新のため").ok)
+        _code, out, stop = self.run_main(True, pc="PC-ADMIN")
+        self.assertNotIn("管理者以外停止モード中", out)
+        stop.assert_called()
 
     def test_動いていない_お願いが無いならいつもどおり(self) -> None:
         self.assertTrue(remote_stop.issue(True, True, "更新のため").ok)
@@ -285,6 +292,33 @@ class KanbanAdapterTests(unittest.TestCase):
         self.assertTrue(any("手元に残しています" in k for k in kept), kept)
         store.unsent.return_value.busy_reason.return_value = ""
         self.assertEqual(captured["left"](), [])
+
+    def test_共有DBとやり取りしている最中は書いている最中と答える(self) -> None:
+        """期限を過ぎても強制せずに待つ(最長さらに5分)。錠は取れたらすぐ返す。"""
+        import threading
+        import start_app
+        store = mock.Mock()
+        store.sync_lock = threading.RLock()
+        captured = {}
+        with mock.patch.object(remote_stop, "install", side_effect=lambda stop, left, **kw: captured.update(kw)):
+            start_app._watch_remote_stop(mock.Mock(), store)
+        self.assertEqual(captured["writing"](), [])
+        held, release = threading.Event(), threading.Event()
+
+        def sync() -> None:
+            with store.sync_lock:
+                held.set()
+                release.wait(10)
+
+        worker = threading.Thread(target=sync)
+        worker.start()
+        self.addCleanup(worker.join)
+        self.addCleanup(release.set)
+        held.wait(5)
+        self.assertEqual(captured["writing"](), ["共有DBへの送信"])
+        release.set()
+        worker.join(5)
+        self.assertEqual(captured["writing"](), [])
 
     def test_止めると決まったらコメントの書きかけを下書きに置く口がある(self) -> None:
         text = (TOOL_DIR / "app" / "static" / "js" / "views" / "board.js").read_text(encoding="utf-8")
@@ -335,6 +369,29 @@ class BandBrowserTests(_Child):
         page.wait_for_function("document.getElementById('remote-stop-band').textContent.includes('止めました')",
                                timeout=20000)
         self.assertEqual(errors, [], "画面の誤り")
+
+    def test_設定画面で打って保存していない欄は_残っているものに数えて待つ(self) -> None:
+        """設定の欄は保存するまで画面の中にしか無い(止めると消える)。何も無いとして帯を見せる間で止めない。"""
+        proc = self.start()
+        port = self.port(proc)
+        self.wait_ready(proc, port)
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        page.goto(f"http://127.0.0.1:{port}/settings?t={self.token(proc)}", wait_until="load")
+        page.wait_for_function("typeof window.__remoteStopUnsaved === 'function'", timeout=30000)
+        # 打ったのと同じ合図(欄の値を変えて input)。画面の鍵の有無にかかわらず、欄の打ちかけは画面の中だけにある
+        page.evaluate("(() => { const el = document.getElementById('behavior-import'); el.value = '123';"
+                      " el.dispatchEvent(new Event('input', { bubbles: true })); })()")
+        time.sleep(3.5)                               # 帯の問い合わせ(3秒ごと)が、お願いの前に言い添える
+        self.issue()
+        page.wait_for_function("document.getElementById('remote-stop-band')"
+                               " && document.getElementById('remote-stop-band').textContent"
+                               ".includes('設定画面で保存していない入力')", timeout=20000)
+        self.assertEqual(self.health(port, "?remote_stop=1&page=t")["remote_stop"]["state"]["state"],
+                         remote_stop.STATE_WAITING)
+        self.assertIsNone(proc.poll(), "保存していない入力があるのに止まった")
+        self.assertEqual(proc.wait(40), 0, "期限では止まる")
+        self.assertEqual(self.answer()["state"], remote_stop.STATE_FORCED)
 
 
 if __name__ == "__main__":

@@ -952,6 +952,16 @@ def _remote_stop_keep(store) -> list:
     return kept
 
 
+def _remote_stop_writing(store) -> list:
+    """共有DBとやり取りしている最中か(書き戻し・取り込みは ``store.sync_lock`` を持つ)。期限を過ぎても
+    書き終わるのを待つ(最長さらに5分)。錠は取れたらすぐ返す(やり取りを待たせない)。"""
+    lock = store.sync_lock
+    if lock.acquire(blocking=False):
+        lock.release()
+        return []
+    return ["共有DBへの送信"]
+
+
 def _watch_remote_stop(srv, store) -> None:
     """お願いを見張る。止め方は ``/api/shutdown`` と同じ道(``srv.stop``)。
 
@@ -966,7 +976,8 @@ def _watch_remote_stop(srv, store) -> None:
             reason = _busy_reason(store)
             return [reason] if reason else []
 
-        rs.watch(srv.stop, left, kind=kind, before_force=lambda: _remote_stop_keep(store))
+        rs.watch(srv.stop, left, kind=kind, before_force=lambda: _remote_stop_keep(store),
+                 writing=lambda: _remote_stop_writing(store))
     except Exception as exc:  # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log.warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
 

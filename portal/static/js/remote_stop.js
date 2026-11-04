@@ -36,6 +36,10 @@ function bandLine() {
   if (band.stopping) {
     return `${band.text}。画面の打ちかけを置いてから、日報複合ツールを閉じます。`;
   }
+  if ((band.writing || []).length) {
+    return `${band.text}。共有へ書いている最中なので、終わるのを待っています(${band.writing.join("、")})。`
+      + `書き終わったら止めます(長くても あと ${rest(band.writing_until_ms - (Date.now() + offset))} で強制で止めます)。`;
+  }
   const items = (band.left || []).filter(Boolean);
   const what = items.length
     ? `残っているもの: ${items.join("、")}。保存する・処理が終わると自動で止まります。`
@@ -75,9 +79,10 @@ const PAGE = (crypto.randomUUID && crypto.randomUUID()) || `p${Date.now()}${Math
 
 async function pollBand() {
   let body;
-  // お願いを受けているあいだは、この画面(大設定)で保存していない入力を言い添える(残っているものに数える)
+  // この画面(大設定)で保存していない入力を言い添える(残っているものに数える)。**お願いが来る前から**
+  // (裏に回した窓はタイマーが間引かれ、お願いを受けてからでは帯を見せる間に間に合わない)
   let query = "";
-  if (band && !band.stopping) {
+  if (!(band && band.stopping)) {
     let items = [];
     try { items = ctx.unsaved() || []; } catch (err) { items = []; }
     query = `?page=${encodeURIComponent(PAGE)}&unsaved=${encodeURIComponent(JSON.stringify(items))}`;

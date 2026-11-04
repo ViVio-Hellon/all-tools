@@ -179,7 +179,15 @@ def refresh_shift(repo: NippouRepository, work_date: str, line: str,
     **停止内訳を読めなかったとき**(`StopLabels.problem`)は、その直の前の集計にあった名前
     (共有へ送った名前)を使います。読めないことで名前が空になり、送り直しで共有の「内訳」を
     空で上書きしないように。
+
+    **テストの直は集計を作りません**(あれば消します ── `nippou/test_mode`)。集計・グラフ・
+    集計管理・CSV・月の書き出し・紙の頭の集計・標準作業時間は、どれもこの集計を読むので、
+    ここで外せば全部から外れます。共有の集計の表(`T_日報集計_<ライン>`)へも出ません。
     """
+    if repo.is_test_shift(work_date, line, shift):
+        if repo.delete_packing_report(work_date, line, shift):
+            log.info("テストの直なので集計を消しました %s/%s/%s", work_date, line, shift)
+        return None
     pages = _shift_pages(repo, work_date, line, shift)
     if not pages:
         return None

@@ -85,6 +85,8 @@ function wireDirtyFields() {
   };
   document.addEventListener('input', mark, true);
   document.addEventListener('change', mark, true);
+  // 管理者以外停止(`remote_stop_band.js`): 打って保存していない欄は、止めると消える。「残っているもの」に数える
+  window.__remoteStopUnsaved = () => ([...dirtyFields].some(isDirty) ? ['設定画面で保存していない入力'] : []);
 }
 
 function isDirty(el) {

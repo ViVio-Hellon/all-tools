@@ -285,7 +285,8 @@ def _cell(found: Found, name: str) -> str:
     if name == "worker":
         return header.worker
     if name == "source":
-        return found.source
+        # テストの直の行には印(`nippou/test_mode`)。消すのは設定・管理者の「直を消す」
+        return found.source + ("・テスト" if getattr(header, "test", False) else "")
     if name == "start":
         return _hhmm(detail.kz, detail.kh)
     if name == "end":

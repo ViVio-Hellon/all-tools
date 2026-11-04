@@ -50,15 +50,36 @@ def aggregate_of(repo: Any, report_date: str, line: str, shift: str) -> dict:
 
 
 def backfill_stamps(repo: Any, report_date: str, line: str, shift: str) -> dict[int, str]:
-    """その直で後から作ったページの印(ページ → 字)。**紙にも残す**(v4.0.0)。"""
+    """その直で後から作ったページの印(ページ → 字)。**紙にも残す**(v4.0.0)。
+
+    テストの直(`nippou/test_mode`)のページには「テストデータ」の印も付けます。
+    """
     from ..logic import backfill as backfill_rule
 
     try:
         found = repo.backfills(report_date, line, shift)
     except Exception:                             # noqa: BLE001 - 印が出ないだけ
         log.exception("後日作成の印を読めませんでした")
-        return {}
-    return {key[3]: backfill_rule.stamp_text(info) for key, info in found.items()}
+        found = {}
+    stamps = {key[3]: backfill_rule.stamp_text(info) for key, info in found.items()}
+    if _is_test(repo, report_date, line, shift):
+        for page in repo.saved_pages(report_date, line, shift):
+            stamps[int(page)] = " / ".join(t for t in (TEST_STAMP, stamps.get(int(page), "")) if t)
+    return stamps
+
+
+#: テストの直の紙に付ける印
+TEST_STAMP = "テストデータ(テストモードで作った直。集計には入りません)"
+#: テストの直の紙を出力先へ残さなかったときの一言
+TEST_NOT_SAVED = "テストの直なので、印刷用HTMLは出力先へ残していません"
+
+
+def _is_test(repo: Any, report_date: str, line: str, shift: str) -> bool:
+    try:
+        return bool(repo.is_test_shift(report_date, line, shift))
+    except Exception:                             # noqa: BLE001 - 印が出ないだけ
+        log.exception("テストの直かを確かめられませんでした %s/%s/%s", report_date, line, shift)
+        return False
 
 
 def local_pages(repo: Any, report_date: str, line: str, shift: str) -> list:
@@ -75,6 +96,11 @@ def save_shift(repo: Any, report_date: str, line: str, shift: str, pages: Option
         if pages is None:
             pages = local_pages(repo, report_date, line, shift)
         if not pages:
+            return out
+        # **テストの直の紙は出力先へ残さない**(本番の紙の束に混ぜない ── `nippou/test_mode`)。
+        # 画面で刷る・見るのはそのまま(紙に「テストデータ」の印が付く)
+        if _is_test(repo, report_date, line, shift):
+            out["skipped"] = TEST_NOT_SAVED
             return out
         aggregate = aggregate_of(repo, report_date, line, shift)
         stamps = backfill_stamps(repo, report_date, line, shift)
@@ -99,6 +125,8 @@ def save_shift(repo: Any, report_date: str, line: str, shift: str, pages: Option
 def saved_note(result: dict) -> str:
     """`save_shift` の結果を一言に(紙の窓の帯に出す)。残さなかった(ページが無い)なら空。"""
     files, errors = result.get("files") or [], result.get("errors") or []
+    if result.get("skipped") and not files:
+        return str(result["skipped"])
     if errors and not files:
         return f"印刷用HTMLを出力先へ残せませんでした: {errors[0]}"
     if not files:

@@ -72,6 +72,7 @@ class _Base(unittest.TestCase):
                               app_id="portal", hosted=False, version="9.9.9", logger=stop_mode.log)
         for patcher in (
                 mock.patch.object(remote_stop, "READ_RETRY_SEC", ()),
+                mock.patch.object(remote_stop, "ISSUE_SETTLE_SEC", 0.0),
                 mock.patch.dict(os.environ, {"ALLTOOLS_PC_NAME": self.PC, "ALLTOOLS_LOGIN_ID": "kanri",
                                              "ALLTOOLS_LOCAL_DIR": str(self.alltools)})):
             patcher.start()
@@ -100,7 +101,7 @@ class IssueTests(_Base):
         self.assertTrue(remote_stop.clear(True, True).ok)
         self.assertEqual(remote_stop.clear(True, True).reason, remote_stop.REFUSE_NOT_ACTIVE)
         self.assertIsNone(remote_stop.read_request())
-        self.assertEqual(remote_stop.request_path().parent.name, "管理者以外停止")
+        self.assertEqual(remote_stop.request_path().parent.name, "日報複合ツール_管理者以外停止")
 
     def test_読めないお願いは上書きしない(self) -> None:
         remote_stop.folder().mkdir(parents=True)
@@ -250,13 +251,24 @@ class StopEntryTests(_Base):
     def test_お願いが出ているあいだ_止める入口は理由を返して3(self) -> None:
         self.issue()
         for argv in (["/nopause"], ["--force"], ["--launcher"], ["--launcher", "--force"]):
-            with self.subTest(argv=argv):
+            with self.subTest(argv=argv), self.as_pc("PC-LINE1"):
                 code, out, run_stop, run_launcher = self.run_main(argv)
                 self.assertEqual(code, process_manager.EXIT_BUSY)
                 self.assertTrue(out.startswith("止めませんでした: 管理者以外停止モード中"), out)
                 self.assertEqual(len(out.strip().splitlines()), 1, "1行目が理由(ランチャーの入口は1行だけ)")
                 run_stop.assert_not_called()
                 run_launcher.assert_not_called()
+
+    def test_お願いを出したPCでは断らずふつうに止める(self) -> None:
+        """その PC は止めないので、管理者が自分の PC を stop.bat・ランチャーでふつうに止めて更新する。"""
+        self.issue()
+        with self.as_pc("pc-admin"):
+            code, _out, run_stop, _ = self.run_main(["/nopause"])
+            self.assertEqual(code, 0)
+            run_stop.assert_called_once()
+            code, _out, _, run_launcher = self.run_main(["--launcher"])
+            self.assertEqual(code, 0)
+            run_launcher.assert_called_once()
 
     def test_動いていなければ断らない_お願いが無ければいつもどおり(self) -> None:
         self.issue()
@@ -773,6 +785,180 @@ class DefaultRootTests(unittest.TestCase):
         self.assertEqual(Path(shared_db.location(strict=True).folder), remote_stop.default_root())
 
 
+class SecondLookTests(_Base):
+    """別の目の穴探しで見つけたこと(直す前は落ちる)。"""
+
+    def write_request(self, data, *, folder=None) -> None:
+        where = folder or remote_stop.folder()
+        where.mkdir(parents=True, exist_ok=True)
+        (where / remote_stop.REQUEST_NAME).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_python_web_toolsの管理者以外停止のお願いでは止まらず_起動も止めない(self) -> None:
+        """同じ共有のフォルダでも、python-web-tools のお願い(`管理者以外停止\\`)は日報複合ツールでは見ない。"""
+        self.write_request({"active": True, "id": "pwt", "by_pc": "PC-PWT"}, folder=self.share / "管理者以外停止")
+        self.assertEqual(remote_stop.FOLDER, "日報複合ツール_管理者以外停止")
+        self.assertIsNone(remote_stop.read_request())
+        with self.as_pc("PC-LINE1"):
+            self.assertIsNone(remote_stop.startup_block())
+            w = remote_stop.Watcher(lambda: None, lambda: [], clock=lambda: 1000.0, flush=False)
+            w.tick()
+            self.assertIsNone(w.request)
+        # 日報複合ツールのお願いは python-web-tools のフォルダに書かない
+        self.assertTrue(self.issue().ok)
+        self.assertEqual(json.loads((self.share / "管理者以外停止" / "お願い.json").read_text(encoding="utf-8"))["id"],
+                         "pwt")
+        self.assertTrue((self.share / "日報複合ツール_管理者以外停止" / "お願い.json").is_file())
+
+    def test_手で置いた短い待つ長さでも_5分より早くは強制で止めない(self) -> None:
+        self.write_request({"active": True, "id": "x", "by_pc": "PC-ADMIN", "grace_sec": 1})
+        now = [1000.0]
+        stopped = []
+        with self.as_pc("PC-LINE1"):
+            w = remote_stop.Watcher(lambda: stopped.append(1), lambda: ["打ちかけ"], clock=lambda: now[0],
+                                    flush=False, before_force=lambda: [])
+            w.tick()
+            now[0] += 2
+            w.tick()
+            self.assertEqual((stopped, w.state), ([], remote_stop.STATE_WAITING), "1秒で強制にした")
+            now[0] = 1000.0 + remote_stop.GRACE_SEC
+            w.tick()
+        self.assertEqual((stopped, w.state), ([1], remote_stop.STATE_FORCED))
+
+    def test_入口は_居るのにまだお願いに答えていない中のツールを待つ(self) -> None:
+        """中のツールが共有をたまたま読めない・見張りが遅れているあいだに、30秒で閉じてしまわない(期限で強制)。"""
+        remote_stop.configure(app="日報", app_id="nippou", hosted=True)
+        with self.as_pc("PC-LINE1"):
+            tool = remote_stop.Watcher(lambda: None, lambda: ["共有への保存"], hosted=True, clock=lambda: 1000.0)
+            tool.tick()                               # お願いはまだ無い: 「居ます」だけ書く
+            self.assertTrue(tool.local_path().is_file(), "お願いが無くても居ることを入口に知らせる")
+        remote_stop.configure(app="日報複合ツール", app_id="portal", hosted=False)
+        self.issue()
+        rid = remote_stop.read_request()["id"]
+        pending, items = remote_stop.hosted_left(rid)
+        self.assertTrue(pending, "まだ答えていない中のツールを数えない")
+        self.assertEqual(items, ["日報: 停止のお願いを確かめています"])
+        now = [1000.0]
+        closed = []
+        with self.as_pc("PC-LINE1"):
+            portal = remote_stop.Watcher(lambda: closed.append(1), lambda: [], clock=lambda: now[0], flush=False,
+                                         hold=lambda: remote_stop.hosted_left(rid)[0],
+                                         extra_sec=remote_stop.HOST_EXTRA_SEC)
+            portal.tick()
+            now[0] += remote_stop.NOTICE_SEC + 1
+            portal.tick()
+            self.assertEqual(closed, [], "中のツールの保存を待たずに閉じた")
+            now[0] = 1000.0 + remote_stop.GRACE_SEC + remote_stop.HOST_EXTRA_SEC
+            portal.tick()
+        self.assertEqual(closed, [1], "期限では閉じる")
+        tool.leave()
+        self.assertFalse(tool.local_path().exists())
+
+    def test_手元の領域の名前は一式の設定に合わせる_入口と中のツールで同じ(self) -> None:
+        bundle = self.tmp / "一式"
+        (bundle / "config").mkdir(parents=True)
+        (bundle / "config" / "app.json").write_text('\ufeff{"local_dir_name": "統合テスト"}', encoding="utf-8")
+        with mock.patch.dict(os.environ, {"ALLTOOLS_LOCAL_DIR": "", "LOCALAPPDATA": str(self.tmp / "LAD")}):
+            remote_stop.configure(bundle_root=bundle)
+            self.assertEqual(remote_stop.alltools_local_root(), self.tmp / "LAD" / "統合テスト")
+            remote_stop.configure(bundle_root=None)
+            with mock.patch.dict(os.environ, {"ALLTOOLS_ROOT": ""}):
+                self.assertEqual(remote_stop.alltools_local_root(), self.tmp / "LAD" / "AllTools")
+
+
+class WritingTests(_Base):
+    """共有へ書いている最中は、5分を過ぎても書き終わるのを待つ(最長さらに5分)。"""
+
+    def watcher(self, **kw):
+        self.now = [1000.0]
+        self.stopped = []
+        self.busy = ["共有への保存"]
+        return remote_stop.Watcher(lambda: self.stopped.append(1), lambda: list(self.busy),
+                                   writing=lambda: list(self.busy), before_force=lambda: [],
+                                   clock=lambda: self.now[0], flush=False, **kw)
+
+    def test_書いている最中は期限を過ぎても待ち_書き終わったら止める(self) -> None:
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            w = self.watcher()
+            w.tick()
+            self.now[0] += remote_stop.GRACE_SEC + 1
+            w.tick()
+            self.assertEqual((self.stopped, w.state), ([], remote_stop.STATE_WRITING), "書いている途中で強制した")
+            self.assertIn("共有へ書いている最中なので、終わるのを待っています", w.detail)
+            self.assertEqual(w.screen_state()["writing"], ["共有への保存"])
+            label = {p["pc"]: p for p in remote_stop.overview().pcs}["PC-LINE1"]["label"]
+            self.assertEqual(label, "共有へ書いている最中なので、終わるのを待っています")
+            self.busy = []                            # 書き終わった
+            w.tick()
+        self.assertEqual((self.stopped, w.state), ([1], remote_stop.STATE_STOPPED))
+
+    def test_延ばすのは最長さらに5分まで(self) -> None:
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            w = self.watcher()
+            w.tick()
+            self.now[0] = 1000.0 + remote_stop.GRACE_SEC + remote_stop.WRITING_MAX_SEC - 1
+            w.tick()
+            self.assertEqual(self.stopped, [])
+            self.now[0] += 2
+            w.tick()
+        self.assertEqual((self.stopped, w.state), ([1], remote_stop.STATE_FORCED))
+
+    def test_中のツールが書いている最中なら入口も閉じずに待つ(self) -> None:
+        self.issue()
+        rid = remote_stop.read_request()["id"]
+        folder = remote_stop.local_status_dir()
+        folder.mkdir(parents=True)
+        answer = folder / "nippou-1.json"
+        answer.write_text(json.dumps({"app": "日報", "request_id": rid, "ready": False, "left": ["共有への保存"],
+                                      "writing": ["共有への保存"], "beat_at": time.time()}), encoding="utf-8")
+        now = [1000.0]
+        closed = []
+        with self.as_pc("PC-LINE1"):
+            portal = remote_stop.Watcher(lambda: closed.append(1), lambda: [], clock=lambda: now[0], flush=False,
+                                         hold=lambda: remote_stop.hosted_left(rid)[0],
+                                         writing=lambda: remote_stop.hosted_writing(rid),
+                                         extra_sec=remote_stop.HOST_EXTRA_SEC)
+            portal.tick()
+            now[0] += remote_stop.GRACE_SEC + remote_stop.HOST_EXTRA_SEC + 1
+            portal.tick()
+            self.assertEqual((closed, portal.writing), ([], ["日報: 共有への保存"]))
+            answer.write_text(json.dumps({"app": "日報", "request_id": rid, "ready": True, "left": [],
+                                          "writing": [], "beat_at": time.time()}), encoding="utf-8")
+            portal.tick()
+        self.assertEqual(closed, [1])
+
+
+class SimultaneousIssueTests(_Base):
+    """2台の Administrator がほぼ同時に出したとき(あとから書いたほうが残る)。"""
+
+    def test_読み直して自分のお願いでなければ断り_自分のPCは止めない(self) -> None:
+        def other_wins() -> None:
+            with self.as_pc("PC-ADMIN-2"):
+                remote_stop.write_json(remote_stop.request_path(), {
+                    "active": True, "id": "other", "by_pc": "PC-ADMIN-2", "by_login": "kanri2",
+                    "reason": "版の入れ替え", "created_at": time.time(), "grace_sec": 300})
+
+        with mock.patch.object(remote_stop, "_settle", other_wins):
+            result = self.issue()
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, remote_stop.REFUSE_ALREADY)
+        self.assertIn("ほかの管理者のお願いが先に出ています", result.message)
+        self.assertEqual(remote_stop.read_request()["id"], "other")
+        # この PC(PC-ADMIN)は止めない・起動もできる・stop.bat も断らない。ほかの PC は止める
+        self.assertIsNone(remote_stop.startup_block())
+        self.assertIsNone(remote_stop.stop_bat_refusal())
+        w = remote_stop.Watcher(lambda: None, lambda: [], clock=lambda: 1000.0, flush=False)
+        w.tick()
+        self.assertIsNone(w.request)
+        with self.as_pc("PC-LINE1"), mock.patch.dict(os.environ, {"ALLTOOLS_LOCAL_DIR": str(self.tmp / "LINE1")}):
+            self.assertIsNotNone(remote_stop.startup_block(), "ほかの PC は止める(覚えはその PC だけ)")
+
+    def test_読み直して自分のお願いなら出せる(self) -> None:
+        self.assertTrue(self.issue().ok)
+        self.assertFalse(remote_stop.spared_path().exists())
+
+
 # ======================================================================
 # 本物の子プロセス(ブラウザ版の入口)
 # ======================================================================
@@ -845,7 +1031,7 @@ class RealPortalTests(unittest.TestCase):
 
     def answers(self) -> dict:
         out = {}
-        for path in (self.share / "管理者以外停止" / "稼働中").glob("*.json"):
+        for path in (self.share / remote_stop.FOLDER / "稼働中").glob("*.json"):
             data = json.loads(path.read_text(encoding="utf-8"))
             out[data["pc"]] = data
         return out
@@ -935,7 +1121,7 @@ class RealPortalTests(unittest.TestCase):
             time.sleep(0.2)
         self.assertFalse(browser_tools.is_alive(tool_pid), "中のツールが残っている")
         answers = {(a["pc"], a["app_id"]): a for a in (json.loads(p.read_text(encoding="utf-8")) for p in
-                   (self.share / "管理者以外停止" / "稼働中").glob("*.json"))}
+                   (self.share / remote_stop.FOLDER / "稼働中").glob("*.json"))}
         self.assertEqual(answers[("PC-LINE1", "portal")]["state"], remote_stop.STATE_FORCED)
         self.assertEqual(answers[("PC-LINE1", "inspection")]["state"], remote_stop.STATE_FORCED)
         self.assertTrue(answers[("PC-LINE1", "inspection")]["hosted"])
@@ -979,7 +1165,7 @@ class RealPortalTests(unittest.TestCase):
         self.wait_listening(proc)
         self.issue_as_admin()
         self.assertEqual(proc.wait(30), 0)
-        (self.share / "管理者以外停止" / "お願い.json").write_text("{書いている途中", encoding="utf-8")
+        (self.share / remote_stop.FOLDER / "お願い.json").write_text("{書いている途中", encoding="utf-8")
         blocked = self.start()
         self.assertEqual(blocked.wait(30), 1)
         self.assertIn("解除されたかを確かめられません", blocked.stderr.read().decode("utf-8", "replace"))

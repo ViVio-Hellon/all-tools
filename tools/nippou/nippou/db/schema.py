@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS daily_header (
     -- 共有の日報管理へは送りません(この端末と控えの中だけ)
     saved_pc                  TEXT,
     base_hash                 TEXT,
+    -- テストデータの印(`nippou/test_mode.py`)。1 = テストモードのあいだに作った直のページ。
+    -- **直の単位で決まります**(その直に先にあるページの印を継ぐ。直の最初のページだけ、
+    -- テストモードかで決まる ── `repository.save`)。集計・グラフ・月の書き出し・CSV・紙の頭の
+    -- 集計に入れません。共有の日報データへは「テスト」の列に 1 を付けて送ります
+    test_mark                 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (report_date, line, shift, page)
 );
 
@@ -321,6 +326,42 @@ CREATE TABLE IF NOT EXISTS backfill (
     PRIMARY KEY (report_date, line, shift, page)
 );
 
+-- 手元から消したページ(「直を消す」 `services/shift_removal`)。**消しません**(記録)。
+--
+-- 誰が(PC名・ログインID)いつ何を消したか、共有の日報データからも消したか(`shared`)を残します。
+--
+--     shared  ''         消した直後(共有からも消すかをまだ答えていない)
+--             'local'    「いいえ」── 手元だけ
+--             'pending'  「はい」と答えたが、共有に届かない・読めないので**まだ消せていない**
+--                        (設定・管理者の同じ面から、あとで消せます)
+--             'done'     共有からも消した
+--             'skipped'  共有から消すのをやめた(手元にまた保存された など。理由は shared_detail)
+--
+-- 控え(LocalBackup)にも同じ表があり、控えから消したページの行を写します。同じラインの
+-- ほかの PC が起動のときに、**消したときと同じ中身**のページを控えへ戻さない(手元からも
+-- 消す)ための印です(`local_backup._pull`)
+CREATE TABLE IF NOT EXISTS page_removal (
+    id            TEXT PRIMARY KEY,     -- 端末をまたいでも重ならない番号(uuid)
+    report_date   TEXT NOT NULL,
+    line          TEXT NOT NULL,
+    shift         TEXT NOT NULL,
+    page          INTEGER NOT NULL,
+    removed_at    TEXT NOT NULL,
+    terminal      TEXT NOT NULL DEFAULT '',   -- 消した PC 名
+    login         TEXT NOT NULL DEFAULT '',   -- 消した人のログインID(Windows の USERNAME)
+    reason        TEXT NOT NULL DEFAULT '',   -- test / empty / picked(どの一覧から選んだか)
+    rows          INTEGER NOT NULL DEFAULT 0, -- 消したときに打ってあった行数
+    content_hash  TEXT NOT NULL DEFAULT '',   -- 消したときの中身の指紋
+    test_mark     INTEGER NOT NULL DEFAULT 0,
+    was_sent      INTEGER NOT NULL DEFAULT 0, -- この端末から共有へ渡したことがあったか
+    kept_file     TEXT NOT NULL DEFAULT '',   -- 消す前に残した控えのファイル
+    shared        TEXT NOT NULL DEFAULT '',
+    shared_at     TEXT NOT NULL DEFAULT '',
+    shared_detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_page_removal_key
+    ON page_removal (report_date, line, shift, page);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     direction    TEXT NOT NULL,   -- 'import' | 'push'
@@ -410,6 +451,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # ── 空のページは「誰が保存したか分からない」なので、知らせを出しません
     ("daily_header", "saved_pc", "TEXT"),
     ("daily_header", "base_hash", "TEXT"),
+    # テストデータの印。前からあるページは 0(テストではない)
+    ("daily_header", "test_mark", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

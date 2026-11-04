@@ -355,7 +355,14 @@ def index():
     except Exception:                             # noqa: BLE001 - 印が出ないだけ
         log.exception("後日作成の印を読めませんでした")
         made_later = {}
+    # **テストの直には印**(`nippou/test_mode`)
+    try:
+        tests = get_repo().test_shift_keys(saved_line["line"])
+    except Exception:                             # noqa: BLE001 - 印が出ないだけ
+        log.exception("テストの直の印を読めませんでした")
+        tests = set()
     for row in recent:
+        row["test"] = (row["report_date"], row["line"], row["shift"]) in tests
         row["own"] = service.is_current_key(
             row["report_date"], row["line"], row["shift"],
             ctx.line, now_date, now_shift)

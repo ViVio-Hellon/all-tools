@@ -33,6 +33,10 @@ class HeaderRecord:
     saved_at: str = ""
     dirty: bool = True
     synced_at: str | None = None
+    #: テストデータの印(`daily_header.test_mark`)。**読んだときの値**で、保存で付け替えるのは
+    #: `NippouRepository.save` の決まり(直に先にあるページの印を継ぐ)。共有から読んだ行は
+    #: 共有の「テスト」の列の値
+    test: bool = False
 
     def key(self) -> tuple[str, str, str, int]:
         return (self.report_date, self.line, self.shift, self.page)

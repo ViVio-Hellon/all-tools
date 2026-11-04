@@ -113,7 +113,10 @@ def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple]) -> Outcome:
 
     **送ったあとも未送信のページが残っている日は出さない**(上の説明)。
     """
-    days = days_of(pushed_keys)
+    pushed_keys = list(pushed_keys)
+    # テストの直だけを送った日は出さない(テストの直は集計に入らない ── `nippou/test_mode`)
+    tests = repo.test_shift_keys()
+    days = days_of(k for k in pushed_keys if tuple(k[:3]) not in tests)
     if not extra_dirs() or not days:
         return Outcome()
     unsent = unsent_days(repo)

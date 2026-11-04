@@ -214,8 +214,15 @@ def install(stop: Callable[[], None], *, desktop: bool) -> Optional[remote_stop.
             rid = ((watcher.request if watcher else None) or {}).get("id", "")
             return not (rid and remote_stop.hosted_keep_failed(rid))
 
+        def writing() -> list:
+            # 中のツールが共有へ書いている最中なら、入口も強制で閉じずに待つ(最長 WRITING_MAX_SEC)
+            watcher = remote_stop.get()
+            rid = ((watcher.request if watcher else None) or {}).get("id", "")
+            return remote_stop.hosted_writing(rid) if rid else []
+
         return remote_stop.install(close, left, kind="desktop" if desktop else "browser",
-                                   extra_sec=remote_stop.HOST_EXTRA_SEC, hold=hold, force_ok=force_ok)
+                                   extra_sec=remote_stop.HOST_EXTRA_SEC, hold=hold, force_ok=force_ok,
+                                   writing=writing)
     except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log.warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
         return None

@@ -298,3 +298,26 @@
   .rail a{ justify-content:center; }
   .ribbon__slots .slot .k{ display:none; }
 }
+
+/* ==================================================================
+   テストモードの帯(`nippou/test_mode`)。**どの画面でも上に出る**
+   帯(リボン)の上に置き、作業面はその分だけ低くする(重ねて隠さない)
+   ================================================================== */
+.testband{
+  --testband-h:38px;
+  display:flex; align-items:center; justify-content:center; gap:var(--sp-3);
+  min-height:var(--testband-h); box-sizing:border-box;
+  padding:var(--sp-1) var(--sp-3);
+  background:repeating-linear-gradient(135deg, #ffd23f 0 18px, #ffe98a 18px 36px);
+  color:#3a2600;
+  border-bottom:3px solid #c24a00;
+  font-size:var(--fs-sm); font-weight:700;
+}
+.testband--shift{ background:#fff3c4; border-bottom-color:#d9a400; }
+.testband__mark{
+  padding:0 var(--sp-2); border-radius:4px;
+  background:#c24a00; color:#ffffff; letter-spacing:.08em;
+}
+.testband__note{ font-weight:400; }
+body:has(.testband) .shell{ height:calc(100vh - 54px - 38px); }
+@media print{ .testband{ display:none; } }

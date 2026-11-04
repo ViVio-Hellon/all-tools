@@ -197,7 +197,9 @@
         <tr{% if r.problems %} class="row-bad"{% endif %}>
           <td data-value="{{ r.date_key }}">{{ r.report_date }}</td><td>{{ r.line | line_label }}</td>
           <td data-value="{{ r.shift }}">{{ r.shift }}{% if r.backfill %}
-            <span class="badge badge--todo" title="{{ r.backfill }}">後日作成</span>{% endif %}</td>
+            <span class="badge badge--todo" title="{{ r.backfill }}">後日作成</span>{% endif %}{% if r.test %}
+            <span class="badge badge--todo" data-test-mark
+                  title="テストモードで作った直です。集計・グラフ・CSV・月の書き出しには入りません">テスト</span>{% endif %}</td>
           <td data-value="{{ r.pages | length }}">{{ r.pages | join("・") }}ページ</td>
           <td data-value="{{ r.saved_at_raw }}">{{ r.saved_at or "―" }}</td>
           <td data-value="{{ 1 if r.synced else 0 }}">{% if r.synced %}済{% else %}<b>未</b>{% endif %}</td>

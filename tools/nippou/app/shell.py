@@ -220,7 +220,42 @@ def shell_context(active: str, *,
         # 心拍の間隔。**間隔の出どころは `idle_exit` ただ1つ** ── 画面と
         # サーバで別々に持つと、画面が送るより先にサーバが見切ってしまう
         "alive_poll_ms": idle_exit.HEARTBEAT_MS,
+        # テストモードの帯(`nippou/test_mode`)。**どの画面でも上に出る**
+        "test_band": test_band(),
     }
+
+
+def test_band() -> dict[str, Any]:
+    """テストモードの帯に出すもの。テストモードでなくても、いまの直がテストの直なら出す。
+
+    いまの直がテストモードに入る**前からある**直なら、そう添えます(保存しても普通の直のまま
+    ── 印は直の単位で決まるので。`repository.save`)。読めなくても画面は出します。
+    """
+    from nippou import test_mode, work_context
+
+    state = test_mode.state()
+    out = {"active": state.active, "text": test_mode.BAND_TEXT if state.active else "",
+           "since": state.as_dict()["since_text"], "note": "", "shift_test": False}
+    try:
+        from .current import current_calculator
+        from . import get_repo
+
+        ctx = work_context.get_context()
+        key = ctx.current_key(current_calculator())
+        repo = get_repo()
+        if all(key):
+            out["shift_test"] = repo.is_test_shift(*key)
+            exists = bool(repo.saved_pages(*key))
+            if state.active and exists and not out["shift_test"]:
+                out["note"] = (f"いまの直({key[0]} {key[2]})はテストモードに入る前からある直なので、"
+                               "保存しても普通の直のままです")
+            elif not state.active and out["shift_test"]:
+                out["text"] = (f"いまの直({key[0]} {key[2]})はテストデータです"
+                               "(テストモードで作った直。保存しても集計には入りません)")
+    except Exception:                             # noqa: BLE001 - 帯は出せる分だけ
+        pass
+    out["shown"] = bool(out["text"])
+    return out
 
 
 def empty_ribbon() -> dict[str, Any]:

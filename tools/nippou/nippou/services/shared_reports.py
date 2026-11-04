@@ -159,6 +159,8 @@ def _tables(line: str) -> list[tuple[str, str]]:
 
 
 def _header(row: sqlite3.Row, names: set[str], page: "PageColumn") -> HeaderRecord:
+    from ..access_bridge.sqlite_backend import TEST_COLUMN, TEST_VALUE
+
     get = (lambda col: _text(row[col]) if col in names else "")
     saved_at = get("保存日時")
     return HeaderRecord(
@@ -168,7 +170,9 @@ def _header(row: sqlite3.Row, names: set[str], page: "PageColumn") -> HeaderReco
         weight_kg=get("重量Kg"), lot_count=get("Lot数"),
         coefficient_lot_count=get("係数Lot数"), reason=get("理由"),
         # 共有にあるのは送ったもの。「未送信」ではない
-        saved_at=saved_at, dirty=False, synced_at=saved_at or None)
+        saved_at=saved_at, dirty=False, synced_at=saved_at or None,
+        # テストデータの印(`sqlite_backend.TEST_COLUMN`。列の無い表は普通の行)
+        test=get(TEST_COLUMN).strip() == TEST_VALUE)
 
 
 def _detail(row: sqlite3.Row, names: set[str], header: HeaderRecord) -> DetailRecord:

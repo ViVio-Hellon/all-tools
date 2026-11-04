@@ -169,8 +169,14 @@ def plan(repo: NippouRepository, *, skip_dates: tuple[str, ...] = ()) -> list[Fi
 def _rewrite(repo: NippouRepository, day: str, line: str, shift: str,
              header: HeaderRecord, rows: list[DetailRecord], synced: bool) -> None:
     """その直を、`rows` を12行ずつ組んだページで置き換える。"""
+    # テストデータの印(`nippou/test_mode`)は**消す前に**読んでおく ── 消してから書くと
+    # 「直の最初のページ」になり、そのときテストモードかで印が付け替わってしまう
+    existing = repo.saved_pages(day, line, shift)
+    is_test = getattr(repo, "is_test_shift", None)
+    test = (bool(is_test(day, line, shift)) if existing and is_test is not None
+            else bool(getattr(header, "test", False)))
     # 画面の外から書き換える(開いたままの古い画面に、前の中身で書き戻させない。page_writer)
-    for page in repo.saved_pages(day, line, shift):
+    for page in existing:
         page_writer.delete_page(repo, day, line, shift, page)
     size = constants.ROW_COUNT
     for index in range(0, len(rows), size):
@@ -178,7 +184,7 @@ def _rewrite(repo: NippouRepository, day: str, line: str, shift: str,
         head = replace(header, report_date=day, line=line, shift=shift, page=page)
         chunk = [replace(d, report_date=day, line=line, shift=shift, page=page,
                          row_no=i + 1) for i, d in enumerate(rows[index:index + size])]
-        page_writer.save_page(repo, head, chunk, by_screen=False)
+        page_writer.save_page(repo, head, chunk, by_screen=False, test=test)
         if synced:
             repo.mark_synced((day, line, shift, page))
 
@@ -208,7 +214,7 @@ def apply(repo: NippouRepository, *, skip_dates: tuple[str, ...] = (),
             head2 = second[0][0]
             head3 = third[0][0] if third else HeaderRecord(
                 report_date=day, line=line, shift=THIRD, page=1, worker="",
-                day_shift=head2.day_shift)
+                day_shift=head2.day_shift, test=head2.test)
             # 送った印(共有へ出さない扱い)は、直す前に全ページ付いていたら保つ
             synced2 = all(not h.dirty for h, _r in second)
             synced3 = all(not h.dirty for h, _r in third) if third else synced2

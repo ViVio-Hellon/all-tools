@@ -2136,7 +2136,10 @@ def save():
     local_backup.note_editing(key)
     factor = _recalculate_factors(state, report_date, line, shift)
     _refresh_summary(report_date, line, shift)
-    exported = _export_daily_csv(report_date, line) if not silent else None
+    # テストの直の保存では出さない(本番の CSV は変わらない。テストだけの日に空の CSV を
+    # 出力先へ置かない ── `nippou/test_mode`)
+    exported = (_export_daily_csv(report_date, line)
+                if not silent and not header.test else None)
     log.info("save ok silent=%s key=%s", silent, header.key())
     # **書いた先をそのまま返す。** `_target` を引き直すと、またいだ直後に
     # 「1直へ書いたのに画面は2直」になります

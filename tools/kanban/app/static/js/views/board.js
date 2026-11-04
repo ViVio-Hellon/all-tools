@@ -651,6 +651,14 @@ function wireLeaving() {
   window.__alltoolsHandlesClose = true;
   // 管理者以外停止で止めると決まったら、開いているコメントの書きかけを下書きに置く(`remote_stop_band.js`)
   window.__remoteStopFlush = () => { saveOpenDraft(); return true; };
+  // この端末に下書きとして置けない書きかけは、止めると消える。「残っているもの」に数えて、送るのを待つ
+  const settingsUnsaved = window.__remoteStopUnsaved;
+  window.__remoteStopUnsaved = () => {
+    saveOpenDraft();
+    const n = draftCount();
+    const mine = n && !draftsSaved ? [`コメントの書きかけ ${n} 件(${draftPlaces()}。この端末に残せません)`] : [];
+    return mine.concat(typeof settingsUnsaved === 'function' ? settingsUnsaved() : []);
+  };
   window.addEventListener('message', async (event) => {
     const data = event.data;
     if (event.source !== window.parent || window.parent === window) return;

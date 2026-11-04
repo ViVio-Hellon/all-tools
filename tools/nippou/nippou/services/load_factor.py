@@ -65,7 +65,8 @@ def previous_pages(repo: NippouRepository, report_date: str, line: str,
     次の工程の話で、この直の仕事が消えるわけではありません。
     """
     here = _rank(report_date, shift)
-    keys = [k for k in repo.list_keys(line)
+    # テストの直のページは見ない(試しに打った値で本番の係数を変えない ── `nippou/test_mode`)
+    keys = [k for k in repo.list_keys(line, include_test=False)
             if _rank(k[0], k[2]) < here]
     keys.sort(key=lambda k: (_rank(k[0], k[2]), k[3]), reverse=True)
 

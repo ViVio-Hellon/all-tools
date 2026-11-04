@@ -418,6 +418,10 @@ def reset() -> WorkContext:
     アプリを起動し直したときと同じ始まり方にするためです。
     """
     global _context
+    # テストモードも起動し直したときと同じく切れている(`nippou/test_mode`)
+    from . import test_mode
+
+    test_mode.reset()
     with _lock:
         _context = WorkContext.from_settings()
         return _context

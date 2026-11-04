@@ -1,7 +1,7 @@
 """管理者以外停止モード(`remote_stop.py`。日報複合ツールの大設定から管理者が出すお願い)── カレンダーの受け方
 
 日報複合ツールの大設定で、管理者(管理者パスワード かつ Administrator)が「ほかの PC を止める」を押すと、
-共有DBの置き場所の `管理者以外停止\\お願い.json` にお願いが置かれる。単体で起動したカレンダーも同じフォルダを見る。
+共有DBの置き場所の `日報複合ツール_管理者以外停止\\お願い.json` にお願いが置かれる。単体で起動したカレンダーも同じフォルダを見る。
 
     何も残っていなければ        帯を見せてから、まもなく止まる
     残っているもの(同期・送信待ち・画面の保存していない入力)   利用者を待つ。期限(5分。試験は短く)で強制で止める。止める前に控えを書き、
@@ -133,7 +133,7 @@ class _Child(unittest.TestCase):
 
     def answer(self) -> dict:
         found = [json.loads(p.read_text(encoding="utf-8"))
-                 for p in (self.share / "管理者以外停止" / "稼働中").glob("*.json")]
+                 for p in (self.share / remote_stop.FOLDER / "稼働中").glob("*.json")]
         mine = [a for a in found if a.get("pc") == "PC-LINE1"]
         self.assertEqual(len(mine), 1, found)
         return mine[0]
@@ -226,10 +226,11 @@ class StopEntryTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_main(self, running: bool):
+    def run_main(self, running: bool, pc: str = "PC-LINE1"):
         import process_manager
         out = io.StringIO()
-        with redirect_stdout(out), mock.patch.object(process_manager, "_lock_present", return_value=running), \
+        with redirect_stdout(out), mock.patch.dict(os.environ, {"ALLTOOLS_PC_NAME": pc}), \
+                mock.patch.object(process_manager, "_lock_present", return_value=running), \
                 mock.patch.object(process_manager, "stop") as stop:
             stop.return_value = process_manager.StopResult()
             code = process_manager.main(["/nopause"])
@@ -242,6 +243,12 @@ class StopEntryTests(unittest.TestCase):
         self.assertEqual(code, process_manager.EXIT_BUSY)
         self.assertTrue(out.startswith("止めませんでした: 管理者以外停止モード中"), out)
         stop.assert_not_called()
+
+    def test_お願いを出したPCでは断らずふつうに止める(self) -> None:
+        self.assertTrue(remote_stop.issue(True, True, "更新のため").ok)
+        _code, out, stop = self.run_main(True, pc="PC-ADMIN")
+        self.assertNotIn("管理者以外停止モード中", out)
+        stop.assert_called()
 
     def test_動いていない_お願いが無いならいつもどおり(self) -> None:
         self.assertTrue(remote_stop.issue(True, True, "更新のため").ok)

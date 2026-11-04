@@ -614,6 +614,12 @@ def _remote_stop_left() -> list:
     return items
 
 
+def _remote_stop_writing() -> list:
+    """取り込み元と同期している最中か。期限を過ぎても終わるのを待つ(最長さらに5分)。"""
+    from calendar_app import sync_service
+    return list(sync_service.get_service().busy_labels())
+
+
 def _remote_stop_keep() -> list:
     """強制で止める前: 何を手元に置いたか(控えに書く。次の起動で知らせる)。"""
     kept = []
@@ -635,7 +641,8 @@ def _watch_remote_stop(srv, *, bare: bool = False) -> None:
         rs = _remote_stop()
         kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
         rs.watch(srv.stop, (lambda: []) if bare else _remote_stop_left, kind=kind,
-                 before_force=None if bare else _remote_stop_keep, restore=not bare)
+                 before_force=None if bare else _remote_stop_keep, restore=not bare,
+                 writing=None if bare else _remote_stop_writing)
     except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
 

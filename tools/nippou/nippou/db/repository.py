@@ -107,7 +107,8 @@ class NippouRepository:
     # ------------------------------------------------------------------
     # Header + detail save/load (NippouDB_Save / NippouDB_Load)
     # ------------------------------------------------------------------
-    def save(self, header: HeaderRecord, details: list[DetailRecord]) -> None:
+    def save(self, header: HeaderRecord, details: list[DetailRecord], *,
+             test: Optional[bool] = None) -> None:
         """DELETE + INSERT the header and every detail row for this key
         in one transaction, exactly like ``NippouDB_Save`` did against
         Access. Marks the header dirty **only when the content actually
@@ -117,7 +118,12 @@ class NippouRepository:
         expressed as a single ``dbkit.sqlite_toolkit.execute_with_retry``
         call -- instead the whole transaction is retried on lock
         contention using the same classifier dbkit uses everywhere else,
-        which the original VBA save routine did not have."""
+        which the original VBA save routine did not have.
+
+        **テストデータの印**(`daily_header.test_mark`、`nippou/test_mode`)は直の単位で
+        決めます: そのページがもうあればそのまま・同じ直にページがあればその印を継ぐ・
+        直の最初のページならテストモードか。`test` を渡すとその値にします(共有から
+        戻すときに、共有の印を写す)。"""
         header.saved_at = _now_iso()
         key = header.key()
 
@@ -138,9 +144,11 @@ class NippouRepository:
                     # **消す前に読みます。** やり直し(ロック待ち)のときも
                     # 巻き戻った中身をもう一度見るので、答えが変わりません
                     before = self.conn.execute(
-                        "SELECT synced_at, synced_hash, base_hash FROM daily_header"
+                        "SELECT synced_at, synced_hash, base_hash, test_mark FROM daily_header"
                         " WHERE report_date=? AND line=? AND shift=? AND page=?",
                         key).fetchone()
+                    test_mark = self._test_mark_for(key, before, test)
+                    header.test = bool(test_mark)
                     sent_hash = (before["synced_hash"] or "") if before else ""
                     # **控えと揃えたときの指紋は持ち越します**(`services/other_terminal`)。
                     # 打って中身が変わっても、「控えにあるのは自分が知っている中身か」は
@@ -164,8 +172,8 @@ class NippouRepository:
                             (report_date, line, shift, page, worker, day_shift, count,
                              weight_kg, lot_count, coefficient_lot_count, reason,
                              saved_at, dirty, synced_at, content_hash, synced_hash,
-                             saved_pc, base_hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             saved_pc, base_hash, test_mark)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             header.report_date, header.line, header.shift, header.page,
@@ -176,7 +184,7 @@ class NippouRepository:
                             # **送ったときの指紋は消しません。** 直して、
                             # また元に戻したときに「同じ」と分かるように
                             sent_hash,
-                            this_pc(), base_hash,
+                            this_pc(), base_hash, test_mark,
                         ),
                     )
                     for d in details:
@@ -212,6 +220,22 @@ class NippouRepository:
                     continue
                 raise
 
+    def _test_mark_for(self, key: tuple[str, str, str, int], before: Optional[sqlite3.Row],
+                       test: Optional[bool]) -> int:
+        """保存するページのテストの印(`save` の説明)。**取引の中で呼ぶ。**"""
+        if test is not None:
+            return int(bool(test))
+        if before is not None:
+            return int(before["test_mark"] or 0)
+        same_shift = self.conn.execute(
+            "SELECT COUNT(*) AS n, MAX(test_mark) AS t FROM daily_header"
+            " WHERE report_date=? AND line=? AND shift=?", key[:3]).fetchone()
+        if same_shift is not None and same_shift["n"]:
+            return int(same_shift["t"] or 0)
+        from .. import test_mode
+
+        return int(test_mode.is_active())
+
     @staticmethod
     def _header_from_row(row: sqlite3.Row) -> HeaderRecord:
         return HeaderRecord(
@@ -220,6 +244,8 @@ class NippouRepository:
             weight_kg=row["weight_kg"] or "", lot_count=row["lot_count"] or "",
             coefficient_lot_count=row["coefficient_lot_count"] or "", reason=row["reason"] or "",
             saved_at=row["saved_at"] or "", dirty=bool(row["dirty"]), synced_at=row["synced_at"],
+            # 前の版が作った控え(列が無い)は、テストではない
+            test=bool(row["test_mark"]) if "test_mark" in row.keys() else False,
         )
 
     @staticmethod
@@ -294,9 +320,87 @@ class NippouRepository:
                 raise
 
     # ------------------------------------------------------------------
+    # テストデータの印(`nippou/test_mode`)
+    # ------------------------------------------------------------------
+    def is_test_shift(self, report_date: str, line: str, shift: str) -> bool:
+        """その直がテストの直か(ページのどれかに印があれば)。"""
+        row = self.conn.execute(
+            "SELECT MAX(test_mark) AS t FROM daily_header"
+            " WHERE report_date=? AND line=? AND shift=?",
+            (report_date, line, shift)).fetchone()
+        return bool(row and row["t"])
+
+    def test_shift_keys(self, line: Optional[str] = None) -> set[tuple[str, str, str]]:
+        """テストの直の (報告日, ライン, 直)。一覧に印を付けるのに使う。"""
+        sql = "SELECT DISTINCT report_date, line, shift FROM daily_header WHERE test_mark<>0"
+        args: tuple = ()
+        if line is not None:
+            sql += " AND line=?"
+            args = (line,)
+        return {(r["report_date"], r["line"], r["shift"])
+                for r in self.conn.execute(sql, args).fetchall()}
+
+    def delete_packing_report(self, work_date: str, line: str, shift: str) -> bool:
+        """その直の集計を消す(テストの直・ページを全部消した直)。消したら True。
+
+        子(ロット行・停止)は外部キーの `ON DELETE CASCADE` で一緒に消えます。
+        """
+        with transaction(self.conn):
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            found = self.conn.execute(
+                "DELETE FROM packing_report WHERE work_date=? AND line_name=? AND shift=?",
+                (work_date, line, shift))
+        return bool(found.rowcount)
+
+    # ------------------------------------------------------------------
+    # 手元から消したページの記録(`services/shift_removal`)
+    # ------------------------------------------------------------------
+    _REMOVAL_COLUMNS = ("id", "report_date", "line", "shift", "page", "removed_at",
+                        "terminal", "login", "reason", "rows", "content_hash", "test_mark",
+                        "was_sent", "kept_file", "shared", "shared_at", "shared_detail")
+
+    def add_removal(self, record: dict) -> None:
+        cols = self._REMOVAL_COLUMNS
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO page_removal ({', '.join(cols)})"
+            f" VALUES ({', '.join('?' for _ in cols)})",
+            tuple(record.get(c, "" if c not in ("page", "rows", "test_mark", "was_sent") else 0)
+                  for c in cols))
+        self.conn.commit()
+
+    def removals(self, *, shared: Optional[Iterable[str]] = None,
+                 ids: Optional[Iterable[str]] = None, limit: int = 500) -> list[dict]:
+        """消した記録(新しい順)。`shared` で共有の状態を、`ids` で番号を絞る。"""
+        where, args = [], []
+        if shared is not None:
+            states = list(shared)
+            where.append(f"shared IN ({', '.join('?' for _ in states)})")
+            args.extend(states)
+        if ids is not None:
+            wanted = list(ids)
+            if not wanted:
+                return []
+            where.append(f"id IN ({', '.join('?' for _ in wanted)})")
+            args.extend(wanted)
+        sql = "SELECT * FROM page_removal"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY removed_at DESC, report_date, shift, page LIMIT ?"
+        return [dict(r) for r in self.conn.execute(sql, (*args, max(1, int(limit))))]
+
+    def set_removal_shared(self, ids: Iterable[str], state: str, detail: str = "") -> None:
+        rows = [(state, _now_iso() if state == "done" else "", detail, i) for i in ids]
+        if not rows:
+            return
+        self.conn.executemany(
+            "UPDATE page_removal SET shared=?, shared_at=?, shared_detail=? WHERE id=?", rows)
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
     # Key discovery (NippouDB_FillDBList / NippouDB_GetPageCount)
     # ------------------------------------------------------------------
-    def list_keys(self, line: Optional[str] = None) -> list[tuple[str, str, str, int]]:
+    def list_keys(self, line: Optional[str] = None, *, include_test: bool = True
+                  ) -> list[tuple[str, str, str, int]]:
         """(report_date, line, shift, page) tuples, newest first --
         mirrors the descending sort ``LoadExistingSheets`` applied to its
         sheet-name list.
@@ -306,16 +410,17 @@ class NippouRepository:
         SQL ``ORDER BY report_date`` sorts wrong across month/day-count
         boundaries (e.g. "...8月30日" sorts before "...8月3日"). Sorting
         is done in Python instead, using the parsed calendar date.
+
+        `include_test=False` でテストの直のページを外す(`nippou/test_mode`)。
         """
-        if line is None:
-            rows = self.conn.execute(
-                "SELECT report_date, line, shift, page FROM daily_header"
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT report_date, line, shift, page FROM daily_header WHERE line=?",
-                (line,),
-            ).fetchall()
+        where = [] if include_test else ["test_mark=0"]
+        args: tuple = ()
+        if line is not None:
+            where.append("line=?")
+            args = (line,)
+        rows = self.conn.execute(
+            "SELECT report_date, line, shift, page FROM daily_header"
+            + (" WHERE " + " AND ".join(where) if where else ""), args).fetchall()
         keys = [(r["report_date"], r["line"], r["shift"], r["page"]) for r in rows]
         keys.sort(key=lambda k: (parse_business_date(k[0]) or date.min, k[2], k[3]), reverse=True)
         return keys
@@ -328,11 +433,13 @@ class NippouRepository:
         集計の作り直しは「どの直があるか」だけ分かれば始められます。
         `list_headers_between` はページごとに明細を全部引いてくるので、
         ひと月ぶんを確かめるだけで何千行も読むことになります。
+
+        **テストの直は入れません**(集計を作らない ── `nippou/test_mode`)。
         """
-        sql = "SELECT DISTINCT report_date, line, shift FROM daily_header"
+        sql = "SELECT DISTINCT report_date, line, shift FROM daily_header WHERE test_mark=0"
         args: tuple = ()
         if line is not None:
-            sql += " WHERE line=?"
+            sql += " AND line=?"
             args = (line,)
         found: list[tuple[date, str, tuple[str, str, str]]] = []
         for row in self.conn.execute(sql, args).fetchall():
@@ -440,20 +547,26 @@ class NippouRepository:
         ]
 
     def list_headers_between(
-        self, start_date: date, end_date: date, line: Optional[str] = None
+        self, start_date: date, end_date: date, line: Optional[str] = None, *,
+        include_test: bool = False,
     ) -> list[tuple[HeaderRecord, list[DetailRecord]]]:
         """指定期間(両端含む)の全ヘッダー+明細を、日付→直→ページの順で返す。
         グラフの履歴表示(月初〜指定日のデフォルト表示・期間指定)で使う。
 
         ``report_date`` がゼロ埋めなしの文字列のため SQL側での範囲比較は
         使わず、(``line`` 指定時のみ効くWHERE以外は)一度取得してから
-        Python側で日付をパースして絞り込む。"""
+        Python側で日付をパースして絞り込む。
+
+        **テストの直のページは入れません**(`include_test=True` で入れる)。ここを読むのは
+        数える側(月の書き出し・内訳番号99 の時間)なので(`nippou/test_mode`)。"""
         if line is None:
             rows = self.conn.execute("SELECT * FROM daily_header").fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT * FROM daily_header WHERE line=?", (line,)
             ).fetchall()
+        if not include_test:
+            rows = [r for r in rows if not r["test_mark"]]
 
         matched: list[tuple[date, HeaderRecord]] = []
         for r in rows:
@@ -798,7 +911,9 @@ class NippouRepository:
         月替わりかどうかは**入っているデータから**決めます
         (`logic/month_roll.py`)。VBA もシート名の日付を見ていました。
         """
-        rows = self.conn.execute("SELECT DISTINCT report_date FROM daily_header").fetchall()
+        # テストの直だけの月は書き出さない(`nippou/test_mode`)
+        rows = self.conn.execute(
+            "SELECT DISTINCT report_date FROM daily_header WHERE test_mark=0").fetchall()
         months = set()
         for r in rows:
             parsed = parse_business_date(r["report_date"])
@@ -815,7 +930,8 @@ class NippouRepository:
         """
         pages: dict[tuple[int, int], list[str]] = {}
         for r in self.conn.execute(
-                "SELECT report_date, line, shift, page, content_hash FROM daily_header"):
+                "SELECT report_date, line, shift, page, content_hash FROM daily_header"
+                " WHERE test_mark=0"):
             parsed = parse_business_date(r["report_date"])
             if parsed is None:
                 continue

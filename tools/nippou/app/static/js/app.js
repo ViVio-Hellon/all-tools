@@ -263,6 +263,11 @@ wireShell();
 window.__alltoolsHandlesClose = true;
 // 管理者以外停止で止めると決まったら、打ちかけを置く(閉じる前と同じ。`remote_stop_band.js`)
 window.__remoteStopFlush = () => nav.leaving();
+// 置く先の無い打ちかけ(止めると消える)は「残っているもの」に数えて、利用者が保存するのを待つ:
+// 出る前の確かめを持たない画面(VC計算・梱包資材)で打った欄と、設定の保存していない置き場所・音。
+// 日報入力の打ちかけは上の口で作業用DBへ置く
+window.__remoteStopUnsaved = () => (nav.guarded() ? nav.unsavedHere()
+  : (nav.typedHere() ? ["この画面で保存していない入力"] : []));
 window.addEventListener("message", async (event) => {
   const data = event.data;
   if (event.source !== window.parent || window.parent === window) return;

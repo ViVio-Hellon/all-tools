@@ -20,10 +20,11 @@
 
 【どこに置くか】
 日報複合ツールの大設定の「共有DBの置き場所」のフォルダ(既定は梱包資材マスタのフォルダ)の
-`管理者以外停止\\` に、小さな JSON を置く。共有の SQLite には書かない(錠の取り合いをしない)。
+`日報複合ツール_管理者以外停止\\` に、小さな JSON を置く(python-web-tools は同じ共有に `管理者以外停止\\` を置くので、
+名前を分けて互いに止め合わない。前の名前のお願いは見ない)。共有の SQLite には書かない(錠の取り合いをしない)。
 
-    管理者以外停止\\お願い.json        管理者の PC だけが書く。{"active": true/false, …}
-    管理者以外停止\\稼働中\\<PC>__<ID>__<アプリ>__<pid>.json
+    日報複合ツール_管理者以外停止\\お願い.json  管理者の PC だけが書く。{"active": true/false, …}
+    日報複合ツール_管理者以外停止\\稼働中\\<PC>__<ID>__<アプリ>__<pid>.json
                                      動いている各プロセスが**自分のぶんだけ**書く(1分ごとの知らせと、
                                      お願いへの答え)。管理者の画面はこれを並べて「どの PC が止まったか」を見る
 
@@ -60,7 +61,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-FOLDER = "管理者以外停止"
+FOLDER = "日報複合ツール_管理者以外停止"  # python-web-tools の「管理者以外停止\\」とは分ける(同じ共有でも互いに止め合わない)
 REQUEST_NAME = "お願い.json"
 PRESENCE_DIR = "稼働中"
 #: 手元(この PC・この利用者)の置き場所の名前
@@ -98,6 +99,12 @@ MEMORY_KEEP_SEC = 6 * 3600.0
 CALL_LIMIT_SEC = 15.0
 # 止める処理を呼んでから、これだけたってもプロセスが残っていれば、確実に落とす(秒)
 HARD_EXIT_SEC = 60.0
+# 共有へ書いている最中(日報の共有へ保存・看板の送信・カレンダーの同期・点検表の印刷)は、期限を過ぎても
+# 書き終わるのを待つ。延ばすのは最長これだけ(秒。過ぎたら強制。現場の決め)
+WRITING_MAX_SEC = 300.0
+# お願いを書いてから読み直すまで(秒)。2台の管理者がほぼ同時に出したとき、あとから書いたほうが残る。
+# 読み直して自分のお願いでなければ、この PC は止めない(ほかの管理者のお願いが先に出ている)
+ISSUE_SETTLE_SEC = 1.0
 # お願いに書く待つ長さの上限(秒。手で書いた・壊れた値で、いつまでも強制にならないことを防ぐ)
 GRACE_MAX_SEC = 24 * 3600.0
 # たまたま読めない(書いている最中・掴まれている)ときの読み直し(秒)
@@ -113,7 +120,8 @@ TEST_LEFT_ENV = "ALLTOOLS_REMOTE_STOP_TEST_LEFT"
 _TIME_KEYS = {"grace": "GRACE_SEC", "notice": "NOTICE_SEC", "poll": "POLL_SEC", "beat": "BEAT_SEC",
               "stale": "STALE_SEC", "block": "BLOCK_SHOW_SEC", "flush": "FLUSH_SEC",
               "host_extra": "HOST_EXTRA_SEC", "orphan": "ORPHAN_SEC", "local_stale": "LOCAL_STALE_SEC",
-              "call_limit": "CALL_LIMIT_SEC", "hard_exit": "HARD_EXIT_SEC"}
+              "call_limit": "CALL_LIMIT_SEC", "hard_exit": "HARD_EXIT_SEC",
+              "writing": "WRITING_MAX_SEC", "settle": "ISSUE_SETTLE_SEC"}
 
 
 def _apply_times(text: str) -> None:
@@ -135,6 +143,7 @@ STATE_NOTICE = "notice"          # お願いを受けた。帯を出している
 STATE_WAITING = "waiting"        # 保存していない・処理中。利用者を待っている
 STATE_STOPPED = "stopped"        # 止まった(利用者が終えた・何も残っていなかった)
 STATE_FORCED = "forced"          # 5分たったので強制で止めた
+STATE_WRITING = "writing"        # 期限を過ぎたが、共有へ書いている最中なので書き終わるのを待っている
 FINISHED = (STATE_STOPPED, STATE_FORCED)
 STATE_LABELS = {
     STATE_RUNNING: "動いています",
@@ -142,7 +151,9 @@ STATE_LABELS = {
     STATE_WAITING: "利用者を待っています",
     STATE_STOPPED: "止まりました",
     STATE_FORCED: "強制で止めました",
+    STATE_WRITING: "共有へ書いている最中なので、終わるのを待っています",
 }
+WRITING_NOTE = STATE_LABELS[STATE_WRITING]
 
 # 断りの種類(文言から推し量らない)
 REFUSE_PASSWORD = "wrong_password"
@@ -223,16 +234,42 @@ def confirmed_missing(path: Any) -> bool:
         return all(os.path.normcase(name) != want for name in names)
 
 
+def _bundle_root() -> Optional[Path]:
+    if _setup.bundle_root is not None:
+        return Path(_setup.bundle_root)
+    env = os.environ.get("ALLTOOLS_ROOT", "").strip()
+    return Path(env) if env else None
+
+
+def _local_dir_name() -> str:
+    """日報複合ツールの手元の領域の名前(一式の `config\\app.json` の `local_dir_name`。無ければ AllTools)。
+
+    入口と中のツールで違う名前を使うと、中のツールの答えを入口が読めず(待たずに閉じる)、
+    単体の4ツールはこの PC の大設定を読めない(別の置き場所を見る)。
+    """
+    base = _bundle_root()
+    if base is not None:
+        try:
+            data = json.loads((base / "config" / "app.json").read_text(encoding="utf-8-sig"))
+            name = str(data.get("local_dir_name") or "").strip() if isinstance(data, dict) else ""
+            if name:
+                return name
+        except (OSError, ValueError):
+            pass
+    return "AllTools"
+
+
 def alltools_local_root() -> Path:
     """日報複合ツールの手元の領域(`portal/app_config.local_root` と同じ決め方)。"""
     custom = os.environ.get("ALLTOOLS_LOCAL_DIR", "").strip()
     if custom:
         return Path(custom)
+    name = _local_dir_name()
     for env in ("LOCALAPPDATA", "XDG_DATA_HOME"):
         base = os.environ.get(env, "").strip()
         if base:
-            return Path(base) / "AllTools"
-    return Path.home() / ".local" / "share" / "AllTools"
+            return Path(base) / name
+    return Path.home() / ".local" / "share" / name
 
 
 def _integrated_setting() -> str:
@@ -258,10 +295,7 @@ def _integrated_setting() -> str:
 
 def _distributed_setting() -> str:
     """一式の `配布設定\\日報複合ツール.json` の共有 DB のフォルダ(手がかり。読めなければ空)。"""
-    base = _setup.bundle_root
-    if base is None:
-        env = os.environ.get("ALLTOOLS_ROOT", "").strip()
-        base = Path(env) if env else None
+    base = _bundle_root()
     if base is None:
         return ""
     for name in DISTRIBUTION_FILES:
@@ -330,6 +364,43 @@ def _fold(text: Any) -> str:
 def same_pc(a: str, b: str) -> bool:
     """同じ PC か(大文字小文字・全角半角・前後の空白を問わない)。空なら同じとしない。"""
     return bool(_fold(a)) and _fold(a) == _fold(b)
+
+
+SPARED_NAME = "管理者以外停止_止めないお願い.json"
+
+
+def spared_path() -> Path:
+    """この PC で「止めないお願い」の覚え(日報複合ツールの手元の領域。この PC の全ツールが同じものを見る)。"""
+    return alltools_local_root() / "runtime" / SPARED_NAME
+
+
+def spare(request_id: str) -> None:
+    """このお願いでは、この PC を止めない(この PC の管理者も同時にお願いを出したが、ほかの管理者のお願いが残った)。"""
+    try:
+        data = json.loads(spared_path().read_text(encoding="utf-8"))
+        ids = [str(x) for x in data.get("ids") or []] if isinstance(data, dict) else []
+    except (OSError, ValueError):
+        ids = []
+    if request_id and request_id not in ids:
+        ids = (ids + [request_id])[-20:]
+    write_json(spared_path(), {"ids": ids, "saved_at": time.time()}, warn=True)
+
+
+def _spared_ids() -> list:
+    try:
+        data = json.loads(spared_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [str(x) for x in data.get("ids") or []] if isinstance(data, dict) else []
+
+
+def exempt(pc: str, req: Optional[dict]) -> bool:
+    """このお願いで `pc` を止めないか: お願いを出した PC か、同時に出して譲った PC(`spare`)。"""
+    if not req:
+        return False
+    if same_pc(pc, req.get("by_pc", "")):
+        return True
+    return bool(req.get("id")) and str(req.get("id")) in _spared_ids()
 
 
 def _span(sec: float) -> str:
@@ -533,10 +604,26 @@ def issue(password_ok: bool, administrator: bool, reason: str = "") -> Result:
     }
     if not write_json(request_path(), data):
         return Result(False, f"お願いを書けませんでした: {request_path()}", REFUSE_WRITE)
+    # ほかの管理者がほぼ同時に出していないか(あとから書いたほうが残る)。読み直して自分のでなければ、この PC は止めない
+    _settle()
+    try:
+        now_req = read_request()
+    except Unreadable:
+        now_req = data
+    if now_req is not None and now_req.get("id") != data["id"]:
+        spare(str(now_req.get("id") or ""))
+        log().warning("管理者以外停止: ほかの管理者のお願いが先に出ていました(この PC は止めません): %s",
+                      describe_request(now_req))
+        return Result(False, "ほかの管理者のお願いが先に出ています(この PC は止めません)。"
+                      + describe_request(now_req), REFUSE_ALREADY)
     log().warning("管理者以外停止のお願いを出しました: %s", describe_request(data))
     _forget_old_answers()
     return Result(True, "お願いを出しました。ほかの PC は保存していない入力・実行中の処理が無ければまもなく止まり、"
                   f"残っていても {_span(GRACE_SEC)}で強制で止まります。")
+
+
+def _settle() -> None:
+    time.sleep(ISSUE_SETTLE_SEC)
 
 
 def clear(password_ok: bool, administrator: bool) -> Result:
@@ -679,7 +766,7 @@ def startup_block() -> Optional[str]:
         req = read_request()
     except Unreadable as exc:
         last = remembered()
-        if last is not None and not same_pc(pc, last.get("by_pc", "")):
+        if last is not None and not exempt(pc, last):
             log().warning("管理者以外停止のお願いを確かめられません。最後に見たお願いが出ていたので起動しません: %s", exc)
             return ("管理者が更新のためツールを止めていました(管理者以外停止モード)。いまは共有のフォルダを読めないため、"
                     "解除されたかを確かめられません。共有に届くようになれば起動できます。"
@@ -694,7 +781,7 @@ def startup_block() -> Optional[str]:
     remember(req)
     if req is None:
         return None
-    if same_pc(pc, req.get("by_pc", "")):
+    if exempt(pc, req):
         log().info("管理者以外停止のお願いが出ていますが、お願いを出した PC なので起動します: %s", describe_request(req))
         return None
     log().warning("管理者以外停止モード中のため起動しません: %s", describe_request(req))
@@ -707,12 +794,13 @@ def stop_bat_refusal() -> Optional[str]:
     """止める入口(stop.bat・ランチャーの「全 PC で止める」)を断るなら1行目の理由。
 
     **同時には使わない**(現場の決め)。読めなければ断らない(止める道を閉じない)。
+    **お願いを出した PC では断らない**(その PC は止めないので、管理者が自分の PC をふつうに止めて更新する)。
     """
     try:
         req = read_request()
     except Exception:                         # noqa: BLE001
         return None
-    if req is None:
+    if req is None or exempt(identity()[0], req):
         return None
     return ("管理者以外停止モード中のため、stop.bat(ランチャーの「全 PC で止める」)では止めません。"
             f"解除してから使ってください({describe_request(req)})")
@@ -787,7 +875,9 @@ def restore_keeps() -> list:
 #: (カレンダーの設定の欄・大設定の置き場所など)を「残っているもの」に数える
 _screens: dict = {}
 _screens_lock = threading.Lock()
-SCREEN_REPORT_SEC = 15.0
+#: 言わなくなった画面を忘れるまで(秒)。裏に回したタブは問い合わせが1分に1回まで間引かれるので、それより長く
+#: (閉じた画面は閉じるときに空を言う。言えずに消えた画面は、これだけ止めるのが遅れる。期限で強制なのは同じ)
+SCREEN_REPORT_SEC = 90.0
 
 
 def screen_report(page: str, items: Any) -> None:
@@ -870,6 +960,7 @@ class Watcher:
                  kind: str = "browser", hosted: bool = False, extra_sec: float = 0.0,
                  hold: Optional[Callable[[], bool]] = None,
                  before_force: Optional[Callable[[], list]] = None,
+                 writing: Optional[Callable[[], list]] = None,
                  on_leave: Optional[Callable[[], list]] = None,
                  flush: bool = True, hard_exit: bool = False,
                  force_ok: Optional[Callable[[], bool]] = None,
@@ -878,6 +969,8 @@ class Watcher:
         self._left_fn = left
         self._hold = hold
         self._before_force = before_force
+        self._writing_fn = writing
+        self.writing: list = []
         self._on_leave = on_leave
         self._force_ok = force_ok
         self._clock = clock
@@ -943,19 +1036,24 @@ class Watcher:
         self._beat_failing = not ok
 
     def _write_local(self) -> None:
-        """中のツール: 入口が読む答え(手元)。お願いが無ければ消す。"""
+        """中のツール: 入口が読む答え(手元)。
+
+        **お願いが無くても「居ます」を書く**(`request_id` は空)。入口は、居るのにまだこのお願いに
+        答えていない中のツールを待つ(以前は答えの無いツールを数えず、共有をたまたま読めなかった・
+        見張りが遅れたツールの処理中の保存を待たずに、30秒で閉じていた)。
+        """
         if not self.hosted:
             return
         path = self.local_path()
         if self.request is None:
-            try:
-                path.unlink()
-            except OSError:
-                pass
+            write_json(path, {"app": _setup.app, "app_id": _setup.app_id, "pid": os.getpid(),
+                              "request_id": "", "state": STATE_RUNNING, "left": [], "ready": False,
+                              "beat_at": time.time()}, warn=False)
             return
         write_json(path, {"app": _setup.app, "app_id": _setup.app_id, "pid": os.getpid(),
                           "request_id": self.request.get("id", ""), "state": self.state,
-                          "left": list(self.left_now), "ready": self.decided, "beat_at": time.time()},
+                          "left": list(self.left_now), "ready": self.decided, "writing": list(self.writing),
+                          "beat_at": time.time()},
                    warn=False)
 
     def leave(self) -> None:
@@ -1057,22 +1155,22 @@ class Watcher:
             # **読めないことを「お願いは無い」にしない。** いまの判断のまま待つ(期限は進める)
             log().debug("管理者以外停止のお願いを読めません(前の判断のまま): %s", exc)
             req = self.request
-        if req is not None and same_pc(self.pc, req.get("by_pc", "")):
-            req = None                            # お願いを出した PC は止めない
+        if req is not None and exempt(self.pc, req):
+            req = None                            # お願いを出した PC(同時に出して譲った PC も)は止めない
         if req is None:
             if self.request is not None:
                 log().info("管理者以外停止のお願いが取り下げられました。止めずに続けます")
                 user_note("管理者が停止のお願いを取り下げました。そのまま使えます")
             self.request = None
             self.state, self.detail, self.left_now = STATE_RUNNING, "", []
-            self.decided, self.stop_at, self.kept = False, 0.0, []
+            self.decided, self.stop_at, self.kept, self.writing = False, 0.0, [], []
             self._write_local()
             self._beat()
             return
         if self.request is None or self.request.get("id") != req.get("id"):
             self.request = req
             self.received_at = now
-            self.deadline = now + float(req.get("grace_sec") or GRACE_SEC)
+            self.deadline = now + self.grace_of(req)
             self.notice_until = now + NOTICE_SEC
             self.decided, self.stop_at, self.kept = False, 0.0, []
             log().warning("管理者以外停止のお願いを受けました: %s", describe_request(req))
@@ -1095,8 +1193,21 @@ class Watcher:
         if not left and not holding and (now >= self.notice_until or self.state == STATE_WAITING):
             self._decide(STATE_STOPPED, "保存していない入力・実行中の処理が無いので止めました", now)
             return
+        self.writing = []
+        if now >= self.deadline + self.extra_sec:
+            writing = self._writing_now()
+            if writing and now < self.deadline + self.extra_sec + WRITING_MAX_SEC:
+                # 共有へ書いている最中は強制しない(途中で落ちると共有が半端になる)。書き終わったら止める
+                if self.state != STATE_WRITING:
+                    log().warning("管理者以外停止: %s(%s)", WRITING_NOTE, "、".join(writing))
+                self.writing = writing
+                self.state = STATE_WRITING
+                self.detail = f"{WRITING_NOTE}({'、'.join(writing)})"
+                self._write_local()
+                self._beat(force=True)
+                return
         if now >= self.deadline + self.extra_sec and self._can_force():
-            grace = float((self.request or {}).get("grace_sec") or GRACE_SEC)
+            grace = self.grace_of(self.request)
             detail = f"{_span(grace)}たっても止まらないので強制で止めました"
             if left:
                 detail += f"(残っていたもの: {'、'.join(left)})"
@@ -1106,6 +1217,19 @@ class Watcher:
         self.detail = "、".join(self.left_now)
         self._write_local()
         self._beat(force=True)
+
+    def _writing_now(self) -> list:
+        """共有へ書いている最中のもの(呼び名)。確かめられなければ空(書いていないとみなす。期限で強制)。"""
+        if self._writing_fn is None:
+            return []
+        ok, got = call_limited(self._writing_fn)
+        return [str(x) for x in (got or []) if str(x).strip()] if ok else []
+
+    @staticmethod
+    def grace_of(req: Optional[dict]) -> float:
+        """待つ長さ。**この版の決め(5分)より短くはしない**(手で置いた `grace_sec: 1` で、利用者に
+        保存する間を与えずに強制で止めない)。長くするのは上限(`GRACE_MAX_SEC`)まで。"""
+        return max(GRACE_SEC, _number((req or {}).get("grace_sec"), GRACE_SEC))
 
     def _left(self) -> list:
         ok, got = call_limited(self._left_fn)
@@ -1196,6 +1320,8 @@ class Watcher:
             "detail": self.detail,
             "stopping": self.decided,
             "hosted": self.hosted,
+            "writing": list(self.writing),
+            "writing_until_ms": int((self.deadline + self.extra_sec + WRITING_MAX_SEC) * 1000),
         }
 
 
@@ -1283,14 +1409,14 @@ def gate(mark_error: Callable[[str], None], stop: Callable[[], None]) -> bool:
 
 def watch(stop: Callable[[], None], left: Callable[[], list], *, kind: str = "browser",
           before_force: Optional[Callable[[], list]] = None, on_leave: Optional[Callable[[], list]] = None,
-          restore: bool = True) -> Optional[Watcher]:
+          restore: bool = True, writing: Optional[Callable[[], list]] = None) -> Optional[Watcher]:
     """各ツールの見張りを立てる。前に強制で止められたときの控えがあれば、画面に一度だけ知らせる。"""
     try:
         if restore:
             for note in restore_keeps():
                 user_note(note)
         return install(stop, left, kind=kind, hosted=_setup.hosted, before_force=before_force,
-                       on_leave=on_leave)
+                       on_leave=on_leave, writing=writing)
     except Exception as exc:                  # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
         return None
@@ -1310,8 +1436,8 @@ def take_notes() -> list:
 
 
 # --- 入口(portal): 中のツールの答えを読む ----------------------------------
-def hosted_answers(request_id: str) -> list:
-    """中のツールの答え(このお願いに答えた、新しいものだけ)。"""
+def _local_answers() -> list:
+    """中のツールの答え(新しいものだけ。お願いを受けていない「居ます」も)。"""
     try:
         files = list(local_status_dir().glob("*.json"))
     except OSError:
@@ -1323,11 +1449,25 @@ def hosted_answers(request_id: str) -> list:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if not isinstance(data, dict) or data.get("request_id") != request_id:
+        if not isinstance(data, dict):
             continue
-        if now - float(data.get("beat_at") or 0) > LOCAL_STALE_SEC:
+        if now - _number(data.get("beat_at"), 0.0) > LOCAL_STALE_SEC:
             continue
         out.append(data)
+    return out
+
+
+def hosted_answers(request_id: str) -> list:
+    """中のツールの答え(このお願いに答えた、新しいものだけ)。"""
+    return [data for data in _local_answers() if data.get("request_id") == request_id]
+
+
+def hosted_writing(request_id: str) -> list:
+    """中のツールのうち、共有へ書いている最中のもの(「日報: 共有への保存」)。入口も強制で閉じずに待つ。"""
+    out = []
+    for data in hosted_answers(request_id):
+        name = str(data.get("app") or data.get("app_id") or "?")
+        out += [f"{name}: {x}" for x in data.get("writing") or []]
     return out
 
 
@@ -1340,11 +1480,16 @@ def hosted_left(request_id: str) -> tuple:
     """(まだ止めてよいと答えていないツールがあるか, 残っているもの「看板: …」の並び)。"""
     pending = False
     items = []
-    for data in hosted_answers(request_id):
+    for data in _local_answers():
+        name = str(data.get("app") or data.get("app_id") or "?")
+        if data.get("request_id") != request_id:
+            # 居るのに、まだこのお願いに答えていない(読めていない・見張りが遅れている)。待つ(期限で強制)
+            pending = True
+            items.append(f"{name}: 停止のお願いを確かめています")
+            continue
         if data.get("ready"):
             continue
         pending = True
-        name = str(data.get("app") or data.get("app_id") or "?")
         items += [f"{name}: {x}" for x in data.get("left") or []]
     return pending, items
 

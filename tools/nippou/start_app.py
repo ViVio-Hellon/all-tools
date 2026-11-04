@@ -523,6 +523,13 @@ def _remote_stop_left() -> list[str]:
     return running.labels()
 
 
+def _remote_stop_writing() -> list[str]:
+    """共有へ書いている最中のもの(共有へ保存 = Access への反映)。期限を過ぎても書き終わるのを待つ(最長さらに5分)。"""
+    from nippou import running
+    from nippou.services import push_flow
+    return [name for name in running.labels() if name == push_flow.PUSH_ACTION]
+
+
 def _remote_stop_keep() -> list[str]:
     """強制で止める前: 何を手元に置いたか(控えに書く。次の起動で知らせる)。"""
     from nippou import running
@@ -542,7 +549,8 @@ def _watch_remote_stop(srv, *, bare: bool = False) -> None:
         rs = _remote_stop()
         kind = "desktop" if os.environ.get("ALLTOOLS_SHELL", "") == "1" else "browser"
         rs.watch(srv.stop, (lambda: []) if bare else _remote_stop_left, kind=kind,
-                 before_force=None if bare else _remote_stop_keep, restore=not bare)
+                 before_force=None if bare else _remote_stop_keep, restore=not bare,
+                 writing=None if bare else _remote_stop_writing)
     except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
 

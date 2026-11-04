@@ -67,6 +67,8 @@ from .sqlite_backend import (
     HEADER_COLUMNS,
     PAGE,
     STOP45_COLUMNS,
+    TEST_COLUMN,
+    TEST_VALUE,
     PageColumn,
     page_names_of,
 )
@@ -138,10 +140,15 @@ class AccessTable:
         return PageColumn(page_names_of(self.columns) or (PAGE,))
 
     def has(self, column: str) -> bool:
-        """その列に書くか。見られなかったときは VBA の表にある列だけ(④⑤は書かない)。"""
+        """その列に書くか。見られなかったときは VBA の表にある列だけ(④⑤・テストの印は書かない)。"""
         if self.columns is None:
-            return column not in STOP45_COLUMNS
+            return column not in STOP45_COLUMNS and column != TEST_COLUMN
         return column in self.columns
+
+    @property
+    def test(self) -> bool:
+        """テストデータの印の列があるか(**見られなかったときは無い**とみなす)。"""
+        return self.columns is not None and TEST_COLUMN in self.columns
 
     @property
     def stops45(self) -> bool:
@@ -282,7 +289,20 @@ def build_header_statements(header: HeaderRecord,
     """1ページの見出しを入れ替える2文。`table` は書き先の表の形(既定は VBA の形)。"""
     name = header_table_name(header.line)
     delete_sql = f"DELETE FROM [{name}] WHERE {_key_where(header, table)}"
-    return [delete_sql, _insert(name, HEADER_COLUMNS, _header_literals(header), table)]
+    logical, literals = HEADER_COLUMNS, _header_literals(header)
+    if table.test:
+        # 表にテストの印の列があれば印も書く(**列は足さない** ── VBA の表なので)
+        logical = (*logical, TEST_COLUMN)
+        literals[TEST_COLUMN] = _lit(TEST_VALUE) if getattr(header, "test", False) else "NULL"
+    return [delete_sql, _insert(name, logical, literals, table)]
+
+
+def build_delete_statements(key: tuple[str, str, str, int], head: AccessTable = VBA_TABLE,
+                            rows: AccessTable = VBA_TABLE) -> list[str]:
+    """共有(Access)からそのページを消す2文(明細 → 見出し)。「直を消す」で使う。"""
+    header = HeaderRecord(report_date=key[0], line=key[1], shift=key[2], page=int(key[3]))
+    return [f"DELETE FROM [{detail_table_name(header.line)}] WHERE {_key_where(header, rows)}",
+            f"DELETE FROM [{header_table_name(header.line)}] WHERE {_key_where(header, head)}"]
 
 
 def build_detail_statements(header: HeaderRecord, details: list[DetailRecord],
@@ -303,6 +323,9 @@ def has_stops45(details: list[DetailRecord]) -> bool:
 
 #: ④⑤を書けなかったときの知らせ(利用者に決めてもらった言い方のまま)
 NO_STOPS45_NOTICE = "Access の表に作業停止④⑤の列が無いので、④⑤は共有へ出ていません"
+#: 書き先が Access で、見出しの表にテストの印の列が無い・表を読めなかったとき(テストのページは送らない)
+NO_TEST_COLUMN_NOTICE = ("共有の日報データ(Access)の見出しの表にテストの印の列「テスト」が無いので、"
+                         "テストの直のページは共有へ送っていません(Access の表には列を足しません)")
 #: 書き先の .accdb を開けず、表に④⑤の列があるか分からなかったとき(そのページは送らない)
 STOPS45_UNREAD_NOTICE = ("書き先の Access のファイルを開けず、表に作業停止④⑤の列があるか"
                          "確かめられなかったので、④⑤を打ったこのページは送っていません")
@@ -590,6 +613,15 @@ def _push_one(
         # **VBA の表に合わせて書く**(列を足さない ── 冒頭)
         head_table = access_table(accdb_path, header_table_name(header.line))
         rows_table = access_table(accdb_path, detail_table_name(header.line))
+        if getattr(header, "test", False) and not head_table.test:
+            # **テストのページを印なしで送らない**(VBA には普通の行に見える)。未送信のまま残す
+            why = f"{NO_TEST_COLUMN_NOTICE}(未送信のまま残しました)"
+            _logger.warning("送りませんでした key=%s: %s", header.key(), why)
+            repo.log_sync("push", header_table_name(header.line), "error", why)
+            summary.failed.append(PushOutcome(
+                key=header.key(), success=False,
+                error=AccessBridgeError(kind=ErrorKind.UNKNOWN, err_number=None, message=why)))
+            return
         statements = (build_header_statements(header, head_table)
                       + build_detail_statements(header, details, rows_table))
         if SETTINGS.access_backend == "odbc":

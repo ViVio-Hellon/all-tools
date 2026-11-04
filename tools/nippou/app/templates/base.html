@@ -104,6 +104,25 @@
           aria-label="この知らせを閉じる">閉じる</button>
 </div>
 
+{#
+  テストモードの帯(`nippou/test_mode`)。**どの画面でも上に出る。** 抜ける釦はここ。
+  テストモードでなくても、いまの直がテストの直(テストモードで作った直)なら出す。
+  中身はサーバが決める(`app/shell.test_band`)。入る・抜けるで画面を読み直すので、
+  `nav.js` の差し替えの外に置いてよい
+#}
+{% if not bare and test_band and test_band.shown %}
+<div class="testband{% if not test_band.active %} testband--shift{% endif %}" id="test-band"
+     role="status" data-active="{{ '1' if test_band.active else '0' }}">
+  <span class="testband__mark" aria-hidden="true">TEST</span>
+  <span class="testband__text" id="test-band-text">{{ test_band.text }}</span>
+  {% if test_band.since %}<small class="testband__note">{{ test_band.since }} から</small>{% endif %}
+  {% if test_band.note %}<small class="testband__note" id="test-band-note">{{ test_band.note }}</small>{% endif %}
+  {% if test_band.active %}
+  <button class="btn btn--sm" type="button" id="test-band-leave">テストモードを抜ける</button>
+  {% endif %}
+</div>
+{% endif %}
+
 {# 別窓(早見表だけ ── v4.16.0)では帯もレールも出さない。**ほかの画面へ移る道を作らない** #}
 {% if not bare %}
 <header class="ribbon">
@@ -327,6 +346,8 @@
   }, 5000);
 </script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{# テストモードの帯の「抜ける」(`static/js/test_band.js`) #}
+<script type="module" src="{{ url_for('static', filename='js/test_band.js') }}"></script>
 {# 管理者以外停止のお願いの帯(`remote_stop.py`。4ツールで同じ中身) #}
 <script defer src="{{ url_for('static', filename='js/remote_stop_band.js') }}"></script>
 {#

@@ -43,9 +43,16 @@ def reset() -> None:
         _WRITTEN_ASIDE.clear()
 
 
-def save_page(repo, header, details, *, by_screen: bool) -> None:
-    """ページを書く。画面の外からなら印を付ける。"""
-    repo.save(header, details)
+def save_page(repo, header, details, *, by_screen: bool, test: Optional[bool] = None) -> None:
+    """ページを書く。画面の外からなら印を付ける。
+
+    `test` はテストデータの印(`nippou/test_mode`)。渡さなければ `repository.save` の決まり
+    (直に先にあるページの印を継ぐ)。直を消してから書き直す道は、消す前の印を渡す。
+    """
+    if test is None:
+        repo.save(header, details)
+    else:
+        repo.save(header, details, test=test)
     if not by_screen:
         note_written_aside((header.report_date, header.line, header.shift, header.page))
 

@@ -68,6 +68,23 @@ export function beforeLeave(fn) {
                                { once: true });
 }
 
+/*
+  **この画面で保存していない入力の呼び名**(管理者以外停止の「残っているもの」)。出る前の確かめが
+  置けない打ちかけ(設定の置き場所など)を持つ画面が登録する。登録はその画面のあいだだけ有効。
+*/
+let unsavedFn = null;
+export function onUnsaved(fn) {
+  unsavedFn = fn;
+  page.signal.addEventListener("abort", () => { if (unsavedFn === fn) unsavedFn = null; }, { once: true });
+}
+
+export function unsavedHere() {
+  try {
+    const items = unsavedFn ? unsavedFn() : [];
+    return Array.isArray(items) ? items : [];
+  } catch (err) { return []; }
+}
+
 /** 出てよいか(確かめが無ければ常に true)。「終了」もここを通る */
 export async function leaving() {
   if (!guard) return true;
