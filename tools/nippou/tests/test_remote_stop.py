@@ -72,22 +72,35 @@ class _Child(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(10)
-            for stream in (proc.stdout,):
-                if stream:
-                    stream.close()
+            proc.out_file.close()
 
     def start(self) -> subprocess.Popen:
+        # 子の出力は**ファイルへ**。パイプにすると読む人が居ないあいだに詰まり(Windows のパイプは
+        # 数KB)、子が print で止まって終われない(強制で止める道はログが多い)
+        out = open(self.tmp / f"子{len(self.procs)}.log", "wb")
         proc = subprocess.Popen([sys.executable, str(TOOL_DIR / "start_app.py"), "--no-browser", *EXTRA_ARGS],
                                 cwd=str(TOOL_DIR), env=self.env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                stdout=out, stderr=subprocess.STDOUT)
+        proc.out_file = out
         self.procs.append(proc)
         return proc
+
+    def output(self, proc) -> str:
+        proc.out_file.flush()
+        return Path(proc.out_file.name).read_bytes().decode("utf-8", "replace")[-3000:]
+
+    def wait_exit(self, proc, timeout: float = 40) -> int:
+        """終わるのを待つ。終わらなければ子の出力を添えて落とす(何で止まっているかが分かるように)。"""
+        try:
+            return proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.fail(f"{timeout:.0f}秒たっても終わりません。子の出力:\n{self.output(proc)}")
 
     def port(self, proc) -> int:
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                self.fail(f"起動しませんでした: {proc.stdout.read().decode('utf-8', 'replace')[-2000:]}")
+                self.fail(f"起動しませんでした: {self.output(proc)}")
             for path in (self.local / "runtime").glob("*.lock"):
                 try:
                     info = json.loads(path.read_text(encoding="utf-8"))
@@ -145,7 +158,7 @@ class RealProcessTests(_Child):
         port = self.port(proc)
         self.wait_ready(proc, port)
         self.issue()
-        self.assertEqual(proc.wait(40), 0, "お願いで止まらない")
+        self.assertEqual(self.wait_exit(proc), 0, "お願いで止まらない")
         answer = self.answer()
         self.assertEqual((answer["state"], answer["app"]), (remote_stop.STATE_STOPPED, "日報"))
 
@@ -159,7 +172,7 @@ class RealProcessTests(_Child):
         state = self.health(port, "?remote_stop=1&page=t")["remote_stop"]["state"]
         self.assertEqual(state["left"], ["試験の打ちかけ"], "帯に残っているものを出す")
         self.assertIsNone(proc.poll(), "残っているのに止まった")
-        self.assertEqual(proc.wait(40), 0)
+        self.assertEqual(self.wait_exit(proc), 0)
         answer = self.answer()
         self.assertEqual(answer["state"], remote_stop.STATE_FORCED)
         self.assertIn("試験の打ちかけ", answer["detail"])
@@ -194,7 +207,7 @@ class RealProcessTests(_Child):
             time.sleep(0.2)
         self.assertIn("更新が終わるまで起動できません", why)
         self.assertIn("別の名前に変えると解除できます", why)
-        self.assertEqual(proc.wait(40), 0, "しばらくして終わる")
+        self.assertEqual(self.wait_exit(proc), 0, "しばらくして終わる")
         self.clear()
         again = self.start()
         port = self.port(again)
@@ -348,7 +361,7 @@ class BandBrowserTests(_Child):
         self.assertIn("試験の打ちかけ", text)
         self.assertIn("強制で止めます", text)
         self.left_file.unlink()                       # 片付いた → まもなく止まる
-        self.assertEqual(proc.wait(40), 0)
+        self.assertEqual(self.wait_exit(proc), 0)
         page.wait_for_function("document.getElementById('remote-stop-band').textContent.includes('止めました')",
                                timeout=20000)
         self.assertEqual(errors, [], "画面の誤り")
@@ -373,7 +386,7 @@ class BandBrowserTests(_Child):
         self.assertEqual(self.health(port, "?remote_stop=1&page=t")["remote_stop"]["state"]["state"],
                          remote_stop.STATE_WAITING)
         self.assertIsNone(proc.poll(), "保存していない入力があるのに止まった")
-        self.assertEqual(proc.wait(40), 0, "期限では止まる")
+        self.assertEqual(self.wait_exit(proc), 0, "期限では止まる")
         self.assertEqual(self.answer()["state"], remote_stop.STATE_FORCED)
 
 
