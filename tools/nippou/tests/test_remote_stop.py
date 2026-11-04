@@ -368,7 +368,12 @@ class BandBrowserTests(_Child):
 
     def test_置く先の無い打ちかけは_残っているものに数えて待つ(self) -> None:
         """出る前の確かめを持たない画面(GW計算など)で打った欄は、置く先が無く止めると消える。
-        何も無いとして帯を見せる間(現場 30 秒)で止めない(帯に出して利用者を待つ。期限で強制)。"""
+        何も無いとして帯を見せる間(現場 30 秒)で止めない(帯に出して利用者を待つ。期限で強制)。
+
+        画面が「保存していない入力」を伝えるのは帯の問い合わせ(3秒ごと)。帯を見せる間を試験の 0.5 秒の
+        ままにすると、遅い PC(Windows CI)では伝わる前に「何も無い」で止まり、現場(30 秒)と違う道を
+        試してしまう。この試験だけ現場と同じく、問い合わせより長く見せる(期限はその後)。"""
+        self.env["ALLTOOLS_REMOTE_STOP_TIMES"] = TIMES + ",notice=8,grace=12"
         proc = self.start()
         port = self.port(proc)
         self.wait_ready(proc, port)
@@ -379,10 +384,12 @@ class BandBrowserTests(_Child):
         page.locator("main#main input[type=text]:not([readonly]):not([disabled]):visible").first.fill("98765")
         time.sleep(3.5)                               # 帯の問い合わせ(3秒ごと)が、お願いの前に言い添える
         self.issue()
+        issued = time.monotonic()
         page.wait_for_function("document.getElementById('remote-stop-band')"
                                " && document.getElementById('remote-stop-band').textContent"
                                ".includes('この画面で保存していない入力')", timeout=20000)
-        # 帯を見せる間(試験は 0.5 秒)をすぎても止めない(期限は試験は 4 秒)
+        # 帯を見せる間(この試験は 8 秒)をすぎても止めない(期限はこの試験は 12 秒)
+        time.sleep(max(0.0, 9.0 - (time.monotonic() - issued)))
         self.assertEqual(self.health(port, "?remote_stop=1&page=t")["remote_stop"]["state"]["state"],
                          remote_stop.STATE_WAITING)
         self.assertIsNone(proc.poll(), "保存していない入力があるのに止まった")
