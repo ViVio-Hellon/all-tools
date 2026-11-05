@@ -381,13 +381,23 @@ class BandBrowserTests(_Child):
         self.addCleanup(page.close)
         page.goto(f"http://127.0.0.1:{port}/gw?t={self.token(proc)}", wait_until="load")
         page.wait_for_function("window.APP && window.APP.booted === true", timeout=30000)
+        # 遅い PC(Windows CI)では、起きた直後に画面が中身を引き直すことがある。引き直しの前に打つと
+        # 打った欄ごと消えて「打ちかけ」にならない ── 落ち着いてから打ち、画面が打ちかけと見たのを確かめる
+        page.wait_for_load_state("networkidle")
         page.locator("main#main input[type=text]:not([readonly]):not([disabled]):visible").first.fill("98765")
+        page.wait_for_function("window.__remoteStopUnsaved().length > 0", timeout=10000)
         time.sleep(3.5)                               # 帯の問い合わせ(3秒ごと)が、お願いの前に言い添える
         self.issue()
         issued = time.monotonic()
-        page.wait_for_function("document.getElementById('remote-stop-band')"
-                               " && document.getElementById('remote-stop-band').textContent"
-                               ".includes('この画面で保存していない入力')", timeout=20000)
+        try:
+            page.wait_for_function("document.getElementById('remote-stop-band')"
+                                   " && document.getElementById('remote-stop-band').textContent"
+                                   ".includes('この画面で保存していない入力')", timeout=20000)
+        except Exception as exc:                      # 何が出ていたかを添えて落とす
+            band = page.evaluate("(document.getElementById('remote-stop-band') || {}).textContent || '(帯なし)'")
+            seen = page.evaluate("window.__remoteStopUnsaved()")
+            self.fail(f"帯に保存していない入力が出ない: {exc}\n帯: {band}\n画面の言い分: {seen}\n"
+                      f"子の出力:\n{self.output(proc)}")
         # 帯を見せる間(この試験は 8 秒)をすぎても止めない(期限はこの試験は 12 秒)
         time.sleep(max(0.0, 9.0 - (time.monotonic() - issued)))
         self.assertEqual(self.health(port, "?remote_stop=1&page=t")["remote_stop"]["state"]["state"],
