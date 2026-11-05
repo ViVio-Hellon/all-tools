@@ -295,3 +295,37 @@ class JissekiTableTests(unittest.TestCase):
                                             now=datetime(2026, 11, 4, 14, 4))
         self.assertIsNotNone(found, "表「実績」を読まずに割り数が空になった")
         self.assertEqual((found.vertical, found.horizontal), ("2", "2"))
+
+    def test_実績で読めたら警告を残さない(self) -> None:
+        """「仕掛」が無いのは想定どおり(次の「実績」で読む)。ロットを引くたびに
+        「sqlite3 の取り込みに失敗しました table=仕掛」が警告でログに残っていた。"""
+        from datetime import datetime
+
+        from nippou import source_db
+        from nippou.access_bridge import gw_master
+
+        source_db.forget()
+        with self.assertNoLogs("nippou", level="WARNING"):
+            found = gw_master.search_coil_split("L815D53", master_path=self.db,
+                                                now=datetime(2026, 11, 4, 14, 4))
+        self.assertEqual((found.vertical, found.horizontal), ("2", "2"))
+
+    def test_どちらの表も無ければ警告とエラーを残す(self) -> None:
+        """黙るのは次の名前があるときだけ。全部無いのは本当に読めないので知らせる。"""
+        from datetime import datetime
+
+        from nippou import source_db
+        from nippou.access_bridge import gw_master
+
+        conn = sqlite3.connect(self.db)
+        conn.execute('ALTER TABLE "実績" RENAME TO "べつ"')
+        conn.commit()
+        conn.close()
+        source_db.forget()
+        with self.assertLogs("nippou", level="WARNING") as logs:
+            found = gw_master.search_coil_split("L815D53", master_path=self.db,
+                                                now=datetime(2026, 11, 4, 14, 4))
+        self.assertIsNone(found)
+        text = "\n".join(logs.output)
+        self.assertIn("table=実績", text)
+        self.assertIn("コイル割り数を読めませんでした", text)

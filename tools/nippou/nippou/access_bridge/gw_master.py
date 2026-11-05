@@ -226,8 +226,12 @@ def _search_wip_at(paths: list[Path], sql_filter: str, runner: Optional[ScriptRu
             # 次の名前へ ── 読めない・ロックなどは今までどおり読めない扱い
             names = tables or (SETTINGS.gw_shared_table_name,)
             for n, table in enumerate(names):
-                result = import_table(path, table, sql_filter=sql_filter, runner=runner)
-                if result.success or n + 1 >= len(names) or not _no_such_table(result.error):
+                last = n + 1 >= len(names)
+                # 次の名前があるうちは「表が無い」を警告にしない(次で読めればそれで済む。
+                # 全部無ければ最後の名前の失敗が警告とエラーに残る)
+                extra = {} if last else {"missing_ok": True}
+                result = import_table(path, table, sql_filter=sql_filter, runner=runner, **extra)
+                if result.success or last or not _no_such_table(result.error):
                     break
         except Exception as exc:                  # noqa: BLE001 - 次の置き場所を見る
             _logger.warning("%sで読めませんでした(%dつ目 %s): %s", label, index + first_no, path, exc)

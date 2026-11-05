@@ -51,7 +51,8 @@ def _as_text(value: object) -> str:
     return str(value)
 
 
-def _import_sqlite(path: Path, table_name: str, sql_filter: str) -> ImportResult:
+def _import_sqlite(path: Path, table_name: str, sql_filter: str,
+                   *, missing_ok: bool = False) -> ImportResult:
     """取り込み元が sqlite3 のとき。**共有のファイルは開かない。**
 
     `source_db` が手元へ写してから読む(その理由はあちらに書いてある)。
@@ -67,8 +68,13 @@ def _import_sqlite(path: Path, table_name: str, sql_filter: str) -> ImportResult
     try:
         rows = source_db.read_query(path, sql)
     except source_db.SourceError as exc:
-        _logger.warning("sqlite3 の取り込みに失敗しました table=%s: %s",
-                        table_name, exc)
+        if missing_ok and "no such table" in str(exc).lower():
+            # 呼ぶ側が**次の表の名前を試す**(コイル割り数の「仕掛」→「実績」)。ここで警告に
+            # すると、次で読めてもロットを引くたびにログへ警告が残る。全部無ければ呼ぶ側が出す
+            _logger.debug("sqlite3 に表 %s がありません(次の名前を試します): %s", table_name, exc)
+        else:
+            _logger.warning("sqlite3 の取り込みに失敗しました table=%s: %s",
+                            table_name, exc)
         return ImportResult(success=False,
                             error=AccessBridgeError(ErrorKind.UNKNOWN, None, str(exc)))
     _logger.info("import ok (sqlite3) table=%s rows=%d", table_name, len(rows))
@@ -148,8 +154,13 @@ def import_table(
     table_name: str,
     sql_filter: str = "",
     runner: Optional[ScriptRunner] = None,
+    *,
+    missing_ok: bool = False,
 ) -> ImportResult:
     """Access上の1テーブルを取り込む。
+
+    ``missing_ok`` は「表が無ければ呼ぶ側が別の名前を試す」とき(sqlite3 のときだけ効く)。
+    表が無いだけなら警告に残さない(失敗は今までどおり返す)。
 
     「仕掛」テーブルのように数千件・100列超になりうる共有マスタも対象に
     含まれるため、呼び出し側は必要な範囲だけを ``sql_filter``
@@ -172,7 +183,7 @@ def import_table(
     済むよう、振り分けはここ1か所で行う。
     """
     if Path(accdb_path).suffix.lower() in source_db.SUFFIXES:
-        return _import_sqlite(Path(accdb_path), table_name, sql_filter)
+        return _import_sqlite(Path(accdb_path), table_name, sql_filter, missing_ok=missing_ok)
 
     if SETTINGS.access_backend == "odbc":
         from .odbc_backend import import_table_odbc
