@@ -98,10 +98,12 @@ def remove(repo: NippouRepository, report_date: str, line: str, shift: str,
     # 集計も作り直します ── 消した紙のぶんが残っていると、グラフと
     # CSVだけ古いままになります。**空の紙なので数は変わりません**が、
     # 「ページが1枚減った」ことは反映されます
+    # 最後のページなら直の集計ごと消え、その日の集計CSVからも外れます(v4.46.3 `day_csv.settle`)
     try:
-        from . import summary
+        from . import day_csv
 
-        summary.refresh_shift(repo, report_date, line, shift)
+        for note in day_csv.settle(repo, {(report_date, line, shift)}, factors=False):
+            log.info("中身の無いページを消したあと: %s", note)
     except Exception:                             # noqa: BLE001 - 消せてはいる
         log.exception("消したあとの集計の作り直しでエラー key=%s", key_text)
 

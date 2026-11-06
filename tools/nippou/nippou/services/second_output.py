@@ -67,6 +67,8 @@ class Outcome:
     #: まだ共有へ送れていない直があるので、**出さずに待っている**もの
     #: (「2026年9月24日 L-1」「2026年9月 のぶん」など)
     held: list[str] = field(default_factory=list)
+    #: **ほかのラインの日なので出さなかった**もの(そのラインの端末が出す ── `services/day_csv`)
+    others: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -76,10 +78,11 @@ class Outcome:
     def merge(self, other: "Outcome") -> "Outcome":
         """2つの結果を1つに(月替わりで何か月ぶんも出したとき)。"""
         return Outcome(copies=self.copies + other.copies,
-                       held=self.held + other.held)
+                       held=self.held + other.held, others=self.others + other.others)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"copies": [c.as_dict() for c in self.copies], "held": self.held}
+        return {"copies": [c.as_dict() for c in self.copies], "held": self.held,
+                "others": self.others}
 
     def text(self, what: str) -> str:
         """知らせの行。**出せなかったもの・待っているものは名指しする**。"""
@@ -92,6 +95,9 @@ class Outcome:
         for c in self.copies:
             if not c.ok:
                 parts.append(f"2つ目の出力先({c.base})に{what}を出せませんでした: {c.error}")
+        if self.others:
+            parts.append(f"ほかのラインの日は、2つ目の出力先へ{what}を出していません"
+                         f"({'・'.join(self.others)})── そのラインの端末が直ぜんぶで出します")
         if self.held:
             parts.append(f"2つ目の出力先へは、まだ送れていない直がある{what}を出していません"
                          f"({'・'.join(self.held)})── 次に共有へ保存で送れたときに出します")
@@ -120,8 +126,14 @@ def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple]) -> Outcome:
     if not extra_dirs() or not days:
         return Outcome()
     unsent = unsent_days(repo)
-    ready = [d for d in days if d not in unsent]
-    out = Outcome(held=[f"{d} {ln}" for d, ln in days if (d, ln) in unsent])
+    # **ほかのラインの日は出さない**(この端末にはその日の直が全部はない ── `services/day_csv`)。
+    # 管理者のPCがほかのラインの直しを送っても、2つ目はそのラインの端末が直ぜんぶで出す
+    from . import day_csv
+
+    others = [(d, ln) for d, ln in days if day_csv.refusal(ln)]
+    ready = [d for d in days if d not in unsent and d not in others]
+    out = Outcome(held=[f"{d} {ln}" for d, ln in days if (d, ln) in unsent and (d, ln) not in others])
+    out.others = [f"{d} {ln}" for d, ln in others]
     for base in extra_dirs():
         for report_date, line in ready:
             out.copies += csv_export.write_copies(
@@ -130,6 +142,29 @@ def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple]) -> Outcome:
     if out.held:
         log.info("2つ目の出力先へは待ちます(未送信の直がある日): %s",
                  ", ".join(out.held))
+    return out
+
+
+def after_pull(repo: NippouRepository, days: Iterable[tuple[str, str]]) -> Outcome:
+    """控えから直しを取り込んだ日を、**共有へ送り終わっていれば**2つ目へも書き直す(v4.46.3)。
+
+    直した側(管理者のPC)が先に共有へ送ると、取り込んだページは送り済みで入るので、この端末の
+    共有へ保存では書き直されません。未送信のページが残る日は待ちます(送ったときに出る)。
+    ほかのラインの日は出しません(`day_csv`)。
+    """
+    from . import day_csv
+
+    days = sorted(set(days))
+    if not extra_dirs() or not days:
+        return Outcome()
+    unsent = unsent_days(repo)
+    ready = [d for d in days if d not in unsent and not day_csv.refusal(d[1])]
+    out = Outcome(held=[f"{d} {ln}" for d, ln in days if (d, ln) in unsent])
+    for base in extra_dirs():
+        for report_date, line in ready:
+            out.copies += csv_export.write_copies(
+                [base], lambda b, d=report_date, ln=line:
+                csv_export.write_daily_set(repo, d, ln, b).folder)
     return out
 
 

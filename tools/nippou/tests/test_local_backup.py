@@ -74,6 +74,21 @@ class BackupServiceTests(unittest.TestCase):
         self.addCleanup(conn.close)
         return NippouRepository(conn)
 
+    def live_settings(self, **props) -> None:
+        """**いま読み込まれている** `config.SETTINGS` にも同じ置き場所を差す。ほかの試験(`tests._web`)が
+        モジュールを読み込み直したあとだと、この試験の先頭で読んだ `config` とは別物になり、
+        中で読み込むサービス(`load_factor`・`day_csv`)は新しいほうを見る。"""
+        import importlib
+
+        live = importlib.import_module("nippou.config")
+        values = {"local_backup_base": self.share, **props}
+        for module in {id(config): config, id(live): live}.values():
+            for name, value in values.items():
+                patcher = patch.object(type(module.SETTINGS), name,
+                                       new_callable=PropertyMock, return_value=value)
+                patcher.start()
+                self.addCleanup(patcher.stop)
+
     def backup_file(self, line="L-1") -> Path:
         return self.share / "LocalBackup" / line / "日報入力データ.sqlite3"
 
@@ -186,6 +201,32 @@ class BackupServiceTests(unittest.TestCase):
                 key).fetchone()[0]
         self.assertEqual(dirty, 0)
 
+    def test_ほかのラインを直す管理者のPCは_前の直を控えから読んで係数を数える(self) -> None:
+        """v4.46.3: 管理者のPCには呼び出した直しかない。前の直を見ずに係数を数えると、前の直から
+        続いたロットをもう一度数えて、ロット数・係数Lot数を書き換えていた。"""
+        from nippou import work_context
+        from nippou.services import load_factor
+
+        self.live_settings()
+        save(self.a, line="機側", shift="1直")
+        save(self.a, line="機側", shift="2直")
+        lb.flush(self.a)
+        lb.import_shift(self.b, DAY, "機側", "2直")
+        self.assertEqual(self.b.saved_pages(DAY, "機側", "1直"), [], "管理者のPCには呼び出した直だけ")
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="L-1"):
+            pages = load_factor.previous_pages(self.b, DAY, "機側", "2直")
+            self.assertEqual([[d.lot for d in p] for p in pages], [["N7131T0"]],
+                             "前の直(1直)を控えから読む")
+            # 控えに届かなければ数え直さない(前の直が揃わないまま数えない)
+            import importlib
+
+            live_lb = importlib.import_module("nippou.services.local_backup")
+            with patch.object(live_lb, "reader", side_effect=OSError("届きません")):
+                with self.assertRaises(load_factor.BackupUnread):
+                    load_factor.previous_pages(self.b, DAY, "機側", "2直")
+                self.assertFalse(load_factor.recalculate(self.b, DAY, "機側", "2直").applied)
+
     def test_ラインごとのフォルダ(self) -> None:
         save(self.a, line="L-1")
         save(self.a, line="HVC")
@@ -224,6 +265,34 @@ class BackupServiceTests(unittest.TestCase):
             self.assertIsNone(backup.load(*key))
 
     # -- 新しいほうが正 ---------------------------------------------------
+    def test_動いているあいだも管理者の直しを取り込み_集計CSVを書き直す(self) -> None:
+        """v4.46.3: 前は起動のときだけ控えを見ていた。ラインの端末が動いたままだと、管理者が直した
+        前日分も、その日の集計CSVも直す前のまま。打っているページは戻さない。"""
+        from nippou import work_context
+        from nippou.reporting import csv_export
+
+        out = self.tmp / "出力先"
+        self.live_settings(report_output_dir=out)
+        key = save(self.a, mai="10")
+        today = save(self.a, shift="2直", mai="5")
+        lb.flush(self.a)
+        lb.import_shift(self.b, DAY, "L-1", "1直")
+        lb.import_shift(self.b, DAY, "L-1", "2直")
+        time.sleep(1.1)
+        self.b.save(*_edited(self.b, key, "12"))
+        self.b.save(*_edited(self.b, today, "99"))       # 打っているページへの直し(戻さない)
+        lb.flush(self.b)
+        lb.note_editing(today)
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="L-1"):
+            result = lb.pull_if_due(self.a, "L-1")
+            self.assertEqual(result.pulled, 1)
+            self.assertIsNone(lb.pull_if_due(self.a, "L-1"), "5分のうちは見に行かない")
+        self.assertEqual(mai_of(self.a, key), "12")
+        self.assertEqual(mai_of(self.a, today), "5", "画面で打っているページは戻さない")
+        paths = csv_export.daily_output_paths(out, DAY, "L-1")
+        self.assertTrue(paths["aggregate"].exists(), "取り込んだ日の集計CSVを書き直す")
+
     def test_管理者が直したぶんを_古い待ちで上書きしない(self) -> None:
         key = save(self.a, mai="10")
         self.a.queue_backup([key])                   # 写せないまま残った待ち(古い中身)

@@ -369,6 +369,17 @@ def _register_rollover(app: Flask) -> None:
 # 書く要求が重なるのは押し間違いか二重送信で、待たせても誰も困らない。
 _WRITE_LOCK = threading.RLock()
 
+
+def _share_write_lock() -> None:
+    """集計CSVを書く道(`services/day_csv`)にも同じ錠を渡す(応答のあとに走る控えの写しから
+    書くときに、保存の要求と同じ3本を同時に書かない)。"""
+    from nippou.services import day_csv
+
+    day_csv.use_lock(_WRITE_LOCK)
+
+
+_share_write_lock()
+
 # 直列化しないもの。**待たせてはいけない**種類の POST。前方一致で見る
 #
 # **DBに触らないものだけを並べます。** 3つとも覚えているのはプロセスの

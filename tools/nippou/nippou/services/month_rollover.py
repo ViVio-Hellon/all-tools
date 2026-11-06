@@ -157,6 +157,15 @@ def settle(repo: NippouRepository, result: "RolloverResult",
     **共有を読めなかったので見送ったラインがあるとき(`unverified`)も覚えません**
     (覚えると、そのラインは二度と書き出されない)。
     """
+    if (not result.ran and result.skipped and not result.failed and not result.unverified
+            and result.decision.due):
+        # **この端末が書く月ではなかった**(手元にあるのは、ほかのラインの直しだけ ── 書き出しは
+        # そのラインの端末がする。`_partial_lines`)。済んだと覚えないと、共有へ保存のたびに
+        # この月で止まり、あとの月も書き出されなかった(v4.46.3)。中身が変われば覚えは外れる
+        log.info("月替わり: %s はこの端末で書くラインが無いので済んだと覚えます(%s)",
+                 result.decision.label, "・".join(sorted(result.skipped)))
+        repo.mark_rolled(result.decision.year, result.decision.month)
+        return True
     if (not result.ran or result.failed or result.pending or result.unverified
             or not second_ok):
         return False

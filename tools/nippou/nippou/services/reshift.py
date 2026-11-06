@@ -194,11 +194,13 @@ def apply(repo: NippouRepository, *, skip_dates: tuple[str, ...] = (),
     """下見と同じものを、もう一度調べてから戻す。"""
     from . import summary
     from .csv_import import Result as ImportResult
-    from .csv_import import _out_dir, _write_csv
+    from .csv_import import _extra_dirs, _out_dir, _write_copies, _write_csv
 
     starts = _starts(repo)
     result = Result()
     touched: list[tuple[str, str]] = []
+    #: 共有に入っている扱いのまま(送った印を保った)日。2つ目の出力先へも書き直す
+    settled: list[tuple[str, str]] = []
     for fix in plan(repo, skip_dates=skip_dates):
         day, line = fix.report_date, fix.line
         try:
@@ -232,10 +234,26 @@ def apply(repo: NippouRepository, *, skip_dates: tuple[str, ...] = (),
         result.days += 1
         result.rows += len(late)
         touched.append((day, line))
+        if synced2 and synced3:
+            settled.append((day, line))
         log.info("3直へ戻しました: %s %s %d行", day, line, len(late))
 
+    # ほかのラインの日は集計CSVを書かない(`day_csv.refusal` ── この端末にはその日の直が全部はない
+    # ことがある)。直したページは控え経由でそのラインの端末に届き、そちらが直ぜんぶで書き直す
+    from . import day_csv
+
+    others = [d for d in touched if day_csv.refusal(d[1])]
+    touched = [d for d in touched if d not in others]
+    settled = [d for d in settled if d not in others]
+    for day, line in others:
+        log.info("3直へ戻した %s %s の集計CSVはこの端末では書きません(ほかのライン)", day, line)
     if touched:
         made = ImportResult()
-        _write_csv(repo, made, touched, _out_dir(out_dir))
+        base = _out_dir(out_dir)
+        _write_csv(repo, made, touched, base)
+        # 2つ目の出力先も(v4.46.3)。送った印を保った日は「共有へ保存」で送り直されないので、
+        # ここで書かないと2つ目には戻す前の直のまま残る(取り込みの「そのままにする」と同じ扱い)
+        if out_dir is None and settled:
+            _write_copies(repo, made, settled, _extra_dirs(base))
         result.csv_failed = [d for d, _e in made.csv_failed]
     return result

@@ -39,6 +39,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from contextlib import nullcontext as _no_lock
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -310,6 +311,36 @@ def _refresh(repo: NippouRepository, shifts: set[ShiftKey]) -> None:
                           report_date, line, shift)
 
 
+def _settle_pulled(repo: NippouRepository, shifts: set[ShiftKey],
+                   csv: Optional[set[ShiftKey]] = None) -> None:
+    """控えから戻した・消した直の集計を作り直し、**この端末のラインの日は集計CSVも書き直す**(v4.46.3)。
+
+    管理者のPCでこのラインの日報を直すと、直しは控え経由でこの端末に戻ってきます。前は集計だけ
+    作り直して集計CSVはそのままだったので、出力先のCSVは直す前の中身のままでした。手元に
+    その日の直が全部あるのはこの端末なので、ここで直ぜんぶで書き直します(`day_csv.settle`。
+    ほかのラインの日は書かない)。負荷係数は直した側で数え直してあるので、ここでは触りません。
+    """
+    if not shifts:
+        return
+    from . import day_csv, second_output
+
+    csv = set(shifts) if csv is None else set(csv) & set(shifts)
+    _refresh(repo, set(shifts) - csv)                      # 集計だけ
+    if not csv:
+        return
+    for note in day_csv.settle(repo, csv, factors=False):
+        log.info("控えから戻した直: %s", note)
+    # 2つ目の出力先も(共有へ送り済みの中身なら)。直した側が先に共有へ送っていると、この端末は
+    # その直を送り直さないので、共有へ保存の道では2つ目が書き直されない
+    try:
+        with day_csv._lock if day_csv._lock is not None else _no_lock():
+            out = second_output.after_pull(repo, {(d, ln) for d, ln, _sh in csv})
+            if out.copies or out.held:
+                log.info("控えから戻した直(2つ目): %s", out.text("集計CSV"))
+    except Exception:                                      # noqa: BLE001 - 1つ目は書けている
+        log.exception("控えから戻した直の2つ目の出力先へ書けませんでした")
+
+
 def _base_missing() -> str:
     return (f"控えの置き場所 {SETTINGS.local_backup_base} に届きません"
             "(届くようになったら写します)")
@@ -403,7 +434,7 @@ def flush(repo: NippouRepository, *, force: bool = False, wait: float = 0.0) -> 
                 result.error = f"{line_names.label(line)} の控えへ写せませんでした: {exc}"
             finally:
                 dst.close()
-        _refresh(repo, pulled)
+        _settle_pulled(repo, pulled)
         result.shifts = sorted(pulled)
         result.pending = len(repo.backup_pending())
         if not result.error:
@@ -490,7 +521,8 @@ def flush_soon() -> None:
 
 def reset() -> None:
     """届かなかった記憶を忘れる(テスト用)。"""
-    global _retry_at, _editing
+    global _retry_at, _editing, _pulled_at
+    _pulled_at = 0.0
     _retry_at = 0.0
     _editing = None
 
@@ -498,6 +530,29 @@ def reset() -> None:
 # ----------------------------------------------------------------------
 # 起動のとき: 控え ⇄ 手元(この端末のライン)
 # ----------------------------------------------------------------------
+#: 動いているあいだに控えを見に行く間隔(秒)。管理者のPCが直したこのラインの日報を取り込む
+PULL_EVERY_SEC = 300.0
+_pulled_at = 0.0
+
+
+def pull_if_due(repo: NippouRepository, line: str) -> Optional[Result]:
+    """**動いているあいだも**、ときどき控えを見て、ほかのPC(管理者)が直したページを取り込む(v4.46.3)。
+
+    前は起動のときだけ見ていたので、ラインの端末が起動したままだと、管理者が直した前日分は
+    次に起動するまでこの端末に入らず、その日の集計CSVも直す前のまま残っていました。
+    取り込んだら集計と集計CSVを書き直します(`_settle_pulled`)。画面で打っているページは戻しません。
+    """
+    global _pulled_at
+    now = time.monotonic()
+    if _pulled_at and now - _pulled_at < PULL_EVERY_SEC:
+        return None
+    _pulled_at = now
+    result = pull(repo, line)
+    if result.pulled or result.removed:
+        log.info("控えから取り込みました(動いているあいだ): %s", result.message)
+    return result
+
+
 def pull(repo: NippouRepository, line: str) -> Result:
     """そのラインの控えと手元を**新しいほうに揃える**準備をする。
 
@@ -524,6 +579,7 @@ def pull(repo: NippouRepository, line: str) -> Result:
 
 def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
     pulled: set[ShiftKey] = set()
+    replaced: set[ShiftKey] = set()
     to_send: list[PageKey] = []
     with reader(line) as backup:
         theirs: dict[PageKey, tuple[str, str]] = {}
@@ -548,10 +604,15 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
         # 控えから戻すと、消したページが起動のたびに生き返る(「直を消す」・中身の無いページ)
         waiting = set(repo.backup_pending())
         removed_there = _removed_there(backup, line)
+        typing = editing()
         for key, stamp in theirs.items():
             if key not in mine and key in waiting:
                 continue
+            if key == typing:
+                continue                          # 画面で打っているページは戻さない(`flush` と同じ)
             if _newer(stamp, mine.get(key)):
+                if key in mine:
+                    replaced.add(key[:3])         # 手元にあったページを、控えの新しいほうで置き換えた
                 with repo.conn:
                     _copy_page(backup.conn, repo.conn, key)
                     _settle_base(repo.conn, key)
@@ -581,8 +642,10 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
             _drop_removed(repo, key, backup)
             result.removed += 1
     repo.queue_backup(to_send)
-    _refresh_after_drop(repo, {k[:3] for k in gone} - pulled)
-    _refresh(repo, pulled)
+    # 集計CSVは**置き換えた・消した直の日だけ**書き直す(手元が空の端末の初めての起動で、
+    # 何年ぶんもの日を共有のフォルダへ書き直さない。新しく入っただけの直は前に出したCSVのまま)
+    _settle_pulled(repo, pulled | {k[:3] for k in gone},
+                   csv=replaced | {k[:3] for k in gone})
     result.shifts = sorted(pulled)
     result.pending = len(repo.backup_pending())
     return result

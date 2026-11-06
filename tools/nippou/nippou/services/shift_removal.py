@@ -377,17 +377,15 @@ def remove(repo: NippouRepository, items: Iterable[Any], *,
 
 
 def _settle_shifts(repo: NippouRepository, shifts: Iterable[tuple[str, str, str]]) -> None:
-    """消した直の集計を作り直す。ページが残っていなければ集計も消す。"""
-    from . import summary
+    """消した直の集計を作り直す(ページが残っていなければ集計も消す)。**その日の集計CSVも書き直す**。
 
-    for report_date, line, shift in sorted(shifts):
-        try:
-            if repo.saved_pages(report_date, line, shift):
-                summary.refresh_shift(repo, report_date, line, shift)
-            else:
-                repo.delete_packing_report(report_date, line, shift)
-        except Exception:                         # noqa: BLE001 - 消せてはいる
-            log.exception("消したあとの集計の作り直しでエラー %s/%s/%s", report_date, line, shift)
+    前は集計だけで、出力先の集計CSVには消したページ(直まるごと消したときはその直)が残って
+    いました(v4.46.3。`day_csv.settle` ── ほかのラインの日の CSV は書かない)。
+    """
+    from . import day_csv
+
+    for note in day_csv.settle(repo, set(shifts), factors=False):
+        log.info("直を消したあと: %s", note)
 
 
 def _note(message: str, *, pc: str = "", login: str = "", pages: Iterable[str] = (),

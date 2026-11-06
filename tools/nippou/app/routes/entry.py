@@ -1489,6 +1489,9 @@ def _distribute(*, lot: bool):
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("時間の割り振りの保存に失敗しました")
         return jsonify(error_body("save_failed", f"ほかのページを保存できませんでした: {exc}")), 500
+    # ほかのページを書き換えたので、その直の集計も作り直す(v4.46.3)。開いているページは画面の
+    # 保存で書くので、集計CSVはそのときに(書きかけのページを混ぜて書かない)
+    _refresh_summary(report_date, line, shift)
     log_button_click("distribute_lot" if lot else "distribute_times", line=line,
                      extra=f"{report_date}/{shift} {len(rows)}行 {span_texts[0]}〜{span_texts[1]}")
     body = _view(state, ctx, calc, problem=problem, key=screen_key)
@@ -2138,8 +2141,19 @@ def save():
     _refresh_summary(report_date, line, shift)
     # テストの直の保存では出さない(本番の CSV は変わらない。テストだけの日に空の CSV を
     # 出力先へ置かない ── `nippou/test_mode`)
+    #
+    # **呼び出して直している過去の直は、自動保存でも書き直す**(v4.46.3)。過去の直の直しは
+    # 「保存(確定)」を押さずに「最新のページに戻る」「呼び出しをやめる」・終了で抜けられる。
+    # 押したときだけ書くと、直した中身が集計CSVに出ないまま残ります(「前日分を修正した。印刷は
+    # 更新していたが、集計ファイルは更新していない」)。保存のたびに書けば、どう抜けても
+    # CSVは最後に保存した中身と同じです。いまの直は今までどおり押したときだけ
+    recalled_past = (ctx.recall.active
+                     and (ctx.recall.report_date, ctx.recall.line, ctx.recall.shift)
+                     == (report_date, line, shift)
+                     and not service.is_current_key(report_date, line, shift, ctx.terminal_line,
+                                                    current_date, current_shift))
     exported = (_export_daily_csv(report_date, line)
-                if not silent and not header.test else None)
+                if (not silent or recalled_past) and not header.test else None)
     log.info("save ok silent=%s key=%s", silent, header.key())
     # **書いた先をそのまま返す。** `_target` を引き直すと、またいだ直後に
     # 「1直へ書いたのに画面は2直」になります
@@ -2179,6 +2193,14 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
     握りつぶして、結果だけ画面へ返します。
     """
     from nippou.reporting import csv_export
+    from nippou.services import day_csv
+
+    # **ほかのラインの日は書かない**(この端末にはその日の直が全部はない。一部の中身で
+    # 出力先の3本を上書きすると、そのラインの端末が書いた直が消える ── `services/day_csv`)
+    refused = day_csv.refusal(line)
+    if refused:
+        log.info("集計CSVを書きませんでした(ほかのライン) key=%s/%s", report_date, line)
+        return {"ok": False, "skipped": True, "dir": "", "message": refused}
 
     # **1つ目だけ。** 2つ目の出力先へは「共有へ保存」で送れたときに出します
     # (`services/second_output` ── 共有にまだ無い中身を先に届けない)
@@ -2436,6 +2458,14 @@ def close_shift():
 
     ctx = work_context.get_context()
     calc = current_calculator()
+    # **管理者のPCが直したこのラインの日報を、動いているあいだも取り込む**(v4.46.3。5分ごと)。
+    # 取り込んだら集計と集計CSVを書き直す(`local_backup.pull_if_due`)。呼出中は触らない
+    if not ctx.recall.active and work_context.terminal_line_decided():
+        try:
+            from nippou.services import local_backup
+            local_backup.pull_if_due(get_repo(), ctx.terminal_line)
+        except Exception:                         # noqa: BLE001 - 締めは続ける
+            log.exception("控えからの取り込み(動いているあいだ)で失敗しました")
     result = shift_close.run(get_repo(), calc,
                              line=ctx.line,
                              force_day_shift=ctx.force_day_shift(),
@@ -2887,6 +2917,9 @@ def new_page():
     # またいでも1回だけ数える ── `logic/load_factor.count`)
     _recalculate_factors(state, report_date, line, shift)
     _refresh_summary(report_date, line, shift)
+    # 押して保存したのと同じ(いまのページを確定した)ので、その日の集計CSVも書き直す(v4.46.3)
+    if not header.test:
+        _export_daily_csv(report_date, line)
 
     log_button_click("new_page", line=line, extra=str(next_page))
     log.info("new page key=%s -> ページ%s", header.key(), next_page)

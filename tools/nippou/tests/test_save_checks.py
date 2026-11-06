@@ -94,6 +94,36 @@ class StopCodeTests(unittest.TestCase):
             [row(1, s="", ss="  ")], known_codes=["0"]), [])
 
 
+class StopPairTests(unittest.TestCase):
+    """停止の記号と時間は組で(①〜⑤)。「作業停止だけ選択して時間を入力しなくても進めてしまう」"""
+
+    def test_記号だけで時間が無ければ断る(self) -> None:
+        found = save_checks.check_stop_pairs([row(3, s="ｲ", th="")])
+        self.assertEqual([f.code for f in found], [save_checks.STOP_NO_TIME])
+        self.assertEqual((found[0].row, found[0].field), (3, "TH"))
+        self.assertIn("作業停止①「ｲ」の時間が入っていません", found[0].message)
+
+    def test_時間が0でも断る(self) -> None:
+        found = save_checks.check_stop_pairs([row(1, ss="ﾛ", ths="0")])
+        self.assertEqual([(f.code, f.field) for f in found], [(save_checks.STOP_NO_TIME, "THS")])
+
+    def test_時間だけで記号が無ければ断る(self) -> None:
+        found = save_checks.check_stop_pairs([row(2, th4="15")])
+        self.assertEqual([(f.code, f.field) for f in found], [(save_checks.STOP_NO_CODE, "S4")])
+        self.assertIn("作業停止④の時間(15分)に記号がありません", found[0].message)
+
+    def test_組で入っていれば通す_停止の無い行も通す(self) -> None:
+        self.assertEqual(save_checks.check_stop_pairs([
+            row(1, s="ｲ", th="10", s5="0", th5="60"), row(2, lot="A")]), [])
+
+    def test_保存確定の関門にも入る_設備移動では飛ばせない(self) -> None:
+        found = save_checks.during_input(save_checks.run_all(
+            [row(1, lot="A", kz="8", kh="00", sz="9", sh="00", s="ｲ")], shift="1直"))
+        self.assertIn(save_checks.STOP_NO_TIME, [f.code for f in found])
+        self.assertEqual(save_checks.unskippable(
+            [f for f in found if f.code == save_checks.STOP_NO_TIME])[0].code, save_checks.STOP_NO_TIME)
+
+
 class RowTimeTests(unittest.TestCase):
     """時間計算_シート版: 1行の長さと、同時刻。"""
 

@@ -42,7 +42,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence
 
-from ..constants import STOP_FIELD_PAIRS
+from ..constants import STOP_FIELD_PAIRS, STOP_MARKS
 from ..db.models import DetailRecord
 from . import break_time
 from .numeric import is_numeric, to_float
@@ -59,6 +59,8 @@ OVER_SHIFT_ROW = "over_shift_row"       # 時間計算_シート版
 SAME_TIME = "same_time"                 # 時間計算_シート版
 NEGATIVE_TIME = "negative_time"         # 時間計算(停止が作業時間を超える)
 BREAK_TIME = "break_time"               # 休憩の時刻(v4.37.1。VBA には無い)
+STOP_NO_TIME = "stop_no_time"           # 停止の記号だけで時間が無い(v4.46.3。VBA には無い)
+STOP_NO_CODE = "stop_no_code"           # 停止の時間だけで記号が無い(v4.46.3。VBA には無い)
 
 #: **直の終わりにならないと判断できないもの。**
 #:
@@ -281,6 +283,37 @@ def check_stop_codes(details: Sequence[DetailRecord],
                 "一覧に無いものは集計のどこにも入りません",
                 page=d.page, row=d.row_no, field=code_field.upper(),
                 sound="unknown_stop"))
+    return out
+
+
+def check_stop_pairs(details: Sequence[DetailRecord]) -> list[Finding]:
+    """停止の**記号と時間は組で**入っているか(①〜⑤)。
+
+    記号だけ選んで時間を打たないと、停止はあるのに作業時間から何も引かれず、
+    停止の集計にも 0 分で入ります。時間だけで記号が無いと、どの停止かが分からず
+    内訳のどこにも数えられません。どちらも保存(確定)で断ります(自動保存は止めない)。
+    """
+    out: list[Finding] = []
+    for d in _sorted(details):
+        for index, (code_field, minutes_field) in enumerate(STOP_PAIRS, start=1):
+            code = (getattr(d, code_field) or "").strip()
+            raw = (getattr(d, minutes_field) or "").strip()
+            has_time = bool(raw) and stop_minutes(raw) > 0
+            mark = STOP_MARKS[index - 1] if index <= len(STOP_MARKS) else str(index)
+            if code and not has_time:
+                out.append(Finding(
+                    STOP_NO_TIME,
+                    f"{d.row_no}行目：作業停止{mark}「{code}」の時間が入っていません",
+                    f"作業停止{mark}の時間(分)を打ってください。停止でなければ記号を消してください",
+                    page=d.page, row=d.row_no, field=minutes_field.upper(),
+                    sound="unknown_stop"))
+            elif has_time and not code:
+                out.append(Finding(
+                    STOP_NO_CODE,
+                    f"{d.row_no}行目：作業停止{mark}の時間({raw}分)に記号がありません",
+                    f"作業停止{mark}の記号を一覧から選んでください。停止でなければ時間を消してください",
+                    page=d.page, row=d.row_no, field=code_field.upper(),
+                    sound="unknown_stop"))
     return out
 
 
@@ -589,7 +622,7 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
             known_stop_codes: Iterable[str] = (),
             day_work: bool = False,
             required_break: int = REQUIRED_BREAK_MINUTES) -> list[Finding]:
-    """8項目ぜんぶ(VBA の7項目 + 休憩の時刻。v4.37.1)。**順番は VBA と同じ**(見つけた順に上から出る)。
+    """9項目ぜんぶ(VBA の7項目 + 休憩の時刻 v4.37.1 + 停止の記号と時間の組 v4.46.3)。**順番は VBA と同じ**(見つけた順に上から出る)。
 
     VBA の手続きは5つで、その中身が7つに分かれます
     (時間計算_シート版 が3つ、Last_Confi が2つ)。休憩の時刻はこのツールで足した確かめです。
@@ -609,6 +642,7 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
     findings: list[Finding] = []
     findings += check_pack_count(details)
     findings += check_stop_codes(details, known_stop_codes)
+    findings += check_stop_pairs(details)
     findings += check_row_times(details, limit_minutes)
     findings += check_negative_time(details)
     findings += check_break_times(details, shift=shift, shift_start=shift_start,

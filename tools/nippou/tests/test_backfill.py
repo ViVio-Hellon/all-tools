@@ -230,6 +230,27 @@ class BackfillWebTests(WebTestCase):
         again = self.post("/api/settings/backfill", {**self.key, "dry_run": True})
         self.assertEqual(again.get_json()["decision"]["page"], 2)
 
+    def test_呼び出して直して戻ると集計とその日の集計CSVも作り直す(self) -> None:
+        """「前日分を修正した。印刷は更新していたが、集計ファイルは更新していない」──
+        戻る前の保存はページを書くだけで、集計と集計CSVを作り直していなかった。"""
+        from nippou import config, user_settings
+        from nippou.config import SETTINGS
+
+        out = self.tmp / "出力先"
+        out.mkdir()
+        user_settings.save_many({config.KEY_REPORT_OUT_DIR: str(out)})
+        self.admin()
+        self.make()
+        self.post("/api/settings/back", {
+            "rows": {"1": {"LOT": "FIX0001", "KEN": "30", "CON": "30", "WEI": "1000"}},
+            "header": {"worker": "山田"}, "checks": {}})
+        header, details = self.repo().load(self.yesterday, "L-1", "1直", 1)
+        self.assertEqual(details[0].lot, "FIX0001")
+        written = [p for p in SETTINGS.report_output_dir.rglob("*.csv")
+                   if "FIX0001" in p.read_text(encoding="utf-8-sig", errors="replace")]
+        self.assertTrue(written, "直した日の集計CSVに直した中身が出ていない: "
+                        + ", ".join(str(p) for p in SETTINGS.report_output_dir.rglob("*.csv")))
+
     def test_作りかけて打たずに戻れば何も残らない(self) -> None:
         """画面の「最新のページに戻る」は空の12行を送ってくる ── 空のページを作らない。"""
         self.admin()

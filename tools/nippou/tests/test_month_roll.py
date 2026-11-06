@@ -204,6 +204,27 @@ class CatchUpTests(RepoCase):
         self.assertEqual(self.months(rolls), [AUG])
         self.assertIn(AUG, self.repo.settled_months())
 
+    def test_ほかのラインの直しだけの月で止まらない(self) -> None:
+        """v4.46.3: 管理者のPCが7月のほかのライン(HVC)を直して送った。この端末は HVC の7月を書かない
+        (`_partial_lines`)ので書き出すものが無く、済んだと覚えないまま毎回7月で止まり、
+        自分のラインの8月も書き出されなかった。"""
+        from unittest import mock
+
+        key = dict(report_date="2026年7月20日", line="HVC", shift="2直", page=1)
+        self.repo.save(HeaderRecord(**key, worker="山田"), [DetailRecord(
+            **key, row_no=1, lot="H0001", ken="30", kz="07", kh="00", sz="15", sh="00", con="30")])
+        self.sent(("2026年7月20日", "HVC", "2直", 1))
+        self.sent(self.save("2026年8月20日"))
+        with mock.patch.object(month_rollover, "_partial_lines",
+                               side_effect=lambda records, y, m, lines, **kw:
+                               {ln: 3 for ln in lines if ln == "HVC"}):
+            rolls = month_rollover.catch_up(self.repo, self.tmp / "月別", today=date(2026, 9, 1),
+                                            hold_pending=True)
+        self.assertEqual(self.months(rolls), [(2026, 7), AUG])
+        self.assertTrue(rolls[1][0].ran, "8月(自分のライン)を書き出す")
+        self.assertFalse(any((self.tmp / "月別").rglob("*HVC*")), "HVC の月はこの端末で書かない")
+        self.assertEqual(self.repo.settled_months(), {(2026, 7), AUG})
+
     def test_済ませられない月があればそこで止める(self) -> None:
         """次の月へ進むと、古い月を置き去りにしたまま済んだ扱いが増える。"""
         self.save("2026年7月20日")                       # 送っていない
@@ -283,7 +304,10 @@ class PartialLineTests(RepoCase):
         self.assertFalse(result.ran)
         self.assertIn("HVC はこの端末では書き出しません", result.message)
         self.assertFalse((self.tmp / "月別" / "HVC").exists())
-        self.assertFalse(month_rollover.settle(self.repo, result))
+        # この端末が書く月ではないので済んだと覚える(v4.46.3)。覚えないと、共有へ保存のたびに
+        # この月で止まり、あとの月が書き出されない。手元の中身が変われば覚えは外れる
+        self.assertTrue(month_rollover.settle(self.repo, result))
+        self.assertIn(SEP, self.repo.settled_months())
 
     def test_この端末のラインはいままでどおり書き出す(self) -> None:
         self.put("L-1", "2026年9月30日", "2直")

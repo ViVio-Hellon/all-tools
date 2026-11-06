@@ -152,7 +152,7 @@ class CalcThroughApiTests(WebTestCase):
             "rows": {"1": {"LOT": "H5422S0", "MAI": "3", "TUT": "1",
                            "UNI": "250.04314",
                            "KZ": "22", "KH": "50", "SZ": "00", "SH": "30",
-                           "TH": "20"}},
+                           "S": "ｲ", "TH": "20"}},
             "header": {"worker": "近藤雅幹"}})
         self.assertEqual(res.status_code, 200)
         body = res.get_json()

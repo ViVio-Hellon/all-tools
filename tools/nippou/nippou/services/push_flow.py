@@ -176,6 +176,16 @@ def after_push(repo: Any, summary: Any, *,
     job_progress.step(phase=progress_logic.PHASE_AFTER, total=4, done=0,
                       label="集計CSV(2つ目の出力先)")
     done.second = guarded_second(lambda: second_output.after_push(repo, succeeded))
+    # **1つ目の出力先も、送った中身で書き直す**(v4.46.3)。保存(確定)を押さずに自動保存だけで
+    # 送った直は1つ目が古いままで、2つ目(送った中身)と食い違っていた。この端末のラインの日だけ
+    # (`day_csv`)・テストの直だけの日は書かない
+    try:
+        from . import day_csv
+
+        for note in day_csv.settle(repo, {tuple(k[:3]) for k in succeeded}, factors=False):
+            log.info("共有へ送ったあと: %s", note)
+    except Exception:                             # noqa: BLE001 - 送れてはいる
+        log.exception("送った日の集計CSV(1つ目)を書き直せませんでした")
     job_progress.step(done=1, label="共有保存の履歴")
     if history is not None:
         keep_history(repo, history)

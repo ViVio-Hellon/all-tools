@@ -25,6 +25,8 @@ VBA の並びは `Array("1直","2直","3直")` の3つだけで、**日勤があ
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -68,14 +70,44 @@ def previous_pages(repo: NippouRepository, report_date: str, line: str,
     # テストの直のページは見ない(試しに打った値で本番の係数を変えない ── `nippou/test_mode`)
     keys = [k for k in repo.list_keys(line, include_test=False)
             if _rank(k[0], k[2]) < here]
-    keys.sort(key=lambda k: (_rank(k[0], k[2]), k[3]), reverse=True)
+    sources = {k: repo for k in keys}
+    with ExitStack() as stack:
+        if _not_own(line):
+            # **ほかのラインは前の直が手元に揃っていない**(管理者のPCには呼び出した直だけ)。足りない
+            # ぶんはそのラインの控えから読む ── 読まずに数えると、前の直から続いたロットを
+            # もう一度数えてロット数・係数Lot数を書き換えてしまう(v4.46.3)。控えを読めなければ
+            # `BackupUnread`(呼ぶ側は数え直さない)
+            from . import local_backup
 
-    pages: list[list[DetailRecord]] = []
-    for key in keys[:limit]:
-        loaded = repo.load(*key)
-        if loaded is not None:
-            pages.append(loaded[1])
-    return pages
+            try:
+                backup = stack.enter_context(local_backup.reader(line))
+                # 控えが**確かめたうえで無い**ラインは手元だけ(控えから呼び出したのではない ──
+                # 過去の日報を取り込んだ日など、手元に揃っている)。今までどおり
+                for k in (backup.list_keys(line, include_test=False) if backup is not None else []):
+                    if _rank(k[0], k[2]) < here and k not in sources:
+                        sources[k] = backup
+            except BackupUnread:
+                raise
+            except Exception as exc:              # noqa: BLE001 - 届かない・読めない
+                raise BackupUnread(str(exc)) from exc
+        ordered = sorted(sources, key=lambda k: (_rank(k[0], k[2]), k[3]), reverse=True)
+        pages: list[list[DetailRecord]] = []
+        for key in ordered[:limit]:
+            loaded = sources[key].load(*key)
+            if loaded is not None:
+                pages.append(loaded[1])
+        return pages
+
+
+class BackupUnread(RuntimeError):
+    """ほかのラインの前の直を、そのラインの控えから読めなかった。"""
+
+
+def _not_own(line: str) -> bool:
+    """この端末のラインではない(`day_csv.refusal` と同じ見分け)。"""
+    from . import day_csv
+
+    return bool(day_csv.refusal(line))
 
 
 @dataclass
@@ -153,10 +185,17 @@ def recalculate(repo: NippouRepository, report_date: str, line: str,
         return Applied(Result(applied=True))
 
     before = [(d.page, d.row_no, d.keisu) for d in rows]
+    try:
+        previous = previous_pages(repo, report_date, line, shift)
+    except BackupUnread as exc:
+        # 前の直が揃わないまま数えると、直をまたいだロットを二重に数える。今回は書き直さない
+        log.warning("%s の前の直を控えから読めなかったので、係数を数え直しませんでした %s %s: %s",
+                    line, report_date, shift, exc)
+        return Applied(Result(applied=False))
     result = load_factor.recalculate(
         rows, line=line,
         factors=table,
-        previous=previous_pages(repo, report_date, line, shift))
+        previous=previous)
 
     changed = {(d.page, d.row_no) for d, (p, r, keisu) in zip(rows, before)
                if d.keisu != keisu}

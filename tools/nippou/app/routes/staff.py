@@ -314,11 +314,16 @@ def execute():
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("全停入力の保存に失敗しました")
         return jsonify(error_body("save_failed", f"保存に失敗しました: {exc}")), 500
+    # **保存(確定)と同じところまで揃える**(v4.46.3)。前は書くだけで、その直の集計も集計CSVも
+    # 作り直さず、グラフ・CSV・共有へ送る集計に全停の分が入らないままだった
+    from nippou.services import day_csv
+    settled = day_csv.settle(get_repo(), {(report_date, ctx.line, shift)})
     log.info("all stop executed shift=%s line=%s reason=%s page=%s",
              shift, ctx.line, label, next_page)
     return jsonify({
         "message": f"全停入力しました(第{next_page}ページ)",
         "page": next_page,
+        "settled": settled,
         "next": "/",
     })
 

@@ -174,7 +174,7 @@ def _as_detail(row: LotRow) -> PackingDetail:
 def refresh_shift(repo: NippouRepository, work_date: str, line: str,
                   shift: str, labels: Optional[dict[str, str]] = None
                   ) -> Optional[PackingReport]:
-    """1直ぶんを作り直して残す。ページが1つも無ければ何もしません。
+    """1直ぶんを作り直して残す。**ページが1つも無ければ、その直の集計を消します**(v4.46.3)。
 
     **停止内訳を読めなかったとき**(`StopLabels.problem`)は、その直の前の集計にあった名前
     (共有へ送った名前)を使います。読めないことで名前が空になり、送り直しで共有の「内訳」を
@@ -190,6 +190,11 @@ def refresh_shift(repo: NippouRepository, work_date: str, line: str,
         return None
     pages = _shift_pages(repo, work_date, line, shift)
     if not pages:
+        # **ページが1つも残っていない直の集計は消す**(v4.46.3)。前は何もしなかったので、
+        # 最後のページを片付けた直・行をぜんぶ3直へ移した2直の集計が残り、グラフ・集計CSV・
+        # 月の書き出しにもう無い直として数えられ続けていた(3直へ移した行は2回数えられた)
+        if repo.delete_packing_report(work_date, line, shift):
+            log.info("ページの無くなった直の集計を消しました %s/%s/%s", work_date, line, shift)
         return None
     labels = labels if labels is not None else stop_labels()
     if getattr(labels, "problem", ""):

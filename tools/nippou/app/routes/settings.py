@@ -360,6 +360,15 @@ def back_to_current():
 
     saved = False
     moved = None
+    # 呼び出していた直(抜けたあとに揃える。行が来なくても ── 自動保存で直しは入っている)
+    recalled = ((ctx.recall.report_date, ctx.recall.line, ctx.recall.shift)
+                if ctx.recall.active else None)
+    if recalled is not None:
+        # **いまの直なら揃えない**(いまの直は押した保存のたびに揃う)。いまかどうかは、開いた
+        # ときの印(`was_current`)ではなく、いまの時刻で比べる(記録を見るから開いたいまの直もある)
+        now_shift, now_date = service.current_shift_info(datetime.now(), ctx.force_day_shift())
+        if service.is_current_key(*recalled, ctx.terminal_line, now_date, now_shift):
+            recalled = None
     if ctx.recall.active:
         # 呼び出し元(画面)が持っている値をそのまま保存する。無ければ
         # DBにあるものがそのまま残るだけなので、保存はしない
@@ -379,6 +388,7 @@ def back_to_current():
     # **この端末のラインへ戻る。** 他ラインの紙を呼び出していると、
     # ここまで `ctx.line` はそのラインのまま ── 戻さないと、いまの直に
     # 戻ったあとも他ラインの端末として保存します
+    notes = _after_recall(recalled) if recalled else []
     ctx.return_to_terminal_line()
     current_shift, current_date = service.current_shift_info(
         datetime.now(), ctx.force_day_shift())
@@ -386,11 +396,16 @@ def back_to_current():
     log_button_click("back_to_current")
     message = ("直した内容を保存して、いまの直に戻りました" if saved
                else "いまの直に戻りました")
+    from nippou.services import day_csv
+    # **集計CSVを書かなかった・書けなかったときは言う**(ほかのラインの日・出力先に届かない)
+    shown = day_csv.problems(notes)
+    if shown:
+        message += "\n" + "\n".join(shown)
     if moved:
         message = ("いまの直に戻りました。画面のページと呼び出した紙が違ったので、"
                    "画面の中身は保存していません")
     return jsonify({"message": message, "saved": saved, "next": "/",
-                    "page_moved": moved})
+                    "page_moved": moved, "settled": notes})
 
 
 def _block_if_recall(action_name: str):
@@ -455,6 +470,26 @@ def _save_recalled(ctx, calc, payload) -> bool:
     except Exception:                             # noqa: BLE001 - 戻れなくしない
         log.exception("戻る前の保存に失敗しました key=%s", ctx.recall)
         return False
+
+
+def _after_recall(key: tuple[str, str, str]) -> list[str]:
+    """呼び出して直した過去の直を、抜けるときに**保存(確定)と同じところまで**揃える。
+
+    「前日分を修正した。印刷は更新していたが、集計ファイルは更新していない」── 戻る前の保存は
+    ページを書くだけで、負荷係数・その直の集計・その日の集計CSVを作り直していなかった。
+    行が来ない抜け方(「呼び出しをやめて、いまの直に戻る」など)でも、自動保存で直しは入って
+    いるので同じく揃えます(`services/day_csv.settle`。ほかのラインの日の CSV は書かない・
+    テストの直だけの日は書かない)。**失敗しても戻ることは止めない。**
+    """
+    from nippou.services import day_csv
+
+    try:
+        # 負荷係数は数え直さない ── 保存のたびに保存の道で数え直してある。見ただけで戻ったときに
+        # ページを書き換えない(係数の表が変わっていると、見ただけで古い直が書き換わる)
+        return day_csv.settle(get_repo(), {key}, factors=False)
+    except Exception:                             # noqa: BLE001 - 戻れなくしない
+        log.exception("呼び出して直した直を揃えられませんでした %s", key)
+        return []
 
 
 # ------------------------------------------------------------------

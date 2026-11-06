@@ -157,7 +157,8 @@ class ReasonPopupTests(WebTestCase):
         self._make_master()
         self.post("/api/entry/save", {
             "rows": {"1": {"LOT": "A1"},
-                     "4": {"SS": "ヨ", "reason": "棚卸し準備、点検表差し替え"}},
+                     "4": {"SS": "ヨ", "reason": "棚卸し準備、点検表差し替え",
+                           "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "THS": "10"}},
             "header": {},
         })
         html = self.client.get("/", headers=HEADERS).get_data(as_text=True)

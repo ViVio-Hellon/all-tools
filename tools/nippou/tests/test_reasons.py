@@ -221,8 +221,8 @@ class ReasonScreenTests(WebTestCase):
     def test_two_rows_keep_two_reasons(self):
         self.make_master()
         self.post("/api/entry/save", {
-            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備"},
-                     "7": {"S": "ヨ", "reason": "点検表の差し替え"}},
+            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備", "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "TH": "10"},
+                     "7": {"S": "ヨ", "reason": "点検表の差し替え", "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "TH": "10"}},
             "header": {}, "checks": {}})
         html = self.get("/").get_data(as_text=True)
         self.assertIn("棚卸し準備", html)
@@ -233,8 +233,8 @@ class ReasonScreenTests(WebTestCase):
     def test_the_paper_carries_both_with_row_numbers(self):
         self.make_master()
         self.post("/api/entry/save", {
-            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備"},
-                     "7": {"S": "ヨ", "reason": "点検表の差し替え"}},
+            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備", "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "TH": "10"},
+                     "7": {"S": "ヨ", "reason": "点検表の差し替え", "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "TH": "10"}},
             "header": {}, "checks": {}})
         from nippou import work_context
         ctx = work_context.get_context()
@@ -248,7 +248,7 @@ class ReasonScreenTests(WebTestCase):
         """後から書き足すこともある。**打つ手を止めない。**"""
         self.make_master()
         res = self.post("/api/entry/save", {
-            "rows": {"3": {"LOT": "N7131T0", "S": "ヨ", "TH": "0",
+            "rows": {"3": {"LOT": "N7131T0", "S": "ヨ", "TH": "10",
                            "KZ": "08", "KH": "00", "SZ": "10", "SH": "00"}},
             "header": {}, "checks": {}})
         self.assertEqual(res.status_code, 200)
@@ -257,7 +257,7 @@ class ReasonScreenTests(WebTestCase):
         """共有の日報管理は欄が1つ(`T_日報ヘッダー` の [理由])。"""
         self.make_master()
         self.post("/api/entry/save", {
-            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備"}},
+            "rows": {"3": {"S": "ヨ", "reason": "棚卸し準備", "KZ": "08", "KH": "00", "SZ": "09", "SH": "00", "TH": "10"}},
             "header": {}, "checks": {}})
         key = self.repo().list_keys()[0]
         header, _ = self.repo().load(*key)
