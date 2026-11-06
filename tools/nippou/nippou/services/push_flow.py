@@ -145,8 +145,6 @@ class AfterPush:
     standard: Any = None
     paper: str = ""
     rolls: list = field(default_factory=list)
-    #: 送った日の集計CSV(1つ目)のうち、**ほかのラインの日**の一言(控えと合わせて書いた・書けなかった)
-    csv_notes: list = field(default_factory=list)
 
     def lines(self) -> list[str]:
         """知らせの行(月替わりは別。`roll_lines`)。手で押したときと同じ並び。"""
@@ -157,7 +155,6 @@ class AfterPush:
             out.append(self.standard.message)
         if self.paper:
             out.append(self.paper)
-        out.extend(self.csv_notes)
         return out
 
     def roll_lines(self) -> tuple[list[str], Any]:
@@ -185,12 +182,8 @@ def after_push(repo: Any, summary: Any, *,
     try:
         from . import day_csv
 
-        others = {k[1] for k in succeeded if day_csv.refusal(k[1])}
         for note in day_csv.settle(repo, {tuple(k[:3]) for k in succeeded}, factors=False):
             log.info("共有へ送ったあと: %s", note)
-            # ほかのラインの日の一言は画面にも(この端末のラインの日はいつもどおり黙って書く)
-            if any(note.startswith(f"{ln} の集計CSV") for ln in others):
-                done.csv_notes.append(note)
     except Exception:                             # noqa: BLE001 - 送れてはいる
         log.exception("送った日の集計CSV(1つ目)を書き直せませんでした")
     job_progress.step(done=1, label="共有保存の履歴")

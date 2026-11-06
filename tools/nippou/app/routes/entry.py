@@ -2197,15 +2197,14 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
 
     # **ほかのラインの日は書かない**(この端末にはその日の直が全部はない。一部の中身で
     # 出力先の3本を上書きすると、そのラインの端末が書いた直が消える ── `services/day_csv`)
-    if day_csv.refusal(line):
-        # **ほかのラインの日は、そのラインの控えと合わせて書く**(その日の直ぜんぶで。v4.46.6
-        # `day_csv.write_other_line`)。控えを読めなければ書かず、そのラインのPCが書く
-        ok, text = day_csv.write_other_line(get_repo(), report_date, line, SETTINGS.report_output_dir)
+    refused = day_csv.refusal(line)
+    if refused:
+        log.info("集計CSVを書きませんでした(ほかのライン) key=%s/%s", report_date, line)
         ctx = work_context.get_context()
         if ctx.recall.active:
             # **次にすることも言う**(「共有保存ができませんけどいいんですか？」)
-            text += "。共有へは「直した直を共有へ送る」で送ってください"
-        return {"ok": ok, "skipped": not ok, "dir": "", "message": text}
+            refused += "。共有へは「直した直を共有へ送る」で送ってください"
+        return {"ok": False, "skipped": True, "dir": "", "message": refused}
 
     # **1つ目だけ。** 2つ目の出力先へは「共有へ保存」で送れたときに出します
     # (`services/second_output` ── 共有にまだ無い中身を先に届けない)
@@ -2463,6 +2462,20 @@ def close_shift():
 
     ctx = work_context.get_context()
     calc = current_calculator()
+    # **控えへ写せていない直しを、1分ごとに写し直す**(v4.46.7)。管理者のPCの直しは控えを通って
+    # そのラインのPCへ届く(そのPCが集計CSVを書き直す)。前は写せなかったぶんを次の保存か起動まで
+    # 待っていたので、共有へは送れているのにラインのPCへ届かず、集計CSVが古いままになり得た
+    try:
+        from nippou.services import local_backup
+        if get_repo().backup_pending():
+            from flask import after_this_request
+
+            @after_this_request
+            def _retry_backup(response):        # noqa: ANN001, ANN202
+                response.call_on_close(local_backup.flush_soon)
+                return response
+    except Exception:                             # noqa: BLE001 - 締めは続ける
+        log.exception("控えへの写し直しを頼めませんでした")
     # **管理者のPCが直したこのラインの日報を、動いているあいだも取り込む**(v4.46.3。5分ごと)。
     # 取り込んだら集計と集計CSVを書き直す(`local_backup.pull_if_due`)。呼出中は触らない
     if not ctx.recall.active and work_context.terminal_line_decided():

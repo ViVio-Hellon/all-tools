@@ -97,7 +97,7 @@ class Outcome:
                 parts.append(f"2つ目の出力先({c.base})に{what}を出せませんでした: {c.error}")
         if self.others:
             parts.append(f"2つ目の出力先の{what}({'・'.join(self.others)})は、そのラインのPCが"
-                         "自動で更新します(このPCでは書きません)")
+                         "直しを受け取ったときに書き直します")
         if self.held:
             parts.append(f"2つ目の出力先へは、まだ送れていない直がある{what}を出していません"
                          f"({'・'.join(self.held)})── 次に共有へ保存で送れたときに出します")
@@ -133,22 +133,7 @@ def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple]) -> Outcome:
     others = [(d, ln) for d, ln in days if day_csv.refusal(ln)]
     ready = [d for d in days if d not in unsent and d not in others]
     out = Outcome(held=[f"{d} {ln}" for d, ln in days if (d, ln) in unsent and (d, ln) not in others])
-    # ほかのラインの日は、そのラインの控えと合わせて**その日の直ぜんぶ**で書く(v4.46.6 `day_csv.merged_day`)。
-    # 控えを読めなければ書かずに名指しする(そのラインのPCが直しを取り込んだときに書く)
-    unwritten = []
-    for d, ln in others:
-        if (d, ln) in unsent:
-            out.held.append(f"{d} {ln}")
-            continue
-        try:
-            with day_csv.merged_day(repo, d, ln) as merged:
-                for base in extra_dirs():
-                    out.copies += csv_export.write_copies(
-                        [base], lambda b, m=merged, dd=d, l=ln:
-                        csv_export.write_daily_set(m, dd, l, b).folder)
-        except day_csv.NoBackup:
-            unwritten.append(f"{d} {ln}")
-    out.others = unwritten
+    out.others = [f"{d} {ln}" for d, ln in others]
     for base in extra_dirs():
         for report_date, line in ready:
             out.copies += csv_export.write_copies(

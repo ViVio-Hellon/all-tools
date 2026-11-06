@@ -671,8 +671,12 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
     repo.queue_backup(to_send)
     # 集計CSVは**置き換えた・消した直の日だけ**書き直す(手元が空の端末の初めての起動で、
     # 何年ぶんもの日を共有のフォルダへ書き直さない。新しく入っただけの直は前に出したCSVのまま)
+    # 新しく入っただけの直も書き直す(管理者が後から作った直など ── その日の集計CSVを書けるのは
+    # このラインの端末だけ)。**手元にこのラインのページが1枚も無かった端末(初めての起動・入れ直し)
+    # だけは書かない**(何年ぶんもの日を共有のフォルダへ書き直さない)
+    first_start = not mine
     _settle_pulled(repo, pulled | {k[:3] for k in gone},
-                   csv=replaced | {k[:3] for k in gone})
+                   csv=(set() if first_start else set(pulled)) | replaced | {k[:3] for k in gone})
     result.shifts = sorted(pulled)
     result.pending = len(repo.backup_pending())
     return result

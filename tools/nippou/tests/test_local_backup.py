@@ -300,7 +300,7 @@ class BackupServiceTests(unittest.TestCase):
             → 管理者のPC(この端末のラインは L-1)が控えから2直を入れて直す・共有へ送る
             → ラインのPCが動いたまま取り込む
         確かめること: 共有・控え・両方のPCの中身が直したものになる/ラインのPCの集計CSVは**1〜3直
-        ぜんぶ**で直したものになる/管理者のPCも機側の控えと合わせて直ぜんぶで書く/送り済みのまま(送り直し
+        ぜんぶ**で直したものになる/管理者のPCは機側の集計CSVを書かない/送り済みのまま(送り直し
         や「共有へ出ていません」にならない)/管理者のPCの時計が遅れていても取り込む
         """
         import sqlite3
@@ -347,13 +347,9 @@ class BackupServiceTests(unittest.TestCase):
             self.b.conn.execute("UPDATE daily_header SET saved_at='2000-01-01T00:00:00'"
                                 " WHERE line='機側' AND shift='2直'")
         notes = run_as("L-1", lambda: day_csv.settle(self.b, {keys["2直"][:3]}, factors=False))
-        # 管理者のPCは**機側の控えと合わせて、その日の直ぜんぶで**書く(v4.46.6)── 1直・3直は消えず、
-        # 2直だけ直した数に(控えにはまだ届いていない直しでも)
-        self.assertTrue(any("その日の直ぜんぶで書き直しました" in n for n in notes), notes)
-        right_away = agg.read_text(encoding="utf-8-sig")
-        self.assertIn("機側,1直,11,", right_away)
-        self.assertIn("機側,2直,29,", right_away)
-        self.assertIn("機側,3直,33,", right_away)
+        self.assertTrue(any("のPCが直しを受け取ったときに書き直します" in n for n in notes), notes)
+        self.assertEqual(agg.read_text(encoding="utf-8-sig"), before,
+                         "管理者のPCは機側の集計CSVを書かない(1直・3直が消えない)")
         self.assertEqual(len(pusher.push_pending(self.b, shared).succeeded), 1)
         self.b.queue_backup([keys["2直"]])
         lb.flush(self.b, force=True)
@@ -419,6 +415,50 @@ class BackupServiceTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertTrue(any("29" in [str(v) for v in row] for row in got), got)
+
+    def test_管理者が後から作った直を取り込んでも_集計CSVを書き直す(self) -> None:
+        """前は「置き換えた直」だけ書き直していた。新しく入った直でも書く
+        (手元にこのラインのページが1枚も無い端末の初めての起動だけは書かない)。"""
+        from nippou import work_context
+        from nippou.reporting import csv_export
+
+        out = self.tmp / "出力先"
+        self.live_settings(report_output_dir=out)
+        save(self.a, shift="1直", mai="10")
+        lb.flush(self.a)
+        time.sleep(1.1)
+        added = save(self.b, shift="2直", mai="20")      # 管理者が後から作った2直
+        self.b.queue_backup([added])
+        lb.flush(self.b, force=True)
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="L-1"):
+            self.assertEqual(lb.pull_if_due(self.a, "L-1").pulled, 1)
+        agg = csv_export.daily_output_paths(out, DAY, "L-1")["aggregate"].read_text(encoding="utf-8-sig")
+        self.assertIn("L-1,1直,10,", agg)
+        self.assertIn("L-1,2直,20,", agg)
+
+    def test_手元に無かった日の直を取り込んでも_集計CSVを書く_初めての起動は書かない(self) -> None:
+        from nippou import work_context
+        from nippou.reporting import csv_export
+
+        out = self.tmp / "出力先"
+        self.live_settings(report_output_dir=out)
+        new_day = "2026年10月2日"
+        made = save(self.b, shift="1直", mai="30", day=new_day)    # ラインのPCに無い日
+        self.b.queue_backup([made])
+        lb.flush(self.b, force=True)
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="L-1"):
+            # 手元にこのラインのページが1枚も無い(初めての起動)── 書かない
+            empty = self.pc("empty")
+            self.assertEqual(lb.pull(empty, "L-1").pulled, 1)
+            self.assertFalse(csv_export.daily_output_paths(out, new_day, "L-1")["aggregate"].exists())
+            # ふだんの端末(ほかの日のページがある)── 書く
+            save(self.a, shift="1直", mai="10")
+            lb.reset()
+            self.assertEqual(lb.pull_if_due(self.a, "L-1").pulled, 1)
+        agg = csv_export.daily_output_paths(out, new_day, "L-1")["aggregate"].read_text(encoding="utf-8-sig")
+        self.assertIn("L-1,1直,30,", agg)
 
     def test_管理者が直したぶんを_古い待ちで上書きしない(self) -> None:
         key = save(self.a, mai="10")
