@@ -256,6 +256,7 @@ export function start() {
   }
 
   wireSavedLine();
+  wireCsvCheck();
   wireBackup();
   wireLotSearch();
 
@@ -279,6 +280,88 @@ export function start() {
    一覧をサーバから取り直します。選んだラインはサーバが覚えるので、画面を移って
    戻っても(`?line=` の無い `/records` でも)そのラインのまま出ます。
    ================================================================ */
+/*
+  直しが集計CSVに入ったか(v4.46.9)。共有フォルダの集計CSVを読み、その直の行を
+  このPCの中身と比べた結果を「集計CSV」の欄に出す(`/api/records/csv-check`)。
+  画面はすぐ出し、読むのはそのあと(共有が遅くても一覧を待たせない)。
+*/
+const CSV_MARK = { done: "入っています", not_yet: "まだ", no_csv: "まだ", unreadable: "読めません",
+                   test: "出しません", empty: "―" };
+
+function paintCsvCell(td, r) {
+  td.replaceChildren();
+  td.dataset.value = r.state;
+  td.dataset.csvState = r.state;
+  const label = CSV_MARK[r.state] || r.state;
+  if (r.state === "done") {
+    const b = document.createElement("span");
+    b.className = "badge badge--done";
+    b.textContent = label;
+    b.title = `${r.folder} の集計CSVに、この直の中身が入っています`;
+    td.append(b);
+    return;
+  }
+  if (r.state === "not_yet" || r.state === "no_csv" || r.state === "unreadable") {
+    const d = document.createElement("details");
+    const s = document.createElement("summary");
+    const b = document.createElement("b");
+    b.textContent = label;
+    s.append(b);
+    d.append(s);
+    const ul = document.createElement("ul");
+    for (const t of [r.text, ...(r.diffs || [])]) {
+      const li = document.createElement("li");
+      li.textContent = t;
+      ul.append(li);
+    }
+    if (r.folder) {
+      const li = document.createElement("li");
+      li.textContent = `読んだところ: ${r.folder}`;
+      ul.append(li);
+    }
+    d.append(ul);
+    td.append(d);
+    return;
+  }
+  const m = document.createElement("span");
+  m.className = "muted";
+  m.textContent = label;
+  m.title = r.text;
+  td.append(m);
+}
+
+async function checkCsv() {
+  const cells = [...document.querySelectorAll("#records-table td[data-csv-check]")];
+  if (!cells.length) return;
+  const keys = cells.map((td) => ({ report_date: td.dataset.date, line: td.dataset.line,
+                                    shift: td.dataset.shift }));
+  for (const td of cells) {
+    td.replaceChildren(Object.assign(document.createElement("span"),
+                                     { className: "muted", textContent: "読んでいます…" }));
+  }
+  try {
+    const body = await api.post("/api/records/csv-check", { keys });
+    const by = new Map(body.results.map((r) => [`${r.report_date}\t${r.line}\t${r.shift}`, r]));
+    for (const td of cells) {
+      const r = by.get(`${td.dataset.date}\t${td.dataset.line}\t${td.dataset.shift}`);
+      if (r) paintCsvCell(td, r);
+      else td.replaceChildren(Object.assign(document.createElement("span"),
+                                            { className: "muted", textContent: "―" }));
+    }
+  } catch (err) {
+    for (const td of cells) {
+      td.replaceChildren(Object.assign(document.createElement("span"),
+                                       { className: "muted", textContent: "読めません",
+                                         title: err.message }));
+    }
+  }
+}
+
+function wireCsvCheck() {
+  document.getElementById("csv-check-again")?.addEventListener("click", () => checkCsv());
+  checkCsv();
+}
+
 function wireSavedLine() {
   const select = document.getElementById("saved-line");
   if (!select) return;

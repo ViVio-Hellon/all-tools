@@ -734,6 +734,33 @@ def backup_open():
     return recall()
 
 
+#: 1度に確かめる直の数(一覧は20直+未送信。共有のフォルダを読みすぎない)
+CSV_CHECK_LIMIT = 60
+
+
+@bp.post("/api/records/csv-check")
+def csv_check():
+    """直しが集計CSVに入ったか(v4.46.9。`services/csv_reflection`)。
+
+    出力先(1つ目・共有)にあるその日の集計CSVを読み、その直の行をこのPCの中身と比べる。
+    読むだけ。誰でも使える(書き換えるものが無い)。
+    """
+    from nippou.services import csv_reflection
+
+    payload = request.get_json(silent=True) or {}
+    keys = []
+    for item in payload.get("keys") or []:
+        if not isinstance(item, dict):
+            continue
+        key = tuple(str(item.get(k, "")).strip() for k in ("report_date", "line", "shift"))
+        if all(key) and key not in keys:
+            keys.append(key)
+    if not keys:
+        return jsonify(error_body("empty", "確かめる直を選んでください")), 400
+    results = csv_reflection.check_many(get_repo(), keys[:CSV_CHECK_LIMIT])
+    return jsonify({"results": results, "dir": str(SETTINGS.report_output_dir)})
+
+
 # ----------------------------------------------------------------------
 # ロットを探す (v4.33.0)
 # ----------------------------------------------------------------------

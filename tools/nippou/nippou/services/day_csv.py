@@ -49,7 +49,8 @@ def refusal(line: str) -> str:
     # そのラインのPCが直しを受け取ったときに書き直す(1.5.93 で控えと合わせて書いたが、控えが
     # そのラインのPCより古いと古い中身で上書きし、誰も直さないことがあったので戻した)
     return (f"{line} の集計CSVは、{line} のPCが直しを受け取ったときに書き直します"
-            f"({line} のPCが動いていれば5分以内・止まっていれば次に起動したとき)")
+            f"({line} のPCが動いていれば5分以内・止まっていれば次に起動したとき)。"
+            f"入ったかは「記録を見る」の「集計CSV」の欄で見られます")
 
 
 def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:

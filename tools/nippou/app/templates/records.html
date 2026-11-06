@@ -191,6 +191,7 @@
         <th data-sort="text"><button type="button">最後の保存</button></th>
         <th data-sort="text"><button type="button">共有へ</button></th>
         <th data-sort="num"><button type="button">確認</button></th>
+        <th data-sort="text" title="共有フォルダの集計CSVを読み、この直の中身が入っているかを比べます"><button type="button">集計CSV</button></th>
         <th></th></tr></thead>
       <tbody>
         {% for r in recent %}
@@ -209,6 +210,9 @@
             {% elif r.later %}<details><summary><span class="muted">直の終わりまでに {{ r.later | length }}件</span></summary>
               <ul>{% for p in r.later %}<li>{{ p }}</li>{% endfor %}</ul></details>
             {% else %}<span class="muted">なし</span>{% endif %}</td>
+          {# 直しが集計CSVに入ったか(v4.46.9)。読みに行くのは画面を出したあと(views/records.js) #}
+          <td data-csv-check data-value="" data-date="{{ r.report_date }}" data-line="{{ r.line }}"
+              data-shift="{{ r.shift }}"><span class="muted">読んでいます…</span></td>
           <td>
             <button class="btn btn--sm" type="button" data-open-all
                     data-date="{{ r.report_date }}" data-line="{{ r.line }}"
@@ -238,11 +242,18 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="empty">{% if saved_line.shown %}{{ saved_line.line | line_label }} の{% else %}まだ{% endif %}保存データがありません。</td></tr>
+        <tr><td colspan="9" class="empty">{% if saved_line.shown %}{{ saved_line.line | line_label }} の{% else %}まだ{% endif %}保存データがありません。</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if recent %}
+  <p class="lead" style="margin-top:var(--sp-2)">
+    <b>「集計CSV」</b>は、共有フォルダの集計CSVを読んで、この直の中身が入っているかを比べた結果です。
+    ほかのラインの直を直したときは、そのラインのPCが受け取って書き直すと「入っています」になります。
+    <button class="btn btn--sm" type="button" id="csv-check-again">集計CSVを読み直す</button>
+  </p>
+  {% endif %}
   <div class="msg" id="recall-note" hidden style="margin-top:var(--sp-2)"></div>
 </div>
 
