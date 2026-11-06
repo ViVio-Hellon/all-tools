@@ -387,9 +387,16 @@ class BandBrowserTests(_Child):
         # 打つのは**寸法の欄**(打った寸法は、あとで引いた答えで戻さない ── `gw.js` の editAt)。
         # 「最初の文字の欄」だと、引いた答えで埋め直す欄に当たることがあり、遅い PC(Windows CI)では
         # 打ったあとに埋め直されて打ちかけにならなかった。念のため、打ちかけと見えるまで打ち直す
-        field = page.locator("main#main [data-dim]:not([readonly]):not([disabled]):visible").first
+        # 「見えている」は待たない(Windows CI で寸法の欄が見えている扱いにならず30秒待って落ちた)。
+        # 欄に焦点を当て、キーボードで打つ(人が打ったのと同じ扱い ── `nav.remember` は isTrusted を見る)
+        dim_id = page.evaluate("(document.querySelector('main#main [data-dim]:not([readonly]):not([disabled])')"
+                               " || {}).id || ''")
+        self.assertTrue(dim_id, f"寸法の欄がありません: {page.url} "
+                        f"欄の数={page.evaluate('document.querySelectorAll(\'[data-dim]\').length')}")
         for attempt in range(3):
-            field.fill(str(98765 + attempt))
+            page.focus(f"#{dim_id}")
+            page.keyboard.press("Control+A")
+            page.keyboard.type(str(98765 + attempt))
             try:
                 page.wait_for_function("window.__remoteStopUnsaved().length > 0", timeout=5000)
                 break
