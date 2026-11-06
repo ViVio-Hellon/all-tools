@@ -2154,6 +2154,19 @@ def save():
                                                     current_date, current_shift))
     exported = (_export_daily_csv(report_date, line)
                 if (not silent or recalled_past) and not header.test else None)
+    # **あとの直の係数も数え直す**(v4.46.8。2直を直すと3直の「前の直から続くロット」が変わる)。
+    # この端末のラインだけ ── ほかのラインはそのラインのPCが直しを受け取ったときに数え直す。
+    # 書き換わったあとの直は、集計と集計CSVも作り直す
+    from nippou.services import day_csv
+    if not day_csv.refusal(line) and not header.test:
+        try:
+            from nippou.services import load_factor as factor_service
+            following = factor_service.recalculate_following(get_repo(), report_date, line, shift)
+            if following:
+                for note in day_csv.settle(get_repo(), set(following), factors=False):
+                    log.info("あとの直: %s", note)
+        except Exception:                         # noqa: BLE001 - 保存は済んでいる
+            log.exception("あとの直の係数を数え直せませんでした key=%s/%s/%s", report_date, line, shift)
     log.info("save ok silent=%s key=%s", silent, header.key())
     # **書いた先をそのまま返す。** `_target` を引き直すと、またいだ直後に
     # 「1直へ書いたのに画面は2直」になります

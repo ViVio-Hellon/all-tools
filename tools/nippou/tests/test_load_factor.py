@@ -343,6 +343,38 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(second.coefficient_lot_count, "0.6")   # Aは入らない
         self.assertEqual(second.lot_count, "1")
 
+    def test_直した直のあとの直も数え直す(self) -> None:
+        """v4.46.8: 2直のロットを直すと、3直の「前の直から続くロット」の見分けが変わる。
+        前は直した直だけ数え直し、3直の係数Lot数は直す前のままだった。"""
+        from nippou.services import load_factor as service
+
+        self.save("2直", [row(1, lot="A", usage="H283", shift="2直")])
+        service.recalculate(self.repo, DAY, LINE, "2直", table=FACTORS)
+        self.save("3直", [row(1, lot="A", usage="H283", shift="3直"),
+                          row(2, lot="C", usage="H197", shift="3直")])
+        service.recalculate(self.repo, DAY, LINE, "3直", table=FACTORS)
+        self.assertEqual(self.repo.load(DAY, LINE, "3直", 1)[0].coefficient_lot_count, "0.6")
+        # 2直のロットを A → B に直した(3直の A は前の直から続いていないことになる)
+        self.save("2直", [row(1, lot="B", usage="H283", shift="2直")])
+        service.recalculate(self.repo, DAY, LINE, "2直", table=FACTORS)
+        changed = service.recalculate_following(self.repo, DAY, LINE, "2直", table=FACTORS)
+        self.assertEqual(changed, [(DAY, LINE, "3直")])
+        third = self.repo.load(DAY, LINE, "3直", 1)[0]
+        self.assertEqual(third.coefficient_lot_count, "2.0", "3直の A も数える(1.4 + 0.6)")
+        self.assertEqual(third.lot_count, "2")
+
+    def test_あとの直は前の3枚に入るところまで(self) -> None:
+        from nippou.services import load_factor as service
+
+        self.save("1直", [row(1, lot="A", shift="1直")])
+        for page in (1, 2, 3):
+            self.save("2直", [row(1, page=page, lot=f"P{page}", shift="2直")], page=page)
+        self.save("3直", [row(1, lot="Z", shift="3直")])
+        self.assertEqual(service.following_shifts(self.repo, DAY, LINE, "1直"),
+                         [(DAY, LINE, "2直")], "2直が3枚あるので3直は1直を見ない")
+        self.assertEqual(service.following_shifts(self.repo, DAY, LINE, "2直"),
+                         [(DAY, LINE, "3直")])
+
     def test_ページが2つでも合計は直ぶん(self) -> None:
         from nippou.services import load_factor as service
 

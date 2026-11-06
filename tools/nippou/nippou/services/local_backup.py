@@ -331,6 +331,20 @@ def _settle_pulled(repo: NippouRepository, shifts: set[ShiftKey],
     from . import day_csv, second_output
 
     csv = set(shifts) if csv is None else set(csv) & set(shifts)
+    # 取り込んだ直の**あとの直**の係数を数え直す(v4.46.8。管理者が2直を直したら3直も)。このPCの
+    # ラインだけ・取り込んだ直そのものは直した側で数えてあるので触らない。書き換わった直は集計CSVも
+    from . import load_factor
+    following: set[ShiftKey] = set()
+    for key in sorted(csv):
+        if day_csv.refusal(key[1]):
+            continue
+        try:
+            following.update(k for k in load_factor.recalculate_following(repo, *key)
+                             if k not in shifts)
+        except Exception:                                  # noqa: BLE001 - 取り込みは済んでいる
+            log.exception("取り込んだ直のあとの直の係数を数え直せませんでした %s", key)
+    shifts = set(shifts) | following
+    csv |= following
     _refresh(repo, set(shifts) - csv)                      # 集計だけ
     if not csv:
         return

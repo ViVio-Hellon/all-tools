@@ -368,7 +368,9 @@ class BackupServiceTests(unittest.TestCase):
         finally:
             conn.close()
         # 送り済みのまま(ラインのPCが送り直す・赤い帯を出すことがない)
-        self.assertEqual([h for h in self.a.pending_sync_headers() if h.line == "機側"], [])
+        # 直した2直は送り済みのまま(送り直し・赤い帯にならない)。3直は2直と同じロットなので、
+        # 2直の直しで係数を数え直したぶん未送信になる(v4.46.8 ── 共有へ送れば揃う)
+        self.assertNotIn("2直", [h.shift for h in self.a.pending_sync_headers() if h.line == "機側"])
         # 集計CSV: 1〜3直ぜんぶで、2直は直した数
         after = agg.read_text(encoding="utf-8-sig")
         self.assertNotEqual(after, before, "直したあとの中身で書き直す")
@@ -379,6 +381,12 @@ class BackupServiceTests(unittest.TestCase):
         self.assertIn("機側,1直,11,", after)
         self.assertIn("機側,3直,33,", after)
         # 2つ目の出力先も(管理者が先に共有へ送ったので、ラインのPCは送り直さない ── 取り込んだときに書く)
+        # 2つ目は**共有に送り終わった中身だけ**: 数え直した3直が未送信のあいだは待ち、ラインのPCが
+        # 共有へ送ったときに出る
+        from nippou.services import second_output
+        self.assertFalse(csv_export.daily_output_paths(out2, DAY, "機側")["aggregate"].exists())
+        sent = pusher.push_pending(self.a, shared).succeeded
+        run_as("機側", lambda: second_output.after_push(self.a, sent))
         agg2 = csv_export.daily_output_paths(out2, DAY, "機側")["aggregate"].read_text(encoding="utf-8-sig")
         self.assertIn("機側,2直,29,", agg2)
         self.assertIn("機側,1直,11,", agg2)

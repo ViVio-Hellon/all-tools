@@ -73,6 +73,17 @@ def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:
     log = get_logger("services.day_csv")
     keys = sorted({(str(d), str(ln), str(sh)) for d, ln, sh in shifts})
     notes: list[str] = []
+    if factors:
+        # **あとの直の係数も**(前の直から続くロットの見分けが変わる。v4.46.8)── この端末のラインだけ。
+        # 書き換わったあとの直も、集計と集計CSVを作り直す
+        following: set[tuple[str, str, str]] = set()
+        for report_date, line, shift in keys:
+            if refusal(line):
+                continue
+            if repo.saved_pages(report_date, line, shift):
+                load_factor.recalculate(repo, report_date, line, shift)
+            following.update(load_factor.recalculate_following(repo, report_date, line, shift))
+        keys = sorted(set(keys) | following)
     for report_date, line, shift in keys:
         # 負荷係数は**この端末のラインだけ**数え直す(ほかのラインは前の直が手元に揃って
         # いないことがあり、数え直すと直をまたいだロットを二重に数えて書き換えてしまう)

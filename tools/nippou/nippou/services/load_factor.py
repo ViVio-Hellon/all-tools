@@ -222,3 +222,51 @@ def recalculate(repo: NippouRepository, report_date: str, line: str,
         log.info("負荷係数を計算し直しました %s %s %s: %s",
                  report_date, line, shift, result.message)
     return Applied(result, pages=len(loaded), written=written)
+
+
+def following_shifts(repo: NippouRepository, report_date: str, line: str, shift: str,
+                     limit: int = load_factor.LOOK_BACK_SHEETS) -> list[tuple[str, str, str]]:
+    """この直を**前の直として見る**あとの直(新しい順ではなく時間の順)。
+
+    係数は「前の直から続くロットは数えない」ので、あとの直は前の `limit` 枚を見ます
+    (`previous_pages`)。この直のページがその中に入るあとの直だけを返す ── あいだに `limit` 枚
+    以上あれば、それより先の直はこの直を見ない。テストの直は数えない(`previous_pages` と同じ)。
+    """
+    here = _rank(report_date, shift)
+    later: dict[tuple[str, str], int] = {}
+    for k in repo.list_keys(line, include_test=False):
+        if _rank(k[0], k[2]) > here:
+            later[(k[0], k[2])] = later.get((k[0], k[2]), 0) + 1
+    out: list[tuple[str, str, str]] = []
+    between = 0
+    for day, sh in sorted(later, key=lambda k: _rank(*k)):
+        if between >= limit:
+            break
+        out.append((day, line, sh))
+        between += later[(day, sh)]
+    return out
+
+
+def recalculate_following(repo: NippouRepository, report_date: str, line: str,
+                          shift: str, *, table: Optional[dict[str, float]] = None
+                          ) -> list[tuple[str, str, str]]:
+    """直した直の**あとの直**の係数も数え直す(v4.46.8)。書き直した直を返す。
+
+    「2直を直したら3直にも影響する」── 2直のロットを直すと、3直の「前の直から続くロット」の
+    見分けが変わり、3直の係数Lot数・ロット数が変わる。前は直した直だけ数え直していた。
+    機側・NS1・AIM 以外では何もしない(`recalculate` と同じ)。
+    """
+    if not load_factor.applies(line):
+        return []
+    changed: list[tuple[str, str, str]] = []
+    for key in following_shifts(repo, report_date, line, shift):
+        try:
+            applied = recalculate(repo, *key, table=table)
+        except Exception:                         # noqa: BLE001 - 直した直は保存済み
+            log.exception("あとの直の係数を数え直せませんでした %s", key)
+            continue
+        if applied.written:
+            changed.append(key)
+            log.info("直した直のあとの直の係数を数え直しました %s → %s(%dページ)",
+                     (report_date, line, shift), key, applied.written)
+    return changed
