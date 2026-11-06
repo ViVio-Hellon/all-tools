@@ -136,10 +136,11 @@ class RecallTests(CorrectionCase):
         self.recall("HVC", "2直")
         body = self.edit("HVC9999")
         self.assertFalse(body["export"]["ok"])
-        self.assertIn("HVC の集計CSVは、HVC のPCが自動で更新します", body["export"]["message"])
+        # 控えが無い(読めない)ので、一部の中身では書かない(HVC のPCが書く)
+        self.assertIn("HVC の集計CSVはまだ更新していません", body["export"]["message"])
         self.edit("HVC9998", draft=True)
         back = self.post("/api/settings/back", {}).get_json()
-        self.assertTrue(any("のPCが自動で更新します" in n for n in back["settled"]), back)
+        self.assertTrue(any("のPCが直しを取り込んだときに自動で更新します" in n for n in back["settled"]), back)
         for path in theirs.values():
             self.assertEqual(path.read_text(encoding="utf-8"), "HVCの端末が書いた中身(1直・2直・3直)",
                              f"{path.name} をこの端末の一部の中身で上書きした")
@@ -177,7 +178,7 @@ class RecalledPushTests(CorrectionCase):
         res = self.post("/api/settings/push", {"scope": "recalled", "skip": "設備移動のため保存"})
         self.assertEqual(res.status_code, 200, res.get_json())
         body = res.get_json()
-        self.assertIn("HVC の集計CSVは、HVC のPCが自動で更新します", body["message"])
+        self.assertIn("HVC の集計CSV", body["message"])
         conn = sqlite3.connect(db)
         try:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -197,6 +198,45 @@ class RecalledPushTests(CorrectionCase):
         self.recall("HVC", "2直")
         res = self.post("/api/settings/push", {"scope": "current"})
         self.assertEqual(res.status_code, 422)
+
+
+class OtherLineMergedTests(CorrectionCase):
+    """「管理者PCで共有へ送るタイミングでは集計は直せないのですか？」(v4.46.6)
+
+    管理者のPCには呼び出した直しかないが、そのラインの控えにはその日の直が全部ある。
+    控えと合わせて、**保存(確定)のときに、その日の直ぜんぶで**ほかのラインの集計CSVを書く。
+    """
+
+    def test_ほかのラインの直を直して保存すると_控えと合わせてその日の直ぜんぶで書く(self) -> None:
+        from nippou import config, user_settings
+        from nippou.services import local_backup
+
+        share = self.tmp / "控え"
+        share.mkdir()
+        user_settings.save_many({config.KEY_BACKUP_DIR: str(share)})
+        # HVC のPCが打って控えへ写した前日の1〜3直(ここでは同じ手元に置いて写し、手元から消す)
+        for shift, lot in (("1直", "HVC0001"), ("2直", "HVC0002"), ("3直", "HVC0003")):
+            self.put("HVC", shift, lot)
+        repo = self.repo()
+        repo.queue_backup([(self.yesterday, "HVC", sh, 1) for sh in ("1直", "2直", "3直")])
+        self.assertFalse(local_backup.flush(repo, force=True).error)
+        with repo.conn:
+            repo.conn.execute("DELETE FROM daily_detail WHERE line='HVC'")
+            repo.conn.execute("DELETE FROM daily_header WHERE line='HVC'")
+            repo.conn.execute("DELETE FROM packing_report WHERE line_name='HVC'")
+        # 管理者のPC: 控えから2直を入れて直し、保存(確定)
+        local_backup.import_shift(repo, self.yesterday, "HVC", "2直")
+        self.admin()
+        self.recall("HVC", "2直")
+        body = self.edit("HVC9999")
+        self.assertTrue(body["export"]["ok"], body["export"])
+        self.assertIn("その日の直ぜんぶで書き直しました", body["export"]["message"])
+        text = self.csv_text("HVC")
+        for lot in ("HVC0001", "HVC9999", "HVC0003"):
+            self.assertIn(lot, text, "1直・3直は控えから、2直は直した中身で")
+        self.assertNotIn("HVC0002", text)
+        # 手元には呼び出した直だけ(控えの直を手元へ入れてはいない)
+        self.assertEqual(sorted({k[2] for k in self.repo().list_keys("HVC")}), ["2直"])
 
 
 class SettleTests(CorrectionCase):

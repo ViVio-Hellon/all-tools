@@ -1076,10 +1076,6 @@ def _push(ctx):
     done = push_flow.after_push(get_repo(), summary, history=lambda: push_history.record_push(
         get_repo(), pressed, summary, current))
     lines.extend(done.lines())
-    # ほかのラインの直を送ったとき: 集計CSVはそのラインのPCが更新する、と一言(ラインごとに1回)
-    from nippou.services import day_csv
-    for other in sorted({k[1] for k in summary.succeeded if day_csv.refusal(k[1])}):
-        lines.append(day_csv.refusal(other))
     sent, standard, rolls = done.second, done.standard, done.rolls
     roll_lines, monthly = done.roll_lines()
 

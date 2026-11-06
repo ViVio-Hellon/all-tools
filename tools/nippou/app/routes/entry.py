@@ -2197,14 +2197,15 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
 
     # **ほかのラインの日は書かない**(この端末にはその日の直が全部はない。一部の中身で
     # 出力先の3本を上書きすると、そのラインの端末が書いた直が消える ── `services/day_csv`)
-    refused = day_csv.refusal(line)
-    if refused:
-        log.info("集計CSVを書きませんでした(ほかのライン) key=%s/%s", report_date, line)
+    if day_csv.refusal(line):
+        # **ほかのラインの日は、そのラインの控えと合わせて書く**(その日の直ぜんぶで。v4.46.6
+        # `day_csv.write_other_line`)。控えを読めなければ書かず、そのラインのPCが書く
+        ok, text = day_csv.write_other_line(get_repo(), report_date, line, SETTINGS.report_output_dir)
         ctx = work_context.get_context()
         if ctx.recall.active:
             # **次にすることも言う**(「共有保存ができませんけどいいんですか？」)
-            refused += "。共有へは「直した直を共有へ送る」で送ってください"
-        return {"ok": False, "skipped": True, "dir": "", "message": refused}
+            text += "。共有へは「直した直を共有へ送る」で送ってください"
+        return {"ok": ok, "skipped": not ok, "dir": "", "message": text}
 
     # **1つ目だけ。** 2つ目の出力先へは「共有へ保存」で送れたときに出します
     # (`services/second_output` ── 共有にまだ無い中身を先に届けない)

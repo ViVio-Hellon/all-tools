@@ -9,16 +9,23 @@
         **その2直だけの中身で上書き**され、機側の端末が書いた1直・3直が黙って消える
 
 月替わりの書き出しは同じ穴を `month_rollover._partial_lines` で塞いでいます。日の集計CSVにも
-同じ関門を置きます。**書くのはそのラインの端末だけ**です。ほかのラインの直しは、そのラインの
-端末が直しを控えから取り込んだときに、その端末が直ぜんぶで作り直します(`local_backup`)。
+同じ関門を置きます。
+
+**ほかのラインの日は、そのラインの控え(LocalBackup)と合わせて書きます**(v4.46.6 `merged_day`)。
+控えにはそのラインの端末が保存した直が全部あるので、それをメモリーへ写し、この端末で直した直
+だけを手元の中身に差し替えて、**その日の直ぜんぶ**で書きます(「管理者PCで共有へ送るタイミング
+では集計は直せないのですか？」)。控えを読めないときは書かず、そのラインの端末が直しを控えから
+取り込んだときに書き直します(`local_backup`)。
 
 この端末のラインを決めていない端末(ライン未設定の管理者のPCなど)は、どのラインも「自分の
 ライン」ではないので書きません。
 """
 from __future__ import annotations
 
+import sqlite3
 import threading
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from typing import Iterator, Optional
 
 #: 書き込みの錠(`app/__init__.py` の `_WRITE_LOCK`。起動のときに `use_lock` で渡す)。
 #: 控えへ写す処理は応答のあと(錠の外)で走るので、そこから CSV を書くときに保存の要求と
@@ -48,13 +55,89 @@ def refusal(line: str) -> str:
     return f"{line} の集計CSVは、{line} のPCが自動で更新します(このPCでは書きません)"
 
 
+class NoBackup(RuntimeError):
+    """そのラインの控えが無い・読めない(その日の直が揃わない)。"""
+
+
+@contextmanager
+def merged_day(repo, report_date: str, line: str) -> Iterator[object]:
+    """ほかのラインのその日を、**そのラインの控え + この端末で直した直**で揃えたリポジトリ(メモリー)。
+
+    控えをメモリーへ写し、この端末の手元にあるその日の直(呼び出して直した直)だけを手元の
+    中身に差し替え、その日の直の集計を作り直してから渡す。控えが無い・読めなければ `NoBackup`。
+    """
+    from ..db.repository import NippouRepository
+    from ..db.schema import ensure_schema
+    from . import local_backup, summary
+
+    mem = sqlite3.connect(":memory:")
+    try:
+        try:
+            with local_backup.reader(line) as backup:
+                if backup is None:
+                    raise NoBackup(f"{line} の控えがありません")
+                backup.conn.backup(mem)
+        except NoBackup:
+            raise
+        except Exception as exc:                  # noqa: BLE001 - 届かない・読めない
+            raise NoBackup(f"{line} の控えを読めませんでした({exc})") from exc
+        mem.row_factory = sqlite3.Row
+        mem.execute("PRAGMA foreign_keys=ON")
+        ensure_schema(mem)
+        merged = NippouRepository(mem)
+        mine = sorted({k[2] for k in repo.list_keys(line) if k[0] == report_date})
+        for shift in mine:
+            # この端末で直した直は、手元の中身で置き換える(控えにまだ届いていなくても)
+            with mem:
+                mem.execute("DELETE FROM daily_detail WHERE report_date=? AND line=? AND shift=?",
+                            (report_date, line, shift))
+                mem.execute("DELETE FROM daily_header WHERE report_date=? AND line=? AND shift=?",
+                            (report_date, line, shift))
+            test = repo.is_test_shift(report_date, line, shift)
+            for page in repo.saved_pages(report_date, line, shift):
+                loaded = repo.load(report_date, line, shift, page)
+                if loaded is not None:
+                    merged.save(*loaded, test=test)
+        # 控えにあった集計は使わず、その日の直を**明細から作り直す**(古い集計を持ち込まない)
+        with mem:
+            mem.execute("DELETE FROM packing_report WHERE work_date=? AND line_name=?",
+                        (report_date, line))
+        for shift in sorted({k[2] for k in merged.list_keys(line) if k[0] == report_date}):
+            summary.refresh_shift(merged, report_date, line, shift)
+        yield merged
+    finally:
+        mem.close()
+
+
+def write_other_line(repo, report_date: str, line: str, base) -> tuple[bool, str]:
+    """ほかのラインの日の集計CSVを、控えと合わせて**その日の直ぜんぶ**で書く。(書けたか, 一言)。"""
+    from ..logging_setup import get_logger
+    from ..reporting import csv_export
+
+    log = get_logger("services.day_csv")
+    try:
+        with merged_day(repo, report_date, line) as merged:
+            with _lock if _lock is not None else nullcontext():
+                written = csv_export.write_daily_set(merged, report_date, line, base)
+    except NoBackup as exc:
+        log.info("ほかのラインの集計CSVを書けませんでした(控え) %s/%s: %s", report_date, line, exc)
+        return False, (f"{line} の集計CSVはまだ更新していません({exc})。"
+                       f"{line} のPCが直しを取り込んだときに自動で更新します")
+    except Exception as exc:                      # noqa: BLE001
+        log.exception("ほかのラインの集計CSVを書けませんでした %s/%s", report_date, line)
+        return False, f"{report_date} {line} の集計CSVを書き直せませんでした: {exc}"
+    log.info("ほかのラインの集計CSVを控えと合わせて書きました %s/%s → %s",
+             report_date, line, written.folder)
+    return True, f"{line} の集計CSVを、その日の直ぜんぶで書き直しました({written.folder})"
+
+
 def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:
     """ページを書き換えた・消した直を、**保存(確定)と同じところまで**揃える(v4.46.3)。
 
         1. 負荷係数を数え直す(`factors`。機側・NS1・AIM だけ効く)
         2. その直の集計を作り直す(ページが無くなった直は集計を消す)
         3. その日の集計CSV 3本を、出力先(1つ目)へ**その日の直ぜんぶで**書き直す
-           ── ほかのラインの日は書かない(`refusal`)。テストの直だけの日は書かない
+           ── ほかのラインの日は、そのラインの控えと合わせて書く(`write_other_line`)。テストの直だけの日は書かない
 
     「前日分を修正した。印刷は更新していたが、集計ファイルは更新していない」── 直す道ごとに
     やることがばらばらで、集計CSVを書き直さない道が残っていました。直す道はここを通します。
@@ -93,10 +176,10 @@ def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:
             continue                              # テストの直だけ(本番の CSV は変わらない)
         if not _has_production(repo, report_date, line) and not _csv_exists(out_dir, report_date, line):
             continue                              # 本番の直が無く、前に出したCSVも無い(テストの直を消しただけ)
-        refused = refusal(line)
-        if refused:
-            log.info("集計CSVを書きませんでした(ほかのライン) %s/%s", report_date, line)
-            notes.append(refused)
+        if refusal(line):
+            # ほかのラインの日は、そのラインの控えと合わせて書く(`merged_day`)
+            _ok, text = write_other_line(repo, report_date, line, out_dir)
+            notes.append(text)
             continue
         try:
             with _lock if _lock is not None else nullcontext():
@@ -125,4 +208,4 @@ def _csv_exists(base, report_date: str, line: str) -> bool:
 
 def problems(notes: list[str]) -> list[str]:
     """`settle` の一言のうち、**利用者に見せるべきもの**(書かなかった理由・失敗)。"""
-    return [n for n in notes if "書き直しました" not in n]
+    return [n for n in notes if "書き直しました" not in n or "書き直せません" in n]

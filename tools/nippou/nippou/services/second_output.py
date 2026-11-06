@@ -133,7 +133,22 @@ def after_push(repo: NippouRepository, pushed_keys: Iterable[tuple]) -> Outcome:
     others = [(d, ln) for d, ln in days if day_csv.refusal(ln)]
     ready = [d for d in days if d not in unsent and d not in others]
     out = Outcome(held=[f"{d} {ln}" for d, ln in days if (d, ln) in unsent and (d, ln) not in others])
-    out.others = [f"{d} {ln}" for d, ln in others]
+    # ほかのラインの日は、そのラインの控えと合わせて**その日の直ぜんぶ**で書く(v4.46.6 `day_csv.merged_day`)。
+    # 控えを読めなければ書かずに名指しする(そのラインのPCが直しを取り込んだときに書く)
+    unwritten = []
+    for d, ln in others:
+        if (d, ln) in unsent:
+            out.held.append(f"{d} {ln}")
+            continue
+        try:
+            with day_csv.merged_day(repo, d, ln) as merged:
+                for base in extra_dirs():
+                    out.copies += csv_export.write_copies(
+                        [base], lambda b, m=merged, dd=d, l=ln:
+                        csv_export.write_daily_set(m, dd, l, b).folder)
+        except day_csv.NoBackup:
+            unwritten.append(f"{d} {ln}")
+    out.others = unwritten
     for base in extra_dirs():
         for report_date, line in ready:
             out.copies += csv_export.write_copies(

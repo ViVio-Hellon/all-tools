@@ -300,7 +300,7 @@ class BackupServiceTests(unittest.TestCase):
             → 管理者のPC(この端末のラインは L-1)が控えから2直を入れて直す・共有へ送る
             → ラインのPCが動いたまま取り込む
         確かめること: 共有・控え・両方のPCの中身が直したものになる/ラインのPCの集計CSVは**1〜3直
-        ぜんぶ**で直したものになる/管理者のPCは機側の集計CSVを書かない/送り済みのまま(送り直し
+        ぜんぶ**で直したものになる/管理者のPCも機側の控えと合わせて直ぜんぶで書く/送り済みのまま(送り直し
         や「共有へ出ていません」にならない)/管理者のPCの時計が遅れていても取り込む
         """
         import sqlite3
@@ -347,9 +347,13 @@ class BackupServiceTests(unittest.TestCase):
             self.b.conn.execute("UPDATE daily_header SET saved_at='2000-01-01T00:00:00'"
                                 " WHERE line='機側' AND shift='2直'")
         notes = run_as("L-1", lambda: day_csv.settle(self.b, {keys["2直"][:3]}, factors=False))
-        self.assertTrue(any("のPCが自動で更新します" in n for n in notes), notes)
-        self.assertEqual(agg.read_text(encoding="utf-8-sig"), before,
-                         "管理者のPCは機側の集計CSVを書かない(1直・3直が消えない)")
+        # 管理者のPCは**機側の控えと合わせて、その日の直ぜんぶで**書く(v4.46.6)── 1直・3直は消えず、
+        # 2直だけ直した数に(控えにはまだ届いていない直しでも)
+        self.assertTrue(any("その日の直ぜんぶで書き直しました" in n for n in notes), notes)
+        right_away = agg.read_text(encoding="utf-8-sig")
+        self.assertIn("機側,1直,11,", right_away)
+        self.assertIn("機側,2直,29,", right_away)
+        self.assertIn("機側,3直,33,", right_away)
         self.assertEqual(len(pusher.push_pending(self.b, shared).succeeded), 1)
         self.b.queue_backup([keys["2直"]])
         lb.flush(self.b, force=True)
