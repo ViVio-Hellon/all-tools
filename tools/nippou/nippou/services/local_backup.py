@@ -220,6 +220,12 @@ def _sent_same(sent: Optional[tuple[str, str]], mine: Optional[tuple[str, str]])
     return bool(sent and mine and mine[1] and sent[1] == mine[1])
 
 
+def _base_of(conn: sqlite3.Connection, key: PageKey) -> str:
+    """手元のそのページが**最後に控えと揃ったときの中身の指紋**(分からなければ空)。"""
+    row = conn.execute(f"SELECT base_hash FROM {HEADER} WHERE {_WHERE}", key).fetchone()
+    return str(row[0] or "") if row else ""
+
+
 def _settle_base(conn: sqlite3.Connection, key: PageKey) -> None:
     """手元のそのページは**いま控えと同じ中身**、と覚える(`daily_header.base_hash`)。
 
@@ -395,6 +401,13 @@ def flush(repo: NippouRepository, *, force: bool = False, wait: float = 0.0) -> 
                 with dst:                         # 1ラインぶんを1つの取引で
                     for key in keys:
                         mine, theirs = _stamp(repo.conn, key), _stamp(dst, key)
+                        # **控えが、手元が最後に揃ったときのまま**(`base_hash`)なら、変わったのは
+                        # 手元だけ ── 時計に関係なく手元を写す(v4.46.3。管理者のPCの時計が遅れて
+                        # いると、直した中身を「控えのほうが新しい」と取り違え、古い中身で手元の
+                        # 直しを上書きしていた。共有へは直したものを送ったあとでも)
+                        if (mine is not None and theirs is not None
+                                and _base_of(repo.conn, key) == theirs[1] != mine[1]):
+                            theirs = (min(theirs[0], mine[0]), theirs[1])
                         # 手元に無い = このPCで消した(待ちに入れたのは消したとき)。
                         # **新しさを比べるのは両方にあるときだけ**
                         if mine is not None and _newer(theirs, mine) and key == open_now:
@@ -597,6 +610,20 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
                 for r in repo.conn.execute(
                     f"SELECT report_date, line, shift, page, saved_at, content_hash"
                     f" FROM {HEADER} WHERE line=?", (line,))}
+        # 手元が**最後に控えと揃ったときの中身**(`base_hash`)。手元がそこから変わっていないのに
+        # 控えが変わっていれば、時計に関係なく控えのほうが新しい(v4.46.3。管理者のPCの時計が
+        # 遅れていると、直した時刻が手元より古く見え、取り込まずに古い中身で控えを上書きしていた)
+        base = {(r[0], r[1], r[2], int(r[3])): str(r[4] or "")
+                for r in repo.conn.execute(
+                    f"SELECT report_date, line, shift, page, base_hash FROM {HEADER} WHERE line=?",
+                    (line,))}
+
+        def moved_there(key: PageKey) -> bool:
+            """手元はそのまま・控えだけ変わった(どちらの時計にも頼らない)。"""
+            known = base.get(key, "")
+            return bool(known and key in mine and key in theirs
+                        and mine[key][1] == known and theirs[key][1] != known)
+
         unsent_here = {(r[0], r[1], r[2], int(r[3])) for r in repo.conn.execute(
             f"SELECT report_date, line, shift, page FROM {HEADER} WHERE line=? AND dirty=1",
             (line,))}
@@ -610,7 +637,7 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
                 continue
             if key == typing:
                 continue                          # 画面で打っているページは戻さない(`flush` と同じ)
-            if _newer(stamp, mine.get(key)):
+            if _newer(stamp, mine.get(key)) or moved_there(key):
                 if key in mine:
                     replaced.add(key[:3])         # 手元にあったページを、控えの新しいほうで置き換えた
                 with repo.conn:
@@ -636,7 +663,7 @@ def _pull(repo: NippouRepository, line: str, result: Result) -> Result:
                 # 控えへ戻さず、この端末からも消す(戻すと、消した PC の起動でまた生き返る)
                 gone.append(key)
                 continue
-            if key not in theirs or _newer(stamp, theirs[key]):
+            if key not in theirs or (_newer(stamp, theirs[key]) and not moved_there(key)):
                 to_send.append(key)
         for key in gone:
             _drop_removed(repo, key, backup)

@@ -293,6 +293,129 @@ class BackupServiceTests(unittest.TestCase):
         paths = csv_export.daily_output_paths(out, DAY, "L-1")
         self.assertTrue(paths["aggregate"].exists(), "取り込んだ日の集計CSVを書き直す")
 
+    def test_管理者が呼び出して直す_通しで穴がない(self) -> None:
+        """管理者が呼び出して直す、を通しで(v4.46.3。頻繁にある操作なので穴があってはならない)。
+
+            ラインのPC(機側)が前日1〜3直を打って共有へ送り、集計CSVを書いた
+            → 管理者のPC(この端末のラインは L-1)が控えから2直を入れて直す・共有へ送る
+            → ラインのPCが動いたまま取り込む
+        確かめること: 共有・控え・両方のPCの中身が直したものになる/ラインのPCの集計CSVは**1〜3直
+        ぜんぶ**で直したものになる/管理者のPCは機側の集計CSVを書かない/送り済みのまま(送り直し
+        や「共有へ出ていません」にならない)/管理者のPCの時計が遅れていても取り込む
+        """
+        import sqlite3
+
+        from nippou import work_context
+        from nippou.access_bridge import pusher
+        from nippou.reporting import csv_export
+        from nippou.services import day_csv
+
+        out = self.tmp / "出力先"
+        shared = self.tmp / "共有DB" / "日報データ.sqlite3"
+        shared.parent.mkdir()
+        out2 = self.tmp / "2つ目"
+        self.live_settings(report_output_dir=out, summary_csv_dirs=[out, out2])
+        keys = {sh: save(self.a, line="機側", shift=sh, mai=m)
+                for sh, m in (("1直", "11"), ("2直", "22"), ("3直", "33"))}
+
+        def as_pc(line):
+            return [patch.object(work_context, "terminal_line_decided", return_value=True),
+                    patch.object(work_context, "stored_terminal_line", return_value=line)]
+
+        def run_as(line, fn):
+            patches = as_pc(line)
+            for p in patches:
+                p.start()
+            try:
+                return fn()
+            finally:
+                for p in patches:
+                    p.stop()
+
+        # ラインのPC: 共有へ送り、控えへ写し、その日の集計CSVを書く
+        self.assertEqual(len(pusher.push_pending(self.a, shared).succeeded), 3)
+        lb.flush(self.a)
+        run_as("機側", lambda: day_csv.settle(self.a, {k[:3] for k in keys.values()}, factors=False))
+        agg = csv_export.daily_output_paths(out, DAY, "機側")["aggregate"]
+        before = agg.read_text(encoding="utf-8-sig")
+        # 管理者のPC: 控えから2直を入れて直す。**時計が遅れている**(直した時刻がラインのPCより前)
+        lb.import_shift(self.b, DAY, "機側", "2直")
+        header, details = _edited(self.b, keys["2直"], "29")
+        details[0].con = "29"                            # 枚数(集計の合計枚数のもと)も
+        self.b.save(header, details)
+        with self.b.conn:
+            self.b.conn.execute("UPDATE daily_header SET saved_at='2000-01-01T00:00:00'"
+                                " WHERE line='機側' AND shift='2直'")
+        notes = run_as("L-1", lambda: day_csv.settle(self.b, {keys["2直"][:3]}, factors=False))
+        self.assertTrue(any("この端末では書き直しません" in n for n in notes), notes)
+        self.assertEqual(agg.read_text(encoding="utf-8-sig"), before,
+                         "管理者のPCは機側の集計CSVを書かない(1直・3直が消えない)")
+        self.assertEqual(len(pusher.push_pending(self.b, shared).succeeded), 1)
+        self.b.queue_backup([keys["2直"]])
+        lb.flush(self.b, force=True)
+        # ラインのPC: 動いたまま取り込む
+        result = run_as("機側", lambda: lb.pull_if_due(self.a, "機側"))
+        self.assertEqual(result.pulled, 1)
+        # 中身: 共有・控え・両方のPC
+        self.assertEqual(mai_of(self.a, keys["2直"]), "29")
+        self.assertEqual(mai_of(self.b, keys["2直"]), "29")
+        with lb.reader("機側") as backup:
+            self.assertEqual(mai_of(backup, keys["2直"]), "29")
+        conn = sqlite3.connect(shared)
+        try:
+            rows = conn.execute('SELECT "直" FROM "T_日報明細_機側"').fetchall()
+            self.assertEqual(sorted(r[0] for r in rows), ["1直", "2直", "3直"])
+        finally:
+            conn.close()
+        # 送り済みのまま(ラインのPCが送り直す・赤い帯を出すことがない)
+        self.assertEqual([h for h in self.a.pending_sync_headers() if h.line == "機側"], [])
+        # 集計CSV: 1〜3直ぜんぶで、2直は直した数
+        after = agg.read_text(encoding="utf-8-sig")
+        self.assertNotEqual(after, before, "直したあとの中身で書き直す")
+        detail = csv_export.daily_output_paths(out, DAY, "機側")["detail"].read_text(encoding="utf-8-sig")
+        for shift in ("1直", "2直", "3直"):
+            self.assertIn(shift, detail)
+        self.assertIn("機側,2直,29,", after, "2直の合計枚数は直した数")
+        self.assertIn("機側,1直,11,", after)
+        self.assertIn("機側,3直,33,", after)
+        # 2つ目の出力先も(管理者が先に共有へ送ったので、ラインのPCは送り直さない ── 取り込んだときに書く)
+        agg2 = csv_export.daily_output_paths(out2, DAY, "機側")["aggregate"].read_text(encoding="utf-8-sig")
+        self.assertIn("機側,2直,29,", agg2)
+        self.assertIn("機側,1直,11,", agg2)
+
+    def test_管理者が共有へ送り忘れても_ラインのPCが取り込んで送る(self) -> None:
+        """直しは控え経由でラインのPCに入り、送っていない印のまま ── ラインのPCの共有へ保存で届く。"""
+        import sqlite3
+
+        from nippou import work_context
+        from nippou.access_bridge import pusher
+
+        shared = self.tmp / "共有DB" / "日報データ.sqlite3"
+        shared.parent.mkdir()
+        self.live_settings(report_output_dir=self.tmp / "出力先")
+        key = save(self.a, line="機側", shift="2直", mai="22")
+        pusher.push_pending(self.a, shared)
+        lb.flush(self.a)
+        lb.import_shift(self.b, DAY, "機側", "2直")
+        time.sleep(1.1)
+        header, details = _edited(self.b, key, "29")
+        details[0].con = "29"
+        self.b.save(header, details)
+        self.b.queue_backup([key])
+        lb.flush(self.b, force=True)                       # 共有へは送らない
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="機側"):
+            self.assertEqual(lb.pull_if_due(self.a, "機側").pulled, 1)
+        self.assertEqual([(h.shift, h.page) for h in self.a.pending_sync_headers()], [("2直", 1)],
+                         "送っていない直しとしてラインのPCに入る")
+        self.assertEqual(len(pusher.push_pending(self.a, shared).succeeded), 1)
+        conn = sqlite3.connect(shared)
+        try:
+            got = conn.execute('SELECT * FROM "T_日報明細_機側"').fetchall()
+        finally:
+            conn.close()
+        self.assertTrue(any("29" in [str(v) for v in row] for row in got), got)
+
     def test_管理者が直したぶんを_古い待ちで上書きしない(self) -> None:
         key = save(self.a, mai="10")
         self.a.queue_backup([key])                   # 写せないまま残った待ち(古い中身)

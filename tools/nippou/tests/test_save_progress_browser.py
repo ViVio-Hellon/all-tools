@@ -157,8 +157,14 @@ class ProgressTests(PushCase):
             window.__shown = false;
             window.__took = null;
             new MutationObserver(() => {
+              // **出た時刻も覚える**(押してから何ミリ秒で出たか)。決まりは「0.3 秒より前には
+              // 出さない」── 保存の答えが返った時刻で比べると、答えのあとの片付けで見張りが
+              // 少し長引いたぶん「一瞬で終わったのに出した」と揺れた(Windows の CI。47ミリ秒)
               const b = document.getElementById("job-float");
-              if (b && !b.hidden) window.__shown = true;
+              if (b && !b.hidden && !window.__shown) {
+                window.__shown = true;
+                window.__shownAt = performance.now() - (window.__pressed ?? performance.now());
+              }
             }).observe(document.body, { subtree: true, childList: true,
                                         attributes: true, attributeFilter: ["hidden"] });
             // **押してから**共有へ保存の答えが来るまで何ミリ秒かかったか。進み具合の見張り(watch)は
@@ -182,9 +188,12 @@ class ProgressTests(PushCase):
         page.wait_for_function("window.__took !== null", timeout=5000)
         page.wait_for_timeout(800)
         took, shown = page.evaluate("window.__took"), page.evaluate("window.__shown")
-        if took < 250:
-            self.assertFalse(shown, f"一瞬({took:.0f}ミリ秒)で終わったのに進み具合を出しました")
-        elif took > 400:
+        if shown:
+            # 出したなら、**0.3 秒(境目の揺れを見て 0.25 秒)より後**であること(ちらつかない)
+            shown_at = page.evaluate("window.__shownAt")
+            self.assertGreaterEqual(shown_at, 250,
+                                    f"押してから{shown_at:.0f}ミリ秒で進み具合を出しました(ちらつく)")
+        if took > 400:
             self.assertTrue(shown, f"{took:.0f}ミリ秒かかったのに進み具合を出しませんでした")
         self.assertTrue(page.evaluate("document.getElementById('job-float')?.hidden ?? true"),
                         "終わったのに進み具合が残っています")
