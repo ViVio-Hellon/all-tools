@@ -384,8 +384,18 @@ class BandBrowserTests(_Child):
         # 遅い PC(Windows CI)では、起きた直後に画面が中身を引き直すことがある。引き直しの前に打つと
         # 打った欄ごと消えて「打ちかけ」にならない ── 落ち着いてから打ち、画面が打ちかけと見たのを確かめる
         page.wait_for_load_state("networkidle")
-        page.locator("main#main input[type=text]:not([readonly]):not([disabled]):visible").first.fill("98765")
-        page.wait_for_function("window.__remoteStopUnsaved().length > 0", timeout=10000)
+        # 打つのは**寸法の欄**(打った寸法は、あとで引いた答えで戻さない ── `gw.js` の editAt)。
+        # 「最初の文字の欄」だと、引いた答えで埋め直す欄に当たることがあり、遅い PC(Windows CI)では
+        # 打ったあとに埋め直されて打ちかけにならなかった。念のため、打ちかけと見えるまで打ち直す
+        field = page.locator("main#main [data-dim]:not([readonly]):not([disabled]):visible").first
+        for attempt in range(3):
+            field.fill(str(98765 + attempt))
+            try:
+                page.wait_for_function("window.__remoteStopUnsaved().length > 0", timeout=5000)
+                break
+            except Exception:                         # noqa: BLE001 - 打ち直す
+                if attempt == 2:
+                    raise
         time.sleep(3.5)                               # 帯の問い合わせ(3秒ごと)が、お願いの前に言い添える
         self.issue()
         issued = time.monotonic()
