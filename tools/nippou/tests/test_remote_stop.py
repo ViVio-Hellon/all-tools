@@ -379,6 +379,11 @@ class BandBrowserTests(_Child):
         self.wait_ready(proc, port)
         page = self.browser.new_page()
         self.addCleanup(page.close)
+        # **直の実績の確認(1分ごと)で画面を連れて行かれないように**、この試験では「確認は無い」と
+        # 答える。時刻によっては終わった直の確認があり、GW の画面から確認画面 → 日報入力へ移って
+        # しまい、寸法の欄が無くなっていた(Windows CI。打ったのは日報入力の欄で、打ちかけに数えない)
+        page.route("**/api/graph/review*", lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"due": false, "notice": null}'))
         page.goto(f"http://127.0.0.1:{port}/gw?t={self.token(proc)}", wait_until="load")
         page.wait_for_function("window.APP && window.APP.booted === true", timeout=30000)
         # 遅い PC(Windows CI)では、起きた直後に画面が中身を引き直すことがある。引き直しの前に打つと
