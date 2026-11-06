@@ -490,8 +490,23 @@ class Terminal:
         return len(self.local_rows("SELECT * FROM backup_pending"))
 
     def wait_backup(self) -> None:
-        """控え(LocalBackup)へ写し終えるのを待つ(写すのは応答を返したあと)。"""
-        wait_for(f"{self.name} が控えへ写し終える", lambda: self.backup_pending() == 0)
+        """控え(LocalBackup)へ写し終えるのを待つ(写すのは応答を返したあと)。
+
+        写すのが1度うまくいかなかったとき(遅い PC で控えのファイルが一瞬開けない など)、本物の画面は
+        1分ごとの見張り(`/api/entry/close`)で写し直す(v4.46.7)。この試験には画面が無いので、待つあいだ
+        5秒ごとに同じ見張りを送る(Windows CI で写し直す人がいないまま待ち切れずに落ちた)。
+        """
+        last = [time.monotonic()]
+
+        def done() -> bool:
+            if self.backup_pending() == 0:
+                return True
+            if time.monotonic() - last[0] > 5.0:
+                last[0] = time.monotonic()
+                self.call("POST", "/api/entry/close", {})
+            return False
+
+        wait_for(f"{self.name} が控えへ写し終える", done)
 
     def screen_html(self) -> str:
         """日報入力の画面(サーバが描いた最初の表。保存してある行が入る)。"""

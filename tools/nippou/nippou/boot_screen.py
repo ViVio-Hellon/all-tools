@@ -234,7 +234,11 @@ async function poll() {{
     if (body.ready) {{
       paintStage("done");
       note.textContent = "起動しました。画面へ移ります…";
-      location.replace(body.home_url || CONF.homeUrl);
+      // **開こうとした画面へ戻る**(v4.46.9)。起動の途中に「GW計算」などを開くと、この画面が出て、
+      // 起動し終えたら日報入力(サーバの既定の行き先)へ連れて行っていた。開いた画面が分かって
+      // いれば(`/` 以外)そこへ戻る
+      const asked = CONF.homeUrl && CONF.homeUrl !== "/" ? CONF.homeUrl : "";
+      location.replace(asked || body.home_url || CONF.homeUrl);
       return;
     }}
   }} catch (err) {{
