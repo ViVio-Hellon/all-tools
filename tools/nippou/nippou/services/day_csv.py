@@ -44,9 +44,8 @@ def refusal(line: str) -> str:
     own = owner_line()
     if line and line == own:
         return ""
-    return (f"{line} の集計CSVはこの端末では書き直しません(この端末には {line} のその日の直が"
-            f"全部はないので、書くと {line} の端末が書いた直が消えます)。"
-            f"{line} の端末が直しを取り込んだときに、直ぜんぶで書き直します")
+    # **短く・することが分かる言い方で**(「文章が難解すぎる」)。理由はこのモジュールの説明に
+    return f"{line} の集計CSVは、{line} のPCが自動で更新します(このPCでは書きません)"
 
 
 def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:

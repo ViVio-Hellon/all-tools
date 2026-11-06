@@ -1034,8 +1034,9 @@
       <span class="btn-group__arrow" aria-hidden="true">→</span>
       <button class="btn" type="button" id="push-shared"
               data-hint="いまの直を共有へ送ります。直の終わりに1回。最終時間・休憩60分まで全部通らないと送れません(前の直は赤い帯の「過去分を共有へ送る」)"
-              {% if view.recall %}disabled title="前のページか他の直を開いています。先に「最新のページに戻る」を押してください"{% endif %}
-              >共有へ保存</button>
+              {% if view.recall_other %}data-scope="recalled"
+              {% elif view.recall %}disabled title="前のページを開いています。先に「最新のページに戻る」を押してください"{% endif %}
+              >{% if view.recall_other %}直した直を共有へ送る{% else %}共有へ保存{% endif %}</button>
     </span>
   </span>
 

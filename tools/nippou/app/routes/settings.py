@@ -892,8 +892,14 @@ def push():
     """
     ctx = work_context.get_context()
     # **呼出モード中は断る**(`NippouDB_BlockIfRecallMode` 相当)。
-    # 直している過去のデータが、そのまま共有へ行ってしまう
-    blocked = _block_if_recall(PUSH_ACTION)
+    # 直している過去のデータが、そのまま共有へ行ってしまう ──
+    # ただし**「直した直を共有へ送る」(呼び出している直だけ)は通す**(v4.46.5。送るのは
+    # 呼び出している直だけで、いまの直は混ざらない ── `_push` の `SCOPE_RECALLED`)
+    from nippou.logic import push_scope
+    payload = request.get_json(silent=True) or {}
+    recalled = (ctx.recall.active
+                and push_scope.normalize(payload.get("scope")) == push_scope.SCOPE_RECALLED)
+    blocked = None if recalled else _block_if_recall(PUSH_ACTION)
     if blocked is not None:
         return blocked
     # **進み具合を置きながら進む**(`nippou/job_progress.py`)。
@@ -919,10 +925,26 @@ def _push(ctx):
     # **どの直を送るか**(v4.35.0)。いまの直のボタンは いまの直だけ、前の直の
     # ボタンは いまの直ではない直だけを確かめて送る(`logic/push_scope`)
     scope = push_scope.normalize(payload.get("scope"))
-    if mine is None:
+    if scope == push_scope.SCOPE_RECALLED:
+        if not ctx.recall.active:
+            return jsonify(error_body("not_recalled", "呼び出している直がありません")), 409
+        # **呼び出している直だけ**を送る(未送信なら)。いまの直・ほかの過去分は混ぜない
+        target = (ctx.recall.report_date, ctx.recall.line, ctx.recall.shift)
+        pending = {(h.report_date, h.line, h.shift) for h in get_repo().pending_sync_headers()}
+        if target not in pending:
+            return jsonify({"message": "この直は共有へ送ってあります(直した中身も送り済み)",
+                            "scope": scope, "held": [], "failed": 0})
+        keys = [target]
+        # 「設備移動のため保存」で通せるのは、呼び出している直(管理者が直しているとき。
+        # 前の直のぶんは「その直の人か管理者が通す」── 上の説明)
+        if ctx.editor:
+            mine = target
+    elif mine is None:
         # いまの直が読めなければ分けようがない ── まとめて送る(押した人を止めない)
         scope = push_scope.SCOPE_ALL
-    keys = _scope_keys(scope, mine)
+        keys = _scope_keys(scope, mine)
+    else:
+        keys = _scope_keys(scope, mine)
     reports = shift_check.run_pending(get_repo(), skip=skip, admin=ctx.editor,
                                       skip_only=mine, keys=keys)
     # **押したことを残す**(時刻・いまの直・担当者・どちらのボタンか)。止めたときも
@@ -1054,6 +1076,10 @@ def _push(ctx):
     done = push_flow.after_push(get_repo(), summary, history=lambda: push_history.record_push(
         get_repo(), pressed, summary, current))
     lines.extend(done.lines())
+    # ほかのラインの直を送ったとき: 集計CSVはそのラインのPCが更新する、と一言(ラインごとに1回)
+    from nippou.services import day_csv
+    for other in sorted({k[1] for k in summary.succeeded if day_csv.refusal(k[1])}):
+        lines.append(day_csv.refusal(other))
     sent, standard, rolls = done.second, done.standard, done.rolls
     roll_lines, monthly = done.roll_lines()
 

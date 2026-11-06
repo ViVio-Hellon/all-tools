@@ -347,7 +347,7 @@ class BackupServiceTests(unittest.TestCase):
             self.b.conn.execute("UPDATE daily_header SET saved_at='2000-01-01T00:00:00'"
                                 " WHERE line='機側' AND shift='2直'")
         notes = run_as("L-1", lambda: day_csv.settle(self.b, {keys["2直"][:3]}, factors=False))
-        self.assertTrue(any("この端末では書き直しません" in n for n in notes), notes)
+        self.assertTrue(any("のPCが自動で更新します" in n for n in notes), notes)
         self.assertEqual(agg.read_text(encoding="utf-8-sig"), before,
                          "管理者のPCは機側の集計CSVを書かない(1直・3直が消えない)")
         self.assertEqual(len(pusher.push_pending(self.b, shared).succeeded), 1)

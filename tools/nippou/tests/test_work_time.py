@@ -220,3 +220,17 @@ class ComputeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopPairProblemTests(unittest.TestCase):
+    """作業停止は記号と時間を組で(v4.46.5)── 打った時点で行の断りに入る(保存・新しいページも断る)。"""
+
+    def test_記号だけ・時間だけ・時間0を行の断りに入れる(self) -> None:
+        base = {"KZ": "08", "KH": "00", "SZ": "10", "SH": "00"}
+        found = work_time.problems({1: {**base, "S": "イ"}, 2: {**base, "THS": "15"},
+                                    3: {**base, "S4": "ロ", "TH4": "0"},
+                                    4: {**base, "S": "イ", "TH": "10"}})
+        self.assertEqual([(p.row, p.reason, p.field) for p in found],
+                         [(1, work_time.REFUSE_STOP_PAIR, "TH"), (2, work_time.REFUSE_STOP_PAIR, "SS"),
+                          (3, work_time.REFUSE_STOP_PAIR, "TH4")])
+        self.assertIn("作業停止①「イ」の時間が入っていません", found[0].message)

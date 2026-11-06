@@ -743,6 +743,7 @@ function paint(view, { forceRow = 0, since = null } = {}) {
   paintSheets(view.sheets);
   paintShiftFindings(view.shift_findings);
   paintPushMark(view.push_mark);
+  paintPushButton(view);
   paintOtherTerminal(view.other_terminal);
   paintLotDuplicates(view.lot_duplicates);
   paintFilled(view.filled);
@@ -1565,6 +1566,28 @@ function paintLotDuplicates(dup) {
   const sign = (dup.items || []).map((i) => `${i.lot}:${(i.rows || []).join(",")}`).join("|");
   if (sign && sign !== lastDup) toast(dup.text, "error");
   lastDup = sign;
+}
+
+/**
+ * 「共有へ保存」のボタン(v4.46.5)。**呼び出して直している他の直では「直した直を共有へ送る」**
+ * にして、その直だけを送る(管理者が前の日を直したら、その場で共有へ)。同じ直のページを
+ * 戻っているだけのときは今までどおり押せない(「最新のページに戻る」が先)。
+ */
+function paintPushButton(view) {
+  const btn = document.getElementById("push-shared");
+  if (!btn || !view) return;
+  if (view.recall_other) {
+    btn.dataset.scope = "recalled";
+    btn.textContent = "直した直を共有へ送る";
+    btn.disabled = Boolean(view.read_only);         // 見るだけで開いているときは送らない
+    btn.removeAttribute("title");
+  } else {
+    delete btn.dataset.scope;
+    btn.textContent = "共有へ保存";
+    btn.disabled = Boolean(view.recall);
+    if (view.recall) btn.title = "前のページを開いています。先に「最新のページに戻る」を押してください";
+    else btn.removeAttribute("title");
+  }
 }
 
 function paintTimeProblem(problem) {
@@ -2769,6 +2792,40 @@ export function start() {
   }, { signal: pageSignal() });
   document.addEventListener("focusin", (ev) => revealStop(ev.target),
                             { capture: true, signal: pageSignal() });
+  // **作業停止は記号と時間を組で**(v4.46.5)。組の欄から、組の外の欄へ移ろうとしたとき、
+  // 記号だけ(時間が空・0)か時間だけなら、足りないほうの欄へ戻して言う ──
+  // 「停止理由選択後時間を入れなくても進めれる」。組の中(記号⇔時間)の行き来は止めない。
+  // 保存(確定)・新しいページはサーバも断る(`logic/work_time.stop_pair_problem`)
+  document.getElementById("grid-body")?.addEventListener("focusout", (ev) => {
+    const el = ev.target;
+    const no = STOP_SLOT_OF[el?.dataset?.family || ""];
+    if (!no || el.readOnly || el.disabled) return;
+    const next = ev.relatedTarget;
+    // 画面の外(ボタン・別の窓)へ出たときは止めない(保存はサーバが断る)
+    if (!next || !next.closest?.("#grid-body")) return;
+    const [codeFamily, timeFamily] = STOP_SLOTS[no - 1];
+    const row = el.dataset.row;
+    if (next.dataset?.row === row && [codeFamily, timeFamily].includes(next.dataset?.family)) return;
+    const code = document.getElementById(`${codeFamily}${row}`);
+    const time = document.getElementById(`${timeFamily}${row}`);
+    if (!code || !time) return;
+    const hasCode = Boolean((code.value || "").trim());
+    const minutes = Number(String(time.value || "").replace(/[^0-9.]/g, "")) || 0;
+    const mark = STOP_MARKS[no - 1] || String(no);
+    let back = null;
+    let message = "";
+    if (hasCode && minutes <= 0) {
+      back = time;
+      message = `${row}行目：作業停止${mark}の時間(分)を打ってください(停止でなければ記号を消す)`;
+    } else if (!hasCode && minutes > 0) {
+      back = code;
+      message = `${row}行目：作業停止${mark}の記号を選んでください(停止でなければ時間を消す)`;
+    }
+    if (!back) return;
+    toast(message, "warn");
+    // 移った先の焦点が決まってから戻す
+    setTimeout(() => { revealStop(back); back.focus(); back.select?.(); }, 0);
+  }, { signal: pageSignal() });
   for (const name of ["input", "change"]) {
     document.addEventListener(name, (ev) => {
       if (STOP_SLOT_OF[ev.target?.dataset?.family || ""]) paintStopSums();
@@ -3595,9 +3652,10 @@ export function start() {
     if (input && !blocked) input.focus();
   }
 
-  // ふだんの「共有へ保存」── **いまの直だけ**(v4.35.0)
-  document.getElementById("push-shared")?.addEventListener("click", () => {
-    pushShared("", "current").catch(toastError);
+  // ふだんの「共有へ保存」── **いまの直だけ**(v4.35.0)。呼び出して直している他の直では
+  // 「直した直を共有へ送る」── **その直だけ**(v4.46.5。`paintPushButton`)
+  document.getElementById("push-shared")?.addEventListener("click", (ev) => {
+    pushShared("", ev.currentTarget.dataset.scope || "current").catch(toastError);
   });
 
   /*

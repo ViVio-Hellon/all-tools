@@ -2200,6 +2200,10 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
     refused = day_csv.refusal(line)
     if refused:
         log.info("集計CSVを書きませんでした(ほかのライン) key=%s/%s", report_date, line)
+        ctx = work_context.get_context()
+        if ctx.recall.active:
+            # **次にすることも言う**(「共有保存ができませんけどいいんですか？」)
+            refused += "。共有へは「直した直を共有へ送る」で送ってください"
         return {"ok": False, "skipped": True, "dir": "", "message": refused}
 
     # **1つ目だけ。** 2つ目の出力先へは「共有へ保存」で送れたときに出します

@@ -136,16 +136,67 @@ class RecallTests(CorrectionCase):
         self.recall("HVC", "2直")
         body = self.edit("HVC9999")
         self.assertFalse(body["export"]["ok"])
-        self.assertIn("HVC の集計CSVはこの端末では書き直しません", body["export"]["message"])
+        self.assertIn("HVC の集計CSVは、HVC のPCが自動で更新します", body["export"]["message"])
         self.edit("HVC9998", draft=True)
         back = self.post("/api/settings/back", {}).get_json()
-        self.assertTrue(any("書き直しません" in n for n in back["settled"]), back)
+        self.assertTrue(any("のPCが自動で更新します" in n for n in back["settled"]), back)
         for path in theirs.values():
             self.assertEqual(path.read_text(encoding="utf-8"), "HVCの端末が書いた中身(1直・2直・3直)",
                              f"{path.name} をこの端末の一部の中身で上書きした")
         # 直したページ自体は保存されている(送る待ち)
         _, details = self.repo().load(self.yesterday, "HVC", "2直", 1)
         self.assertEqual(details[0].lot, "HVC9998")
+
+
+class RecalledPushTests(CorrectionCase):
+    """呼出中の「直した直を共有へ送る」(v4.46.5) ──「共有保存ができませんけどいいんですか？」"""
+
+    def share_db(self):
+        from nippou import config, user_settings
+
+        shared = self.tmp / "共有"
+        shared.mkdir(exist_ok=True)
+        user_settings.save_many({config.KEY_ACCESS_DIR: str(shared)})
+        return shared / "日報データ.sqlite3"
+
+    def test_呼び出している直だけを共有へ送れる_ほかの直は送らない(self) -> None:
+        import sqlite3
+
+        db = self.share_db()
+        self.put("HVC", "2直", "HVC0002")
+        self.put("L-1", "3直", "OTHER03")                  # 呼び出していない未送信の直
+        self.admin()
+        self.recall("HVC", "2直")
+        html = self.get("/").get_data(as_text=True)
+        self.assertIn("直した直を共有へ送る", html)
+        self.edit("HVC9999")
+        res = self.post("/api/settings/push", {"scope": "recalled"})
+        # 直の途中までの試しの中身なので、最終時間と休憩で断られる(関門は同じ)。管理者は
+        # 「設備移動のため保存」で通せる
+        self.assertEqual(res.status_code, 422)
+        res = self.post("/api/settings/push", {"scope": "recalled", "skip": "設備移動のため保存"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertIn("HVC の集計CSVは、HVC のPCが自動で更新します", body["message"])
+        conn = sqlite3.connect(db)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            got = conn.execute('SELECT "直" FROM "T_日報明細_HVC"').fetchall()
+        finally:
+            conn.close()
+        self.assertEqual({r[0] for r in got}, {"2直"})
+        self.assertNotIn("T_日報明細_L-1", tables, "呼び出していない直は送らない")
+        # もう送ってある
+        again = self.post("/api/settings/push", {"scope": "recalled",
+                                                 "skip": "設備移動のため保存"}).get_json()
+        self.assertIn("共有へ送ってあります", again["message"])
+
+    def test_ふだんの共有へ保存は呼出中は今までどおり断る(self) -> None:
+        self.put("HVC", "2直", "HVC0002")
+        self.admin()
+        self.recall("HVC", "2直")
+        res = self.post("/api/settings/push", {"scope": "current"})
+        self.assertEqual(res.status_code, 422)
 
 
 class SettleTests(CorrectionCase):
@@ -210,7 +261,7 @@ class SettleTests(CorrectionCase):
         out = second_output.after_push(repo, [(self.yesterday, "HVC", "1直", 1),
                                               (self.yesterday, "L-1", "1直", 1)])
         self.assertEqual(out.others, [f"{self.yesterday} HVC"])
-        self.assertIn("そのラインの端末が直ぜんぶで出します", out.text("集計CSV"))
+        self.assertIn("そのラインのPCが自動で更新します", out.text("集計CSV"))
         self.assertFalse(list((second / "HVC").rglob("*.csv")))
         self.assertTrue(list((second / "L-1").rglob("*.csv")))
 

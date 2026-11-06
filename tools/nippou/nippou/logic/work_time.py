@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
-from ..constants import STOP_TIME_FAMILIES
+from ..constants import STOP_MARKS, STOP_SLOTS, STOP_TIME_FAMILIES
 from .numeric import is_numeric, to_float
 from .shift import normalize_hhmm
 
@@ -47,6 +47,8 @@ REFUSE_RANGE = "time_range"
 REFUSE_OVER_SHIFT = "over_shift"
 REFUSE_SAME_TIME = "same_time"
 REFUSE_NEGATIVE = "negative_time"
+#: 作業停止の記号と時間が組になっていない(v4.46.5。記号だけ・時間だけ)
+REFUSE_STOP_PAIR = "stop_pair"
 
 #: 欄の見出し。断りの文言に出す(VBA のメッセージと同じ言い回し)
 _FIELD_LABELS = {
@@ -274,6 +276,7 @@ def problems(rows: dict[int, dict[str, str]], *,
     for row in sorted(rows):
         values = rows[row]
 
+
         # 1. 時・分の範囲。**その行の最初の1つだけ**(同じ行に4つ出ても
         #    直すのは1か所ずつなので、並べても読めない)
         bad_range = None
@@ -314,7 +317,38 @@ def problems(rows: dict[int, dict[str, str]], *,
                     row, REFUSE_NEGATIVE,
                     f"{row}行目：作業時間がマイナスです。"
                     "停止時間が作業時間を超えていないか確かめてください。"))
+                continue
+
+        # 作業停止の記号と時間は組で(v4.46.5)。**打った時点で行に印を付け、保存(確定)・
+        # 新しいページを断る** ── 前は保存の関門(`save_checks.check_stop_pairs`)だけで、
+        # 記号を選んで時間を打たないまま次へ進めた(「停止理由選択後時間を入れなくても進めれる」)
+        pair = stop_pair_problem(row, values)
+        if pair is not None:
+            found.append(pair)
     return found
+
+
+def stop_pair_problem(row: int, values: dict[str, str]) -> Optional[TimeProblem]:
+    """作業停止①〜⑤のうち、記号だけ(時間が空・0)か時間だけ(記号が空)の最初の1組。
+
+    `field` は直す欄(記号だけなら時間の欄・時間だけなら記号の欄)。
+    """
+    for index, (code_family, time_family) in enumerate(STOP_SLOTS):
+        code = (values.get(code_family) or "").strip()
+        raw = (values.get(time_family) or "").strip()
+        has_time = bool(raw) and stop_minutes(raw) > 0
+        mark = STOP_MARKS[index] if index < len(STOP_MARKS) else str(index + 1)
+        if code and not has_time:
+            return TimeProblem(row, REFUSE_STOP_PAIR,
+                               f"{row}行目：作業停止{mark}「{code}」の時間が入っていません。"
+                               "時間(分)を打ってください(停止でなければ記号を消す)。",
+                               field=time_family)
+        if has_time and not code:
+            return TimeProblem(row, REFUSE_STOP_PAIR,
+                               f"{row}行目：作業停止{mark}の時間({raw}分)に記号がありません。"
+                               "記号を選んでください(停止でなければ時間を消す)。",
+                               field=code_family)
+    return None
 
 
 # ======================================================================

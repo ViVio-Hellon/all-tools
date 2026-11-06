@@ -96,8 +96,8 @@ class Outcome:
             if not c.ok:
                 parts.append(f"2つ目の出力先({c.base})に{what}を出せませんでした: {c.error}")
         if self.others:
-            parts.append(f"ほかのラインの日は、2つ目の出力先へ{what}を出していません"
-                         f"({'・'.join(self.others)})── そのラインの端末が直ぜんぶで出します")
+            parts.append(f"2つ目の出力先の{what}({'・'.join(self.others)})は、そのラインのPCが"
+                         "自動で更新します(このPCでは書きません)")
         if self.held:
             parts.append(f"2つ目の出力先へは、まだ送れていない直がある{what}を出していません"
                          f"({'・'.join(self.held)})── 次に共有へ保存で送れたときに出します")

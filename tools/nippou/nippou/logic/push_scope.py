@@ -77,15 +77,20 @@ SCOPE_PREVIOUS = "previous"
 #: 範囲を言わずに押した(前の版の画面・ほかの道具)。**未送信ぜんぶを、1つでも
 #: 引っかかれば止める**(v4.34 までの「共有へ保存」と同じ)
 SCOPE_ALL = "all"
+#: **呼び出して直している直だけ**(v4.46.5。呼出中の「直した直を共有へ送る」)。管理者が前の日を
+#: 直したら、その場で共有へ送れる(前は「最新のページに戻る」→「過去分を共有へ送る」が要った)
+SCOPE_RECALLED = "recalled"
 
-SCOPES: tuple[str, ...] = (SCOPE_CURRENT, SCOPE_PREVIOUS, SCOPE_ALL)
+SCOPES: tuple[str, ...] = (SCOPE_CURRENT, SCOPE_PREVIOUS, SCOPE_ALL, SCOPE_RECALLED)
 
 #: 共有保存の履歴の「通し方」に書く字。**どちらのボタンで押したか**
-VIA_TEXT = {SCOPE_CURRENT: "いまの直", SCOPE_PREVIOUS: "過去分", SCOPE_ALL: ""}
+VIA_TEXT = {SCOPE_CURRENT: "いまの直", SCOPE_PREVIOUS: "過去分", SCOPE_ALL: "",
+            SCOPE_RECALLED: "呼び出して直した直"}
 
 #: ボタンの名前。**画面の字と1対1**(`entry.html` / `settings.html`)
 BUTTON_CURRENT = "共有へ保存"
 BUTTON_PREVIOUS = "過去分を共有へ送る"
+BUTTON_RECALLED = "直した直を共有へ送る"
 
 #: いまの直の断りに添える一文。**前の直は別のボタンで送れる**と言う
 PREVIOUS_HINT = ("前の直(過去分)は、赤い帯の「過去分を共有へ送る」から送れます"
