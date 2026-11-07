@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import tempfile
@@ -417,7 +418,8 @@ class BackupServiceTests(unittest.TestCase):
         table.start()
         self.addCleanup(table.stop)
         # 試験の一時フォルダを「共有のフォルダ」とみなす(本物は \\\\サーバ\\共有\\…)
-        shared = patch.object(day_csv, "is_shared", side_effect=lambda t: str(t).startswith(str(self.share)))
+        shared = patch.object(day_csv, "is_shared", side_effect=lambda t: os.path.realpath(str(t)).startswith(
+                                 os.path.realpath(str(self.share))))
         shared.start()
         self.addCleanup(shared.stop)
 
@@ -480,7 +482,8 @@ class BackupServiceTests(unittest.TestCase):
         # 管理者のPC: 自分の出力先ではなく、ラインのPCが書いた先を読んで「入っています」
         got = admin_sees()
         self.assertEqual(got.state, "done", (got.text, got.diffs))
-        self.assertIn(str(out), got.folder)
+        # Windows では短い名前(RUNNER~1)が長い名前になって残る(`day_csv.real_path`)── 同じ場所かで比べる
+        self.assertTrue(os.path.realpath(got.folder).startswith(os.path.realpath(str(out))), got.folder)
         # 書いた先がこのPCから読めなければ、そう言う(「まだ」と言い続けない)
         (self.share / "LocalBackup" / "機側" / day_csv.WHERE_FILE).write_text(
             '{"dir": "C:\\\\機側のPCの中", "pc": "PC-KIGAWA"}', encoding="utf-8")
