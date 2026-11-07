@@ -116,6 +116,9 @@ def expected_rows(repo, report_date: str, line: str, shift: str
     from ..reporting import csv_export
     from . import summary
 
+    # **このPCの集計を先に作り直す**(v4.46.11)。比べるもとは明細(ページ)で、集計はそこから作るもの。
+    # 作り直しに失敗したまま残った古い集計と比べると、直した中身が入っていないのに「入っています」になる
+    summary.refresh_shift(repo, report_date, line, shift)
     reports = [r for r in summary.for_date(repo, report_date, line) if r.shift == shift]
     lots = [r for r in summary.day_lot_rows(repo, report_date, line) if r.shift == shift]
     detail = [_text_of(r) for r in csv_export.detail_rows_of(lots, reports)]
@@ -124,23 +127,115 @@ def expected_rows(repo, report_date: str, line: str, shift: str
     return detail, aggregate
 
 
+def where_to_read(line: str, base: Optional[Path] = None) -> tuple[Path, str]:
+    """そのラインの集計CSVを読む先と、読めないときの理由(読めれば空)(v4.46.11)。
+
+    ラインのPCが**実際に書いている先**(控えのフォルダに残した `day_csv.output_dir_of`)を読む。
+    出力先は端末ごとの設定なので、このPCの出力先を読むと、違っていればいつまでも「まだ」になる。
+
+    **ほかのPCからも同じ場所を指す道(`\\\\サーバ\\共有\\…`)だけを読む。** `C:\\…` はPCごとに別の
+    場所で、このPCにも同じ名前のフォルダがあると**このPC自身が前に書いたCSV**を読んで、直しが
+    入っていないのに「入っています」と言いかねない(いちばん悪い間違い)。分からないときは読まずにそう言う。
+    """
+    from ..config import SETTINGS
+    from ..db.repository import this_pc
+    from . import day_csv
+
+    own = Path(base if base is not None else SETTINGS.report_output_dir)
+    if base is not None or not day_csv.refusal(line):
+        return own, ""
+    theirs = day_csv.output_dir_of(line)
+    if theirs is None:
+        # ラインのPCが前の版で、書いた先を残していない。このPCの出力先が共有なら同じ先とみて読む
+        if day_csv.is_shared(day_csv.real_path(own)):
+            return own, ""
+        return own, (f"{line} のPCが集計CSVをどこへ書いているか、まだ分かりません"
+                     f"({line} のPCを新しい版にして、1度保存(確定)すると分かります)。"
+                     "このPCの出力先は共有のフォルダではないので、読んで比べません")
+    there, pc = Path(theirs[0]), theirs[1]
+    if not (day_csv.is_shared(theirs[0]) or (pc and pc == this_pc())):
+        name = f"({pc})" if pc else ""
+        return there, (f"{line} のPC{name}は集計CSVを、そのPCの中({there})に出しています。"
+                       "このPCからそこを読めません(共有のフォルダにするには、"
+                       f"{line} のPCの設定で集計CSVの出力先を共有のフォルダにしてください)")
+    try:
+        if there.is_dir():
+            return there, ""
+    except OSError:
+        pass
+    return there, (f"{line} のPCは集計CSVを {there} に出しています。このPCからそこを読めません"
+                   "(このPCから届くか確かめてください)")
+
+
+def why_not_yet(repo, report_date: str, line: str, shift: str) -> str:
+    """「まだ」のわけ(v4.46.11)。分からなければ空。
+
+        このPCの直しが控えに届いていない → 1分ごとに写し直す
+        控えには届いている             → そのラインのPCが受け取るのを待っている
+        控えのほうが新しい中身          → そのラインのPCでそのあと直された
+        このPCのラインで書けていない     → 1分ごとに書き直す
+    """
+    from . import day_csv, local_backup
+
+    if not day_csv.refusal(line):
+        for d, ln, _at, error in day_csv.owed(repo):
+            if (d, ln) == (str(report_date), str(line)):
+                return f"このPCで集計CSVを書けていません(1分ごとに書き直します): {error}"
+        return ""
+    keys = [(report_date, line, shift, int(p)) for p in repo.saved_pages(report_date, line, shift)]
+    if not keys:
+        return ""
+    waiting = set(map(tuple, repo.backup_pending()))
+    if any(k in waiting for k in keys):
+        return ("このPCの直しが、まだ控えに届いていません(1分ごとに写し直します。"
+                "控えの置き場所に届くか、設定・管理者の「控え」で確かめてください)")
+    try:
+        with local_backup.reader(line) as backup:
+            if backup is None:
+                return f"{line} の控えがありません"
+            there = {(report_date, line, shift, int(p))
+                     for p in backup.saved_pages(report_date, line, shift)}
+            other = None
+            for key in sorted(set(keys) | there):
+                theirs = local_backup._stamp(backup.conn, key)
+                mine = local_backup._stamp(repo.conn, key)
+                if theirs is None or mine is None or theirs[1] != mine[1]:
+                    other = local_backup._owner(backup.conn, key) or ("", theirs[0] if theirs else "", "")
+                    break
+    except Exception:                             # noqa: BLE001 - わけが分からないだけ
+        return ""
+    if other is not None:
+        # **入れ直しは勧めない。** 入れ直すとこのPCも控えの中身になり、直しが置き換えられて
+        # いても「入っています」と出てしまう。まず中身を見比べてもらう
+        who = f"{other[0]} が " if other[0] else ""
+        when = f"{other[1][5:16].replace('T', ' ')} に" if len(other[1]) >= 16 else ""
+        return (f"控えの中身が、このPCの直しと違います(控えは {who}{when}保存したもの)。"
+                "このPCの直しが、そのあとの保存で置き換えられたかもしれません。"
+                "「ほかのPCの日報」で控えの中身を見て確かめてください")
+    return (f"控えには届いています。{line} のPCが受け取って書き直すのを待っています"
+            f"({line} のPCが動いていれば5分以内・止まっていれば次に起動したとき)")
+
+
 def check(repo, report_date: str, line: str, shift: str, *,
           base: Optional[Path] = None, cache: Optional[dict] = None) -> Check:
-    """その直の直しが、出力先(1つ目)の集計CSVに入っているか。"""
-    from ..config import SETTINGS
+    """その直の直しが、そのラインの集計CSV(ラインのPCが書いている先)に入っているか。"""
     from ..reporting import csv_export
 
-    out_dir = Path(base if base is not None else SETTINGS.report_output_dir)
+    out_dir, unreadable = where_to_read(line, base)
     paths = csv_export.daily_output_paths(out_dir, report_date, line)
     folder = str(paths["aggregate"].parent)
     if repo.is_test_shift(report_date, line, shift):
         return Check(TEST, "テストの直なので集計CSVに出しません", folder=folder)
+    if unreadable:
+        return Check(UNREADABLE, unreadable, folder=folder)
     detail, aggregate = expected_rows(repo, report_date, line, shift)
     missing = [p for key, p in paths.items() if key in ("aggregate", "detail") and not p.exists()]
     if missing:
         if not detail and not aggregate:
             return Check(EMPTY, "打った行が無い直です(集計CSVに出る行がありません)", folder=folder)
-        return Check(NO_CSV, f"まだです(集計CSVがまだありません: {missing[0].name})", folder=folder)
+        why = why_not_yet(repo, report_date, line, shift)
+        return Check(NO_CSV, f"まだです: {why}" if why else "まだです",
+                     diffs=[f"集計CSVがまだありません: {missing[0].name}"], folder=folder)
     # 一覧では同じ日の直が並ぶ。共有のファイルは1日1回だけ読む
     cache = {} if cache is None else cache
 
@@ -163,7 +258,9 @@ def check(repo, report_date: str, line: str, shift: str, *,
     shown = diffs[:MAX_DIFFS]
     if len(diffs) > MAX_DIFFS:
         shown.append(f"ほか {len(diffs) - MAX_DIFFS}件")
-    return Check(NOT_YET, f"まだです(違うところ {len(diffs)}件)", diffs=shown, folder=folder)
+    why = why_not_yet(repo, report_date, line, shift)
+    text = f"まだです(違うところ {len(diffs)}件)" + (f": {why}" if why else "")
+    return Check(NOT_YET, text, diffs=shown, folder=folder)
 
 
 def check_many(repo, keys, *, base: Optional[Path] = None) -> list[dict]:

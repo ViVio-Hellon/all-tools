@@ -332,10 +332,12 @@ class BackupServiceTests(unittest.TestCase):
                 for p in patches:
                     p.stop()
 
-        # ラインのPC: 共有へ送り、控えへ写し、その日の集計CSVを書く
+        # ラインのPC: 保存(確定)と同じく係数も数え、その日の集計CSVを書き、共有へ送り、控えへ写す
+        # (v4.46.11 からラインのPCは取り込んだ直の係数も数え直す。数えていない明細のままだと、
+        # 取り込みで数えた2直が未送信になる)
+        run_as("機側", lambda: day_csv.settle(self.a, {k[:3] for k in keys.values()}, factors=True))
         self.assertEqual(len(pusher.push_pending(self.a, shared).succeeded), 3)
         lb.flush(self.a)
-        run_as("機側", lambda: day_csv.settle(self.a, {k[:3] for k in keys.values()}, factors=False))
         agg = csv_export.daily_output_paths(out, DAY, "機側")["aggregate"]
         before = agg.read_text(encoding="utf-8-sig")
         # 管理者のPC: 控えから2直を入れて直す。**時計が遅れている**(直した時刻がラインのPCより前)
@@ -380,16 +382,144 @@ class BackupServiceTests(unittest.TestCase):
         self.assertIn("機側,2直,29,", after, "2直の合計枚数は直した数")
         self.assertIn("機側,1直,11,", after)
         self.assertIn("機側,3直,33,", after)
-        # 2つ目の出力先も(管理者が先に共有へ送ったので、ラインのPCは送り直さない ── 取り込んだときに書く)
-        # 2つ目は**共有に送り終わった中身だけ**: 数え直した3直が未送信のあいだは待ち、ラインのPCが
-        # 共有へ送ったときに出る
-        from nippou.services import second_output
-        self.assertFalse(csv_export.daily_output_paths(out2, DAY, "機側")["aggregate"].exists())
-        sent = pusher.push_pending(self.a, shared).succeeded
-        run_as("機側", lambda: second_output.after_push(self.a, sent))
+        # 2つ目の出力先も(管理者が先に共有へ送ったので、ラインのPCは送り直さない ── 取り込んだときに書く)。
+        # 2つ目は**共有に送り終わった中身だけ**: 係数が変わらず全部の直が送り済みなので、取り込んだときに出る
+        self.assertEqual([h.shift for h in self.a.pending_sync_headers() if h.line == "機側"], [],
+                         "直しで係数が変わらなければ、どの直も送り済みのまま")
         agg2 = csv_export.daily_output_paths(out2, DAY, "機側")["aggregate"].read_text(encoding="utf-8-sig")
         self.assertIn("機側,2直,29,", agg2)
         self.assertIn("機側,1直,11,", agg2)
+
+    def test_管理者が直す_ラインのPCが開いて集計CSVを直す_管理者に入っていますが伝わる_通しで穴がない(self) -> None:
+        """v4.46.11「管理者が修正後、現地PCからの開きで集計CSVが直るか、またその後直りが管理者に伝わるか」。
+
+            ラインのPC(機側)が1〜3直を打ち、集計CSVを書いた(出力先は共有。書いた先を控えに残す)
+            → 管理者のPC(出力先の設定はラインのPCと違う)が2直を直す。前の直を読めず係数は数え直せなかった
+            → 管理者に「まだ」: 控えに届く前/届いたあと、それぞれのわけ
+            → ラインのPCが取り込む。そのとき共有に届かず集計CSVを書けなかった(穴: 二度と書かれなかった)
+            → 1分ごとの見張りで書き直す。取り込んだ直の係数もラインのPCが数え直す(穴: 誰も数え直さなかった)
+            → 管理者に「入っています」(ラインのPCが書いた先を読む ── 穴: 自分の出力先を読み、いつまでも「まだ」)
+        """
+        import importlib
+
+        from nippou import work_context
+
+        live = importlib.import_module("nippou.config")
+        day_csv = importlib.import_module("nippou.services.day_csv")
+        csv_reflection = importlib.import_module("nippou.services.csv_reflection")
+        load_factor = importlib.import_module("nippou.services.load_factor")
+        live_lb = importlib.import_module("nippou.services.local_backup")
+        csv_export = importlib.import_module("nippou.reporting.csv_export")
+        out = self.tmp / "共有" / "集計"                  # ラインのPCの出力先(共有)
+        admin_out = self.tmp / "管理者のPCの中"            # 管理者のPCの出力先(設定が違う)
+        self.live_settings(report_output_dir=out)
+        table = patch.object(load_factor, "_factors_checked", return_value=({"H176": 2.0}, ""))
+        table.start()
+        self.addCleanup(table.stop)
+        # 試験の一時フォルダを「共有のフォルダ」とみなす(本物は \\\\サーバ\\共有\\…)
+        shared = patch.object(day_csv, "is_shared", side_effect=lambda t: str(t).startswith(str(self.share)))
+        shared.start()
+        self.addCleanup(shared.stop)
+
+        def run_as(line, fn):
+            with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                    patch.object(work_context, "stored_terminal_line", return_value=line):
+                return fn()
+
+        def admin_sees(shift="2直"):
+            with patch.object(type(live.SETTINGS), "report_output_dir", new_callable=PropertyMock,
+                              return_value=admin_out):
+                return run_as("L-1", lambda: csv_reflection.check(self.b, DAY, "機側", shift))
+
+        # ラインのPC: 1〜3直(2直は2行 ── 2行目の係数で、数え直したかが分かる)
+        keys = {sh: save(self.a, line="機側", shift=sh, mai=m)
+                for sh, m in (("1直", "11"), ("2直", "22"), ("3直", "33"))}
+        header, details = self.a.load(*keys["2直"])
+        extra = DetailRecord(**{k: getattr(details[0], k) for k in ("report_date", "line", "shift", "page")},
+                             row_no=2, lot="N9999X0", siz="8.000×1528.0×3053.0", kz="10", kh="00",
+                             sz="11", sh="00", hit="2", mai="5", tut="1", con="5", wei="50", tim="60",
+                             others1="H176", others4="1P0001")
+        self.a.save(header, details + [extra])
+        lb.flush(self.a)                                  # 控えのフォルダができる
+        run_as("機側", lambda: day_csv.settle(self.a, {k[:3] for k in keys.values()}, factors=True))
+        right = [d.keisu for d in self.a.load(*keys["2直"])[1]]
+        self.assertTrue(day_csv.output_dir_of("機側"), "書いた先を控えのフォルダに残す")
+        lb.flush(self.a)
+        # 管理者のPC: 2直を入れて直す。係数は数え直せなかった(前の直を控えから読めなかった)
+        lb.import_shift(self.b, DAY, "機側", "2直")
+        header, details = self.b.load(*keys["2直"])
+        details[0].mai = details[0].con = "29"
+        for d in details:
+            d.keisu = "0"
+        time.sleep(1.1)
+        self.b.save(header, details)
+        got = admin_sees()
+        self.assertEqual(got.state, "not_yet", got.text)
+        self.assertIn("まだ控えに届いていません", got.text)
+        self.assertTrue(any("29" in d for d in got.diffs), got.diffs)
+        lb.flush(self.b, force=True)
+        got = admin_sees()
+        self.assertIn("控えには届いています。機側 のPCが受け取って書き直すのを待っています", got.text)
+        # ラインのPC: 開いて取り込む。そのとき共有に届かず集計CSVを書けなかった
+        with patch.object(csv_export, "write_daily_set", side_effect=OSError("共有に届きません")):
+            result = run_as("機側", lambda: live_lb.pull_if_due(self.a, "機側"))
+        self.assertEqual(result.pulled, 1)
+        self.assertEqual(mai_of(self.a, keys["2直"]), "29")
+        self.assertEqual([d.keisu for d in self.a.load(*keys["2直"])[1]], right,
+                         "取り込んだ直の係数をラインのPCが数え直す(管理者のPCは数え直せなかった)")
+        self.assertEqual([r[:2] for r in day_csv.owed(self.a)], [(DAY, "機側")], "書けなかった日を覚える")
+        self.assertEqual(admin_sees().state, "not_yet")
+        # 1分ごとの見張り(/api/entry/close)で書き直す
+        notes = run_as("機側", lambda: day_csv.retry_owed(self.a))
+        self.assertTrue(any("書き直しました" in n for n in notes), notes)
+        self.assertEqual(day_csv.owed(self.a), [])
+        agg = csv_export.daily_output_paths(out, DAY, "機側")["aggregate"].read_text(encoding="utf-8-sig")
+        self.assertIn("機側,2直,34,", agg, "2直は直した数(29+5)")
+        self.assertIn("機側,1直,11,", agg)
+        self.assertIn("機側,3直,33,", agg)
+        # 管理者のPC: 自分の出力先ではなく、ラインのPCが書いた先を読んで「入っています」
+        got = admin_sees()
+        self.assertEqual(got.state, "done", (got.text, got.diffs))
+        self.assertIn(str(out), got.folder)
+        # 書いた先がこのPCから読めなければ、そう言う(「まだ」と言い続けない)
+        (self.share / "LocalBackup" / "機側" / day_csv.WHERE_FILE).write_text(
+            '{"dir": "C:\\\\機側のPCの中", "pc": "PC-KIGAWA"}', encoding="utf-8")
+        got = admin_sees()
+        self.assertEqual(got.state, "unreadable")
+        self.assertIn("このPCからそこを読めません", got.text)
+        # 書いた先が分からない(前の版のラインのPC)うえ、このPCの出力先も共有でなければ、読まない
+        (self.share / "LocalBackup" / "機側" / day_csv.WHERE_FILE).unlink()
+        got = admin_sees()
+        self.assertEqual(got.state, "unreadable")
+        self.assertIn("どこへ書いているか、まだ分かりません", got.text)
+
+    def test_取り込んだあと係数の数え直しで落ちても_集計CSVまで書く(self) -> None:
+        """v4.46.11: 数え直しで落ちると集計CSVを書かずに抜け、取り込みは済んでいるので二度と書かれなかった。"""
+        import importlib
+
+        from nippou import work_context
+
+        day_csv = importlib.import_module("nippou.services.day_csv")
+        load_factor = importlib.import_module("nippou.services.load_factor")
+        csv_export = importlib.import_module("nippou.reporting.csv_export")
+        out = self.tmp / "出力先"
+        self.live_settings(report_output_dir=out)
+        key = save(self.a, line="機側", mai="10")
+        lb.flush(self.a)
+        lb.import_shift(self.b, DAY, "機側", "1直")
+        time.sleep(1.1)
+        header, details = _edited(self.b, key, "12")
+        details[0].con = "12"                            # 枚数(集計の合計枚数のもと)も
+        self.b.save(header, details)
+        lb.flush(self.b, force=True)
+        with patch.object(work_context, "terminal_line_decided", return_value=True), \
+                patch.object(work_context, "stored_terminal_line", return_value="機側"), \
+                patch.object(load_factor, "recalculate", side_effect=RuntimeError("数え直せません")):
+            self.assertEqual(lb.pull_if_due(self.a, "機側").pulled, 1)
+        agg = csv_export.daily_output_paths(out, DAY, "機側")["aggregate"]
+        self.assertTrue(agg.exists(), "数え直しで落ちても集計CSVは書く")
+        self.assertIn("機側,1直,12,", agg.read_text(encoding="utf-8-sig"))
+        self.assertEqual(day_csv.owed(self.a), [], "書けたら覚えた日は消える")
 
     def test_管理者が共有へ送り忘れても_ラインのPCが取り込んで送る(self) -> None:
         """直しは控え経由でラインのPCに入り、送っていない印のまま ── ラインのPCの共有へ保存で届く。"""

@@ -81,9 +81,15 @@ def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:
         for report_date, line, shift in keys:
             if refusal(line):
                 continue
-            if repo.saved_pages(report_date, line, shift):
-                load_factor.recalculate(repo, report_date, line, shift)
-            following.update(load_factor.recalculate_following(repo, report_date, line, shift))
+            # **落ちても集計CSVまで進む**(v4.46.11)。ここで抜けると、取り込んだ直しが集計CSVに
+            # 出ないまま「取り込み済み」になり、二度と書かれない
+            try:
+                if repo.saved_pages(report_date, line, shift):
+                    load_factor.recalculate(repo, report_date, line, shift)
+                following.update(load_factor.recalculate_following(repo, report_date, line, shift))
+            except Exception as exc:              # noqa: BLE001 - 明細は保存済み
+                log.exception("負荷係数を数え直せませんでした %s/%s/%s", report_date, line, shift)
+                notes.append(f"{report_date} {line} {shift} の負荷係数を数え直せませんでした: {exc}")
         keys = sorted(set(keys) | following)
     for report_date, line, shift in keys:
         # 負荷係数は**この端末のラインだけ**数え直す(ほかのラインは前の直が手元に揃って
@@ -115,15 +121,195 @@ def settle(repo, shifts, *, factors: bool = True, base=None) -> list[str]:
             notes.append(refused)
             continue
         try:
-            with _lock if _lock is not None else nullcontext():
-                written = csv_export.write_daily_set(repo, report_date, line, out_dir)
-        except Exception as exc:                  # noqa: BLE001
+            written = write_day(repo, report_date, line, base)
+        except Exception as exc:                  # noqa: BLE001 - 覚えておいて書き直す(`retry_owed`)
             log.exception("集計CSVを書き直せませんでした %s/%s", report_date, line)
-            notes.append(f"{report_date} {line} の集計CSVを書き直せませんでした: {exc}")
+            notes.append(f"{report_date} {line} の集計CSVを書き直せませんでした"
+                         f"(1分ごとに書き直します): {exc}")
             continue
         log.info("集計CSVを書き直しました %s/%s → %s", report_date, line, written.folder)
         notes.append(f"{report_date} {line} の集計CSVを {written.folder} に書き直しました")
     return notes
+
+
+# ----------------------------------------------------------------------
+# 書けなかった日を覚えて書き直す (v4.46.11)
+#
+#     管理者が修正後、現地PCからの開きで集計CSVが直るか … 一連のチェック穴がないかのチェック
+#
+# ラインのPCは、管理者の直しを控えから取り込んだときにその日の集計CSVを書き直します。そのとき
+# 出力先(共有)に届かず書けないと、取り込みは済んでいるので**次の取り込みには何も無く、二度と
+# 書かれません**でした(集計CSVは直す前のまま)。書けなかった日はこの端末のDBに覚えておき
+# (`csv_owed`)、1分ごとの見張り(`/api/entry/close`)と起動のときに書き直します。書けたら消します。
+# ----------------------------------------------------------------------
+OWED_TABLE = "csv_owed"
+
+
+def _owed_table(conn) -> None:
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {OWED_TABLE} ("
+                 " report_date TEXT NOT NULL, line TEXT NOT NULL, at TEXT, error TEXT,"
+                 " PRIMARY KEY (report_date, line))")
+
+
+def owe(repo, report_date: str, line: str, error: str) -> None:
+    """その日の集計CSVを書けなかった(あとで書き直す)。"""
+    from datetime import datetime
+
+    try:
+        with repo.conn:
+            _owed_table(repo.conn)
+            repo.conn.execute(
+                f"INSERT OR REPLACE INTO {OWED_TABLE} (report_date, line, at, error) VALUES (?,?,?,?)",
+                (str(report_date), str(line), datetime.now().isoformat(timespec="seconds"),
+                 str(error)[:500]))
+    except Exception:                             # noqa: BLE001 - 覚えられなくても続ける
+        from ..logging_setup import get_logger
+        get_logger("services.day_csv").exception("書けなかった日を覚えられませんでした %s/%s",
+                                                 report_date, line)
+
+
+def paid(repo, report_date: str, line: str) -> None:
+    """その日の集計CSVを書けた(覚えていれば消す)。"""
+    try:
+        with repo.conn:
+            _owed_table(repo.conn)
+            repo.conn.execute(f"DELETE FROM {OWED_TABLE} WHERE report_date=? AND line=?",
+                              (str(report_date), str(line)))
+    except Exception:                             # noqa: BLE001
+        pass
+
+
+def owed(repo) -> list[tuple[str, str, str, str]]:
+    """書けていない日: (日付, ライン, 覚えた時刻, 理由)。"""
+    try:
+        _owed_table(repo.conn)
+        return [tuple(str(v or "") for v in r) for r in repo.conn.execute(
+            f"SELECT report_date, line, at, error FROM {OWED_TABLE} ORDER BY at")]
+    except Exception:                             # noqa: BLE001
+        return []
+
+
+def write_day(repo, report_date: str, line: str, base=None):
+    """その日の集計CSV 3本を書く。**どの道もここを通す**(書けなければ覚える・書けたら消す・
+    どこへ書いたかを控えに残す)。書けなければ例外をそのまま上げる。"""
+    from ..config import SETTINGS
+    from ..reporting import csv_export
+
+    out_dir = base if base is not None else SETTINGS.report_output_dir
+    # 覚える・消すも**書くのと同じ錠の中で**(錠の外だと、あとから書けなかった回の「覚える」を、
+    # 先に書けた回の「消す」が消してしまう)
+    with _lock if _lock is not None else nullcontext():
+        try:
+            written = csv_export.write_daily_set(repo, report_date, line, out_dir)
+        except Exception as exc:
+            owe(repo, report_date, line, str(exc))
+            raise
+        paid(repo, report_date, line)
+    if base is None:
+        note_output_dir(line, out_dir)
+    return written
+
+
+def retry_owed(repo) -> list[str]:
+    """書けていない日を書き直す(1分ごとの見張り・起動のとき)。返すのは書き直した・まだ書けない一言。"""
+    from ..logging_setup import get_logger
+
+    log = get_logger("services.day_csv")
+    notes: list[str] = []
+    for report_date, line, _at, _error in owed(repo):
+        own = owner_line()
+        if not own:
+            continue                              # この端末のラインがまだ分からない(消さずに残す)
+        if own != line:
+            paid(repo, report_date, line)         # この端末のラインではなくなった(書くのはそのPC)
+            continue
+        from ..config import SETTINGS
+        if (not _has_production(repo, report_date, line)
+                and not _csv_exists(SETTINGS.report_output_dir, report_date, line)):
+            paid(repo, report_date, line)         # テストの直だけの日(本番のCSVは出さない ── `settle` と同じ)
+            continue
+        try:
+            written = write_day(repo, report_date, line)
+        except Exception as exc:                  # noqa: BLE001 - 次の見張りでまた
+            log.warning("集計CSVをまだ書けません %s/%s: %s", report_date, line, exc)
+            notes.append(f"{report_date} {line} の集計CSVをまだ書けません: {exc}")
+            continue
+        log.info("書けていなかった集計CSVを書き直しました %s/%s → %s", report_date, line, written.folder)
+        notes.append(f"{report_date} {line} の集計CSVを {written.folder} に書き直しました")
+    return notes
+
+
+# ----------------------------------------------------------------------
+# このラインの集計CSVをどこへ書いているか ── 控えのフォルダに残す (v4.46.11)
+#
+# 出力先は端末ごとの設定です(既定はそのPCの中)。管理者のPCが「集計CSVに入ったか」を見るとき、
+# 自分の出力先を読むと、ラインのPCの出力先と違えば**いつまでも「まだ」**になります。ラインのPCは
+# 書いた先を控えのフォルダ(`LocalBackup\<ライン>\`)に残し、管理者のPCはそこを読みます
+# (`csv_reflection`)。
+# ----------------------------------------------------------------------
+WHERE_FILE = "集計CSVの出力先.json"
+
+
+def where_file(line: str):
+    from . import local_backup
+
+    return local_backup.path_for(line).parent / WHERE_FILE
+
+
+def note_output_dir(line: str, out_dir) -> None:
+    """このラインの集計CSVを `out_dir` に書いた、と控えのフォルダに残す(変わったときだけ書く)。"""
+    import json
+    from datetime import datetime
+
+    from ..db.repository import this_pc
+    from . import local_backup
+
+    try:
+        if not local_backup.reachable():
+            return
+        path = where_file(line)
+        if not path.parent.is_dir():
+            return                                # 控えがまだ無い(作るのは控えへ写すとき)
+        try:
+            known = json.loads(path.read_text(encoding="utf-8")).get("dir")
+        except (OSError, ValueError, AttributeError):
+            known = None
+        if known == str(out_dir):
+            return
+        path.write_text(json.dumps({"dir": str(out_dir), "real": real_path(out_dir), "pc": this_pc(),
+                                    "at": datetime.now().isoformat(timespec="seconds")},
+                                   ensure_ascii=False), encoding="utf-8")
+    except Exception:                             # noqa: BLE001 - 残せなくても書いたCSVはそのまま
+        from ..logging_setup import get_logger
+        get_logger("services.day_csv").exception("集計CSVの出力先を控えに残せませんでした %s", line)
+
+
+def real_path(path) -> str:
+    """ほかのPCから見ても同じ場所を指す形。割り当てたドライブ(Z: など)は Windows では
+    `\\\\サーバ\\共有\\…` になる(`os.path.realpath`)。たどれなければそのまま。"""
+    import os
+
+    try:
+        return os.path.realpath(str(path))
+    except (OSError, ValueError):
+        return str(path)
+
+
+def is_shared(text: str) -> bool:
+    """ほかのPCからも同じ場所を指す道か(`\\\\サーバ\\共有\\…`)。`C:\\…`・`Z:\\…` は PC ごとに違う。"""
+    return str(text).replace("/", "\\").startswith("\\\\")
+
+
+def output_dir_of(line: str) -> "tuple[str, str] | None":
+    """そのラインのPCが集計CSVを書いている先 (ほかのPCから見た形, PC名)。分からなければ None。"""
+    import json
+
+    try:
+        got = json.loads(where_file(line).read_text(encoding="utf-8"))
+        where = got.get("real") or got.get("dir")
+        return (str(where), str(got.get("pc", ""))) if where else None
+    except Exception:                             # noqa: BLE001 - 無い・読めない
+        return None
 
 
 def _has_production(repo, report_date: str, line: str) -> bool:

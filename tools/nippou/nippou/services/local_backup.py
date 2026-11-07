@@ -324,31 +324,27 @@ def _settle_pulled(repo: NippouRepository, shifts: set[ShiftKey],
     管理者のPCでこのラインの日報を直すと、直しは控え経由でこの端末に戻ってきます。前は集計だけ
     作り直して集計CSVはそのままだったので、出力先のCSVは直す前の中身のままでした。手元に
     その日の直が全部あるのはこの端末なので、ここで直ぜんぶで書き直します(`day_csv.settle`。
-    ほかのラインの日は書かない)。負荷係数は直した側で数え直してあるので、ここでは触りません。
+    ほかのラインの日は書かない)。負荷係数もこのPCで数え直します(取り込んだ直とあとの直)。
     """
     if not shifts:
         return
     from . import day_csv, second_output
 
     csv = set(shifts) if csv is None else set(csv) & set(shifts)
-    # 取り込んだ直の**あとの直**の係数を数え直す(v4.46.8。管理者が2直を直したら3直も)。このPCの
-    # ラインだけ・取り込んだ直そのものは直した側で数えてあるので触らない。書き換わった直は集計CSVも
-    from . import load_factor
-    following: set[ShiftKey] = set()
-    for key in sorted(csv):
-        if day_csv.refusal(key[1]):
-            continue
-        try:
-            following.update(k for k in load_factor.recalculate_following(repo, *key)
-                             if k not in shifts)
-        except Exception:                                  # noqa: BLE001 - 取り込みは済んでいる
-            log.exception("取り込んだ直のあとの直の係数を数え直せませんでした %s", key)
-    shifts = set(shifts) | following
-    csv |= following
-    _refresh(repo, set(shifts) - csv)                      # 集計だけ
+    _refresh(repo, set(shifts) - csv)                      # 集計だけ(初めての起動)
     if not csv:
         return
-    for note in day_csv.settle(repo, csv, factors=False):
+    # **取り込んだ直そのものの係数も、あとの直の係数も**このPCで数え直す(`factors=True`。このPCの
+    # ラインだけ)。前は「直した側で数え直してある」として取り込んだ直は触らなかったが、管理者のPCは
+    # 前の直を控えから読めないと数え直さない(`load_factor.BackupUnread`)── そのときは誰も数え直さず、
+    # 係数Lot数・ロット数が直す前のまま残った(v4.46.11)。直ぜんぶを持つこのPCの数が正。同じなら書かない
+    # **先に「書く日」として覚える**(v4.46.11)。数え直し・書き直しの途中で落ちたり止められたり
+    # しても、取り込みは済んでいるので次の取り込みには何も無い ── 覚えておけば1分ごとの見張りと
+    # 次の起動で書く(書けたら消える)
+    for d, ln in sorted({(d, ln) for d, ln, _sh in csv}):
+        if not day_csv.refusal(ln):
+            day_csv.owe(repo, d, ln, "控えから取り込んだ直しを、まだ書いていません")
+    for note in day_csv.settle(repo, csv, factors=True):
         log.info("控えから戻した直: %s", note)
     # 2つ目の出力先も(共有へ送り済みの中身なら)。直した側が先に共有へ送っていると、この端末は
     # その直を送り直さないので、共有へ保存の道では2つ目が書き直されない

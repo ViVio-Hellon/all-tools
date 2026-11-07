@@ -15,6 +15,17 @@ from tests.test_correction_outputs import CorrectionCase  # noqa: E402
 
 
 class CsvReflectionTests(CorrectionCase):
+    def setUp(self) -> None:
+        super().setUp()
+        import importlib
+        from unittest import mock
+
+        # 試験の出力先を「共有のフォルダ」とみなす(本物は \\\\サーバ\\共有\\…)
+        day_csv = importlib.import_module("nippou.services.day_csv")
+        shared = mock.patch.object(day_csv, "is_shared", return_value=True)
+        shared.start()
+        self.addCleanup(shared.stop)
+
     def check(self, line: str, shift: str):
         from nippou.services import csv_reflection
 
@@ -110,6 +121,18 @@ class CsvReflectionTests(CorrectionCase):
         html = self.client.get("/records").get_data(as_text=True)
         self.assertIn("data-csv-check", html)
         self.assertIn("集計CSVを読み直す", html)
+
+    def test_書いた先が分からず_このPCの出力先も共有でなければ読まない(self) -> None:
+        """このPCの中のフォルダには、このPCが前に書いたCSVがあるかもしれない ── 読むと嘘の「入っています」。"""
+        import importlib
+        from unittest import mock
+
+        day_csv = importlib.import_module("nippou.services.day_csv")
+        self.put("HVC", "2直", "HVC0002")
+        self.write_csv("HVC")                     # このPCが前に書いた(4.46.3 より前の版)
+        with mock.patch.object(day_csv, "is_shared", return_value=False):
+            got = self.check("HVC", "2直")
+        self.assertEqual(got.state, "unreadable", got.text)
 
     def test_ほかのラインを直したときの一言で見るところを言う(self) -> None:
         from nippou.services import day_csv

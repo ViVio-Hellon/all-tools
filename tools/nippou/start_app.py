@@ -754,6 +754,10 @@ def _restore_from_backup(srv) -> None:
                 if result.pulled or result.adopted:
                     log().info("%s", result.message)
             local_backup.flush(repo)
+            # 前に書けなかった集計CSVを書き直す(v4.46.11 `day_csv.retry_owed`)
+            from nippou.services import day_csv
+            for note in day_csv.retry_owed(repo):
+                log().info("集計CSV: %s", note)
         finally:
             conn.close()
     except Exception:                             # noqa: BLE001 - 起動は続ける

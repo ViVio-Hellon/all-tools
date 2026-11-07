@@ -2205,7 +2205,6 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
     出ないことより、打った12行が消えるほうが困ります ── ここで
     握りつぶして、結果だけ画面へ返します。
     """
-    from nippou.reporting import csv_export
     from nippou.services import day_csv
 
     # **ほかのラインの日は書かない**(この端末にはその日の直が全部はない。一部の中身で
@@ -2223,12 +2222,14 @@ def _export_daily_csv(report_date: str, line: str) -> Optional[dict]:
     # (`services/second_output` ── 共有にまだ無い中身を先に届けない)
     base = SETTINGS.report_output_dir
     try:
-        written = csv_export.write_daily_set(get_repo(), report_date, line, base)
+        # 書けなければ覚えて1分ごとに書き直す・書いた先を控えに残す(`day_csv.write_day`。v4.46.11)
+        written = day_csv.write_day(get_repo(), report_date, line)
     except Exception as exc:                      # noqa: BLE001 - 保存は済んでいる
         log.exception("集計CSVの自動書き出しに失敗しました key=%s/%s",
                       report_date, line)
         # **黙って諦めません。** 出ていないことは画面に出す
-        return {"ok": False, "dir": str(base), "message": f"集計CSVは出せませんでした: {exc}"}
+        return {"ok": False, "dir": str(base),
+                "message": f"集計CSVは出せませんでした(1分ごとに書き直します): {exc}"}
     message = f"集計CSVを {written.folder} に出しました"
     if written.placed:
         # **黙って置きません。** 年月のフォルダに説明が無かった(初めての月か、
@@ -2497,6 +2498,13 @@ def close_shift():
             local_backup.pull_if_due(get_repo(), ctx.terminal_line)
         except Exception:                         # noqa: BLE001 - 締めは続ける
             log.exception("控えからの取り込み(動いているあいだ)で失敗しました")
+    # **書けなかった集計CSVを書き直す**(v4.46.11。取り込んだあと共有に届かなかった日など)
+    try:
+        from nippou.services import day_csv
+        for note in day_csv.retry_owed(get_repo()):
+            log.info("集計CSV: %s", note)
+    except Exception:                             # noqa: BLE001 - 締めは続ける
+        log.exception("書けなかった集計CSVの書き直しで失敗しました")
     result = shift_close.run(get_repo(), calc,
                              line=ctx.line,
                              force_day_shift=ctx.force_day_shift(),
