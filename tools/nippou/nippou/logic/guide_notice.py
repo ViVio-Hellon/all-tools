@@ -379,8 +379,15 @@ class Hit:
     carried: bool = False
 
 
+def _known(notice: Notice, slot: Slot, since: Optional[dict[str, datetime]]) -> bool:
+    """その回のうちに、この案内はもうあったか(**案内を作る前の回は数えない** ── v4.47.4)。"""
+    first = (since or {}).get(notice.id)
+    return first is None or first < slot.end
+
+
 def due_slots(notices: Iterable[Notice], *, line: str, now: datetime, current: Optional[Slot],
-              past: Iterable[Slot], acked: Iterable[tuple[str, str, str]] = ()) -> list[Hit]:
+              past: Iterable[Slot], acked: Iterable[tuple[str, str, str]] = (),
+              since: Optional[dict[str, datetime]] = None) -> list[Hit]:
     """いま出す案内。`acked` は押した (案内ID, 報告日, 直)。
 
     いまの直のぶん(時刻が来ていて、押していない)と、**過ぎた直のぶん**(「過ぎても出す」で、
@@ -397,16 +404,19 @@ def due_slots(notices: Iterable[Notice], *, line: str, now: datetime, current: O
             continue
         if not notice.carry or not notice.shifts:
             continue
-        mine = [s for s in past if applies(notice, line, s)]
+        mine = [s for s in past if applies(notice, line, s) and _known(notice, s, since)]
         if mine and (notice.id, *mine[-1].key) not in done:
             hits.append(Hit(notice, mine[-1], carried=True))
     return sorted(hits, key=lambda h: (not h.carried, h.notice.order, h.slot.start, h.notice.id))
 
 
 def windows(notices: Iterable[Notice], *, line: str, now: datetime,
-            slots: Iterable[Slot]) -> list[tuple[Notice, Slot]]:
-    """その期間に出した(出すはずだった)案内の回。押されていない一覧のもと(新しい回が先)。"""
+            slots: Iterable[Slot], since: Optional[dict[str, datetime]] = None
+            ) -> list[tuple[Notice, Slot]]:
+    """その期間に出した(出すはずだった)案内の回。押されていない一覧のもと(新しい回が先)。
+    案内を作る前の回は入れない(`since`)。"""
     out = [(n, s) for s in slots for n in notices
-           if applies(n, line, s) and s.start <= now and point(n, s) <= now]
+           if applies(n, line, s) and s.start <= now and point(n, s) <= now
+           and _known(n, s, since)]
     return sorted(out, key=lambda x: (x[1].start, x[0].order), reverse=True)
 

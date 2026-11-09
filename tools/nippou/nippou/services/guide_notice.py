@@ -271,6 +271,30 @@ def acks(repo, line: str, months: Iterable[str]) -> dict[tuple[str, str, str], d
     return found
 
 
+SEEN_TABLE = "guide_notice_seen"
+
+
+def first_seen(repo, notices_: Iterable[rule.Notice], now: datetime) -> dict[str, datetime]:
+    """案内ごとに、この端末が**初めて見た時刻**(無ければ `now` として覚える)。
+
+        月曜に案内を作ったのに、作る前の週の火曜の分まで「押されていません」と出た(v4.47.4)
+
+    それより前に終わった回は、あとの直へ回さない・押されていない一覧に入れない。"""
+    with repo.conn:
+        repo.conn.execute(f"CREATE TABLE IF NOT EXISTS {SEEN_TABLE} ("
+                          " notice_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL)")
+        repo.conn.executemany(
+            f"INSERT OR IGNORE INTO {SEEN_TABLE} (notice_id, first_seen) VALUES (?, ?)",
+            [(n.id, now.isoformat(timespec="seconds")) for n in notices_])
+    out: dict[str, datetime] = {}
+    for notice_id, at in repo.conn.execute(f"SELECT notice_id, first_seen FROM {SEEN_TABLE}"):
+        try:
+            out[str(notice_id)] = datetime.fromisoformat(str(at))
+        except ValueError:
+            continue
+    return out
+
+
 def acked(repo, report_date: str, line: str, shift: str) -> set[str]:
     """その直で押した案内の ID(この端末のDB)。"""
     return {r["notice_id"] for r in _local_acks(repo, line)
@@ -376,8 +400,10 @@ def share_pending(repo) -> Optional[int]:
 # ----------------------------------------------------------------------
 # 直の回
 # ----------------------------------------------------------------------
-#: 過ぎた直を何日さかのぼって見るか(あとの直で出す・押されていない一覧)
-LOOK_BACK_DAYS = 2
+#: 過ぎた直を何日さかのぼって見るか(あとの直で出す)。**1週間**: 曜日を決めた案内(月曜だけ など)は
+#: 次の同じ曜日・同じ直が始まるまで出すので、2日では足りない(月曜のぶんを木曜に開くと出なかった ──
+#: v4.47.4)。毎日の案内は、いちばん近い回だけを出すので長くしても変わらない
+LOOK_BACK_DAYS = 7
 
 
 def _slot(calc, business, shift: str) -> Optional[rule.Slot]:
@@ -468,7 +494,8 @@ def due_now(repo, calc, line: str, now: Optional[datetime] = None, *,
         return Due(None, line=line, problem=problem)
     every = ([current] if current else []) + past
     done = set(acks(repo, line, _months(every, now)))
-    hits = rule.due_slots(found, line=line, now=now, current=current, past=past, acked=done)
+    hits = rule.due_slots(found, line=line, now=now, current=current, past=past, acked=done,
+                          since=first_seen(repo, found, now))
     if not hits:
         return Due(None, current.report_date, line, current.shift, problem=problem,
                    now_shift=current.shift)
@@ -487,7 +514,8 @@ def checks(repo, calc, line: str, *, days: int = 14, now: Optional[datetime] = N
     every = ([current] if current else []) + past
     done = acks(repo, line, _months(every, now))
     out: list[dict[str, Any]] = []
-    for notice, slot in rule.windows(found, line=line, now=now, slots=every):
+    for notice, slot in rule.windows(found, line=line, now=now, slots=every,
+                                     since=first_seen(repo, found, now)):
         got = done.get((notice.id, slot.report_date, slot.shift))
         out.append({
             "notice": notice.id, "text": notice.text, "report_date": slot.report_date,

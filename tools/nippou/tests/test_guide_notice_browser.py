@@ -98,6 +98,9 @@ class CarriedBrowserTests(ScreenBrowserCase):
         conn.close()
         guide_notice.reset()
         self.addCleanup(guide_notice.reset)
+        from nippou.logic import guide_notice as rule
+        # 案内は9日の朝からある(作る前の回は数えない ── v4.47.4)
+        guide_notice.first_seen(self.repo(), rule.parse([rule.FIRST_ROW]), datetime(2026, 11, 9, 6, 0))
         when = datetime(2026, 11, 9, 23, 30)                # 3直。2直は誰も押していない
         for name in ("due_now", "checks"):
             real = getattr(guide_notice, name)

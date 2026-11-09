@@ -268,6 +268,8 @@ class NoticeWebTests(WebTestCase):
         self.assertTrue(text.splitlines()[1].endswith(",3直"), text)
 
     def test_2直とばしで3直_翌日の1直でも押すまで出る_次の2直が始まれば次の2直のぶん(self) -> None:
+        self.at(datetime(2026, 11, 9, 6, 0))              # 案内を作った(9日の朝)
+        self.get("/api/notice/due")
         self.at(datetime(2026, 11, 10, 9, 0))             # 9日の2直・3直は誰も開かなかった
         body = self.get("/api/notice/due").get_json()
         self.assertTrue(body["carried"])
