@@ -68,6 +68,7 @@ import { go, guarded, leaving, refresh, typedHere } from "./nav.js";
 import { paintRibbon, showShiftMoved } from "./ribbon.js";
 import { paintOtherTerminal } from "./other_terminal.js";
 import { toast } from "./toast.js";
+import { check as guideCheck } from "./guide_notice.js";
 
 // 訊きに行く間隔(ms)。VBA のタイマーが1分ごとだったので合わせる
 const POLL_MS = 60000;
@@ -302,6 +303,8 @@ async function tick() {
   // **確定 → 確認** の順。確認画面には確定後の数字を映したい
   await autoConfirm();
   await reviewCheck();
+  // 案内表示(v4.47.0。表「案内表示」に当たれば、押すまで閉じない案内を出す)
+  await guideCheck();
 }
 
 export function startShiftEndWatch() {

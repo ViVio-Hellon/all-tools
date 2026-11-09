@@ -750,7 +750,7 @@ def get_repo():
 # ルーティング
 # ------------------------------------------------------------------
 def _register_routes(app: Flask) -> None:
-    from .routes import (agg, entry, graph, gw, health, logs, master, pending,
+    from .routes import (agg, entry, graph, gw, health, logs, master, notice, pending,
                          printing, removal, settings, sound, staff, standard_time, tab, vc)
 
     app.register_blueprint(health.bp)
@@ -780,6 +780,8 @@ def _register_routes(app: Flask) -> None:
     app.register_blueprint(sound.bp)
     # ログ(エラーの一覧・なぜなぜ・画面のエラーの受け口)。設定の「ログ」の面
     app.register_blueprint(logs.bp)
+    # 案内表示(v4.47.0)。条件に合えば画面いっぱいに出し、押した人を残す(`services/guide_notice`)
+    app.register_blueprint(notice.bp)
 
     # レールに出ているのに中身がまだ無い画面へ、「準備中」の案内を置く。
     # **業務の画面を全部登録したあと**に呼ぶ(すでに実装済みのものを
