@@ -1,8 +1,9 @@
 """案内表示 ── 表を読む・押した記録を残す (v4.47.0。決まりは `logic/guide_notice.py`)
 
 【表はどこにあるか】伝送用ファイル(停止理由・時間用と同じファイル)の「案内表示」。マスタ管理で
-直します。sqlite3 のファイルに表が無ければ、**初めて読むときに作り**、頼まれた案内(機側・2直の始まりに
-計量器の点検)を1行入れておきます。Access のファイルなら作りません(Access で表を作ってもらう)。
+直します。表が無ければ、**初めて読むときに作り**、頼まれた案内(機側・2直の始まりに計量器の点検)を
+1行入れておきます。sqlite3 はその場で、Access(.accdb)は共有へ保存と同じ道(VBScript か ODBC)で作ります
+(Access は10分に1回まで確かめる。ほかの人が開いていて作れなければ10分後にもう一度)。
 
 【押した記録】押したら3か所に残します。
 
@@ -44,6 +45,7 @@ def reset() -> None:
     global _cache
     with _lock:
         _cache = None
+        _access_tried.clear()
 
 
 # ----------------------------------------------------------------------
@@ -53,11 +55,78 @@ def master_path() -> Path:
     return SETTINGS.transmission_master_path
 
 
+#: Access のマスタで表を作ろうとした時刻(道ごと)。cscript を毎回は走らせない
+_access_tried: dict[str, float] = {}
+#: Access で作れなかったとき、もう一度試すまでの秒数(ほかの人が開いていて錠が取れない など)
+ACCESS_RETRY_SEC = 600.0
+ACCESS_SUFFIXES = (".accdb", ".mdb")
+
+
+def _access_literal(value: Any) -> str:
+    if value is None or value == "":
+        return "NULL"
+    if isinstance(value, int):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def access_statements() -> list[str]:
+    """Access で表を作り、最初の1行を入れる SQL。長くなる文は MEMO(255字を超えてよい)。"""
+    long_text = {"表示文", "確認の文"}
+    cols = ", ".join(
+        f"[{name}] " + ("INTEGER" if kind == "INTEGER" else "MEMO" if name in long_text else "TEXT(255)")
+        for name, kind in rule.COLUMNS)
+    names = ", ".join(f"[{name}]" for name, _ in rule.COLUMNS)
+    values = ", ".join(_access_literal(rule.FIRST_ROW.get(name)) for name, _ in rule.COLUMNS)
+    return [f"CREATE TABLE [{rule.TABLE}] ({cols})",
+            f"INSERT INTO [{rule.TABLE}] ({names}) VALUES ({values})"]
+
+
+def ensure_access_table(path: Path, *, runner=None, now: Optional[float] = None) -> bool:
+    """Access のマスタに表が無ければ作り、最初の1行を入れる(共有へ保存と同じ道 ── VBScript か ODBC)。
+    作ったら True。表があるか確かめるのは10分に1回まで(cscript を毎回走らせない)。"""
+    from ..access_bridge import script_gen
+    from ..access_bridge.importer import import_table
+    from ..access_bridge.runner import run_with_retry
+
+    path = Path(path)
+    if path.suffix.lower() not in ACCESS_SUFFIXES or not path.exists():
+        return False
+    t = _time.monotonic() if now is None else now
+    with _lock:
+        tried = _access_tried.get(str(path))
+        if tried is not None and t - tried < ACCESS_RETRY_SEC:
+            return False
+        _access_tried[str(path)] = t
+    try:
+        if import_table(path, rule.TABLE, runner=runner).success:
+            return False                          # もうある
+        statements = access_statements()
+        if SETTINGS.access_backend == "odbc":
+            from ..access_bridge.odbc_backend import push_statements_odbc
+            result = push_statements_odbc(path, statements)
+        else:
+            result = run_with_retry(lambda: script_gen.build_push_script(str(path), statements),
+                                    runner=runner)
+    except Exception:                             # noqa: BLE001 - 作れなくても日報は止めない
+        log.exception("案内表示の表を作れませんでした(Access): %s", path)
+        return False
+    if not result.success:
+        log.warning("案内表示の表を作れませんでした(Access。10分後にもう一度): %s: %s",
+                    path, getattr(result, "error", "") or getattr(result, "err_desc", ""))
+        return False
+    log.info("伝送用ファイル(Access)に「%s」の表を作り、最初の案内を入れました: %s", rule.TABLE, path)
+    return True
+
+
 def ensure_table(path: Path) -> bool:
-    """sqlite3 のマスタに表が無ければ作り、最初の1行を入れる。作ったら True。"""
+    """マスタに表が無ければ作り、最初の1行を入れる。作ったら True。
+    sqlite3 はここで、Access は `ensure_access_table`(共有へ保存と同じ道)で作る。"""
     from .. import source_db
 
     path = Path(path)
+    if path.suffix.lower() in ACCESS_SUFFIXES:
+        return ensure_access_table(path)
     if not path.exists() or not source_db.looks_like_sqlite(path):
         return False
     try:

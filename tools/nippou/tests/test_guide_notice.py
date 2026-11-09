@@ -78,6 +78,62 @@ class RuleTests(unittest.TestCase):
         self.assertEqual((got[0].size, got[0].color), ("小", "警告"))
 
 
+class AccessTableTests(unittest.TestCase):
+    """伝送用ファイルが Access(.accdb)のときも、表が無ければ作る(共有へ保存と同じ VBScript の道)。"""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from nippou.services import guide_notice
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "伝送用ファイル.accdb"
+        self.path.write_bytes(b"not really access")
+        guide_notice.reset()
+        self.addCleanup(guide_notice.reset)
+
+    def run_with(self, *, exists: bool, now: float = 1000.0):
+        from unittest import mock
+
+        from nippou.access_bridge.runner import ScriptResult
+        from nippou.services import guide_notice
+
+        scripts: list[str] = []
+
+        class Runner:
+            def run(self, text):
+                scripts.append(text)
+                return ScriptResult(success=True, stdout="OK:2", return_code=0)
+
+        found = mock.Mock(success=exists, rows=[], error=None)
+        with mock.patch("nippou.access_bridge.importer.import_table", return_value=found):
+            made = guide_notice.ensure_access_table(self.path, runner=Runner(), now=now)
+        return made, scripts
+
+    def test_無ければ表を作り_頼まれた1行を入れる(self) -> None:
+        made, scripts = self.run_with(exists=False)
+        self.assertTrue(made)
+        self.assertEqual(len(scripts), 1)
+        self.assertIn("CREATE TABLE [案内表示]", scripts[0])
+        self.assertIn("[表示文] MEMO", scripts[0])
+        self.assertIn("'計量器の点検を行ってください'", scripts[0])
+        self.assertIn("'機側'", scripts[0])
+
+    def test_あれば作らない(self) -> None:
+        made, scripts = self.run_with(exists=True)
+        self.assertFalse(made)
+        self.assertEqual(scripts, [])
+
+    def test_確かめるのは10分に1回まで(self) -> None:
+        self.run_with(exists=True, now=1000.0)
+        made, scripts = self.run_with(exists=False, now=1300.0)
+        self.assertFalse(made)
+        self.assertEqual(scripts, [], "10分たつまでは確かめない(cscript を毎回走らせない)")
+        made, scripts = self.run_with(exists=False, now=1700.0)
+        self.assertTrue(made)
+
+
 class NoticeWebTests(WebTestCase):
     terminal_line = "機側"
 
