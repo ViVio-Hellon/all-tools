@@ -7,6 +7,7 @@
     大 … 画面いっぱい(既定)/ 中 … 真ん中の窓 / 小 … 上の帯
     **押すまで閉じない**(×も Esc も無い)。名前を選ぶ案内は、名前を選ぶまで押せない。
     押したら `/api/notice/ack`。サーバがその直・その案内を覚えるので、次からは出ない。
+  **押されないまま直が終わった案内**は、あとの直で「◯直に確認されていません」を添えて出る(v4.47.2)。
 
   名前は班員名簿(`/api/staff/members`)から選ぶ。その直の作業者がもう選ばれていれば、
   最初からその人を選んでおく。名簿に無い人は下の欄に打てる。
@@ -50,6 +51,8 @@ async function paint(body) {
   box.setAttribute("aria-modal", "true");
   box.dataset.notice = notice.id;
   const panel = el("div", "gnote__panel");
+  // **過ぎた直のぶん**(その直で押されなかった。代わりにいまの直で確認する ── v4.47.2)
+  if (body.carried) panel.append(el("p", "gnote__carried", body.carried_text));
   panel.append(el("p", "gnote__text", notice.text));
   if (notice.question) panel.append(el("p", "gnote__question", notice.question));
 

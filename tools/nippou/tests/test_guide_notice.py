@@ -155,19 +155,24 @@ class NoticeWebTests(WebTestCase):
         self.addCleanup(guide_notice.reset)
 
     def at(self, when: datetime):
-        """時計をその時刻に(案内の判定と押した記録だけ)。"""
+        """時計をその時刻に(案内の判定・押した記録・一覧だけ)。何度呼んでもよい(最後の時刻)。"""
         from unittest import mock
 
         from nippou.services import guide_notice
 
-        real = guide_notice.due_now
+        self.when = when
+        if getattr(self, "_clock", False):
+            return
+        self._clock = True
+        for name in ("due_now", "checks"):
+            real = getattr(guide_notice, name)
 
-        def fixed(repo, calc, line, now=None, **kw):
-            return real(repo, calc, line, when, **kw)
+            def fixed(repo, calc, line, now=None, _real=real, **kw):
+                return _real(repo, calc, line, now=self.when, **kw)
 
-        patcher = mock.patch.object(guide_notice, "due_now", side_effect=fixed)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+            patcher = mock.patch.object(guide_notice, name, side_effect=fixed)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def table_rows(self):
         conn = sqlite3.connect(self.master)
@@ -187,9 +192,143 @@ class NoticeWebTests(WebTestCase):
         self.assertTrue(body["notice"]["pick_worker"])
         self.assertEqual((body["line"], body["shift"]), ("機側", "2直"))
 
-    def test_1直では出ない(self) -> None:
+    def press(self, when: datetime, worker: str = "山田") -> dict:
+        self.at(when)
+        body = self.get("/api/notice/due").get_json()
+        res = self.post("/api/notice/ack", {"id": "計量器の点検", "worker": worker,
+                                            "report_date": body["report_date"], "shift": body["shift"]})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        return body
+
+    def test_1直では_前の日の2直が押されていれば出ない(self) -> None:
+        self.press(datetime(2026, 11, 8, 15, 1))          # 前の日の2直で押した
         self.at(datetime(2026, 11, 9, 9, 0))
         self.assertIsNone(self.get("/api/notice/due").get_json()["notice"])
+
+    def test_2直で押されなければ3直で出す_押した記録は2直のぶん_押した直は3直(self) -> None:
+        """「2直で誰も確認していない、だから3直が代わりにやる」。"""
+        from nippou.services import guide_notice
+
+        self.at(datetime(2026, 11, 9, 15, 1))
+        self.get("/api/notice/due")                       # 表を作る(2直のあいだ誰も押さない)
+        body = self.press(datetime(2026, 11, 9, 23, 30), "佐藤")
+        self.assertTrue(body["carried"])
+        self.assertEqual((body["shift"], body["now_shift"]), ("2直", "3直"))
+        self.assertIn("2直 に確認されていません", body["carried_text"])
+        self.assertIsNone(self.get("/api/notice/due").get_json()["notice"], "押したらもう出ない")
+        got = guide_notice.history(self.repo())[0]
+        self.assertEqual((got["shift"], got["acked_shift"], got["worker"]), ("2直", "3直", "佐藤"))
+        text = next((self.out / "機側" / "案内の確認").glob("*.csv")).read_text(encoding="utf-8-sig")
+        self.assertIn("押した直", text.splitlines()[0])
+        self.assertTrue(text.splitlines()[1].endswith(",3直"), text)
+
+    def test_2直とばしで3直_翌日の1直でも押すまで出る_次の2直が始まれば次の2直のぶん(self) -> None:
+        self.at(datetime(2026, 11, 10, 9, 0))             # 9日の2直・3直は誰も開かなかった
+        body = self.get("/api/notice/due").get_json()
+        self.assertTrue(body["carried"])
+        self.assertEqual((body["report_date"], body["shift"]), ("2026年11月9日", "2直"))
+        self.at(datetime(2026, 11, 10, 15, 1))            # 10日の2直が始まった
+        body = self.get("/api/notice/due").get_json()
+        self.assertFalse(body["carried"], "いまの2直のぶんを押せば済む(前の日のぶんは回さない)")
+        self.assertEqual((body["report_date"], body["shift"]), ("2026年11月10日", "2直"))
+
+    def test_過ぎても出すが0なら_あとの直では出さない(self) -> None:
+        self.at(datetime(2026, 11, 9, 15, 1))
+        self.get("/api/notice/due")
+        conn = sqlite3.connect(self.master)
+        conn.execute(f'UPDATE "{rule.TABLE}" SET "過ぎても出す"=0')
+        conn.commit()
+        conn.close()
+        from nippou import source_db
+        from nippou.services import guide_notice
+        source_db.forget()
+        guide_notice.reset()
+        self.at(datetime(2026, 11, 9, 23, 30))
+        self.assertIsNone(self.get("/api/notice/due").get_json()["notice"])
+
+    def test_ほかのPCで押したぶんも押したとみなす_共有のCSV(self) -> None:
+        self.at(datetime(2026, 11, 9, 15, 1))
+        self.get("/api/notice/due")
+        folder = self.out / "機側" / "案内の確認"
+        folder.mkdir(parents=True)
+        (folder / "案内の確認_2026-11.csv").write_text(
+            "報告日,直,ライン,案内,押した人,押した時刻,PC,押した直\n"
+            "2026年11月9日,2直,機側,計量器の点検,鈴木,2026-11-09 15:10:00,PC-KIGAWA2,2直\n",
+            encoding="utf-8-sig")
+        self.at(datetime(2026, 11, 9, 23, 30))
+        self.assertIsNone(self.get("/api/notice/due").get_json()["notice"])
+
+    def test_共有のCSVを消す_よそへ移すと_また出る_押せばまた書く(self) -> None:
+        """テストがやりにくいのでファイルを消したり退避させたら再表示するようにしてください。"""
+        self.press(datetime(2026, 11, 9, 15, 1))
+        self.assertIsNone(self.get("/api/notice/due").get_json()["notice"])
+        csv_file = next((self.out / "機側" / "案内の確認").glob("*.csv"))
+        moved = csv_file.with_name("退避.txt")
+        csv_file.rename(moved)
+        self.assertIsNotNone(self.get("/api/notice/due").get_json()["notice"], "退避したらまた出る")
+        self.press(datetime(2026, 11, 9, 15, 5), "佐藤")
+        self.assertIn("佐藤", csv_file.read_text(encoding="utf-8-sig"), "押し直したらまた書く")
+        csv_file.unlink()
+        self.assertIsNotNone(self.get("/api/notice/due").get_json()["notice"], "消したらまた出る")
+
+    def test_出力先に届かないときは_この端末の記録で決める(self) -> None:
+        """共有が落ちただけで、押した案内を全部また出さない。"""
+        from nippou import config, user_settings
+
+        self.press(datetime(2026, 11, 9, 15, 1))
+        user_settings.save_many({config.KEY_REPORT_OUT_DIR: str(self.tmp / "届かない共有")})
+        self.assertIsNone(self.get("/api/notice/due").get_json()["notice"])
+
+    def test_マスタ管理で直すとき_選べる値を出し_それ以外は断る(self) -> None:
+        """案内表示の色って注意以外に何が設定できるんですか？ 設定時に教えるようにしてください。"""
+        from nippou import master_admin
+
+        self.at(datetime(2026, 11, 9, 15, 1))
+        self.get("/api/notice/due")                       # 表を作る
+        cols = {c.name: c.to_dict() for c in master_admin.columns(self.master, rule.TABLE)}
+        self.assertEqual(cols["色"]["choices"], ["注意", "警告", "案内"])
+        self.assertIn("警告 = 赤", cols["色"]["hint"])
+        self.assertEqual(cols["大きさ"]["choices"], ["大", "中", "小"])
+        self.assertEqual(cols["タイミング"]["choices"], ["直の始まり", "時刻", "直の終わり前"])
+        bad = master_admin.add_row("transmission", rule.TABLE,
+                                   {"ID": "試し", "表示文": "x", "色": "紫"}, unlocked=True)
+        self.assertFalse(bad.ok)
+        self.assertIn("注意 ・ 警告 ・ 案内", bad.message)
+        bad = master_admin.add_row("transmission", rule.TABLE,
+                                   {"ID": "試し", "表示文": "x", "タイミング": "時刻", "時刻": "25時"},
+                                   unlocked=True)
+        self.assertFalse(bad.ok)
+        ok = master_admin.add_row("transmission", rule.TABLE,
+                                  {"ID": "試し", "表示文": "x", "色": "警告"}, unlocked=True)
+        self.assertTrue(ok.ok, ok.message)
+        page = master_admin.page("transmission", rule.TABLE)
+        self.assertEqual(page.checks, [], "読めない行は無い")
+
+    def test_前の版で作った表には列を足す(self) -> None:
+        conn = sqlite3.connect(self.master)
+        conn.execute(f'CREATE TABLE "{rule.TABLE}" ("ID" TEXT, "ライン" TEXT, "直" TEXT, "表示文" TEXT)')
+        conn.execute(f'INSERT INTO "{rule.TABLE}" VALUES (\'計量器の点検\', \'機側\', \'2直\', \'点検\')')
+        conn.commit()
+        conn.close()
+        self.at(datetime(2026, 11, 9, 15, 1))
+        self.assertIsNotNone(self.get("/api/notice/due").get_json()["notice"])
+        conn = sqlite3.connect(self.master)
+        names = [r[1] for r in conn.execute(f'PRAGMA table_info("{rule.TABLE}")')]
+        conn.close()
+        self.assertIn("過ぎても出す", names)
+
+    def test_押されていない一覧(self) -> None:
+        self.at(datetime(2026, 11, 8, 15, 1))
+        self.get("/api/notice/due")                       # 8日の2直: 押さない
+        self.press(datetime(2026, 11, 9, 15, 2))          # 9日の2直: 押した
+        self.at(datetime(2026, 11, 9, 16, 0))
+        view = self.get("/api/notice/checks").get_json()
+        got = {(r["report_date"], r["shift"]): (r["acked"], r["worker"]) for r in view["rows"]}
+        self.assertEqual(got[("2026年11月9日", "2直")], (True, "山田"))
+        self.assertEqual(got[("2026年11月8日", "2直")], (False, ""))
+        self.assertGreaterEqual(view["missed"], 1)
+        html = self.client.get("/records").get_data(as_text=True)
+        self.assertIn('id="notice-card"', html)
 
     def test_名前が無ければ押せない_押したら記録してその直は出ない(self) -> None:
         from nippou.services import guide_notice

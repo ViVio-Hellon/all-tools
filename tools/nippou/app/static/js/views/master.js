@@ -356,6 +356,28 @@ function openRow(row) {
       name.textContent += " +";
     }
     label.append(name, input, kind);
+    // **選べる値と説明を、直す場所で出す**(案内表示 ── v4.47.2)。
+    //   案内表示の色って注意以外に何が設定できるんですか？ 設定時に教えるようにしてください
+    // 選べる値は欄の候補にも入れる(打たずに選べる)。それ以外はサーバが保存で断る
+    if (col.choices && col.choices.length) {
+      const list = document.createElement("datalist");
+      list.id = `choices-${col.name}`;
+      for (const v of col.choices) {
+        const o = document.createElement("option");
+        o.value = v;
+        list.append(o);
+      }
+      input.setAttribute("list", list.id);
+      label.append(list);
+    }
+    if (col.hint) {
+      const hint = document.createElement("span");
+      hint.className = "stack-field__hint";
+      hint.dataset.hintFor = col.name;
+      hint.textContent = (col.choices && col.choices.length
+        ? `選べる値: ${col.choices.join(" / ")} ── ` : "") + col.hint;
+      label.append(hint);
+    }
     host.append(label);
   }
   setText("row-title", row ? "行を直す" : "1行足す");

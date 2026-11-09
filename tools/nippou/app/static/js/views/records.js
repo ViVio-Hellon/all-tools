@@ -257,6 +257,7 @@ export function start() {
 
   wireSavedLine();
   wireCsvCheck();
+  loadNoticeChecks();
   wireBackup();
   wireLotSearch();
 
@@ -360,6 +361,58 @@ async function checkCsv() {
 function wireCsvCheck() {
   document.getElementById("csv-check-again")?.addEventListener("click", () => checkCsv());
   checkCsv();
+}
+
+/*
+  案内の確認(v4.47.2)。案内表示を押した/押されていない一覧(`/api/notice/checks`)。
+  押されていない過ぎた回は赤く、件数を上に出す。いまの直のぶんは「まだ」(これから押す)。
+*/
+async function loadNoticeChecks() {
+  const card = document.getElementById("notice-card");
+  const body = card?.querySelector("#notice-table tbody");
+  if (!card || !body) return;
+  const line = card.dataset.line || "";
+  let view;
+  try {
+    view = await api.get(`/api/notice/checks?line=${encodeURIComponent(line)}`);
+  } catch (err) {
+    const tr = document.createElement("tr");
+    const td = cell(`読めませんでした: ${err.message}`, "empty");
+    td.colSpan = 7;
+    tr.append(td);
+    body.replaceChildren(tr);
+    return;
+  }
+  const rows = view.rows || [];
+  const missed = document.getElementById("notice-missed");
+  if (missed) {
+    missed.hidden = !view.missed;
+    missed.textContent = view.missed
+      ? `押されていない案内が ${view.missed}件 あります(赤い行)。あとの直で出ています` : "";
+  }
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.className = "empty";
+    td.textContent = view.message || "この14日に出した案内はありません";
+    tr.append(td);
+    body.replaceChildren(tr);
+    return;
+  }
+  body.replaceChildren(...rows.map((r) => {
+    const tr = document.createElement("tr");
+    if (!r.acked && !r.now) tr.className = "row-bad";
+    tr.dataset.notice = r.notice;
+    const status = r.acked ? r.worker || "(名前なし)" : (r.now ? "まだ(いまの直)" : "押されていません");
+    for (const text of [r.report_date, r.shift, lineLabel(r.line), r.notice, status,
+                        r.acked ? r.acked_at : "", r.acked ? r.acked_shift : ""]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    return tr;
+  }));
 }
 
 function wireSavedLine() {

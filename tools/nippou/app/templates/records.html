@@ -257,6 +257,26 @@
   <div class="msg" id="recall-note" hidden style="margin-top:var(--sp-2)"></div>
 </div>
 
+{# ---- 案内の確認(v4.47.2)── 案内表示を押した/押されていない ----
+
+       押されていない一覧 やってください
+
+   ラインは「保存した直」と同じ(Administrator・管理者モードは選んだライン)。中身は
+   `/api/notice/checks`(views/records.js が画面を出したあとに読む) #}
+<div class="card" id="notice-card" data-line="{{ saved_line.line }}">
+  <div class="card__head">
+    <h2>案内の確認</h2>
+    <span class="lead">案内表示を押したか(この14日)。押されないまま過ぎた案内は、あとの直で出ます</span>
+  </div>
+  <p class="msg msg--error" id="notice-missed" hidden></p>
+  <div class="scroll-x">
+    <table class="list list--nowrap" id="notice-table">
+      <thead><tr><th>報告日</th><th>直</th><th>ライン</th><th>案内</th><th>押した人</th><th>押した時刻</th><th>押した直</th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">読んでいます…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 {# ---- ほかのPCの日報(控え LocalBackup)── v4.12.0 ----
 
        権限 が Administrator のユーザーは LocalBackup すべてのラインデータを

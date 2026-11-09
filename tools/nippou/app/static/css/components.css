@@ -3254,6 +3254,12 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
   padding:var(--sp-4); text-align:center;
 }
 .gnote__text{ margin:0; white-space:pre-line; font-weight:700; color:var(--guide-fg); font-size:1.6rem; line-height:1.4; }
+.gnote__carried{
+  margin:0; padding:var(--sp-1) var(--sp-3); border-radius:var(--r-md, 6px);
+  background:var(--state-error-bg); color:var(--state-error); border:2px solid var(--state-error-line);
+  font-weight:700; font-size:1.15rem;
+}
+.gnote--large .gnote__carried{ font-size:clamp(1.2rem, 2.4vw, 1.8rem); }
 .gnote__question{ margin:0; font-size:1.25rem; font-weight:700; }
 .gnote__pick{ display:flex; flex-direction:column; gap:var(--sp-2); width:100%; }
 .gnote__label{ margin:0; color:var(--muted); font-size:1rem; }
@@ -3286,3 +3292,6 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
 }
 .gnote--small .gnote__text, .gnote--small .gnote__question{ font-size:1.05rem; }
 .gnote--small .gnote__pick{ width:auto; flex-direction:row; align-items:center; }
+
+/* マスタ管理: 欄の下の説明と選べる値(案内表示 ── v4.47.2) */
+.stack-field__hint{ grid-column:1 / -1; color:var(--muted); font-size:var(--fs-sm); line-height:1.5; }

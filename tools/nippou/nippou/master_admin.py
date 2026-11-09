@@ -317,12 +317,16 @@ class Column:
     required: bool = False
     #: マスタ管理の「列を足す」で足した列(v4.14.0)。計算・帳票には使われない
     added: bool = False
+    #: 直すときに欄の下に出す説明と、選べる値(案内表示 ── v4.47.2)
+    hint: str = ""
+    choices: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "kind": self.kind,
                 "kind_label": KIND_LABEL.get(self.kind, self.kind),
                 "required": self.required, "added": self.added,
-                "note": ADDED_COLUMN_NOTE if self.added else ""}
+                "note": ADDED_COLUMN_NOTE if self.added else "",
+                "hint": self.hint, "choices": list(self.choices)}
 
 
 def _kind_of(declared: str) -> str:
@@ -352,6 +356,8 @@ def columns(path: Path, table: str) -> list[Column]:
         return []
 
     added = set(added_columns(Path(path), table))
+    from .logic import guide_notice
+    hints = guide_notice.COLUMN_HINTS if table == guide_notice.TABLE else {}
     out: list[Column] = []
     for row in rows:
         kind = _kind_of(str(row["type"]))
@@ -362,7 +368,9 @@ def columns(path: Path, table: str) -> list[Column]:
             name=row["name"], kind=kind,
             # 既定値のある列は空欄で通してよい。NULL も既定も無い列だけが必須
             required=bool(row["notnull"]) and row["dflt_value"] is None,
-            added=row["name"] in added))
+            added=row["name"] in added,
+            hint=hints.get(row["name"], ("", ()))[0],
+            choices=hints.get(row["name"], ("", ()))[1]))
     return out
 
 
@@ -490,6 +498,11 @@ def page(file_key: str, table: str, *, query: str = "", sort: str = "",
         if view.checks:
             view.checks_head = (f"読めない行が{len(view.checks)}行あります"
                                 "(このままでは、そのPCのラインに効きません)")
+    elif is_guide_table(file_key, view.table):
+        view.checks = _guide_checks(path, view.table)
+        if view.checks:
+            view.checks_head = (f"出せない案内が{len(view.checks)}行あります"
+                                "(直すまで画面に出ません)")
     elif is_staff_table(file_key, view.table):
         view.checks = _staff_checks(path, view.table)
         if view.checks:
@@ -1114,6 +1127,27 @@ def _staff_checks(path: Path, table: str) -> list[str]:
     return [f.describe() for f in operator.inspect(rows, operator_column=column)]
 
 
+def is_guide_table(file_key: str, table: str) -> bool:
+    """案内表示の表か(伝送用ファイルの「案内表示」── v4.47.0)。"""
+    from .logic import guide_notice
+    return file_key == "transmission" and table == guide_notice.TABLE
+
+
+def _guide_checks(path: Path, table: str) -> list[str]:
+    """案内表示の、読めない欄のある行(画面に出さない行)。"""
+    from .logic import guide_notice
+
+    try:
+        rows = source_db.read_table(path, table)
+    except source_db.SourceError:
+        return []
+    out = []
+    for notice in guide_notice.parse(rows):
+        if notice.problems:
+            out.append(f"{notice.id}: {' / '.join(notice.problems)}")
+    return out
+
+
 def is_shift_table(file_key: str, table: str) -> bool:
     """直の境界時刻の表か(伝送用ファイルの「時間用」)。"""
     from .config import SETTINGS
@@ -1130,6 +1164,9 @@ def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
     """
     if file_key == "vc":
         return _vc_problem(src, table, clean, row_key=row_key)
+    if is_guide_table(file_key, table):
+        from .logic import guide_notice
+        return guide_notice.problem_of(clean)
     if is_access_table(table):
         return _access_problem(clean)
     if not is_shift_table(file_key, table):

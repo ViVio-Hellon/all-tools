@@ -1,7 +1,9 @@
 """案内表示 (`/api/notice/*`。v4.47.0)
 
-    GET  /api/notice/due    いま出す案内(無ければ notice=null)。画面の1分ごとの見張りが聞く
-    POST /api/notice/ack    押した(名前を選んで「点検済み」など)。押すまで画面は閉じない
+    GET  /api/notice/due     いま出す案内(無ければ notice=null)。画面の1分ごとの見張りが聞く
+                             押されないまま過ぎた直のぶんも、あとの直で出す(carried=true。v4.47.2)
+    POST /api/notice/ack     押した(名前を選んで「点検済み」など)。押すまで画面は閉じない
+    GET  /api/notice/checks  押した/押されていない一覧(記録を見る。ライン・日数)
 
 決まりは `logic/guide_notice.py`、表と記録は `services/guide_notice.py`。比べるラインは
 **この端末のライン設定**(管理者がほかのラインを見ていても、その PC の持ち場の案内を出す)。
@@ -55,12 +57,38 @@ def ack():
     if notice is None:
         return jsonify(error_body("no_notice", "その案内はもうありません")), 404
     key = (str(payload.get("report_date", "")), str(payload.get("shift", "")))
-    if key != (got.report_date, got.shift):
+    if got.notice is None or got.notice.id != notice_id or key != (got.report_date, got.shift):
         return jsonify(error_body("moved", "直が変わりました。画面の案内を出し直します")), 409
     if notice.pick_worker and not worker:
         return jsonify(error_body("no_worker", "押した人の名前を選んでください", field="worker")), 422
     result = guide_notice.record(get_repo(), notice, report_date=got.report_date,
-                                 line=got.line, shift=got.shift, worker=worker)
+                                 line=got.line, shift=got.shift, worker=worker,
+                                 acked_shift=got.now_shift)
     log_button_click("guide_notice_ack", line=got.line,
                      extra=f"{notice.id} {got.report_date}/{got.shift} {worker}")
     return jsonify({"ok": result.ok, "message": result.message, "path": result.shared_path})
+
+
+@bp.get("/api/notice/checks")
+def checks():
+    """押した/押されていない一覧(新しい回が先)。**ラインは、Administrator・管理者モードなら選べる**
+    (記録を見るの「保存した直」と同じ決まり)。ほかの PC はこの端末のラインだけ。"""
+    from ..current import current_calculator
+
+    ctx = work_context.get_context()
+    asked = str(request.args.get("line", "")).strip()
+    line = asked if asked and ctx.editor else _line(ctx)
+    try:
+        days = max(1, min(62, int(request.args.get("days", 14))))
+    except ValueError:
+        days = 14
+    if not line:
+        return jsonify({"line": "", "rows": [], "message": "この端末のラインが決まっていません"})
+    try:
+        rows = guide_notice.checks(get_repo(), current_calculator(), line, days=days,
+                                   force_day_shift=ctx.force_day_shift())
+    except Exception as exc:                      # noqa: BLE001 - 一覧が出ないだけ
+        log.exception("案内の確認の一覧を作れませんでした")
+        return jsonify(error_body("checks_failed", f"一覧を作れませんでした: {exc}")), 500
+    return jsonify({"line": line, "days": days, "rows": rows,
+                    "missed": sum(1 for r in rows if not r["acked"] and not r["now"])})
