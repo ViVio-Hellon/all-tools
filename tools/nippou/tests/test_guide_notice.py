@@ -72,6 +72,29 @@ class RuleTests(unittest.TestCase):
         self.assertTrue(bad[0].problems)
         self.assertEqual(due([row(タイミング="時刻", 時刻="")]), [])
 
+    def test_曜日(self) -> None:
+        """11/9 は月曜。曜日は報告日で見る(3直は始めた日)。"""
+        self.assertTrue(due([row(曜日="月")]))
+        self.assertTrue(due([row(曜日="月,水,金")]))
+        self.assertTrue(due([row(曜日="平日")]))
+        self.assertTrue(due([row(曜日="月曜")]))
+        self.assertTrue(due([row(曜日="日～火")]), "日〜火(月をはさむ)")
+        self.assertEqual(due([row(曜日="火")]), [])
+        self.assertEqual(due([row(曜日="土日")]), [])
+        self.assertTrue(rule.parse([row(曜日="月,あ")])[0].problems, "読めない曜日の行は出さない")
+        self.assertIn("月 火 水 木 金 土 日", rule.problem_of({"曜日": "げつ"}))
+        self.assertEqual(rule.problem_of({"曜日": "月水金"}), "")
+
+    def test_曜日はあとの直へ回すときも元の直の日で見る(self) -> None:
+        """月曜だけの2直の案内: 月曜の2直に押されなければ、火曜の1直でも出る(火曜の2直ぶんではない)。"""
+        notices = rule.parse([row(曜日="月")])
+        mon2 = rule.Slot("2026年11月9日", date(2026, 11, 9), "2直", START, END)
+        tue1 = rule.Slot("2026年11月10日", date(2026, 11, 10), "1直",
+                         datetime(2026, 11, 10, 7, 0), datetime(2026, 11, 10, 15, 0))
+        hits = rule.due_slots(notices, line="機側", now=datetime(2026, 11, 10, 9, 0),
+                              current=tue1, past=[mon2])
+        self.assertEqual([(h.slot.shift, h.carried) for h in hits], [("2直", True)])
+
     def test_並び順と大きさ(self) -> None:
         got = due([row(ID="B", 並び=2), row(ID="A", 並び=1, 大きさ="小", 色="警告")])
         self.assertEqual([n.id for n in got], ["A", "B"])
@@ -124,6 +147,28 @@ class AccessTableTests(unittest.TestCase):
         made, scripts = self.run_with(exists=True)
         self.assertFalse(made)
         self.assertEqual(scripts, [])
+
+    def test_前の版で作った表には足りない列を足す(self) -> None:
+        from unittest import mock
+
+        from nippou.access_bridge.runner import ScriptResult
+        from nippou.services import guide_notice
+
+        scripts: list[str] = []
+
+        class Runner:
+            def run(self, text):
+                scripts.append(text)
+                return ScriptResult(success=True, stdout="OK:1", return_code=0)
+
+        old = {n: "" for n, _ in rule.COLUMNS if n not in ("曜日", "過ぎても出す")}
+        found = mock.Mock(success=True, rows=[old], error=None)
+        with mock.patch("nippou.access_bridge.importer.import_table", return_value=found):
+            guide_notice.ensure_access_table(self.path, runner=Runner(), now=1000.0)
+        self.assertEqual(len(scripts), 1)
+        self.assertIn("ALTER TABLE [案内表示] ADD COLUMN [曜日] TEXT(255)", scripts[0])
+        self.assertIn("ADD COLUMN [過ぎても出す] INTEGER", scripts[0])
+        self.assertNotIn("CREATE TABLE", scripts[0])
 
     def test_確かめるのは10分に1回まで(self) -> None:
         self.run_with(exists=True, now=1000.0)

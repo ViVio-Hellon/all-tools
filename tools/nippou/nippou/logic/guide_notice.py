@@ -13,6 +13,8 @@
     有効        1 で出す・0 で出さない(空は出す)
     ライン      空なら全ライン。「機側,NS1」のように並べてもよい(この端末のライン設定と比べる)
     直          空なら全部の直。「2直」「1直,3直」
+    曜日        空なら毎日。「月」「月,水,金」「平日」(月〜金)「土日」。**報告日の曜日**で見る
+                (3直は始めた日の曜日 ── 月曜の3直は火曜の朝まで「月」)
     タイミング  直の始まり(空も同じ)/ 時刻 / 直の終わり前
     時刻        「時刻」のとき 14:30 の形(その直の中のその時刻になったら)
     分          「直の終わり前」のとき、終わりの何分前から
@@ -53,7 +55,7 @@ TABLE = "案内表示"
 
 #: 表を作るときの列と型(sqlite3)。並びは画面(マスタ管理)の並び
 COLUMNS: tuple[tuple[str, str], ...] = (
-    ("ID", "TEXT"), ("有効", "INTEGER"), ("ライン", "TEXT"), ("直", "TEXT"),
+    ("ID", "TEXT"), ("有効", "INTEGER"), ("ライン", "TEXT"), ("直", "TEXT"), ("曜日", "TEXT"),
     ("タイミング", "TEXT"), ("時刻", "TEXT"), ("分", "INTEGER"),
     ("表示文", "TEXT"), ("確認の文", "TEXT"), ("ボタン", "TEXT"),
     ("大きさ", "TEXT"), ("色", "TEXT"), ("名前を選ぶ", "INTEGER"), ("過ぎても出す", "INTEGER"),
@@ -62,7 +64,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
 
 #: 表を作ったときに入れておく1行(頼まれた案内そのもの)
 FIRST_ROW: dict[str, Any] = {
-    "ID": "計量器の点検", "有効": 1, "ライン": "機側", "直": "2直",
+    "ID": "計量器の点検", "有効": 1, "ライン": "機側", "直": "2直", "曜日": "",
     "タイミング": "直の始まり", "時刻": "", "分": None,
     "表示文": "計量器の点検を行ってください", "確認の文": "点検済みですか？",
     "ボタン": "点検済み", "大きさ": "大", "色": "注意", "名前を選ぶ": 1, "過ぎても出す": 1,
@@ -79,6 +81,8 @@ COLUMN_HINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "有効": ("1 で出す・0 で出さない(空は出す)", ("1", "0")),
     "ライン": ("空なら全ライン。「機側,NS1」のように , で並べてもよい", ()),
     "直": ("空なら全部の直。「2直」「1直,3直」のように", ()),
+    "曜日": ("空なら毎日。「月」「月,水,金」「平日」(月〜金)「土日」のように。報告日の曜日で見る"
+           "(3直は始めた日 ── 月曜の3直は翌朝まで「月」)", ()),
     "タイミング": ("直の始まり(空も同じ)/ 時刻(「時刻」の欄の時刻から)/ 直の終わり前(「分」の欄の分前から)",
                ("直の始まり", "時刻", "直の終わり前")),
     "時刻": ("タイミングが「時刻」のとき。14:30 の形", ()),
@@ -110,6 +114,9 @@ def problem_of(values: dict[str, Any]) -> str:
             return "「時刻」は 14:30 のように 時:分 で入れてください。"
         if name in ("開始日", "終了日") and _date(text) is None:
             return f"「{name}」は 2026-11-09 の形で入れてください。"
+        if name == "曜日" and _weekdays(text) is None:
+            return ("「曜日」は 月 火 水 木 金 土 日 を , で並べるか、平日・土日・毎日 で入れてください"
+                    "(例: 月,水,金)。")
         if name in ("分", "並び") and _int(text) is None:
             return f"「{name}」は数で入れてください。"
     return ""
@@ -134,6 +141,8 @@ class Notice:
     button: str = DEFAULT_BUTTON
     lines: frozenset[str] = frozenset()
     shifts: frozenset[str] = frozenset()
+    #: 出す曜日(0=月)。空なら毎日
+    weekdays: frozenset[int] = frozenset()
     timing: str = TIMING_START
     at: Optional[time] = None
     minutes: Optional[int] = None
@@ -205,6 +214,38 @@ def _date(value: Any) -> Optional[date]:
     return None
 
 
+WEEKDAYS = "月火水木金土日"
+#: まとめた言い方 → 曜日(0=月)
+WEEKDAY_GROUPS = {"平日": (0, 1, 2, 3, 4), "土日": (5, 6), "毎日": tuple(range(7))}
+
+
+def _weekdays(value: Any) -> Optional[frozenset[int]]:
+    """「月,水,金」「平日」「月曜」「月～金」→ 曜日(0=月)。空は空(毎日)。読めなければ None。"""
+    text = _text(value)
+    if not text:
+        return frozenset()
+    out: set[int] = set()
+    for part in _list(text):
+        part = part.replace("曜日", "").replace("曜", "")
+        if part in WEEKDAY_GROUPS:
+            out.update(WEEKDAY_GROUPS[part])
+            continue
+        for sep in ("～", "~", "-", "〜"):
+            if sep in part:
+                a, _, b = part.partition(sep)
+                if a in WEEKDAYS and b in WEEKDAYS and a and b:
+                    i, j = WEEKDAYS.index(a), WEEKDAYS.index(b)
+                    out.update(range(i, j + 1) if i <= j else [*range(i, 7), *range(0, j + 1)])
+                    break
+                return None
+        else:
+            if len(part) >= 1 and all(ch in WEEKDAYS for ch in part):
+                out.update(WEEKDAYS.index(ch) for ch in part)   # 「月水金」も
+            else:
+                return None
+    return frozenset(out)
+
+
 def _shift(name: str) -> str:
     """「2」「２直」→「2直」。"""
     name = _text(name)
@@ -233,6 +274,10 @@ def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
         if timing == TIMING_BEFORE_END and (minutes is None or minutes < 0):
             problems.append("タイミングが「直の終わり前」なのに、分が入っていません")
         start, end = get.get("開始日"), get.get("終了日")
+        weekdays = _weekdays(get.get("曜日"))
+        if weekdays is None:
+            problems.append("曜日が読めません(月,水,金 / 平日 / 土日 の形)")
+            weekdays = frozenset()
         if _text(start) and _date(start) is None:
             problems.append("開始日が 2026-11-09 の形ではありません")
         if _text(end) and _date(end) is None:
@@ -246,6 +291,7 @@ def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
             button=_text(get.get("ボタン")) or DEFAULT_BUTTON,
             lines=_list(get.get("ライン")),
             shifts=frozenset(_shift(s) for s in _list(get.get("直"))),
+            weekdays=weekdays,
             timing=timing, at=at, minutes=minutes,
             size=size if size in (SIZE_LARGE, SIZE_MEDIUM, SIZE_SMALL) else SIZE_LARGE,
             color=color if color in (COLOR_CAUTION, COLOR_WARNING, COLOR_INFO) else COLOR_CAUTION,
@@ -281,6 +327,7 @@ def due(notices: Iterable[Notice], *, line: str, shift: str, business_date: date
             if not n.problems and n.id not in done
             and (not n.lines or line in n.lines)
             and (not n.shifts or shift in n.shifts)
+            and (not n.weekdays or business_date.weekday() in n.weekdays)
             and (n.start is None or business_date >= n.start)
             and (n.end is None or business_date <= n.end)
             and _in_window(n, now, shift_start, shift_end)]
@@ -309,6 +356,7 @@ def applies(notice: Notice, line: str, slot: Slot) -> bool:
     return (not notice.problems and bool(line)
             and (not notice.lines or line in notice.lines)
             and (not notice.shifts or slot.shift in notice.shifts)
+            and (not notice.weekdays or slot.business.weekday() in notice.weekdays)
             and (notice.start is None or slot.business >= notice.start)
             and (notice.end is None or slot.business <= notice.end))
 

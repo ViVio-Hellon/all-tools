@@ -99,9 +99,18 @@ def ensure_access_table(path: Path, *, runner=None, now: Optional[float] = None)
             return False
         _access_tried[str(path)] = t
     try:
-        if import_table(path, rule.TABLE, runner=runner).success:
-            return False                          # もうある
-        statements = access_statements()
+        found = import_table(path, rule.TABLE, runner=runner)
+        if found.success:
+            # もうある。**前の版で作った表に足りない列を足す**(曜日・過ぎても出す)。列は行から
+            # 読むので、行が1つも無い表では分からない(そのときは足さない ── 空の列は既定どおり)
+            have = set(found.rows[0]) if found.rows else set()
+            missing = [(n, k) for n, k in rule.COLUMNS if have and n not in have]
+            if not missing:
+                return False
+            statements = [f"ALTER TABLE [{rule.TABLE}] ADD COLUMN [{n}] "
+                          + ("INTEGER" if k == "INTEGER" else "TEXT(255)") for n, k in missing]
+        else:
+            statements = access_statements()
         if SETTINGS.access_backend == "odbc":
             from ..access_bridge.odbc_backend import push_statements_odbc
             result = push_statements_odbc(path, statements)
