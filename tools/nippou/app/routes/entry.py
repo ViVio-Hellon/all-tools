@@ -1323,8 +1323,8 @@ def _pick_lot(ctx, targets, target_rows, kinds, shift: str, shift_start: int, to
         began_from = f"前のロットの続き({where(first - 1)}の終了)"
 
     note = ""
-    # 休憩の時刻(12:00・18:00・02:00 のうち、直がまたぐもの)。いまが休憩の中なら、休憩の始まりまで
-    breaks = [] if day_work else time_split.break_slots(shift_start, total)
+    # LOTで時間を割り振るは休憩を見ない(v4.49.1。休憩は作業者が打つ)── いまが休憩の中でも、いままでで区切る
+    breaks: list = []
     finish = clock_of(target_rows[last], "SZ", "SH")
     if finish is not None:
         until = f"{where(last)}の終了"
@@ -1458,7 +1458,25 @@ def _distribute(*, lot: bool):
     # 移して 60分 1つにまとめていた
     rest_info = None
     breaks_info: dict = {}
-    if day_work:
+    if lot:
+        # **LOTで時間を割り振るは休憩を自動で入れない**(v4.49.1)。
+        #     ロットで時間を割り振る の停止時間は作業者入力としたいです
+        # 休憩・停止は作業者が停止の欄に打ったぶんだけ、その行の停止として先に渡す(`row_stop_minutes`)。
+        # 打っていなくても知らせない(直の終わりの休憩の確かめで気づく)。
+        #     停止は各自打つ、作業時間がそれを加味して打った時間までで割り振る が理想形です
+        # 休憩の時刻(11:30〜12:30 など)まで打ってある行は、その時刻をまたぐように合わせる(作業者が打った
+        # とおりに。保存の確かめで「休憩の時刻が行の時間の外」と言われないように)。足すのは何も無い
+        if day_work:
+            plan = time_split.split(stops, span_total, weights=weights, origin=origin)
+        else:
+            from nippou.logic import break_time
+
+            bplan = time_split.plan_breaks(all_rows, chosen, shift_start=start, shift_total=total,
+                                           span_start=span_start, span_total=span_total, from_start=lot,
+                                           shift_window=break_time.shift_window(start_text, end_text))
+            plan = time_split.split_pinned(stops, span_total, pins=[pin[:3] for pin in bplan.pins],
+                                           rests=[], weights=weights, origin=origin)
+    elif day_work:
         plan = time_split.split(stops, span_total, weights=weights, origin=origin)
         if time_split.break_slots(span_start, span_total, from_start=lot):
             rest_info = {"skipped": "昼稼働(有)の直なので、休憩の時間は飛ばしません"}

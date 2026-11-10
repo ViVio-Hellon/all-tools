@@ -166,32 +166,37 @@ class DistributeLotWebTests(WebTestCase):
         self.assertGreaterEqual(spans[0], 30 + 5)
         self.assertEqual(sum(spans), 60)
 
-    def test_休憩をまたげば飛ばして休憩0を入れる(self) -> None:
+    def test_休憩をまたいでも休憩0を足さない(self) -> None:
+        """LOTで時間を割り振るは休憩を自動で入れない(v4.49.1)。停止・休憩は作業者が打つ。"""
         screen = rows_of((5, 1), lot="LOTA", KZ="07", KH="00", SZ="11", SH="00")
         screen.update(rows_of((5, 1), (5, 1), (5, 1), lot="LOTB", start=2))
         self.at("14:00")
         plan = self.plan(screen)
-        self.assertEqual(plan["rest"]["start"], "12:00")
+        self.assertFalse(plan.get("rest"))
+        self.assertEqual(plan.get("breaks"), [])
         self.assertEqual(sum(span(r) for r in plan["rows"]), 180)
         body = self.plan(screen, dry=False)
-        crossing = body["rows"][str(plan["rest"]["row"])]
-        self.assertIn(("0", "60"), [(crossing.get(c), crossing.get(m)) for c, m in ts.STOP_SLOTS])
+        for values in body["rows"].values():
+            self.assertNotIn(("0", "60"), [(values.get(c), values.get(m)) for c, m in ts.STOP_SLOTS])
 
-    def test_前のロットが休憩の始まりで終われば最初の行が休憩をまたぐ(self) -> None:
-        screen = rows_of((5, 1), lot="LOTA", KZ="07", KH="00", SZ="12", SH="00")
+    def test_打った休憩の分は差し引いて押した時刻まで(self) -> None:
+        """「停止は各自打つ、作業時間がそれを加味して打った時間までで割り振る」"""
+        screen = rows_of((5, 1), lot="LOTA", KZ="07", KH="00", SZ="11", SH="00")
         screen.update(rows_of((5, 1), (5, 1), lot="LOTB", start=2))
+        screen["3"].update(S="0", TH="60")
         self.at("14:00")
         plan = self.plan(screen)
-        self.assertEqual(plan["rows"][0]["start"], "12:00")
-        self.assertEqual(plan["rest"]["row"], 2)
+        spans = [span(r) for r in plan["rows"]]
+        self.assertEqual(sum(spans), 180)
+        self.assertGreaterEqual(spans[1], 60)
+        self.assertEqual(plan["rows"][-1]["end"], "14:00")
 
-    def test_いまが休憩の中なら休憩の始まりまで(self) -> None:
+    def test_いまが休憩の中でも押した時刻まで(self) -> None:
         screen = rows_of((5, 1), lot="LOTA", KZ="07", KH="00", SZ="11", SH="00")
         screen.update(rows_of((5, 1), (5, 1), lot="LOTB", start=2))
         self.at("12:20")
         plan = self.plan(screen)
-        self.assertEqual(plan["rows"][-1]["end"], "12:00")
-        self.assertIn("休憩の始まり 12:00 までを割り振ります", plan["lot"]["note"])
+        self.assertEqual(plan["rows"][-1]["end"], "12:20")
 
     def test_EXのロットとVC交換も同じ処理(self) -> None:
         from nippou import user_settings

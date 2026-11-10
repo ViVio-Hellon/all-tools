@@ -270,23 +270,24 @@ class BreakWebTests(base.BreakOverrunScenarioTests):
         self.at("2026-10-05 14:00")
         dry, body = self.split(rows, "/api/entry/distribute-lot", focus_row=4)
         self.assertEqual(dry["lot"]["lot"], lot2)
-        self.assertEqual([(b["time"], b["added"]) for b in dry["breaks"]], [("12:00", False)])
-        self.assertIn("12:00 の休憩はもう入っているので足しませんでした", body["message"])
+        # LOTで割り振るは休憩のことを言わない・足さない(v4.49.1)。打った休憩は残し、その時刻に合わせる
+        self.assertEqual(dry["breaks"], [])
         self.assertEqual(self.rests(body["rows"]), {4: [("60", "12:00〜13:00")]})
         got = body["rows"]["4"]
         self.assertLessEqual(f'{got["KZ"]}:{got["KH"]}', "12:00")
         self.assertEqual(f'{got["SZ"]}:{got["SH"]}', "14:00")
         self.assertEqual(self.problems(body), {})
 
-    def test_LOTで割り振る_無ければ休憩をまたぐ行に足す(self) -> None:
+    def test_LOTで割り振る_無くても休憩を足さない(self) -> None:
+        """「ロットで時間を割り振る の停止時間は作業者入力としたいです」(v4.49.1)"""
         rows = self.open_shift("2026-10-05 07:05", "1直", {}, count=3)
         rows["1"].update(KZ="07", KH="00", SZ="11", SH="00")
         rows["3"]["LOT"] = ""                          # 2〜3行目がロット2
         self.at("2026-10-05 14:00")
         dry, body = self.split(rows, "/api/entry/distribute-lot", focus_row=3)
-        self.assertEqual([(b["time"], b["added"]) for b in dry["breaks"]], [("12:00", True)])
-        self.assertIn("12:00 の休憩を足しました", body["message"])
-        self.assertEqual(list(self.rests(body["rows"]).values()), [[("60", "12:00〜13:00")]])
+        self.assertEqual(dry["breaks"], [])
+        self.assertNotIn("休憩", body["message"])
+        self.assertEqual(self.rests(body["rows"]), {})
 
 
 for _name in [n for n in dir(base.BreakOverrunScenarioTests) if n.startswith("test_")]:
