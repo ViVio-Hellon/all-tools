@@ -544,7 +544,14 @@ class OverviewTests(_Base):
         self.assertEqual(rows["PC-LINE1"]["label"], "利用者を待っています")
         self.assertEqual(rows["PC-LINE1"]["detail"], "打ちかけ")
         self.assertEqual(rows["PC-LINE1"]["app"], "日報複合ツール")
-        self.assertIn("お願いを出した PC", rows["PC-ADMIN"]["label"])
+        self.assertIn("お願いを出しています", rows["PC-ADMIN"]["label"])
+        self.assertIn("止める対象ではありません", rows["PC-ADMIN"]["label"])
+        self.assertNotIn("動いています", rows["PC-ADMIN"]["label"],
+                         "止める側の自分を、止まるのを待っている PC の1つに見せない")
+        # ほかの PC(もう1台の管理者の PC)から見ると「お願いを出した PC」
+        with self.as_pc("PC-LINE1"):
+            other = {r["pc"]: r for r in remote_stop.overview().pcs}
+        self.assertEqual(other["PC-ADMIN"]["label"], "お願いを出した PC(止める対象ではありません)")
 
     def test_知らせが途絶えたPCは応答なし(self) -> None:
         self.issue()

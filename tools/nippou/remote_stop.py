@@ -734,7 +734,12 @@ def overview(*, full: bool = True) -> Overview:
         elif rid and not answered and not mine:
             label = "まだお願いを受けていません"
         if mine and rid:
-            label += "(お願いを出した PC。止めません)"
+            # **「動いています」と並べない**(止める側の自分が、止まるのを待っている PC の1つに見えた ──
+            # 「自身(管理者PC)の案内にも 動いています(お願いを出した PC。止めません)と出ているのは勘違い
+            # するので変えて」)。止める対象ではないことだけを言う
+            label = ("この PC がお願いを出しています(止める対象ではありません)"
+                     if same_pc(data.get("pc", ""), pc) else
+                     "お願いを出した PC(止める対象ではありません)")
         view.pcs.append({
             "pc": data.get("pc", ""), "login": data.get("login", ""), "app": data.get("app", ""),
             "kind": data.get("kind", ""), "version": data.get("version", ""), "state": state,

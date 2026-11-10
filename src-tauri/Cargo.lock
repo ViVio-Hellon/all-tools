@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "all-tools-desktop"
-version = "1.5.106"
+version = "1.5.107"
 dependencies = [
  "serde",
  "serde_json",
