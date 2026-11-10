@@ -69,7 +69,7 @@ class PreviousOfTests(unittest.TestCase):
                          ("3直", date(2026, 8, 31)))
 
     def test_知らない直はNone(self) -> None:
-        self.assertIsNone(self.prev.previous_of("4直", date(2026, 8, 3)))
+        self.assertIsNone(self.prev.previous_of("9直", date(2026, 8, 3)))
 
 
 class WarnTests(unittest.TestCase):

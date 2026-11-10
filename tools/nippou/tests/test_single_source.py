@@ -87,7 +87,9 @@ class ShiftNameTests(unittest.TestCase):
         from app.routes.printing import SHIFT_CHOICES
 
         self.assertEqual(SHIFT_CHOICES, SHIFT_NAMES)
-        self.assertEqual(SHIFT_STACK_ORDER, SHIFT_NAMES)
+        # 積み上げは 4つのあとに 4直・5直(決まったラインだけの直。v4.49.0)
+        self.assertEqual(SHIFT_STACK_ORDER[:len(SHIFT_NAMES)], SHIFT_NAMES)
+        self.assertEqual(SHIFT_STACK_ORDER[len(SHIFT_NAMES):], ("4直", "5直"))
 
     def test_集計の並べ替えも同じ4つ(self) -> None:
         self.assertEqual(tuple(SHIFT_ORDER), SHIFT_NAMES)

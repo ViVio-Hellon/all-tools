@@ -761,8 +761,9 @@ class StackedShiftBarTests(unittest.TestCase):
         Office の既定色(Excel のグラフがそのまま使う並び)を採ります。
         色相が4方向に散るので、隣り合っても見分けられます。
         """
+        # 4直・5直(決まったラインだけの直。v4.49.0)は直の4色から離れた区別の色
         self.assertEqual(list(dash.SHIFT_QTY_CLASSES.values()),
-                         ["shift-1", "shift-2", "shift-3", "shift-day"])
+                         ["shift-1", "shift-2", "shift-3", "shift-day", "cat-7", "cat-9"])
         css = self.css("tokens.css").replace(" ", "")
         for name, want in (("--shift-1", "#4F81BD"), ("--shift-2", "#C0504D"),
                            ("--shift-3", "#9BBB59"), ("--shift-day", "#8064A2")):
