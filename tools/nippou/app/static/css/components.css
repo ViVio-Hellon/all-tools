@@ -2120,6 +2120,11 @@ input.is-auto::after, select.is-auto::after{ content:none; }
 .start-shift{ display:flex; gap:var(--sp-3); align-items:center;
               flex-wrap:wrap; justify-content:space-between; }
 .start-shift__now{ font-size:var(--fs-lg); }
+/* 4直・5直と重なる時間は、先に直を選ぶ(v4.49.0)。**大きく**出す ── 選び間違えると
+   別の直の紙に入るので */
+.shift-pick{ flex-basis:100%; display:flex; flex-direction:column; gap:var(--sp-2); }
+.shift-pick__why{ margin:0; font-weight:700; font-size:var(--fs-lg); }
+.shift-pick__choices .btn{ min-width:8em; font-size:var(--fs-lg); }
 body.needs-worker table.grid,
 body.needs-worker .btn-row--staged{ opacity:.45; }
 body.needs-worker #start-shift{ opacity:1; }

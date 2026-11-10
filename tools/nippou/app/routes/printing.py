@@ -92,6 +92,18 @@ bp = Blueprint("printing", __name__)
 SHIFT_CHOICES: tuple[str, ...] = SHIFT_NAMES
 
 
+def _shift_choices() -> tuple[str, ...]:
+    """直の選択肢。1〜3直・日勤のあとに、時間用にある 4直・5直…(v4.49.0)。"""
+    from nippou.logic import shift_rows
+
+    try:
+        extras = shift_rows.all_extra_names(get_repo().get_shift_rows())
+    except Exception:                             # noqa: BLE001 - 選択肢は出す
+        log.exception("時間用の 4直・5直を読めませんでした")
+        extras = []
+    return SHIFT_CHOICES + tuple(n for n in extras if n not in SHIFT_CHOICES)
+
+
 def _aggregate_of(report_date: str, line: str, shift: str) -> dict:
     """紙の頭に載せる、その直の集計(`services/paper_files.aggregate_of` の1か所)。"""
     from nippou.services import paper_files
@@ -383,7 +395,8 @@ def index():
                           recall=ctx.recall.active).as_dict(),
         # 並びは定義の表の順、見せる字は正規の呼び名(v4.12.5)
         lines=_line_codes(),
-        shifts=SHIFT_CHOICES,
+        # 4直・5直(時間用で決まったラインだけの直。v4.49.0)も選べるように
+        shifts=_shift_choices(),
         recall_note=recall_note,
         recall=ctx.recall,
         # 呼び出せるか。管理者モードか、アクセス権限の表で Administrator(v4.12.0)

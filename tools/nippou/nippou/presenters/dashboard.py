@@ -142,6 +142,8 @@ QUANTITY_TONES = (TONE_QTY, TONE_DUR, TONE_STOP, TONE_GOAL)
 #: 1直が別の色、では結び付きません ── 直の色はここ1つで決めます。
 SHIFT_CLASSES = {
     "1直": "shift-1", "2直": "shift-2", "3直": "shift-3", "日勤": "shift-day",
+    # 決まったラインだけの直(v4.49.0)。直の4色から離れた色(区別の色の 7・9)
+    "4直": "cat-7", "5直": "cat-9",
 }
 
 #: 積み上げた段の色。**直の色そのもの**です ── 別に持つと、表の1直と
@@ -150,7 +152,7 @@ SHIFT_QTY_CLASSES = SHIFT_CLASSES
 
 #: 積み上げる順。**下から 1直 → 2直 → 3直 → 日勤**(色も濃い順)。
 #: 紙に出る順と同じなので `logic/shift.SHIFT_NAMES` から取ります
-SHIFT_STACK_ORDER = SHIFT_NAMES
+SHIFT_STACK_ORDER = SHIFT_NAMES + ("4直", "5直")
 
 
 @dataclass
@@ -652,10 +654,11 @@ def cumulative_tile(points, note: str) -> Tile:
     seen = {shift for p in points for shift in p.quantity_by_shift}
     bars = [
         Series(key=f"count_{shift}", title=shift, kind="bar", unit="枚",
-               axis="left", stack="day", mark=SHIFT_QTY_CLASSES[shift],
+               axis="left", stack="day", mark=SHIFT_QTY_CLASSES.get(shift, "cat-6"),
                values=[round(p.quantity_by_shift.get(shift, 0.0), 1)
                        for p in points])
-        for shift in SHIFT_STACK_ORDER if shift in seen
+        for shift in [*SHIFT_STACK_ORDER, *sorted(seen - set(SHIFT_STACK_ORDER))]
+        if shift in seen
     ]
     if not bars:
         # 直の内訳が無い(古い集計を読んだ)。**棒を消しません** ──

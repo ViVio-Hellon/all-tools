@@ -417,8 +417,11 @@ def terminal_line() -> LineChoice:
 # ----------------------------------------------------------------------
 # 直の時刻・名簿
 # ----------------------------------------------------------------------
-def shift_times() -> tuple[dict, str]:
-    """(直の時刻, どこから)。共有の DB と同じフォルダの伝送用ファイルの「時間用」。無ければ既定。"""
+def shift_times(line: str = "") -> tuple[dict, str]:
+    """(直の時刻, どこから)。共有の DB と同じフォルダの伝送用ファイルの「時間用」。無ければ既定。
+
+    `line` の対象ラインの行はそのラインだけに効かせる(日報 1.5.108〜。`guide_notice.shift_times`)。
+    """
     def make():
         try:
             folder = shared_path().parent
@@ -437,13 +440,14 @@ def shift_times() -> tuple[dict, str]:
                     continue
                 cursor = conn.execute(f"SELECT * FROM {_q(SHIFT_TABLE)}")
                 cols = [d[0] for d in cursor.description]
-                return rule.shift_times(dict(zip(cols, r)) for r in cursor.fetchall()), str(path)
+                return rule.shift_times((dict(zip(cols, r)) for r in cursor.fetchall()),
+                                        line), str(path)
             except sqlite3.Error:
                 continue
             finally:
                 conn.close()
         return dict(rule.DEFAULT_TIMES), "既定(伝送用ファイルの時間用が見つからない)"
-    return _cached("times", make)
+    return _cached(f"times:{line}", make)
 
 
 def old_table() -> str:
@@ -673,7 +677,7 @@ def due_now(now: Optional[datetime] = None, *, line: Optional[str] = None) -> Du
     except Exception:                             # noqa: BLE001 - 次の見張りでまた
         log.exception("案内の記録を共有へ書き直せませんでした")
     found, problem = notices()
-    times, _where = shift_times()
+    times, _where = shift_times(line)
     slots = rule.shift_slots(times, now)
     done = set(acks(line, _months(slots, now)))
     hits = rule.due_all(found, line=line, now=now, slots=slots, acked=done,
@@ -721,7 +725,7 @@ def checks(*, line: Optional[str] = None, days: int = 14, now: Optional[datetime
     if not line:
         return []
     found, _problem = notices()
-    times, _where = shift_times()
+    times, _where = shift_times(line)
     slots = [s for s in rule.shift_slots(times, now, back_days=days, ahead_days=0)]
     done = acks(line, _months(slots, now))
     out: list[dict[str, Any]] = []

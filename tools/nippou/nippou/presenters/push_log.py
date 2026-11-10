@@ -60,6 +60,9 @@ SHIFT_MARKS: tuple[tuple[str, str, str], ...] = (
     ("2直", "cat-2", "square"),
     ("3直", "cat-3", "diamond"),
     ("日勤", "cat-4", "triangle"),
+    # 決まったラインだけの直(v4.49.0)
+    ("4直", "cat-7", "circle"),
+    ("5直", "cat-9", "square"),
 )
 
 COLUMNS: tuple[tuple[str, str, bool], ...] = (
@@ -274,7 +277,15 @@ def build(repo, *, line: Optional[str], start: date, end: date,
           db_path=None) -> PushLogView:
     """期間(報告日)とラインで絞った履歴。`line=None` なら全ライン。"""
     readout = push_history.read(repo, db_path)
-    shift_times = repo.get_shift_times()
+    # **ラインごとの時刻**(4直・5直はそのラインの時間用の行。v4.49.0)
+    by_line: dict[str, dict[str, tuple[str, str]]] = {}
+
+    def times_of(row: dict) -> dict[str, tuple[str, str]]:
+        key = str(row.get("line", "") or "")
+        if key not in by_line:
+            by_line[key] = repo.get_shift_times(key)
+        return by_line[key]
+
     picked: list[tuple[date, dict, Optional[int]]] = []
     for row in readout.rows:
         day = _in_scope(row, line, start, end)
@@ -282,7 +293,7 @@ def build(repo, *, line: Optional[str], start: date, end: date,
             continue
         # 引き継ぎは「共有へ保存」を押した時刻ではない ── 直の終わりとの差は出さない
         handed = row.get("result") == push_history.HANDED
-        picked.append((day, row, None if handed else minutes_after_end(row, shift_times)))
+        picked.append((day, row, None if handed else minutes_after_end(row, times_of(row))))
 
     table_rows = []
     for _, row, minutes in picked:

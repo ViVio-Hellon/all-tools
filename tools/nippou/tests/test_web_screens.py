@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._gw_master import GwWebTestCase
 from tests._web import WebTestCase
+from nippou.logic.shift_rows import ShiftRow  # noqa: E402
 
 
 def _header(**overrides):
@@ -553,20 +554,20 @@ class SettingsTests(WebTestCase):
         self.assertIn(res.status_code, (200, 500))
 
     def test_時間マスタ取り込みが例外でも落ちない(self) -> None:
-        with patch("nippou.access_bridge.importer.import_shift_times",
+        with patch("nippou.access_bridge.importer.import_shift_rows",
                    side_effect=RuntimeError("想定外")):
             res = self.post("/api/settings/sync-shift", {})
         self.assertEqual(res.status_code, 500)
 
     def test_時間マスタが取れなければ502(self) -> None:
-        with patch("nippou.access_bridge.importer.import_shift_times",
+        with patch("nippou.access_bridge.importer.import_shift_rows",
                    return_value=None):
             res = self.post("/api/settings/sync-shift", {})
         self.assertEqual(res.status_code, 502)
 
     def test_時間マスタを取り込むと保存される(self) -> None:
-        with patch("nippou.access_bridge.importer.import_shift_times",
-                   return_value={"1": ("08:00", "17:00")}):
+        with patch("nippou.access_bridge.importer.import_shift_rows",
+                   return_value=[ShiftRow("1", "08:00", "17:00")]):
             res = self.post("/api/settings/sync-shift", {})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(self.repo().get_shift_times()["1"], ("08:00", "17:00"))

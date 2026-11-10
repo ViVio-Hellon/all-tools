@@ -99,7 +99,8 @@ class ShiftNameTests(unittest.TestCase):
 
         揃えると 1直 → 日勤 の引き継ぎが切れます(`services/load_factor`)。
         """
-        self.assertEqual(set(load_factor.SHIFT_ORDER), set(SHIFT_NAMES))
+        # 4直・5直(決まったラインだけの直。v4.49.0)は始まる時刻の順に間へ入る
+        self.assertEqual(set(load_factor.SHIFT_ORDER) - {"4直", "5直"}, set(SHIFT_NAMES))
         self.assertNotEqual(tuple(load_factor.SHIFT_ORDER), SHIFT_NAMES)
 
 

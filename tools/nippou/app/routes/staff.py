@@ -253,7 +253,7 @@ def execute():
     from nippou.services import shift_check
 
     start_text, end_text = shift_check.bounds_of(
-        get_repo().get_shift_times(), shift)
+        get_repo().get_shift_times(ctx.line), shift)
     start_t = _parse_hhmm(start_text)
     end_t = _parse_hhmm(end_text)
     if start_t is None or end_t is None:

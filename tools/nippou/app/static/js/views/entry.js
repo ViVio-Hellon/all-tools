@@ -904,6 +904,10 @@ function paintNeedsWorker(view) {
   const noLine = !!view?.needs_line;
   const blocked = !noLine && !!view?.handover?.blocked;
   const need = noLine || !!view?.needs_worker || blocked;
+  // **4直・5直と重なる時間は、作業者より先に直を選ぶ**(v4.49.0 `shift_pick`)。
+  // 選ぶまで作業者のカードも止めます(選んだ直の紙に作業者を入れるため)
+  const picking = !noLine && !blocked && !!view?.shift_pick?.choices?.length;
+  paintShiftPick(view?.shift_pick);
   const box = document.getElementById("start-shift");
   // 前の直が先。**2つの帯を同時に出さない** ── どちらから触るのかが
   // また分からなくなります
@@ -934,10 +938,11 @@ function paintNeedsWorker(view) {
         ...document.querySelectorAll("[data-need-worker]")].map((el) => [el, need]),
     ...[...(card ? card.querySelectorAll("input, select, textarea, button") : [])]
       .filter((el) => el.dataset.needWorker === undefined)
-      .map((el) => [el, noLine]),
+      .map((el) => [el, noLine || picking]),
   ];
   const why = noLine
     ? "先に「ラインを決める」で、この端末のラインを決めてください"
+    : picking ? "先に、どちらの直かを選んでください"
     : "先に「作業者を選ぶ」でこの直の作業者を決めてください";
   for (const [el, lock] of locked) {
     const named = el.dataset.needWorker !== undefined;
@@ -960,6 +965,54 @@ function paintNeedsWorker(view) {
         delete el.dataset.needWorkerTitle;
       }
     }
+  }
+}
+
+/**
+ * 「どちらの直ですか」(4直・5直と重なる時間の直の始まり。v4.49.0)。
+ *
+ * 決めるのはサーバ(`view.shift_pick`)。選ぶとその直に固定され、画面を引き直して
+ * 作業者を選びます。選べる直が無ければ伏せて、「作業者を選ぶ」を出します。
+ */
+function paintShiftPick(pick) {
+  const host = document.getElementById("shift-pick");
+  if (!host) return;
+  const choices = pick?.choices || [];
+  host.hidden = !choices.length;
+  const start = document.getElementById("start-pick-staff");
+  if (start) start.hidden = !!choices.length;
+  // 「まず作業者を選んでください」は直を選ぶまで伏せる(2つ言うと、どちらが先か読めない)
+  const text = document.getElementById("start-shift-text");
+  if (text) text.hidden = !!choices.length;
+  const why = document.getElementById("shift-pick-why");
+  if (why) why.textContent = pick?.message || "";
+  const box = document.getElementById("shift-pick-choices");
+  if (!box) return;
+  const same = [...box.querySelectorAll("button")].map((b) => `${b.dataset.pickDate}|${b.dataset.pickShift}|${b.textContent}`).join(",")
+    === choices.map((c) => `${c.report_date}|${c.shift}|${c.label}`).join(",");
+  if (same) return;
+  box.replaceChildren(...choices.map((c) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn--primary btn--lg";
+    btn.dataset.pickDate = c.report_date;
+    btn.dataset.pickShift = c.shift;
+    btn.textContent = c.label;
+    return btn;
+  }));
+}
+
+async function pickShift(button) {
+  try {
+    const body = await api.post("/api/entry/pick-shift", {
+      report_date: button.dataset.pickDate, shift: button.dataset.pickShift });
+    toast(body.message, "ok");
+    // 開く紙が変わる(選んだ直の紙)。**書いたものとしてから移る**
+    markSaved();
+    location.href = body.next || "/";
+  } catch (err) {
+    toastError(err);
+    if (err.body?.choices) paintShiftPick(err.body);
   }
 }
 
@@ -2868,10 +2921,16 @@ export function start() {
   // ── ここを `paint()` に任せると、止まっているはずの画面が最初の
   // 1回だけ打ててしまい、関門の意味がなくなります
   const handoverBox = document.getElementById("handover");
+  const pickBox = document.getElementById("shift-pick");
   paintNeedsWorker({
     needs_worker: !document.getElementById("start-shift")?.hidden,
     needs_line: !document.getElementById("terminal-line-note")?.hidden,
     handover: { blocked: handoverBox?.dataset.blocked === "1" },
+    shift_pick: pickBox && !pickBox.hidden ? {
+      message: document.getElementById("shift-pick-why")?.textContent || "",
+      choices: [...pickBox.querySelectorAll("[data-pick-shift]")].map((b) => ({
+        report_date: b.dataset.pickDate, shift: b.dataset.pickShift, label: b.textContent })),
+    } : null,
   });
   document.body.classList.toggle(
     "handover-blocked", handoverBox?.dataset.blocked === "1");
@@ -3756,6 +3815,11 @@ export function start() {
     **閉じるからには出口を置きます。** 止まったまま次へ進む道が無いと、
     次に座った人は何を押せばよいのか分かりません。
   */
+  document.getElementById("shift-pick-choices")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pick-shift]");
+    if (button) pickShift(button);
+  });
+
   document.getElementById("start-next-shift")?.addEventListener("click", async () => {
     // 打ちかけがあれば先に置く(置けずに「やめる」なら進まない)
     if (!(await keepTyped())) return;

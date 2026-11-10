@@ -30,7 +30,21 @@ def build_shift_calculator(raw: dict[str, tuple[str, str]]) -> ShiftCalculator:
 
 
 def current_calculator() -> ShiftCalculator:
-    return build_shift_calculator(get_repo().get_shift_times())
+    """いまのラインの直の計算機。**4直・5直に固定していれば、その直をいまの直にする**(v4.49.0)。
+
+    ラインの行(時間用の対象ライン)が無いラインは、いままでと同じ計算機です。
+    """
+    from nippou.logic import shift_rows
+    from nippou.logic.shift import parse_business_date
+
+    ctx = work_context.get_context()
+    calc = shift_rows.calculator_for_line(get_repo().get_shift_rows(), ctx.line)
+    anchor = ctx.anchor
+    if anchor.filled and anchor.line == ctx.line and calc.extra(anchor.shift):
+        business = parse_business_date(anchor.report_date)
+        if business is not None:
+            calc = calc.pinned(business, anchor.shift)
+    return calc
 
 
 def current_target(ctx: work_context.WorkContext, calc: ShiftCalculator):

@@ -25,6 +25,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests._web import HAS_FLASK, SKIP_REASON, WebTestCase  # noqa: E402
+from nippou.logic.shift_rows import ShiftRow  # noqa: E402
 
 
 class _Transmission(WebTestCase):
@@ -135,10 +136,19 @@ class ShiftFormTests(_Transmission):
         self.assertEqual(self.shift_rows()["1"], ("06:55", "15:05"))
 
     def test_知らない直は断る(self) -> None:
-        res = self.add("時間用", {"番号": "5", "直": "4",
+        res = self.add("時間用", {"番号": "5", "直": "X",
                                 "開始": "07:00", "終了": "15:00"})
         self.assertEqual(res.status_code, 400)
         self.assertIn("1・2・3・昼", res.get_json()["error"]["message"])
+
+    def test_4直は対象ラインが無ければ断る(self) -> None:
+        """4直・5直は決まったラインだけの直(v4.49.0)。空だと全ラインで聞かれる。"""
+        res = self.add("時間用", {"番号": "5", "直": "4",
+                                "開始": "11:00", "終了": "19:25"})
+        self.assertEqual(res.status_code, 400)
+        message = res.get_json()["error"]["message"]
+        self.assertIn("対象ライン", message)
+        self.assertIn("列を足す", message)
 
     def test_同じ直を2行にしない(self) -> None:
         """読む側は後の行で上書きするので、前の行を直しても効かなくなる。"""
@@ -256,7 +266,7 @@ class ShiftTakesEffectTests(_Transmission):
 
     def test_写せなくても書いたことは残す(self) -> None:
         """元のファイルにはもう書けている。**押す場所を言う。**"""
-        with patch("nippou.access_bridge.importer.import_shift_times",
+        with patch("nippou.access_bridge.importer.import_shift_rows",
                    return_value=None):
             res = self.save("1", {"開始": "06:50"})
         self.assertEqual(res.status_code, 200)
@@ -358,17 +368,17 @@ class SyncMirrorTests(WebTestCase):
 
     def test_取り込むとマスタに無い直は消える(self) -> None:
         self.repo().set_shift_time("昼", "08:00", "17:00")
-        with patch("nippou.access_bridge.importer.import_shift_times",
-                   return_value={"1": ("07:00", "15:00")}):
+        with patch("nippou.access_bridge.importer.import_shift_rows",
+                   return_value=[ShiftRow("1", "07:00", "15:00")]):
             res = self.post("/api/settings/sync-shift", {})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(self.repo().get_shift_times(), {"1": ("07:00", "15:00")})
 
     def test_読めなければ手元に触らない(self) -> None:
         self.repo().set_shift_time("1", "07:00", "15:00")
-        for empty in (None, {}):
+        for empty in (None, []):
             with self.subTest(empty=empty), patch(
-                    "nippou.access_bridge.importer.import_shift_times",
+                    "nippou.access_bridge.importer.import_shift_rows",
                     return_value=empty):
                 res = self.post("/api/settings/sync-shift", {})
             self.assertEqual(res.status_code, 502)

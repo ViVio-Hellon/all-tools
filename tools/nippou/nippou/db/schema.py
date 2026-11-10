@@ -217,10 +217,13 @@ CREATE TABLE IF NOT EXISTS packing_stop_detail (
 );
 
 CREATE TABLE IF NOT EXISTS shift_config (
-    shift_key   TEXT PRIMARY KEY,   -- '1','2','3','昼'
+    shift_key   TEXT PRIMARY KEY,   -- '1','2','3','昼'。ラインつきは '4@NS1'(v4.49.0)
     start_time  TEXT NOT NULL,
     end_time    TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    target_lines TEXT,              -- 対象ライン(空 = 全ライン共通)
+    early_min    INTEGER,           -- 早出(分)
+    overtime_min INTEGER            -- 残業(分)
 );
 
 CREATE TABLE IF NOT EXISTS print_status (
@@ -453,6 +456,10 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("daily_header", "base_hash", "TEXT"),
     # テストデータの印。前からあるページは 0(テストではない)
     ("daily_header", "test_mark", "INTEGER NOT NULL DEFAULT 0"),
+    # 時間用の対象ライン・早出・残業(v4.49.0)。**空のまま足します** ── 前からの行は全ライン共通
+    ("shift_config", "target_lines", "TEXT"),
+    ("shift_config", "early_min", "INTEGER"),
+    ("shift_config", "overtime_min", "INTEGER"),
 )
 
 

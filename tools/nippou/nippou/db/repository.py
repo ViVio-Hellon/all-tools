@@ -1213,9 +1213,69 @@ class NippouRepository:
         if not result.ok:
             raise sqlite3.OperationalError(result.error or "replace_shift_times failed")
 
-    def get_shift_times(self) -> dict[str, tuple[str, str]]:
-        rows = self.conn.execute("SELECT shift_key, start_time, end_time FROM shift_config").fetchall()
-        return {r["shift_key"]: (r["start_time"], r["end_time"]) for r in rows}
+    def replace_shift_rows(self, rows) -> None:
+        """手元の直の時刻を、**時間用の行(対象ライン・早出・残業つき)に揃える**(v4.49.0)。
+
+        `replace_shift_times` と同じく、マスタに無い行は消し、空なら何もしません。
+        """
+        rows = list(rows)
+        if not rows:
+            return
+        now = _now_iso()
+        keys = []
+        for row in rows:
+            key = row.stored_key
+            keys.append(key)
+            result = execute_with_retry(
+                self.conn,
+                "INSERT INTO shift_config (shift_key, start_time, end_time, updated_at,"
+                " target_lines, early_min, overtime_min) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(shift_key) DO UPDATE SET start_time=excluded.start_time, "
+                "end_time=excluded.end_time, updated_at=excluded.updated_at, "
+                "target_lines=excluded.target_lines, early_min=excluded.early_min, "
+                "overtime_min=excluded.overtime_min",
+                (key, row.start, row.end, now, "、".join(row.lines), row.early, row.overtime),
+                caller_name="replace_shift_rows",
+            )
+            if not result.ok:
+                raise sqlite3.OperationalError(result.error or "replace_shift_rows failed")
+        marks = ", ".join("?" for _ in keys)
+        result = execute_with_retry(
+            self.conn,
+            f"DELETE FROM shift_config WHERE shift_key NOT IN ({marks})",
+            tuple(keys),
+            caller_name="replace_shift_rows",
+        )
+        if not result.ok:
+            raise sqlite3.OperationalError(result.error or "replace_shift_rows failed")
+
+    def get_shift_rows(self):
+        """手元の時間用の行(`logic/shift_rows.ShiftRow`)。対象ライン・早出・残業つき。"""
+        from ..logic.shift_rows import ShiftRow, parse_lines
+
+        out = []
+        for r in self.conn.execute(
+                "SELECT shift_key, start_time, end_time, target_lines, early_min, overtime_min"
+                " FROM shift_config ORDER BY rowid").fetchall():
+            key = str(r["shift_key"] or "").split("@", 1)[0]
+            out.append(ShiftRow(key=key, start=r["start_time"] or "", end=r["end_time"] or "",
+                                lines=parse_lines(r["target_lines"] or ""),
+                                early=int(r["early_min"] or 0),
+                                overtime=int(r["overtime_min"] or 0)))
+        return out
+
+    def get_shift_times(self, line: Optional[str] = None) -> dict[str, tuple[str, str]]:
+        """直の時刻 ``{鍵: (開始, 終了)}``。
+
+        `line` を渡さなければ**全ライン共通の行だけ**(いままでと同じ)。渡せばそのラインで
+        使う直(ラインの行が勝つ・4直・5直…も入る。`logic/shift_rows.for_line`)。
+        """
+        from ..logic import shift_rows
+
+        rows = self.get_shift_rows()
+        if line is None:
+            return shift_rows.common(rows)
+        return shift_rows.for_line(rows, line)[0]
 
     # ------------------------------------------------------------------
     # 直を締めた印 (VBA SavePrintStatusToRegistry / LoadPrintStatusFromRegistry)

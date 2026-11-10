@@ -141,6 +141,31 @@ def bounds_of(shift_times: dict[str, tuple[str, str]], shift: str
     return bounds_text(shift_times, shift)
 
 
+def check_bounds(repo: NippouRepository, line: str, shift: str) -> tuple[dict, str, str, str]:
+    """確かめに渡す ``(時刻の辞書, 始まり, 定時の終わり, 閉じる時刻)``(v4.49.0)。
+
+    1〜3直・日勤は いままでと同じ(閉じる時刻は空)。**4直・5直は 始まりを早出ぶん前へ、
+    閉じる時刻を 終了 + 残業(ほかの 4直・5直の始まりで切る)**に ── 早出の行も残業の行も
+    「直の外」と言わない(`logic/shift.ExtraShift`)。
+    """
+    from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+
+    from ..logic import shift_rows
+
+    times = repo.get_shift_times(line)
+    start, end = bounds_of(times, shift)
+    calc = shift_rows.calculator_for_line(repo.get_shift_rows(), line)
+    extra = calc.extra(shift)
+    if extra is None:
+        return times, start, end, ""
+    day = _date(2001, 1, 1)
+    opens = calc.window_start(shift, day)
+    close = calc.input_close_at(shift, day)
+    if opens is not None:
+        start = f"{opens:%H:%M}"
+    return times, start, end, (f"{close:%H:%M}" if close is not None else "")
+
+
 def known_stop_codes() -> set[str]:
     """内訳マスタにある記号ぜんぶ。
 
@@ -207,13 +232,12 @@ def run(repo: NippouRepository, report_date: str, line: str, shift: str, *,
     if not details:
         return CheckReport(report_date, line, shift)
 
-    shift_times = repo.get_shift_times()
-    start, end = bounds_of(shift_times, shift)
+    shift_times, start, end, overtime_end = check_bounds(repo, line, shift)
     found = save_checks.run_all(
         details, shift=shift, shift_start=start, shift_end=end,
         limit_minutes=shift_limit(shift_times, shift, admin=admin),
         known_stop_codes=known_stop_codes() if codes is None else codes,
-        day_work=day_work)
+        day_work=day_work, overtime_end=overtime_end)
 
     blocking = save_checks.blocking(found, skip=skip)
     skipped = [f for f in found if skip and f.skippable]
@@ -282,13 +306,12 @@ def run_for_save(repo: NippouRepository, report_date: str, line: str,
     if not merged:
         return CheckReport(report_date, line, shift)
 
-    shift_times = repo.get_shift_times()
-    start, end = bounds_of(shift_times, shift)
+    shift_times, start, end, overtime_end = check_bounds(repo, line, shift)
     found = save_checks.run_all(
         merged, shift=shift, shift_start=start, shift_end=end,
         limit_minutes=shift_limit(shift_times, shift, admin=admin),
         known_stop_codes=known_stop_codes() if codes is None else codes,
-        day_work=day_work)
+        day_work=day_work, overtime_end=overtime_end)
     return CheckReport(report_date, line, shift, pages=1, rows=len(merged),
                        findings=save_checks.during_input(found))
 

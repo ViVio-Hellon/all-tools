@@ -161,7 +161,7 @@ class ShiftMasterReflectTests(flow.ScenarioCase):
     # -- 読み直しの決まり -------------------------------------------------------
     def test_変わっていなければ中身は読まない(self) -> None:
         self.start_shift("2026-10-05 07:05", "山田")
-        with patch("nippou.access_bridge.importer.import_shift_times") as read:
+        with patch("nippou.access_bridge.importer.import_shift_rows") as read:
             for when in ("2026-10-05 10:00", "2026-10-05 10:01", "2026-10-05 10:02"):
                 self.look(when, ROWS_1500)
         read.assert_not_called()

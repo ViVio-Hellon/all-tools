@@ -739,7 +739,7 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         for notice, row in zip(rule.parse(rows), [r for r in rows if rule._flag(r.get("有効"), True)]):
             if notice.problems:
                 problems.append(f"{notice.id}: {' / '.join(notice.problems)}")
-        times, where = guide_store.shift_times()
+        times, where = guide_store.shift_times(guide_store.terminal_line().line or "")
         return {
             "rows": [{k: ("" if v is None else v) for k, v in r.items()} for r in rows],
             "columns": [{"name": n, "kind": k, "hint": rule.COLUMN_HINTS.get(n, ("", ()))[0],

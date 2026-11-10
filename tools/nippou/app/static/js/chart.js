@@ -573,7 +573,8 @@ export { chart, combo, donut };
    点に載せると(`title`)、担当者・押した時刻・結果が出る。
    ================================================================== */
 const TIMING = { W: 720, H: 260, top: 14, right: 12, bottom: 30, left: 64 };
-const SHIFT_SLOTS = ["1直", "2直", "3直", "日勤"];
+//: 1日の幅の中の置き場所(左からの割合)。4直・5直(決まったラインだけの直。v4.49.0)は間へ
+const SHIFT_SLOTS = { "1直": 0.2, "2直": 0.4, "3直": 0.6, "日勤": 0.8, "4直": 0.3, "5直": 0.5 };
 
 /** 目盛りの字。**下は「◯分前」(直内)、上は「◯分後」(直が終わってから)。** */
 function hoursLabel(minutes) {
@@ -642,8 +643,7 @@ function timingSvg(chart) {
   }
 
   for (const p of chart.points) {
-    const slot = Math.max(0, SHIFT_SLOTS.indexOf(p.shift));
-    const x = TIMING.left + band * p.day + band * (0.2 + 0.2 * slot);
+    const x = TIMING.left + band * p.day + band * (SHIFT_SLOTS[p.shift] ?? 0.2);
     const yy = y(p.minutes);
     const group = el("g", { class: "timing__pt" });
     group.appendChild(el("title", {}, p.tip + (p.clipped ? "\n(グラフの外なので端に置いています)" : "")));

@@ -523,7 +523,7 @@ class ShiftTimesTests(_Case):
                 conn.execute('UPDATE "時間用" SET "終了" = "15:30" WHERE "直" = "1"')
             conn.close()
             os.utime(master, ns=(10**18, 10**18))
-            with patch.object(importer, "import_shift_times", return_value=None):  # ロック中
+            with patch.object(importer, "import_shift_rows", return_value=None):  # ロック中
                 self.assertIsNone(shift_times.refresh_if_changed(self.repo, now=100.0))
             self.assertEqual(self.repo.get_shift_times()["1"], ("07:00", "15:00"))
             shift_times.refresh_if_changed(self.repo, now=200.0)

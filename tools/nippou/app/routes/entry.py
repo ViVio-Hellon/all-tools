@@ -67,8 +67,11 @@ def _shift_end_times(calc: ShiftCalculator) -> dict[str, tuple[str, str]]:
         hour, minute = hhmm.split(":")
         return hour, minute
 
-    return {"日勤": split(t.end_day), "1直": split(t.end1),
-            "2直": split(t.end2), "3直": split(t.end3)}
+    found = {"日勤": split(t.end_day), "1直": split(t.end1),
+             "2直": split(t.end2), "3直": split(t.end3)}
+    for extra in t.extras:                        # 4直・5直(v4.49.0)
+        found[extra.name] = split(extra.end)
+    return found
 
 
 def _carried_rows(payload: dict) -> set[int]:
@@ -275,6 +278,12 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
     body["needs_worker"] = bool(
         not body["read_only"] and not body["needs_line"] and not ctx.recall.active
         and not str(state.header.get("worker", "")).strip())
+    # **4直・5直のあるラインで、重なる時間なら先に直を選ぶ**(v4.49.0)。選ぶまでは
+    # 作業者も選ばせない(選んだ直の紙に作業者を入れるため)
+    pick = [] if body["read_only"] or body["needs_line"] else shift_pick(ctx, calc)
+    body["shift_pick"] = pick_view(pick)
+    if pick:
+        body["needs_worker"] = True
     # **直の始めに、前の直の始末をつける。**
     #
     # 押し忘れ・打ち間違いのまま直の時間が過ぎ、次の直がそのまま入力を
@@ -749,6 +758,35 @@ def anchor_standing(ctx, calc, now: Optional[datetime] = None):
         grace_minutes=SETTINGS.shift_grace_minutes, close_at=close_at)
 
 
+def shift_pick(ctx, calc, now: Optional[datetime] = None) -> list:
+    """**作業者を選ぶ前に、直を選んでもらう**ときの候補。選ばなくてよければ空(v4.49.0)。
+
+        4、5直は時間もつながっていない、ただ早出残業はある
+        重なる時間に、どちらの直かをどう決めますか？ → 作業者を選ぶ時に聞く
+
+    4直・5直は 1〜3直と時刻が重なるので、時計だけでは決まりません。直をまだ固定して
+    いない(直の始まり)ときに、なれる直が2つ以上あれば選んでもらいます。
+    **4直・5直の行が無いライン・重ならない時間は空**(いままでと同じ)。
+    呼出中(過去の紙を開いている)・固定済みのときも空。
+    """
+    if ctx.recall.active or ctx.anchor.filled:
+        return []
+    found = calc.candidates(now or datetime.now(), ctx.force_day_shift())
+    return found if len(found) > 1 else []
+
+
+def pick_view(pick: list) -> dict:
+    """画面に出す「どちらの直ですか」。選ばなくてよければ空の辞書。"""
+    if not pick:
+        return {}
+    names = " と ".join(c.label for c in pick)
+    return {
+        "message": f"この時間は {names} のどちらにもなれます。どちらの直ですか？",
+        "choices": [{"report_date": format_business_date(c.business_date),
+                     "shift": c.shift, "label": c.label} for c in pick],
+    }
+
+
 def anchor_on_worker(ctx, calc, state, now: Optional[datetime] = None) -> bool:
     """作業者が決まったら、**その瞬間の時計の直に固定する。**
 
@@ -770,6 +808,9 @@ def anchor_on_worker(ctx, calc, state, now: Optional[datetime] = None) -> bool:
     if not str(state.header.get("worker", "")).strip():
         return False
     now = now or datetime.now()
+    if shift_pick(ctx, calc, now):
+        # 直がまだ決まっていない(4直・5直と重なる時間)。**時計の直へ勝手に固定しない**
+        return False
     shift = calc.time_check(now, ctx.force_day_shift())
     if ctx.anchor.filled and not shift_anchor.should_restart(
             ctx.anchor, ("", ctx.line, shift)):
@@ -805,9 +846,13 @@ def line_refusal():
     1ページを書くもの)。保存は画面ぜんぶを返したいので `save` が自分で
     断ります(同じ判定 `work_context.terminal_line_decided`)。
     """
-    if work_context.line_known():
-        return None
-    return jsonify(error_body("line_undecided", work_context.LINE_GATE_MESSAGE)), 409
+    if not work_context.line_known():
+        return jsonify(error_body("line_undecided", work_context.LINE_GATE_MESSAGE)), 409
+    # **直がまだ決まっていなければ1ページも書かない**(4直・5直と重なる時間。v4.49.0)
+    pick = shift_pick(work_context.get_context(), current_calculator())
+    if pick:
+        return jsonify(error_body("shift_undecided", pick_view(pick)["message"])), 409
+    return None
 
 
 def _is_read_only(ctx, calc) -> bool:
@@ -898,11 +943,15 @@ def prev_shift_warning(ctx, calc):
             return prev.EmptyPrevShift(line=line)
         prev_name, prev_date = found
         prev_report_date = format_business_date(prev_date)
+        # その日にもう一方の勤務(ふつうの直 / 4直・5直)が回っていれば、前の直は無いのが普通
+        that_day = {str(r["shift"]) for r in get_repo().saved_keys(line)
+                    if str(r["report_date"]) == prev_report_date}
         return prev.evaluate(
             report_date=report_date, line=line, shift=shift,
             prev_report_date=prev_report_date, prev_shift=prev_name,
             prev_has_data=bool(get_repo().saved_pages(
-                prev_report_date, line, prev_name)),
+                prev_report_date, line, prev_name))
+            or prev.other_pattern_ran(prev_name, that_day),
             seen_recently=_shift_seen_recently(line, prev_name, business_date),
             recall_mode=ctx.recall.active)
     except Exception:                             # noqa: BLE001 - 画面は出す
@@ -964,7 +1013,7 @@ def _recalculate(state, ctx, calc, *, shift: str = ""):
         _, _, shift, _ = _target(ctx, calc)
     return presenter.recalculate(
         state, package_calc=ctx.package_calc_enabled(),
-        shift_times=get_repo().get_shift_times(),
+        shift_times=get_repo().get_shift_times(ctx.line),
         current_shift=shift, admin=ctx.editor)
 
 
@@ -975,15 +1024,17 @@ def _break_entries(state, report_date: str, line: str, shift: str, page: int) ->
     読めなくても一覧は出す(そのページの中だけで見る)。
     """
     from nippou.logic import break_time
-    from nippou.services.shift_check import bounds_of
+    from nippou.services.shift_check import check_bounds
 
     repo = get_repo()
+    overtime_end = ""
     try:
-        start, end = bounds_of(repo.get_shift_times(), shift)
+        # 4直・5直は早出〜残業の終わりまで(保存の確かめと同じ物差し。v4.49.0)
+        _times, start, end, overtime_end = check_bounds(repo, line, shift)
     except Exception:                                   # noqa: BLE001 - 直の時間が読めない日
         start, end = "", ""
     from nippou.logic.save_checks import latest_end
-    window = break_time.shift_window(start, latest_end(shift, end))
+    window = break_time.shift_window(start, latest_end(shift, end, overtime_end))
     others: list[tuple[str, list]] = []
     try:
         for saved in repo.saved_pages(report_date, line, shift):
@@ -1013,7 +1064,7 @@ def _bad_rows(state, ctx, calc, *, shift: str = "") -> list[dict]:
     return [{"row": p.row, "reason": p.reason, "message": p.message,
              "field": p.field, "sound": p.sounds}
             for p in presenter.time_problems(
-                state, shift_times=get_repo().get_shift_times(),
+                state, shift_times=get_repo().get_shift_times(ctx.line),
                 current_shift=shift, admin=ctx.editor)]
 
 
@@ -1354,7 +1405,7 @@ def _distribute(*, lot: bool):
     report_date, line, shift, page = screen_key or _target(ctx, calc)
 
     repo = get_repo()
-    start_text, end_text = shift_check.bounds_of(repo.get_shift_times(), shift)
+    start_text, end_text = shift_check.bounds_of(repo.get_shift_times(line), shift)
     start = time_split.parse_hhmm(start_text)
     end = time_split.parse_hhmm(end_text)
     if start is None or end is None:
@@ -1862,6 +1913,16 @@ def save():
             return jsonify(body)
         body["message"] = work_context.LINE_GATE_MESSAGE
         return jsonify(body), 409
+    # **直がまだ決まっていなければ書かない**(4直・5直と重なる時間。v4.49.0)。
+    # 時計の直(1直)へ書いてから「4直でした」では、別の直の紙に残ります
+    if shift_pick(ctx, calc):
+        body = _view(state, ctx, calc)
+        body["saved"] = False
+        if silent:
+            body["skipped"] = "直がまだ決まっていないため保存しません"
+            return jsonify(body)
+        body["message"] = body["shift_pick"].get("message", "先に直を選んでください")
+        return jsonify(body), 409
     # **画面に出ていないページへは書かない**(v4.24.0 `screen_mismatch`)。
     # 何かを決める前・固定を動かす前に見ます ── 古い画面の送信で、書き先の
     # 直まで動かさないために
@@ -2293,6 +2354,38 @@ def _recalculate_factors(state, report_date: str, line: str, shift: str):
     if applied.result.coefficient:
         state.header["coefficient_lot_count"] = applied.result.totals.coefficient_text
     return applied.as_dict()
+
+
+@bp.post("/api/entry/pick-shift")
+def pick_shift():
+    """**どちらの直かを選ぶ**(4直・5直と重なる時間の直の始まり。v4.49.0)。
+
+    選んだ直に固定します(`logic/shift_anchor`)。作業者はこのあと選びます ──
+    選んだ直の紙に入れるため。選べるのは**いまなれる直**だけです(画面を開いた
+    ままで時刻が進み、もうなれない直を送ってきたら断る)。
+    """
+    from nippou.logic import shift_anchor
+
+    payload = request.get_json(silent=True) or {}
+    ctx = work_context.get_context()
+    calc = current_calculator()
+    now = datetime.now()
+    wanted = (str(payload.get("report_date", "")), str(payload.get("shift", "")))
+    pick = shift_pick(ctx, calc, now)
+    if not pick:
+        return jsonify({"message": "直はもう決まっています。画面を読み直してください",
+                        "next": "/"}), 409
+    for c in pick:
+        if (format_business_date(c.business_date), c.shift) == wanted:
+            ctx.anchor = shift_anchor.start_key(
+                (format_business_date(c.business_date), ctx.line, c.shift), now)
+            log_button_click("pick_shift", line=ctx.line, extra=f"{wanted[0]}/{c.label}")
+            log.info("直を選んで固定しました: %s %s %s", wanted[0], ctx.line, c.label)
+            return jsonify({"message": f"{wanted[0]} {c.label} を始めます。作業者を選んでください",
+                            "report_date": wanted[0], "shift": c.shift, "next": "/"})
+    return jsonify({**pick_view(pick),
+                    "message": f"いまは {' / '.join(c.label for c in pick)} から選んでください"
+                               "(時刻が進んで、選べる直が変わりました)"}), 409
 
 
 @bp.post("/api/entry/start-next")

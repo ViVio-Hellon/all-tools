@@ -219,7 +219,7 @@ def samples_of(repo: NippouRepository, report: PackingReport,
                                           report.shift)) or report.worker_name
     team = logic.team_of(worker, teams)
     details = list(details)
-    breaks = _break_checks(repo, report.shift, details)
+    breaks = _break_checks(repo, report.shift, details, line=report.line_name)
     return [logic.sample_of(
         report_date=report.work_date, line=report.line_name, shift=report.shift,
         page=d.page, row_no=d.row_no, worker=worker, team=team, lot_no=d.lot_no,
@@ -247,16 +247,18 @@ def _detail_values(d: PackingDetail) -> dict[str, str]:
 
 
 def _break_checks(repo: NippouRepository, shift: str,
-                  details: list[PackingDetail]) -> dict[tuple[int, int], dict]:
+                  details: list[PackingDetail], *, line: str = "") -> dict[tuple[int, int], dict]:
     """直ぜんぶの行の休憩(分・時刻・確かめの1つ目)。保存の確かめと同じ物差し。"""
     from ..logic.save_checks import latest_end
-    from ..logic.shift import bounds_text
+    from .shift_check import check_bounds
 
+    overtime_end = ""
     try:
-        start, end = bounds_text(repo.get_shift_times(), shift)
+        # 4直・5直は早出〜残業の終わりまで(保存の確かめと同じ。v4.49.0)
+        _times, start, end, overtime_end = check_bounds(repo, line, shift)
     except Exception:                                   # noqa: BLE001 - 直の時間が読めない
         start, end = "", ""
-    window = break_time.shift_window(start, latest_end(shift, end))
+    window = break_time.shift_window(start, latest_end(shift, end, overtime_end))
     many = len({d.page for d in details}) > 1
     rows = [((d.page, d.row_no), f"{d.page}ページ {d.row_no}行目" if many else f"{d.row_no}行目",
              _detail_values(d)) for d in details]

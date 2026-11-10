@@ -168,7 +168,8 @@ TABLE_NOTES: dict[str, str] = {
     "作業停止時間内訳_3": "停止理由(ハンドリング)。記号は A〜G の英字。"
                           "停止内訳.csv に 3 の行があればそちらが勝ちます",
     "時間用": "直の境界時刻。直は 1・2・3・昼、開始と終了は 07:00 の形。"
-              "直すと直の時間にすぐ効きます",
+              "決まったラインだけの直(4・5)は「対象ライン」と「早出」「残業」(分)を入れる"
+              "(列が無ければ「列を足す」で足す)。直すと直の時間にすぐ効きます",
     "注意_包装仕様": "包装仕様NOごとの注意。フラグ(用途コード/寸法/納入先)で"
                      "出す条件が決まる。コイルは画面に出す",
     "資材重量": "資材ごとの単位質量と係数(GW計算)",
@@ -1155,24 +1156,93 @@ def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
                     "(0:00〜23:59)。")
         clean[name] = normalized
 
+    from .logic import shift_rows
+
+    # 対象ライン・早出・残業(v4.49.0)。**正規のライン名だけ**(読めない名前は黙って効かない)
+    if shift_rows.LINES_COLUMN in clean:
+        from .logic import line_names
+
+        text = str(clean[shift_rows.LINES_COLUMN] or "").strip()
+        for part in shift_rows._SPLIT.split(unicodedata.normalize("NFKC", text)):
+            if not part:
+                continue
+            if not line_names.to_code(part):
+                mistake = line_names.check(part) or "ラインの名前として読めません"
+                return (f"「{shift_rows.LINES_COLUMN}」の {part}: {mistake}。"
+                        "NS1 のように正規の名前で、複数は「、」で区切って入れてください(空なら全ライン共通)。")
+        clean[shift_rows.LINES_COLUMN] = "、".join(shift_rows.parse_lines(text))
+    for names in (shift_rows.EARLY_COLUMNS, shift_rows.OVERTIME_COLUMNS):
+        for name in names:
+            if name not in clean:
+                continue
+            minutes = shift_rows.parse_minutes(clean[name])
+            if minutes is None:
+                return f"「{name}」は 120 のように分で入れてください(0〜1440。空なら 0)。"
+            clean[name] = minutes if str(clean[name] or "").strip() else clean[name]
+
     if SHIFT_KEY_COLUMN not in clean:
         return ""
     key = unicodedata.normalize("NFKC", str(clean[SHIFT_KEY_COLUMN] or "")).strip()
-    if key not in SHIFT_KEYS:
-        return f"「{SHIFT_KEY_COLUMN}」は {'・'.join(SHIFT_KEYS)} のどれかで入れてください。"
+    if key.endswith("直") and len(key) > 1:
+        key = key[:-1]
+    extra = key not in SHIFT_KEYS
+    if extra and not (key.isdigit() and 4 <= int(key) <= 9):
+        return (f"「{SHIFT_KEY_COLUMN}」は {'・'.join(SHIFT_KEYS)} か、決まったラインだけの直"
+                " 4〜9 のどれかで入れてください。")
     clean[SHIFT_KEY_COLUMN] = key
+    lines = shift_rows.parse_lines(clean.get(shift_rows.LINES_COLUMN, ""))
+    if extra and not lines:
+        return (f"{key}直は決まったラインだけの直です。「{shift_rows.LINES_COLUMN}」にラインを入れてください"
+                "(空にすると全ラインで作業者を選ぶたびに聞かれます)。"
+                f"列が無ければ、先に「列を足す」で「{shift_rows.LINES_COLUMN}」を足してください。")
 
-    # **同じ直を2行にしない。** 読む側は後の行で上書きするので、
-    # 足したほうだけが黙って効き、前の行を直しても変わらなくなります
-    quoted_key = source_db.quote_identifier(SHIFT_KEY_COLUMN)
-    for other in src.query(
-            f"SELECT rowid AS r, {quoted_key} AS k"
-            f" FROM {source_db.quote_identifier(table)}"):
-        other_key = unicodedata.normalize("NFKC", str(other["k"] or "")).strip()
-        if other_key == key and other["r"] != row_key:
+    # **同じ直・同じラインを2行にしない。** 読む側は後の行で上書きするので、
+    # 足したほうだけが黙って効き、前の行を直しても変わらなくなります。
+    # 対象ラインが違えば同じ直でも別の行です(v4.49.0)
+    for other in _shift_rows_of(src, table):
+        if other["r"] == row_key or other["key"] != key:
+            continue
+        if bool(other["lines"]) != bool(lines):
+            continue
+        if not lines:
             return (f"直「{key}」の行はもうあります。同じ直が2行あると、"
                     "後の行だけが効きます ── その行のほうを直してください。")
+        both = set(other["lines"]) & set(lines)
+        if both:
+            return (f"直「{key}」の {'、'.join(sorted(both))} の行はもうあります。"
+                    "同じ直・同じラインが2行あると、後の行だけが効きます ── その行のほうを直してください。")
     return _shift_gap_problem(src, table, clean, row_key=row_key)
+
+
+def _has_column(src: source_db.SourceConnection, table: str, column: str) -> Optional[bool]:
+    """表にその列があるか。分からなければ None。
+
+    **`SELECT "列"` で確かめない** ── sqlite3 は無い列名の "…" を文字の値として読むので、
+    無い列でも「ある」に見えます。
+    """
+    try:
+        rows = src.query(f"PRAGMA table_info({source_db.quote_identifier(table)})")
+    except Exception:                             # noqa: BLE001 - 分からない
+        return None
+    return column in {str(r.get("name", "")) for r in rows}
+
+
+def _shift_rows_of(src: source_db.SourceConnection, table: str) -> list[dict]:
+    """時間用の行(rowid・直・対象ライン)。対象ラインの列が無い表は全部共通。"""
+    from .logic import shift_rows
+
+    quoted = source_db.quote_identifier
+    has_lines = _has_column(src, table, shift_rows.LINES_COLUMN)
+    picked = f", {quoted(shift_rows.LINES_COLUMN)} AS l" if has_lines else ""
+    out = []
+    for row in src.query(f"SELECT rowid AS r, {quoted(SHIFT_KEY_COLUMN)} AS k{picked}"
+                         f" FROM {quoted(table)}"):
+        key = unicodedata.normalize("NFKC", str(row["k"] or "")).strip()
+        if key.endswith("直") and len(key) > 1:
+            key = key[:-1]
+        out.append({"r": row["r"], "key": key,
+                    "lines": shift_rows.parse_lines(row["l"] if has_lines else "")})
+    return out
 
 
 def _shift_gap_problem(src: source_db.SourceConnection, table: str, clean: dict[str, Any],
@@ -1185,8 +1255,14 @@ def _shift_gap_problem(src: source_db.SourceConnection, table: str, clean: dict[
     """
     from .logic import shift as shift_logic
 
+    from .logic import shift_rows
+
     quoted = source_db.quote_identifier
     columns = (SHIFT_KEY_COLUMN, *SHIFT_TIME_COLUMNS)
+    # **見るのは全ライン共通の行だけ**(v4.49.0)。4直・5直やラインの行は、1〜3直の
+    # つながりとは別(4直と5直の間が空いているのは普通)
+    if _has_column(src, table, shift_rows.LINES_COLUMN):
+        columns = (*columns, shift_rows.LINES_COLUMN)
     try:
         rows = src.query(
             f"SELECT rowid AS r, {', '.join(f'{quoted(c)} AS c{i}' for i, c in enumerate(columns))}"
@@ -1195,14 +1271,20 @@ def _shift_gap_problem(src: source_db.SourceConnection, table: str, clean: dict[
         return ""
     after: dict[str, tuple[str, str]] = {}
     seen_self = False
+
+    def common(values: dict) -> bool:
+        return not shift_rows.parse_lines(values.get(shift_rows.LINES_COLUMN, ""))
+
     for row in rows:
         values = {c: row[f"c{i}"] for i, c in enumerate(columns)}
         if row_key is not None and row["r"] == row_key:
             values.update({c: clean[c] for c in columns if c in clean})
             seen_self = True
+        if not common(values):
+            continue
         key = unicodedata.normalize("NFKC", str(values[SHIFT_KEY_COLUMN] or "")).strip()
         after[key] = (str(values[SHIFT_TIME_COLUMNS[0]] or ""), str(values[SHIFT_TIME_COLUMNS[1]] or ""))
-    if not seen_self and SHIFT_KEY_COLUMN in clean:  # 足す行
+    if not seen_self and SHIFT_KEY_COLUMN in clean and common(clean):  # 足す行
         after[clean[SHIFT_KEY_COLUMN]] = (str(clean.get(SHIFT_TIME_COLUMNS[0]) or ""),
                                           str(clean.get(SHIFT_TIME_COLUMNS[1]) or ""))
     gaps = shift_logic.shift_gaps(after)

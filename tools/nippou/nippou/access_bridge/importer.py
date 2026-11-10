@@ -222,6 +222,20 @@ def import_table(
             pass
 
 
+def import_shift_rows(accdb_path: Path, table_name: str = "時間用",
+                      runner: Optional[ScriptRunner] = None):
+    """時間用の行を、**対象ライン・早出・残業つき**で読む(v4.49.0 `logic/shift_rows`)。
+
+    読めなければ None。列が無い表でも読めます(全行が全ライン共通・早出残業 0)。
+    """
+    from ..logic import shift_rows
+
+    result = import_table(accdb_path, table_name, runner=runner)
+    if not result.success:
+        return None
+    return shift_rows.from_table(result.rows)
+
+
 def import_shift_times(
     accdb_path: Path, table_name: str = "時間用", runner: Optional[ScriptRunner] = None
 ) -> Optional[dict[str, tuple[str, str]]]:

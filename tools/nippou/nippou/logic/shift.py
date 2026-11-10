@@ -169,6 +169,54 @@ FORM_KEYS: tuple[tuple[str, str], ...] = MASTER_KEYS + (("昼", DAY_SHIFT),)
 #: (以前は shift_check・shift_times・master_admin にも同じ表があった)
 SHIFT_KEYS: dict[str, str] = {name: key for key, name in FORM_KEYS}
 
+#: 1〜3直と日勤の鍵。**これ以外の直(4直・5直…)は「決まったラインだけの直」**(v4.49.0)。
+#:
+#:     直の概念が増え4直、5直が増える
+#:     ただ4直、5直で見る必要があるのは決まったラインだけである
+#:
+#: 時間用の「対象ライン」に書いたラインだけで使います。**時計だけでは決まりません**
+#: (1〜3直と時刻が重なるため)── 作業者を選ぶときに「1直 / 4直」を選んでもらい、
+#: 選んだ直に固定します(`ShiftCalculator.candidates` / `pinned`)。
+BASE_KEYS: tuple[str, ...] = tuple(key for key, _ in FORM_KEYS)
+
+
+def shift_name(key: object) -> str:
+    """時間用の鍵 → 直の名前。「4」→「4直」、「昼」→「日勤」。「4直」と書いてあってもそのまま。"""
+    text = unicodedata.normalize("NFKC", str(key or "")).strip()
+    if not text:
+        return ""
+    found = dict(FORM_KEYS).get(text)
+    if found:
+        return found
+    return text if text.endswith("直") else f"{text}直"
+
+
+def shift_key_of(name: object) -> str:
+    """直の名前 → 時間用の鍵。「4直」→「4」、「日勤」→「昼」。知らなければ字のまま。"""
+    text = unicodedata.normalize("NFKC", str(name or "")).strip()
+    if text in SHIFT_KEYS:
+        return SHIFT_KEYS[text]
+    return text[:-1] if text.endswith("直") and len(text) > 1 else text
+
+
+@dataclass(frozen=True)
+class ExtraShift:
+    """決まったラインだけの直(4直・5直…)。時刻は "HH:MM"、早出・残業は分。
+
+    **入力できる幅**は 開始 − 早出 から 閉じる時刻(`ShiftCalculator.close_of`)まで。
+    閉じる時刻は 終了 + 残業 ですが、**同じラインのほかの直(4直・5直…)の定時の始まりで
+    切ります** ── 4直の残業は 5直の始まり(21:20)まで。
+
+        4直の残業が続いたとしても21：20までに区切って入力しなければ
+        123直と同じように入力できなくすべきです
+    """
+
+    name: str
+    start: str
+    end: str
+    early: int = 0
+    overtime: int = 0
+
 
 def parse_hhmm(value: object) -> Optional[time]:
     """``"22:50"``(全角も)を ``time`` に。読めなければ None(:func:`normalize_hhmm` と同じ読み方)。"""
@@ -179,7 +227,8 @@ def parse_hhmm(value: object) -> Optional[time]:
     return time(int(hh), int(mm))
 
 
-def times_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftTimes":
+def times_from_master(raw: Optional[dict[str, tuple[str, str]]],
+                      extras: Optional[tuple["ExtraShift", ...]] = None) -> "ShiftTimes":
     """時間マスタ(``{"1": ("06:50", "15:00"), …}``)から直の境界。**読む側はみなここを通す。**
 
     **片側でも欠けているか、時:分として読めなければ、その直は両方とも控えに落とす**
@@ -198,8 +247,19 @@ def times_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftTimes"
     s2, e2 = pick("2", defaults.start2, defaults.end2)
     s3, e3 = pick("3", defaults.start3, defaults.end3)
     sd, ed = pick("昼", defaults.start_day, defaults.end_day)
+    if extras is None:
+        # 鍵と時刻だけのとき(`get_shift_times(line)` の形)。早出・残業は 0
+        found = []
+        for key, value in raw.items():
+            if key in BASE_KEYS or "@" in str(key):
+                continue
+            pair = usable_pair(value)
+            if pair:
+                found.append(ExtraShift(shift_name(key), pair[0], pair[1]))
+        extras = tuple(found)
     return ShiftTimes(start1=s1, end1=e1, start2=s2, end2=e2,
-                      start3=s3, end3=e3, start_day=sd, end_day=ed)
+                      start3=s3, end3=e3, start_day=sd, end_day=ed,
+                      extras=tuple(extras))
 
 
 def calculator_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftCalculator":
@@ -208,10 +268,12 @@ def calculator_from_master(raw: Optional[dict[str, tuple[str, str]]]) -> "ShiftC
 
 
 def bounds_text(raw: Optional[dict[str, tuple[str, str]]], shift: str) -> tuple[str, str]:
-    """その直の ``("HH:MM", "HH:MM")``。知らない直なら ``("", "")``。"""
+    """その直の ``("HH:MM", "HH:MM")``。知らない直なら ``("", "")``。4直・5直も(v4.49.0)。"""
     times = times_from_master(raw)
     pairs = {SHIFT_1: (times.start1, times.end1), SHIFT_2: (times.start2, times.end2),
              SHIFT_3: (times.start3, times.end3), DAY_SHIFT: (times.start_day, times.end_day)}
+    for extra in times.extras:
+        pairs.setdefault(extra.name, (extra.start, extra.end))
     return pairs.get(shift, ("", ""))
 
 
@@ -340,6 +402,8 @@ class ShiftTimes:
     #: 1直の始まりに合わせて8時間ぶんを控えにしてあります
     start_day: str = "07:00"
     end_day: str = "17:00"
+    #: 決まったラインだけの直(4直・5直…。v4.49.0)。ふつうのラインは空
+    extras: tuple[ExtraShift, ...] = ()
 
     def bounds(self, shift: str) -> tuple[time, time]:
         mapping = {
@@ -348,8 +412,17 @@ class ShiftTimes:
             SHIFT_3: (self.start3, self.end3),
             DAY_SHIFT: (self.start_day, self.end_day),
         }
+        for extra in self.extras:
+            mapping.setdefault(extra.name, (extra.start, extra.end))
         s, e = mapping[shift]
         return _parse_hhmm(s), _parse_hhmm(e)
+
+    def extra(self, shift: str) -> Optional[ExtraShift]:
+        """名指しした直が 4直・5直… ならその定義。1〜3直・日勤・知らない直は None。"""
+        for found in self.extras:
+            if found.name == shift:
+                return found
+        return None
 
 
 DEFAULT_SHIFT_TIMES = ShiftTimes()
@@ -369,18 +442,115 @@ def default_times_text(times: ShiftTimes = DEFAULT_SHIFT_TIMES) -> str:
         (DAY_SHIFT, times.start_day, times.end_day)))
 
 
+@dataclass(frozen=True)
+class Candidate:
+    """作業者を選んだときに、なれる直の1つ。`note` は「早出」「残業」か空。"""
+
+    business_date: date
+    shift: str
+    note: str = ""
+
+    @property
+    def label(self) -> str:
+        return f"{self.shift}({self.note})" if self.note else self.shift
+
+
 class ShiftCalculator:
     """Stateless helper bundling the shift-boundary math. All methods take
     the "now" instant explicitly (rather than reading the system clock)
     so tests are deterministic."""
 
-    def __init__(self, times: ShiftTimes = DEFAULT_SHIFT_TIMES) -> None:
+    def __init__(self, times: ShiftTimes = DEFAULT_SHIFT_TIMES,
+                 pin: Optional[tuple[date, str]] = None) -> None:
         self.times = times
+        #: 固定した 4直・5直(報告日, 直)。**その直が閉じるまでは、時計の代わりにこれを
+        #: いまの直とする**(`pinned`)。1〜3直・日勤のときは None
+        self.pin = pin if pin and times.extra(pin[1]) else None
+
+    # -- 4直・5直(決まったラインだけの直。v4.49.0) ---------------------
+    def extra(self, shift: str) -> Optional[ExtraShift]:
+        return self.times.extra(shift)
+
+    def knows(self, shift: str) -> bool:
+        """時刻の分かる直か(1〜3直・日勤と、このラインの 4直・5直…)。"""
+        return shift in SHIFT_NAMES or self.extra(shift) is not None
+
+    def pinned(self, business_date: date, shift: str) -> "ShiftCalculator":
+        """**固定した 4直・5直を「いまの直」にした**計算機。
+
+        4直・5直は時計だけでは決まりません(1〜3直と時刻が重なる)。作業者を選んだときに
+        選んだ直に固定するので、その直が閉じるまでは、時計を見る所(何直か・何日の日報か・
+        残り何分か・催促・5分前の自動確定)も**その直**を指すようにします。
+        閉じたあとは時計に戻ります(固定の側は見るだけになる ── `logic/shift_anchor`)。
+        1〜3直・日勤を渡したときは、固定しない計算機を返します。
+        """
+        return ShiftCalculator(self.times, pin=(business_date, shift))
+
+    def _pin_now(self, now: datetime) -> Optional[tuple[date, str]]:
+        """固定した 4直・5直が、`now` にまだ開いているなら (報告日, 直)。"""
+        if self.pin is None:
+            return None
+        business_date, shift = self.pin
+        close = self.input_close_at(shift, business_date)
+        start = self.window_start(shift, business_date)
+        if close is None or start is None or not (start <= now < close):
+            return None
+        return self.pin
+
+    def window_start(self, shift: str, business_date: date) -> Optional[datetime]:
+        """その直を**選べるようになる**時刻(開始 − 早出)。4直・5直だけ。"""
+        extra = self.extra(shift)
+        start_t = parse_hhmm(extra.start) if extra else None
+        if start_t is None:
+            return None
+        return datetime.combine(business_date, start_t) - timedelta(minutes=max(extra.early, 0))
+
+    def _extra_close_at(self, extra: ExtraShift, business_date: date) -> Optional[datetime]:
+        """4直・5直の閉じる時刻。終了 + 残業。**ほかの 4直・5直の定時の始まりで切る。**"""
+        end_dt = self.shift_end_at(extra.name, business_date)
+        if end_dt is None:
+            return None
+        close = end_dt + timedelta(minutes=max(extra.overtime, 0))
+        for other in self.times.extras:
+            other_t = parse_hhmm(other.start)
+            if other_t is None:
+                continue
+            for offset in (0, 1, 2):
+                begins = datetime.combine(business_date + timedelta(days=offset), other_t)
+                if end_dt < begins < close:
+                    close = begins
+        return close
+
+    def candidates(self, now: datetime, force_day_shift: bool = False) -> list["Candidate"]:
+        """`now` に作業者を選んだら、**どの直にできるか**。時計の直(1〜3直・日勤)が先頭。
+
+        4直・5直は、選べる幅(開始 − 早出 〜 閉じる時刻)に `now` が入っているものだけ。
+        日をまたぐ直(5直)は、前の日に始まったぶんも見ます(報告日は始まった日)。
+        2つ以上なら、作業者を選ぶ前に選んでもらいます(`app/routes/entry`)。
+        """
+        base = ShiftCalculator(self.times)
+        found = [Candidate(base.today_check(now, force_day_shift),
+                           base.time_check(now, force_day_shift), "")]
+        for extra in self.times.extras:
+            for back in (1, 0):
+                day = now.date() - timedelta(days=back)
+                start = self.window_start(extra.name, day)
+                close = self._extra_close_at(extra, day)
+                end = self.shift_end_at(extra.name, day)
+                if start is None or close is None or end is None or not (start <= now < close):
+                    continue
+                begins = start + timedelta(minutes=max(extra.early, 0))
+                note = "早出" if now < begins else ("残業" if now >= end else "")
+                found.append(Candidate(day, extra.name, note))
+        return found
 
     def time_check(self, now: datetime, force_day_shift: bool = False) -> str:
         """Port of ``TimeCheck``. ``force_day_shift`` replaces the VBA
         check against ``UFdaily.TOT/BALA/MARU`` -- pass True when the
         currently selected line is one of :data:`nippou.constants.DAY_SHIFT_ALWAYS_LINES`."""
+        pin = self._pin_now(now)
+        if pin is not None:
+            return pin[1]
         if force_day_shift:
             return DAY_SHIFT
 
@@ -403,6 +573,9 @@ class ShiftCalculator:
         """Port of ``TodayCheck``: the *business* date this instant
         belongs to. Only the early-morning tail of the night shift (3直,
         from 00:00 to End3) is attributed to the previous calendar day."""
+        pin = self._pin_now(now)
+        if pin is not None:
+            return pin[0]
         if force_day_shift:
             return now.date()
 
@@ -422,18 +595,23 @@ class ShiftCalculator:
         return now.date()
 
     def current_shift_start_time(self, shift: str) -> Optional[time]:
-        if shift not in SHIFT_NAMES:
+        if not self.knows(shift):
             return None
         return self.times.bounds(shift)[0]
 
     def current_shift_end_time(self, shift: str) -> Optional[time]:
-        if shift not in SHIFT_NAMES:
+        if not self.knows(shift):
             return None
         return self.times.bounds(shift)[1]
 
     def minutes_until_shift_end(self, now: datetime, force_day_shift: bool = False) -> int:
         """Port of ``GetMinutesUntilShiftEnd``. Returns -1 if the shift
         can't be determined (mirrors the VBA sentinel)."""
+        pin = self._pin_now(now)
+        if pin is not None:
+            # 固定した 4直・5直は**その直の定時**まで(残業の間は負になる。日勤の残業と同じ)
+            end_dt = self.shift_end_at(pin[1], pin[0])
+            return int((end_dt - now).total_seconds() // 60) if end_dt else -1
         shift = self.time_check(now, force_day_shift)
         end_t = self.current_shift_end_time(shift)
         if end_t is None:
@@ -502,6 +680,10 @@ class ShiftCalculator:
         共有保存の履歴の「直の終わりから何分後に押したか」(`presenters/push_log`)や
         過去日報の取り込みも同じものを見ています。
         """
+        extra = self.extra(shift)
+        if extra is not None:
+            # 4直・5直は 終了 + 残業(ほかの 4直・5直の始まりで切る。v4.49.0)
+            return self._extra_close_at(extra, business_date)
         end_dt = self.shift_end_at(shift, business_date)
         if end_dt is None or shift != DAY_SHIFT:
             return end_dt

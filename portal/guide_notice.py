@@ -417,11 +417,38 @@ DEFAULT_TIMES: dict[str, tuple[time, time]] = {
 }
 
 
-def shift_times(rows: Iterable[dict[str, Any]]) -> dict[str, tuple[time, time]]:
-    """「時間用」の行(直・開始・終了)→ 直の時刻。読めない直は既定のまま。"""
+#: 「時間用」の対象ライン(日報 1.5.108〜)。空なら全ライン共通
+LINES_COLUMN = "対象ライン"
+#: 対象ラインの書き方の前の名前(日報と同じ読み替え)
+_OLD_LINE_NAMES = {"LS": "機側", "L1": "L-1", "TOT": "トット", "BALA": "バランサー", "MARU": "中板"}
+
+
+def _target_lines(value: Any) -> frozenset[str]:
+    out = set()
+    for part in _text(value).replace(",", "、").replace("/", "、").replace(" ", "、").split("、"):
+        part = part.strip()
+        if part:
+            out.add(_OLD_LINE_NAMES.get(part, part))
+    return frozenset(out)
+
+
+def shift_times(rows: Iterable[dict[str, Any]], line: str = "") -> dict[str, tuple[time, time]]:
+    """「時間用」の行(直・開始・終了)→ 直の時刻。読めない直は既定のまま。
+
+    **対象ラインのある行(日報 1.5.108〜)は、そのラインだけ**。共通の行より勝ちます。
+    4直・5直(決まったラインだけの直)は見ません ── その日に 4直・5直を回すかは日報で
+    作業者を選ぶときに決まるので、ここからは分かりません。
+    """
     out = dict(DEFAULT_TIMES)
+    common, mine = [], []
     for row in rows:
         get = {_text(k): v for k, v in row.items()}
+        targets = _target_lines(get.get(LINES_COLUMN))
+        if not targets:
+            common.append(get)
+        elif line and (_text(line) in targets or _text(line).rstrip("0123456789") in targets):
+            mine.append(get)
+    for get in common + mine:
         name = SHIFT_KEYS.get(_text(get.get("直")))
         start, end = _time(get.get("開始")), _time(get.get("終了"))
         if name and start is not None and end is not None:

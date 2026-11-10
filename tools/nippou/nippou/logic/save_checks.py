@@ -47,7 +47,7 @@ from ..db.models import DetailRecord
 from . import break_time
 from .numeric import is_numeric, to_float
 from .work_time import elapsed_minutes, minutes_text, shift_minutes, stop_minutes
-from .shift import normalize_hhmm
+from .shift import hhmm_minutes, normalize_hhmm
 
 #: 断りの種類。**文言から推し量らない**(`logic/work_time.py` と同じ約束)
 PACK_OVER = "pack_over"           # Number_Count
@@ -103,13 +103,16 @@ def is_day_shift(shift: str) -> bool:
     return "日勤" in (shift or "") or "昼" in (shift or "")
 
 
-def latest_end(shift: str, shift_end: str) -> str:
+def latest_end(shift: str, shift_end: str, overtime_end: str = "") -> str:
     """その直の最後の行が終わってよい、**いちばん遅い時刻**(`HH:MM`)。
 
     ふつうは定時そのもの。日勤は定時と残業の終わり(`DAY_SHIFT_OVERTIME_ENDS`)の
-    うち遅いほうです。定時が読めなければ空のまま返します(上限を見ない)。
+    うち遅いほうです。4直・5直は閉じる時刻(`overtime_end`。終了 + 残業。v4.49.0)。
+    定時が読めなければ空のまま返します(上限を見ない)。
     """
     end = normalize_hhmm(shift_end)
+    if end and normalize_hhmm(overtime_end):
+        return normalize_hhmm(overtime_end)
     if not end or not is_day_shift(shift):
         return end
     found = [normalize_hhmm(t) for t in DAY_SHIFT_OVERTIME_ENDS]
@@ -320,8 +323,16 @@ def check_stop_pairs(details: Sequence[DetailRecord]) -> list[Finding]:
 # ======================================================================
 # 時間計算_シート版 ── 定時エンド / 1行の長さ / 同時刻
 # ======================================================================
+def _within(actual: str, start: str, until: str) -> bool:
+    """`actual` が `start`〜`until`(両端を含む。0時をまたいでもよい)に入るか。"""
+    a, s, u = (hhmm_minutes(t) for t in (actual, start, until))
+    if a is None or s is None or u is None:
+        return False
+    return (a - s) % (24 * 60) <= (u - s) % (24 * 60)
+
+
 def check_shift_end(details: Sequence[DetailRecord], shift: str,
-                    end_time: str) -> list[Finding]:
+                    end_time: str, overtime_end: str = "") -> list[Finding]:
     """port of ``定時エンドチェック_シート版`` + ``Last_Confi`` の前半。
 
     **最終ページの、最後に埋まっている行の終了時刻**が、その直の定時と
@@ -352,8 +363,14 @@ def check_shift_end(details: Sequence[DetailRecord], shift: str,
     if any(actual == f"{_int(t.split(':')[0]):02d}:{_int(t.split(':')[1]):02d}"
            for t in wanted if ":" in t):
         return []
+    # **4直・5直は定時〜閉じる時刻(残業の終わり)の間なら通す**(v4.49.0)
+    #     4、5直は幅を持たせた入力にして下さい
+    if normalize_hhmm(overtime_end) and _within(actual, end_time, overtime_end):
+        return []
 
     allowed = " / ".join(wanted)
+    if normalize_hhmm(overtime_end):
+        allowed = f"{end_time}〜{normalize_hhmm(overtime_end)}(残業)"
     return [Finding(
         SHIFT_END,
         f"最終時間まで入力がないのでは？ 最後の行の終了は {actual}、"
@@ -621,7 +638,8 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
             limit_minutes: int = 0,
             known_stop_codes: Iterable[str] = (),
             day_work: bool = False,
-            required_break: int = REQUIRED_BREAK_MINUTES) -> list[Finding]:
+            required_break: int = REQUIRED_BREAK_MINUTES,
+            overtime_end: str = "") -> list[Finding]:
     """9項目ぜんぶ(VBA の7項目 + 休憩の時刻 v4.37.1 + 停止の記号と時間の組 v4.46.3)。**順番は VBA と同じ**(見つけた順に上から出る)。
 
     VBA の手続きは5つで、その中身が7つに分かれます
@@ -638,7 +656,8 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
     # (`check_shift_end`)は最後の行が 19:00 でも通すのに、長さを定時(17:00)まで
     # で数えると、19:00 まで打った日勤は「作業可能時間を超えています」で止まり、
     # どうやっても保存できませんでした(画面の固定を直しても、ここで止まる)
-    available = shift_minutes(shift_start, latest_end(shift, shift_end))
+    # 4直・5直は 開始 − 早出(`shift_start` に入れて渡される)〜 閉じる時刻(v4.49.0)
+    available = shift_minutes(shift_start, latest_end(shift, shift_end, overtime_end))
     findings: list[Finding] = []
     findings += check_pack_count(details)
     findings += check_stop_codes(details, known_stop_codes)
@@ -646,8 +665,8 @@ def run_all(details: Sequence[DetailRecord], *, shift: str,
     findings += check_row_times(details, limit_minutes)
     findings += check_negative_time(details)
     findings += check_break_times(details, shift=shift, shift_start=shift_start,
-                                  shift_end=latest_end(shift, shift_end))
-    findings += check_shift_end(details, shift, shift_end)
+                                  shift_end=latest_end(shift, shift_end, overtime_end))
+    findings += check_shift_end(details, shift, shift_end, overtime_end)
     findings += check_break(details, day_work=day_work, required=required_break)
     findings += check_total_work(details, shift, available)
     return findings

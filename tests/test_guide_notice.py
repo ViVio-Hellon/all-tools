@@ -460,5 +460,29 @@ class Scenarios(StoreCase):
         self.assertEqual(self.queue(at(MON, 9)), [("点検", "2026年11月8日", "2直", True)])
 
 
+
+class LineShiftTimesTests(unittest.TestCase):
+    """時間用の**対象ライン**(日報 1.5.108〜)。ラインの行はそのラインだけ、4直・5直は見ない。"""
+
+    ROWS = [{"直": "1", "開始": "07:00", "終了": "15:00", "対象ライン": ""},
+            {"直": "2", "開始": "15:00", "終了": "22:50", "対象ライン": None},
+            {"直": "2", "開始": "15:30", "終了": "22:50", "対象ライン": "NS1"},
+            {"直": "4", "開始": "11:00", "終了": "19:25", "対象ライン": "NS1"}]
+
+    def test_ラインの行はそのラインだけ(self) -> None:
+        from datetime import time
+        self.assertEqual(rule.shift_times(self.ROWS, "NS1")["2直"], (time(15, 30), time(22, 50)))
+        self.assertEqual(rule.shift_times(self.ROWS, "機側")["2直"], (time(15, 0), time(22, 50)))
+        self.assertEqual(rule.shift_times(self.ROWS)["2直"], (time(15, 0), time(22, 50)))
+
+    def test_4直5直は案内の直にしない(self) -> None:
+        self.assertNotIn("4直", rule.shift_times(self.ROWS, "NS1"))
+
+    def test_列が無い表はいままでどおり(self) -> None:
+        from datetime import time
+        rows = [{"直": "2", "開始": "16:00", "終了": "23:00"}]
+        self.assertEqual(rule.shift_times(rows, "NS1")["2直"], (time(16, 0), time(23, 0)))
+
+
 if __name__ == "__main__":
     unittest.main()

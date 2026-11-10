@@ -132,13 +132,20 @@ def reload(repo: NippouRepository) -> Optional[dict[str, tuple[str, str]]]:
     """
     path = SETTINGS.transmission_master_path
     stamp = _stamp(path)
-    times = importer.import_shift_times(
-        path, table_name=SETTINGS.shift_time_table)
-    if not times:
+    # **対象ライン・早出・残業つきで写す**(v4.49.0)。返すのは全ライン共通の行
+    # (いままでの形。4直・5直のラインの行は `repo.get_shift_rows` から)
+    rows = importer.import_shift_rows(path, table_name=SETTINGS.shift_time_table)
+    if not rows:
         log.warning("直の時間をマスタから読めませんでした: %s",
                     SETTINGS.transmission_master_path)
         return None
-    repo.replace_shift_times(times)
+    repo.replace_shift_rows(rows)
+    from ..logic import shift_rows
+
+    times = shift_rows.common(rows)
+    for row in rows:
+        if row.lines:
+            times[row.stored_key] = (row.start, row.end)
     # **写せたときだけ**、読んだときの更新時刻を覚える(`refresh_if_changed` が同じものを
     # 読み直さない)。読めなかったのを覚えると、次に変わるまで読み直さない
     if stamp is not None:
@@ -152,9 +159,17 @@ def describe(times: dict[str, tuple[str, str]]) -> str:
     """「1直 07:00〜15:00 / 2直 15:00〜22:50 …」。**直の順に並べる。**"""
     from ..logic.shift import FORM_KEYS
 
+    from ..logic.shift import shift_name
+
     names = dict(FORM_KEYS)                       # 鍵 → 直の名前(logic/shift の 1 か所)
     order = [k for k in names if k in times]
     order += sorted(k for k in times if k not in names)
+
+    def label(key: str) -> str:
+        # ラインつきの行は「4直(NS1)」
+        head, _, lines = str(key).partition("@")
+        return f"{shift_name(head)}({lines})" if lines else names.get(key, shift_name(key))
+
     return " / ".join(
-        f"{names.get(k, k)} {times[k][0] or '(空)'}〜{times[k][1] or '(空)'}"
+        f"{label(k)} {times[k][0] or '(空)'}〜{times[k][1] or '(空)'}"
         for k in order)

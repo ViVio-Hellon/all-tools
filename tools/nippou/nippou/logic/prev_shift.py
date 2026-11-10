@@ -49,7 +49,25 @@ PREVIOUS: dict[str, tuple[str, int]] = {
     "2直": ("1直", 0),
     "3直": ("2直", 0),
     "日勤": ("3直", -1),
+    # 決まったラインだけの直(v4.49.0)。特殊勤務の日は 4直 → 5直 → 翌日の 4直
+    "4直": ("5直", -1),
+    "5直": ("4直", 0),
 }
+
+#: 1〜3直・日勤(ふつうの日の直)。これ以外は特殊勤務の直(4直・5直)
+BASE_SHIFTS: frozenset[str] = frozenset({"1直", "2直", "3直", "日勤"})
+
+
+def other_pattern_ran(prev_shift: str, shifts_that_day: "set[str]") -> bool:
+    """前の直の日に、**もう一方の勤務**(ふつうの直 / 4直・5直)が回っていたか(v4.49.0)。
+
+        日で切り替え(特殊勤務の日は 4直・5直だけで動く)
+
+    特殊勤務の翌朝の 1直から見た「前の直(昨日の3直)」は、無いのが普通です。
+    昨日に 4直・5直の保存があれば知らせません(逆も同じ)。
+    """
+    base = prev_shift in BASE_SHIFTS
+    return any((s in BASE_SHIFTS) != base for s in shifts_that_day)
 
 #: 「そのラインはその直を回している」と見なす遡り(日)
 SEEN_WITHIN_DAYS = 14
