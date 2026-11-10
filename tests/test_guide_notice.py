@@ -180,6 +180,22 @@ class StoreTests(StoreCase):
         choice = guide_store.terminal_line()
         self.assertEqual((choice.line, choice.origin), ("機側", "アクセス権限"))
 
+    def test_日報を使わないラインもアクセス権限で決まる(self) -> None:
+        """「日報非表示のラインは案内が出ません」(1.5.109)。コイル・大板小板もラインとして読む。"""
+        for line in ("コイル", "大板小板"):
+            with self.subTest(line=line):
+                user_settings.update({guide_store.KEY_LINE: None})
+                conn = sqlite3.connect(guide_store.shared_path())
+                conn.execute('DROP TABLE IF EXISTS "アクセス権限"')
+                conn.execute('CREATE TABLE "アクセス権限" ("ログインID" TEXT, "PC名" TEXT, "権限" TEXT, "有効" INTEGER)')
+                conn.execute('INSERT INTO "アクセス権限" VALUES (\'\', \'TEST-PC\', ?, 1)', (f"{line},mode:field",))
+                conn.commit()
+                conn.close()
+                guide_store.reset()
+                self.assertEqual(guide_store.terminal_line().line, line)
+                self.rows({"ID": "点検", "ライン": line})
+                self.assertIsNotNone(self.shown(at(MON, 15, 1)))
+
     def test_ラインが決まらなければ出さず_わけを出す(self) -> None:
         user_settings.update({guide_store.KEY_LINE: None})
         guide_store.reset()
