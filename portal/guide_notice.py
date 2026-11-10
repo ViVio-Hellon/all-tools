@@ -52,6 +52,7 @@
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -85,8 +86,9 @@ FIRST_ROW: dict[str, Any] = {
 COLUMN_HINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "ID": ("案内の名前。押した記録に残ります(空なら行の番号)", ()),
     "有効": ("1 で出す・0 で出さない(空は出す)", ("1", "0")),
-    "ライン": ("空なら全ライン。「機側,NS1」のように , で並べてもよい", ()),
-    "直": ("空なら全部の直。「2直」「1直,3直」のように", ()),
+    "ライン": ("空なら全ライン。「機側,NS1」のように , で並べてもよい(中板 と書けば 中板1〜7 のどれでも)", ()),
+    "直": ("空なら 1直・2直・3直(日勤だけのライン トット・バランサー・中板 は日勤)。"
+           "「2直」「1直,3直」「日勤」のように", ()),
     "曜日": ("空なら毎日。「月」「月,水,金」「平日」(月〜金)「土日」のように。報告日の曜日で見る"
            "(3直は始めた日 ── 月曜の3直は翌朝まで「月」)", ()),
     "タイミング": ("直の始まり(空も同じ)/ 時刻(「時刻」の欄の時刻から)/ 直の終わり前(「分」の欄の分前から)",
@@ -125,6 +127,13 @@ def problem_of(values: dict[str, Any]) -> str:
                     "(例: 月,水,金)。")
         if name in ("分", "並び") and _int(text) is None:
             return f"「{name}」は数で入れてください。"
+        if name == "ライン" and _bad_lines(text):
+            return (f"「ライン」の {'・'.join(_bad_lines(text))} はライン名として読めません。"
+                    f"{'・'.join(LINE_NAMES)} のどれかで入れてください(中板は 中板 か 中板3。"
+                    "複数は , で並べる)。書き間違えると、その案内は黙って出ません。")
+        if name == "直" and _bad_shifts(text):
+            return (f"「直」の {'・'.join(_bad_shifts(text))} は使えません。{'・'.join(SHIFT_NAMES)}"
+                    " のどれかで入れてください(4直・5直の案内はまだ出せません)。")
     return ""
 
 
@@ -258,6 +267,47 @@ def _shift(name: str) -> str:
     return f"{name}直" if name.isdigit() else name
 
 
+#: ラインとして読む名前(正規の呼び名)。日報のラインと、看板・カレンダーだけのライン(1.5.109)。
+#: 中板は 中板3 のように番号を続けてもよい(案内の「ライン」に 中板 と書けば、中板1〜7 のどれでも出る)
+NIPPOU_LINES = ("L-1", "LVC", "HVC", "トット", "バランサー", "AIM", "機側", "NS1", "中板")
+OTHER_LINES = ("コイル", "大板小板")
+LINE_NAMES = NIPPOU_LINES + OTHER_LINES
+#: 日勤だけのライン(日報の `constants.DAY_SHIFT_ALWAYS_LINES` と同じ)。直を決めていない案内は日勤で出す
+DAY_LINES = frozenset({"トット", "バランサー", "中板"})
+#: 案内の「直」に書ける直。4直・5直は日報で作業者を選ぶときに決まるので、ここでは出せない
+SHIFT_NAMES = ("1直", "2直", "3直", "日勤")
+
+
+def line_family(line: str) -> str:
+    """「中板3」→「中板」。ほかはそのまま。"""
+    text = _text(line)
+    return "中板" if re.fullmatch(r"中板\d+", text) else text
+
+
+def is_line_name(text: str) -> bool:
+    """ラインとして読む名前か(中板3 も)。"""
+    return _text(text) in LINE_NAMES or bool(re.fullmatch(r"中板\d+", _text(text)))
+
+
+def shifts_of(notice: "Notice", line: str) -> frozenset[str]:
+    """その案内を出す直。決めてあればそれ、決めていなければ 1〜3直(日勤だけのラインは日勤)。
+
+    **出すほうと押されていない一覧の両方がここを見る**(1.5.110。前は一覧だけ日勤も数えていて、
+    出していない日勤の回が「押されていません」と赤く並んだ)。
+    """
+    if notice.shifts:
+        return notice.shifts
+    return frozenset({"日勤"}) if line_family(line) in DAY_LINES else MAIN_SHIFTS
+
+
+def _bad_lines(value: Any) -> list[str]:
+    return [p for p in _list(value) if not is_line_name(p)]
+
+
+def _bad_shifts(value: Any) -> list[str]:
+    return [p for p in _list(value) if _shift(p) not in SHIFT_NAMES]
+
+
 def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
     """表の行 → 案内。**有効でない行は入れない。** 読めない欄がある行は `problems` 付きで返す
     (`due` は出さない。設定の画面などで知らせる)。"""
@@ -288,6 +338,13 @@ def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
             problems.append("開始日が 2026-11-09 の形ではありません")
         if _text(end) and _date(end) is None:
             problems.append("終了日が 2026-11-09 の形ではありません")
+        bad = _bad_lines(get.get("ライン"))
+        if bad:
+            problems.append(f"ライン「{'・'.join(bad)}」はライン名ではありません"
+                            f"({'・'.join(LINE_NAMES)}。中板は 中板3 も)")
+        bad = _bad_shifts(get.get("直"))
+        if bad:
+            problems.append(f"直「{'・'.join(bad)}」は使えません({'・'.join(SHIFT_NAMES)})")
         size = _text(get.get("大きさ")) or SIZE_LARGE
         color = _text(get.get("色")) or COLOR_CAUTION
         out.append(Notice(
@@ -329,8 +386,8 @@ class Slot:
 def applies(notice: Notice, line: str, slot: Slot) -> bool:
     """その直のその回に、この案内を出す決まりか(押したかは見ない)。"""
     return (not notice.problems and bool(line)
-            and (not notice.lines or line in notice.lines)
-            and (not notice.shifts or slot.shift in notice.shifts)
+            and (not notice.lines or line in notice.lines or line_family(line) in notice.lines)
+            and slot.shift in shifts_of(notice, line)
             and (not notice.weekdays or slot.business.weekday() in notice.weekdays)
             and (notice.start is None or slot.business >= notice.start)
             and (notice.end is None or slot.business <= notice.end))
@@ -375,8 +432,7 @@ def due_all(notices: Iterable[Notice], *, line: str, now: datetime, slots: Itera
     slots = list(slots)
     hits: list[Hit] = []
     for notice in notices:
-        names = notice.shifts or MAIN_SHIFTS
-        mine = [s for s in slots if s.shift in names and applies(notice, line, s)]
+        mine = [s for s in slots if applies(notice, line, s)]
         now_in = [s for s in mine if s.start <= now < s.end]
         if now_in:
             slot = max(now_in, key=lambda s: s.start)

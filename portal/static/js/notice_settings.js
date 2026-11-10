@@ -40,7 +40,7 @@ function paint() {
     ? `${line.line}(${line.origin}から)`
     : `決まっていません ── ${line.why || ""}`;
   const choice = $("notice-line-choice");
-  choice.replaceChildren(new Option("(アクセス権限の表から)", ""),
+  choice.replaceChildren(new Option("(アクセス権限の表・日報の設定から)", ""),
                          ...(view.lines || []).map((n) => new Option(n, n)));
   if (line.setting && ![...choice.options].some((o) => o.value === line.setting)) {
     choice.append(new Option(line.setting, line.setting));

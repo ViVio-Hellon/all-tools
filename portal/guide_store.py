@@ -46,15 +46,9 @@ RECORD_DIR = "案内の確認"
 CSV_FIELDS = ["報告日", "直", "ライン", "案内", "押した人", "押した時刻", "PC", "押した直"]
 #: 表・時刻・名簿を読み直すまでの秒数(見張りは1分ごと。共有へ毎回行かない)
 CACHE_SEC = 30.0
-#: 正規のライン名(日報の `constants.LINE_NAMES` と同じ。中板は 中板3 のように番号を続けてもよい)
-#: ラインとして読む名前。**日報のラインだけでなく、看板・カレンダーのラインも**(1.5.109)
-#:
-#:     日報非表示のラインは案内が出ません(日報表示のラインは出ました)
-#:
-#: 前は日報のライン名だけを読んでいたので、日報を使わないライン(コイル・大板小板)の PC は
-#: アクセス権限にラインが書いてあっても「この端末のラインが決まっていません」になり、案内が出なかった
-LINE_NAMES = ("L-1", "LVC", "HVC", "トット", "バランサー", "AIM", "機側", "NS1", "中板",
-              "コイル", "大板小板")
+#: ラインとして読む名前(決まりは `guide_notice.LINE_NAMES` の1か所)。日報のラインと、看板・カレンダーだけの
+#: ライン(コイル・大板小板。1.5.109 ──「日報非表示のラインは案内が出ません」)。中板は 中板3 も
+LINE_NAMES = rule.LINE_NAMES
 
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
@@ -342,11 +336,18 @@ _SEPARATORS = re.compile(r"[\s,、，;；|｜/／・]+")
 
 def _line_of(token: str) -> str:
     text = rule._text(token)
-    if text in LINE_NAMES:
-        return text
-    if re.fullmatch(r"中板\d+", text):
-        return text
-    return ""
+    return text if rule.is_line_name(text) else ""
+
+
+def _access_sources() -> list[Path]:
+    """アクセス権限の表を探すファイル。共有の DB → 同じフォルダの伝送用ファイル(日報も伝送用ファイルを見る)。"""
+    first = shared_path()
+    out = [first]
+    for name in TRANSMISSION_NAMES:
+        other = first.parent / name
+        if other != first:
+            out.append(other)
+    return out
 
 
 def access_lines() -> tuple[list[str], str]:
@@ -355,20 +356,36 @@ def access_lines() -> tuple[list[str], str]:
 
     pc, login = remote_stop.identity()
     try:
-        conn = shared_db._connect(shared_path(), read_only=True)
+        sources = _access_sources()
     except shared_db.SourceError as exc:
         return [], f"共有の DB を読めません: {exc}"
-    try:
-        table = next((t for t in _tables(conn) if stop_mode.fold(t) == stop_mode.fold(ACCESS_TABLE)), None)
-        if table is None:
-            return [], f"共有の DB に「{ACCESS_TABLE}」の表がありません"
-        cursor = conn.execute(f"SELECT * FROM {_q(table)}")
-        columns = [d[0] for d in cursor.description]
-        rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
-    except sqlite3.Error as exc:
-        return [], f"アクセス権限の表を読めません: {exc}"
-    finally:
-        conn.close()
+    rows: Optional[list] = None
+    columns: list = []
+    unread: list[str] = []
+    for path in sources:
+        if path != sources[0] and not path.is_file():
+            continue
+        try:
+            conn = shared_db._connect(path, read_only=True)
+        except shared_db.SourceError as exc:
+            unread.append(f"{path.name}: {exc}")
+            continue
+        try:
+            table = next((t for t in _tables(conn) if stop_mode.fold(t) == stop_mode.fold(ACCESS_TABLE)), None)
+            if table is None:
+                continue
+            cursor = conn.execute(f"SELECT * FROM {_q(table)}")
+            columns = [d[0] for d in cursor.description]
+            rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
+            break
+        except sqlite3.Error as exc:
+            unread.append(f"{path.name}: {exc}")
+        finally:
+            conn.close()
+    if rows is None:
+        if unread:
+            return [], f"アクセス権限の表を読めません({' / '.join(unread)})"
+        return [], f"共有の DB(と同じフォルダの伝送用ファイル)に「{ACCESS_TABLE}」の表がありません"
     login_col = next((c for c in columns if stop_mode.fold(c) in stop_mode.LOGIN_COLUMNS), None)
     pc_col = next((c for c in columns if stop_mode.fold(c) in stop_mode.PC_COLUMNS), None)
     rights_col = next((c for c in columns if stop_mode.fold(c) == stop_mode.fold(stop_mode.RIGHTS_COLUMN)), None)
@@ -405,17 +422,64 @@ class LineChoice:
                 "setting": str(user_settings.get(KEY_LINE) or "")}
 
 
+def pick_line(lines: list[str]) -> tuple[str, str]:
+    """アクセス権限のこの端末の行のライン名から1つ決める。(ライン, 決まらない理由)。
+
+    **日報のラインが先**(1.5.110)。日報のラインが1つならそれ(コイル・大板小板が並んでいても)。
+    日報のラインが無く、看板・カレンダーだけのラインが1つならそれ。2つ以上なら決めない。
+    前(1.5.109)は全部を同じに数えたので、L-1 の PC の行に コイル もあると「2つ以上」で出なくなった。
+    """
+    nippou = [x for x in lines if rule.line_family(x) in rule.NIPPOU_LINES]
+    other = [x for x in lines if x not in nippou]
+    for group in (nippou, other):
+        if len(group) == 1:
+            return group[0], ""
+        if len(group) > 1:
+            return "", (f"アクセス権限のこの端末の行にラインが2つ以上あります({'・'.join(group)})。"
+                        "大設定でこの端末のラインを決めてください")
+    return "", ""
+
+
+def nippou_line() -> str:
+    """日報がこの PC で使っているライン(日報の設定 `terminal_line`。中板は番号つき)。無ければ空。
+
+    アクセス権限で決まらない PC でも、日報の設定画面でラインを決めてあれば、それを使う(1.5.110)。
+    """
+    import json
+
+    from . import catalog
+
+    try:
+        tool = catalog.load().by_id("nippou")
+        if tool is None:
+            return ""
+        path = tool.local_root() / "runtime" / "user_config.json"
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, KeyError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    line = rule._text(data.get("terminal_line") or "")
+    if line == "中板":
+        number = rule._text(data.get("terminal_maru_sub") or "")
+        line = f"中板{number}" if number.isdigit() else line
+    return line if rule.is_line_name(line) else ""
+
+
 def terminal_line() -> LineChoice:
-    """この端末のライン。大設定で決めた値 → アクセス権限の表。"""
+    """この端末のライン。大設定で決めた値 → アクセス権限の表 → 日報の設定。"""
     chosen = rule._text(user_settings.get(KEY_LINE) or "")
     if chosen:
         return LineChoice(chosen, "大設定")
     lines, problem = _cached("access_lines", access_lines)
-    if len(lines) == 1:
-        return LineChoice(lines[0], "アクセス権限")
-    if len(lines) > 1:
-        return LineChoice("", "", f"アクセス権限のこの端末の行にラインが2つ以上あります({'・'.join(lines)})。"
-                                  "大設定でこの端末のラインを決めてください")
+    line, why = pick_line(lines)
+    if line:
+        return LineChoice(line, "アクセス権限")
+    mine = _cached("nippou_line", nippou_line)
+    if mine:
+        return LineChoice(mine, "日報の設定")
+    if why:
+        return LineChoice("", "", why)
     return LineChoice("", "", (problem + "。" if problem else "")
                       + "この端末のラインが決まっていません(アクセス権限のこの端末の行にライン名が無い)。"
                         "大設定でこの端末のラインを決めると、そのラインの案内が出ます")
@@ -666,9 +730,11 @@ def _months(slots: Iterable[rule.Slot], now: datetime) -> set[str]:
     return months
 
 
-def _now_shift(times: dict, now: datetime) -> str:
+def _now_shift(times: dict, now: datetime, line: str = "") -> str:
+    """押した直(いまの直)。日勤だけのライン(トット・バランサー・中板)は日勤。"""
+    names = {"日勤"} if rule.line_family(line) in rule.DAY_LINES else rule.MAIN_SHIFTS
     for slot in rule.shift_slots(times, now, back_days=1, ahead_days=0):
-        if slot.shift in rule.MAIN_SHIFTS and slot.start <= now < slot.end:
+        if slot.shift in names and slot.start <= now < slot.end:
             return slot.shift
     return ""
 
@@ -689,7 +755,7 @@ def due_now(now: Optional[datetime] = None, *, line: Optional[str] = None) -> Du
     done = set(acks(line, _months(slots, now)))
     hits = rule.due_all(found, line=line, now=now, slots=slots, acked=done,
                         since=first_seen(found, now))
-    current = _now_shift(times, now)
+    current = _now_shift(times, now, line)
     if not hits:
         return Due(None, line=line, now_shift=current, problem=problem)
     hit = hits[0]

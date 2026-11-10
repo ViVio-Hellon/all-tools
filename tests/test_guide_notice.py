@@ -16,6 +16,7 @@ import sqlite3
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 import tests  # noqa: F401  (一時フォルダへ向ける)
@@ -74,6 +75,12 @@ class StoreCase(Base):
         super().setUp()
         guide_store.reset()
         self.addCleanup(guide_store.reset)
+        # 日報の設定(この PC の日報のライン)は試験の一時フォルダへ(本物の手元を読まない)
+        self.nippou_local = SHARE.parent / "nippou_local"
+        shutil.rmtree(self.nippou_local, ignore_errors=True)
+        env = mock.patch.dict(os.environ, {"NIPPOU_LOCAL_DIR": str(self.nippou_local)})
+        env.start()
+        self.addCleanup(env.stop)
         user_settings.update({guide_store.KEY_LINE: self.line or None})
         self.addCleanup(user_settings.update, {guide_store.KEY_LINE: None})
         local = guide_store.app_config.local_dir("data") / "guide_notice.sqlite3"
@@ -195,6 +202,50 @@ class StoreTests(StoreCase):
                 self.assertEqual(guide_store.terminal_line().line, line)
                 self.rows({"ID": "点検", "ライン": line})
                 self.assertIsNotNone(self.shown(at(MON, 15, 1)))
+
+    def access(self, *rows: tuple[str, str], where: Optional[Path] = None) -> None:
+        """アクセス権限の表をこの行にする((PC名, 権限) の並び)。大設定のラインは消す。"""
+        user_settings.update({guide_store.KEY_LINE: None})
+        path = where or guide_store.shared_path()
+        conn = sqlite3.connect(path)
+        conn.execute('DROP TABLE IF EXISTS "アクセス権限"')
+        conn.execute('CREATE TABLE "アクセス権限" ("ログインID" TEXT, "PC名" TEXT, "権限" TEXT, "有効" INTEGER)')
+        conn.executemany('INSERT INTO "アクセス権限" VALUES (\'\', ?, ?, 1)', rows)
+        conn.commit()
+        conn.close()
+        guide_store.reset()
+
+    def test_日報のラインが先_コイルが並んでいても決まる(self) -> None:
+        """1.5.109 で コイル もラインにしたので、L-1 の PC の行に コイル もあると決まらなくなっていた。"""
+        self.access(("TEST-PC", "L-1,コイル,mode:field"))
+        self.assertEqual(guide_store.terminal_line().line, "L-1")
+        self.access(("TEST-PC", "L-1"), ("TEST-PC", "機側"))
+        self.assertEqual(guide_store.terminal_line().line, "")
+        self.assertIn("2つ以上", guide_store.terminal_line().why)
+        self.access(("TEST-PC", "コイル,大板小板"))
+        self.assertEqual(guide_store.terminal_line().line, "")
+
+    def test_アクセス権限が伝送用ファイルにあっても読む(self) -> None:
+        """日報は伝送用ファイル → 梱包資材マスタ の順にアクセス権限を探す。入口も同じフォルダの伝送用ファイルを見る。"""
+        conn = sqlite3.connect(guide_store.shared_path())
+        conn.execute('DROP TABLE IF EXISTS "アクセス権限"')
+        conn.commit()
+        conn.close()
+        self.access(("TEST-PC", "NS1"), where=SHARE / "伝送用ファイル.sqlite3")
+        self.assertEqual(guide_store.terminal_line().line, "NS1")
+
+    def test_アクセス権限で決まらなければ日報の設定のライン(self) -> None:
+        """日報の設定画面でラインを決めた PC(アクセス権限にラインが無い)でも出す。"""
+        self.access(("TEST-PC", "mode:field"))
+        config = self.nippou_local / "runtime" / "user_config.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('{"terminal_line": "中板", "terminal_maru_sub": "3"}', encoding="utf-8")
+        guide_store.reset()
+        choice = guide_store.terminal_line()
+        self.assertEqual((choice.line, choice.origin), ("中板3", "日報の設定"))
+        self.rows({"ID": "点検", "ライン": "中板", "直": ""})
+        self.when = at(MON, 7, 1)
+        self.assertIsNotNone(self.shown(at(MON, 7, 1)), "中板 の案内は 中板3 の PC にも出る")
 
     def test_ラインが決まらなければ出さず_わけを出す(self) -> None:
         user_settings.update({guide_store.KEY_LINE: None})
@@ -475,6 +526,36 @@ class Scenarios(StoreCase):
         self.rows({"ID": "点検"})
         self.assertEqual(self.queue(at(MON, 9)), [("点検", "2026年11月8日", "2直", True)])
 
+
+
+class LineAndShiftRuleTests(unittest.TestCase):
+    """案内の「ライン」「直」の読み方の穴(1.5.110)。"""
+
+    def test_直を決めていない案内は日勤の回を一覧に入れない(self) -> None:
+        """出すのは 1〜3直なのに、押されていない一覧には日勤の回まで並んで赤くなっていた。"""
+        notices = rule.parse([{"ID": "点検", "表示文": "x", "ライン": "", "直": ""}])
+        now = datetime(2026, 11, 10, 20, 0)
+        slots = rule.shift_slots(dict(rule.DEFAULT_TIMES), now, back_days=1)
+        listed = {s.shift for _, s in rule.windows(notices, line="機側", now=now, slots=slots)}
+        self.assertEqual(listed, {"1直", "2直", "3直"})
+
+    def test_日勤だけのラインは日勤で出す(self) -> None:
+        notices = rule.parse([{"ID": "点検", "表示文": "x", "ライン": "", "直": ""}])
+        now = datetime(2026, 11, 10, 7, 5)
+        slots = rule.shift_slots(dict(rule.DEFAULT_TIMES), now, back_days=1)
+        hits = rule.due_all(notices, line="トット", now=now, slots=slots)
+        self.assertEqual([h.slot.shift for h in hits], ["日勤"])
+        listed = {s.shift for _, s in rule.windows(notices, line="中板3", now=now, slots=slots)}
+        self.assertEqual(listed, {"日勤"})
+
+    def test_書き間違えたラインと直は出せない案内として知らせる(self) -> None:
+        found = rule.parse([{"ID": "a", "表示文": "x", "ライン": "NS-1", "直": "2直"},
+                            {"ID": "b", "表示文": "x", "ライン": "NS1", "直": "4直"}])
+        self.assertTrue(found[0].problems and "NS-1" in found[0].problems[0])
+        self.assertTrue(found[1].problems and "4直" in found[1].problems[0])
+        self.assertIn("ライン名として読めません", rule.problem_of({"ライン": "LS"}))
+        self.assertIn("4直", rule.problem_of({"直": "4直"}))
+        self.assertEqual(rule.problem_of({"ライン": "中板,中板3,コイル", "直": "2,日勤"}), "")
 
 
 class LineShiftTimesTests(unittest.TestCase):
