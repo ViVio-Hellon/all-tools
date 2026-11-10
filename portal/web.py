@@ -731,6 +731,7 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         try:
             path = guide_store.shared_path()
             guide_store.ensure_table(path)
+            guide_store.import_old(path, only_if_untouched=True)
             rows = guide_store.read_rows(path)
         except shared_db.SourceError as exc:
             error = str(exc)
@@ -818,6 +819,23 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             return _error("bad_value", "どの行かが分かりません", 400)
         was = body.get("was") if isinstance(body.get("was"), dict) else {}
         return notice_write(lambda path: guide_store.delete(path, key, was), "案内表示から1行消しました")
+
+    @app.post("/api/notice/import-old")
+    def notice_import_old():                      # noqa: ANN202
+        """前の版の表(伝送用ファイル)の行を写す。同じ中身の行が無いものだけ足す(1.5.105)。"""
+        from . import guide_store
+
+        copied = {"n": 0}
+
+        def action(path):
+            copied["n"] = guide_store.import_old(path)
+        result = notice_write(action, "前の版の表から写しました")
+        if isinstance(result, tuple):
+            return result
+        body = result.get_json()
+        body["message"] = (f"前の版の表から {copied['n']}行写しました" if copied["n"]
+                           else "写す行はありませんでした(同じ中身の行はもうあります)")
+        return jsonify(body)
 
     @app.post("/api/notice/line")
     def notice_line():                            # noqa: ANN202

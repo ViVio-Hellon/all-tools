@@ -295,6 +295,69 @@ class WeekdayTests(StoreCase):
         self.assertIn("伝送用ファイル.sqlite3", body["old_table"])
 
 
+class OldTableTests(StoreCase):
+    """「前より設定が減ってますが」(1.5.105)── 1.5.104 で表を共有の DB へ移したとき、前の版の表
+    (伝送用ファイル)の行を写していなかった。"""
+
+    OLD = [("計量器の点検", 1, "機側", "2直", "日"), ("計量器の点検", 1, "AIM", "1直", "平日")]
+
+    def old(self, rows=OLD) -> None:
+        conn = sqlite3.connect(SHARE / "伝送用ファイル.sqlite3")
+        conn.execute(f'CREATE TABLE "{rule.TABLE}" ("ID" TEXT, "有効" INTEGER, "ライン" TEXT, "直" TEXT,'
+                     ' "曜日" TEXT, "タイミング" TEXT, "表示文" TEXT, "確認の文" TEXT, "ボタン" TEXT,'
+                     ' "大きさ" TEXT, "色" TEXT, "名前を選ぶ" INTEGER, "並び" INTEGER, "過ぎても出す" INTEGER)')
+        for r in rows:
+            conn.execute(f'INSERT INTO "{rule.TABLE}" VALUES (?,?,?,?,?, \'直の始まり\', \'計量器の点検を行ってください\','
+                         ' \'点検済みですか？\', \'点検済み\', \'大\', \'注意\', 1, 1, 1)', r)
+        conn.commit()
+        conn.close()
+
+    def shared(self) -> list:
+        conn = sqlite3.connect(guide_store.shared_path())
+        try:
+            return conn.execute(f'SELECT "ライン", "直", "曜日" FROM "{rule.TABLE}" ORDER BY rowid').fetchall()
+        finally:
+            conn.close()
+
+    def test_大設定の表が最初の1行のままなら_前の版の行に置き換える(self) -> None:
+        guide_store.ensure_table(guide_store.shared_path())      # 1.5.104 が作った(最初の1行だけ)
+        self.assertEqual(self.shared(), [("機側", "2直", "")])
+        self.old()
+        guide_store.reset()
+        body = self.get("/api/notice/settings").get_json()
+        self.assertEqual(self.shared(), [("機側", "2直", "日"), ("AIM", "1直", "平日")])
+        self.assertEqual([(r["ライン"], r["曜日"]) for r in body["rows"]], [("機側", "日"), ("AIM", "平日")])
+
+    def test_表を作るとき前の版の表があればそれを写す(self) -> None:
+        self.old()
+        guide_store.ensure_table(guide_store.shared_path())
+        self.assertEqual(self.shared(), [("機側", "2直", "日"), ("AIM", "1直", "平日")])
+
+    def test_大設定で直したあとは自ずと置き換えない_ボタンで無い行だけ足す(self) -> None:
+        self.rows({"ID": "夜", "直": "3直"})
+        self.old()
+        guide_store.reset()
+        self.get("/api/notice/settings")
+        self.assertEqual(self.shared(), [("機側", "3直", "")], "直した表は自ずと触らない")
+        self.assertEqual(self.post("/api/notice/import-old").status_code, 403, "鍵が要る")
+        self.unlock()
+        res = self.post("/api/notice/import-old")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn("2行写しました", res.get_json()["message"])
+        self.assertEqual(self.shared(), [("機側", "3直", ""), ("機側", "2直", "日"), ("AIM", "1直", "平日")])
+        again = self.post("/api/notice/import-old").get_json()
+        self.assertIn("写す行はありませんでした", again["message"])
+        self.assertEqual(len(self.shared()), 3, "2回押しても増えない")
+
+    def test_写したあと曜日が効く(self) -> None:
+        guide_store.ensure_table(guide_store.shared_path())
+        self.old()
+        guide_store.reset()
+        guide_store.first_seen(rule.parse([rule.FIRST_ROW]), at(MON, 6))
+        self.assertIsNone(self.shown(at(TUE, 15, 1)), "機側の案内は日曜だけ")
+        self.assertEqual(self.shown(at(SUN, 15, 1)), ("計量器の点検", label(SUN), "2直", False))
+
+
 class Scenarios(StoreCase):
     """直をまたぐいろいろな場面(日報の 1.5.103 と同じ21場面を入口で)。案内は前の日曜の朝に作った。"""
 

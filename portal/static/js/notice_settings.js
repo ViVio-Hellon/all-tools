@@ -51,8 +51,10 @@ function paint() {
   $("notice-records").textContent = view.records || "";
   const notes = [view.error,
     view.old_table ? `${view.old_table} にも「案内表示」の表がありますが、前の版(日報の中の案内表示)の表で、`
-      + "いまは使っていません。案内はこの大設定の表で直してください(日報のマスタ管理で直しても効きません)。" : ""]
+      + "いまは使っていません。案内はこの大設定の表で直してください(日報のマスタ管理で直しても効きません)。"
+      + "前の版の行を使うときは「前の版の表から写す」(この表に無い行だけ足します)。" : ""]
     .filter(Boolean);
+  $("notice-import").hidden = !view.old_table;
   $("notice-error").hidden = !notes.length;
   $("notice-error").textContent = notes.join(" ");
   const problems = $("notice-problems");
@@ -244,6 +246,16 @@ export function install() {
   $("notice-dialog")?.addEventListener("close", () => {
     delete $("notice-delete").dataset.sure;
     $("notice-delete").textContent = "消す";
+  });
+  $("notice-import")?.addEventListener("click", async () => {
+    if (locked()) return;
+    try {
+      const body = await api.post("/api/notice/import-old", {});
+      view = body;
+      paint();
+      paintChecks();
+      toast(body.message);
+    } catch (err) { toastError(err); }
   });
   $("notice-line-save")?.addEventListener("click", async () => {
     if (locked()) return;

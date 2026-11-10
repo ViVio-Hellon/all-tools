@@ -108,11 +108,12 @@ def ensure_table(path: Path) -> bool:
         if rule.TABLE not in _tables(conn):
             cols = ", ".join(f"{_q(n)} {t}" for n, t in rule.COLUMNS)
             conn.execute(f"CREATE TABLE {_q(rule.TABLE)} ({cols})")
-            names = list(rule.FIRST_ROW)
-            conn.execute(f"INSERT INTO {_q(rule.TABLE)} ({', '.join(_q(n) for n in names)})"
-                         f" VALUES ({', '.join('?' for _ in names)})",
-                         [rule.FIRST_ROW[n] for n in names])
-            log.info("共有の DB に「%s」の表を作り、最初の案内を入れました: %s", rule.TABLE, path)
+            # **前の版の表(伝送用ファイル)に行があれば、それを写す**(1.5.105。写さずに最初の1行だけを
+            # 入れていたので、日報のマスタ管理で決めた曜日・ラインが消えたように見えた)
+            rows = old_rows() or [dict(rule.FIRST_ROW)]
+            for row in rows:
+                _insert(conn, row)
+            log.info("共有の DB に「%s」の表を作り、%d行入れました: %s", rule.TABLE, len(rows), path)
             return True
         now = set(_table_columns(conn, rule.TABLE))
         missing = [(n, t) for n, t in rule.COLUMNS if n not in now]
@@ -129,6 +130,84 @@ def ensure_table(path: Path) -> bool:
         return False
     reset()
     return made
+
+
+def _insert(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+    names = [n for n, _ in rule.COLUMNS if n in row]
+    conn.execute(f"INSERT INTO {_q(rule.TABLE)} ({', '.join(_q(n) for n in names)})"
+                 f" VALUES ({', '.join('?' for _ in names)})", [row[n] for n in names])
+
+
+def _norm(row: dict[str, Any]) -> tuple:
+    """行の中身(比べる形)。空と NULL、数と数の字を同じに見る。"""
+    out = []
+    for name, _kind in rule.COLUMNS:
+        value = row.get(name)
+        out.append("" if value is None else str(value).strip())
+    return tuple(out)
+
+
+def old_rows() -> list[dict[str, Any]]:
+    """前の版(1.5.99〜1.5.103 の日報)が伝送用ファイルに作った「案内表示」の行。無ければ空。"""
+    path = old_table()
+    if not path:
+        return []
+    try:
+        conn = shared_db._connect(Path(path), read_only=True)
+    except shared_db.SourceError:
+        return []
+    try:
+        cursor = conn.execute(f"SELECT * FROM {_q(rule.TABLE)} ORDER BY rowid")
+        cols = [d[0] for d in cursor.description]
+        known = {n for n, _ in rule.COLUMNS}
+        return [{k: v for k, v in zip(cols, r) if k in known} for r in cursor.fetchall()]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def import_old(path: Path, *, only_if_untouched: bool = False) -> int:
+    """前の版の表の行を、共有の DB の表へ写す。写した行の数。
+
+    `only_if_untouched`: 共有の DB の表が**最初に自動で入った1行のまま**(だれも直していない)のときだけ、
+    その1行を前の版の行に置き換える(起動のとき・読むときに自ずと)。そうでなければ(大設定のボタン)、
+    同じ中身の行が無いものだけを**足す**(大設定で直した行は消さない)。
+    """
+    if only_if_untouched:
+        try:
+            current = read_rows(path)
+        except shared_db.SourceError:
+            return 0
+        if len(current) != 1 or _norm(current[0]) != _norm(rule.FIRST_ROW):
+            return 0
+    old = old_rows()
+    if not old:
+        return 0
+
+    def work(conn: sqlite3.Connection) -> int:
+        have = [dict(zip([d[0] for d in c.description], r)) for c in
+                [conn.execute(f"SELECT * FROM {_q(rule.TABLE)}")] for r in c.fetchall()]
+        if only_if_untouched:
+            if len(have) != 1 or _norm(have[0]) != _norm(rule.FIRST_ROW):
+                return 0                          # 読んだあとにだれかが直した
+            conn.execute(f"DELETE FROM {_q(rule.TABLE)}")
+            have = []
+        seen = {_norm(r) for r in have}
+        copied = 0
+        for row in old:
+            if _norm(row) in seen:
+                continue
+            _insert(conn, row)
+            seen.add(_norm(row))
+            copied += 1
+        return copied
+
+    copied = shared_db._write(path, work)
+    reset()
+    if copied:
+        log.info("前の版の表(伝送用ファイル)から「%s」へ %d行写しました", rule.TABLE, copied)
+    return copied
 
 
 def read_rows(path: Path) -> list[dict[str, Any]]:
@@ -153,6 +232,10 @@ def notices() -> tuple[list[rule.Notice], str]:
         try:
             path = shared_path()
             ensure_table(path)
+            try:
+                import_old(path, only_if_untouched=True)
+            except shared_db.SourceError as exc:
+                log.warning("前の版の表を写せませんでした: %s", exc)
             return rule.parse(read_rows(path)), ""
         except shared_db.SourceError as exc:
             return [], str(exc)
