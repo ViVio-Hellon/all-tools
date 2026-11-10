@@ -363,6 +363,31 @@ def shift_times() -> tuple[dict, str]:
     return _cached("times", make)
 
 
+def old_table() -> str:
+    """前の版(1.5.99〜1.5.103 の日報)が伝送用ファイルに作った「案内表示」があれば、その道。
+    **もう使っていない** ── そちらを直して「効かない」と取り違えないよう、大設定で言う。"""
+    try:
+        folder = shared_path().parent
+    except shared_db.SourceError:
+        return ""
+    for name in TRANSMISSION_NAMES:
+        path = folder / name
+        try:
+            if not path.is_file() or path == shared_path():
+                continue
+            conn = shared_db._connect(path, read_only=True)
+        except (OSError, shared_db.SourceError):
+            continue
+        try:
+            if rule.TABLE in _tables(conn):
+                return str(path)
+        except sqlite3.Error:
+            continue
+        finally:
+            conn.close()
+    return ""
+
+
 def roster() -> list[dict[str, Any]]:
     """班員名簿(班ごと)。読めなければ空(名前は打てる)。"""
     def make():

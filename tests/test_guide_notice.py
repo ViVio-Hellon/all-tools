@@ -270,6 +270,31 @@ class StoreTests(StoreCase):
         self.assertGreaterEqual(view["missed"], 1)
 
 
+class WeekdayTests(StoreCase):
+    """「直の判定は効いているが曜日の判定がされていないと思われる」(1.5.105)── 曜日は効いている。"""
+
+    def test_日曜の案内_初めて起動したのが火曜なら火曜には出ず_次の日曜に出る(self) -> None:
+        self.rows({"ID": "点検", "曜日": "日"}, seen=at(TUE, 6))
+        self.assertIsNone(self.shown(at(TUE, 15, 1)))
+        self.assertEqual(self.shown(at(SUN, 15, 1)), ("点検", label(SUN), "2直", False))
+
+    def test_前からある行を日曜に直したら_火曜には出ない(self) -> None:
+        self.rows({"ID": "点検", "曜日": "日"}, seen=at(MON, 6))
+        self.assertIsNone(self.shown(at(TUE, 15, 1)))
+
+    def test_最初に入る毎日の行を残すと_日曜の行とは別に毎日出る(self) -> None:
+        self.rows({"ID": "計量器の点検"}, {"ID": "日曜の点検", "曜日": "日"}, seen=at(TUE, 6))
+        self.assertEqual(self.shown(at(TUE, 15, 1))[0], "計量器の点検")
+
+    def test_前の版の表が伝送用ファイルにあれば大設定で言う(self) -> None:
+        conn = sqlite3.connect(SHARE / "伝送用ファイル.sqlite3")
+        conn.execute(f'CREATE TABLE "{rule.TABLE}" ("ID" TEXT, "曜日" TEXT)')
+        conn.commit()
+        conn.close()
+        body = self.get("/api/notice/settings").get_json()
+        self.assertIn("伝送用ファイル.sqlite3", body["old_table"])
+
+
 class Scenarios(StoreCase):
     """直をまたぐいろいろな場面(日報の 1.5.103 と同じ21場面を入口で)。案内は前の日曜の朝に作った。"""
 

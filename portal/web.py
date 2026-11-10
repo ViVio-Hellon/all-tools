@@ -747,6 +747,8 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             "line": guide_store.terminal_line().to_dict(), "lines": list(guide_store.LINE_NAMES),
             "times": {k: f"{a:%H:%M}〜{b:%H:%M}" for k, (a, b) in times.items()}, "times_from": where,
             "records": str(guide_store.record_folder() or ""),
+            # 前の版の表(伝送用ファイル)。使っていないことを言う(そちらを直して効かない、を防ぐ)
+            "old_table": guide_store.old_table(),
         }
 
     @app.get("/api/notice/settings")

@@ -49,8 +49,12 @@ function paint() {
   $("notice-times").textContent =
     Object.entries(view.times || {}).map(([k, v]) => `${k} ${v}`).join(" / ") + `(${view.times_from || ""})`;
   $("notice-records").textContent = view.records || "";
-  $("notice-error").hidden = !view.error;
-  $("notice-error").textContent = view.error || "";
+  const notes = [view.error,
+    view.old_table ? `${view.old_table} にも「案内表示」の表がありますが、前の版(日報の中の案内表示)の表で、`
+      + "いまは使っていません。案内はこの大設定の表で直してください(日報のマスタ管理で直しても効きません)。" : ""]
+    .filter(Boolean);
+  $("notice-error").hidden = !notes.length;
+  $("notice-error").textContent = notes.join(" ");
   const problems = $("notice-problems");
   problems.hidden = !(view.problems || []).length;
   problems.replaceChildren(...(view.problems || []).map((t) => {
