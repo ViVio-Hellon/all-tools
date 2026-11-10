@@ -1,34 +1,25 @@
 /*
-  guide_notice.js — 案内表示(v4.47.0)
+  guide_notice.js — 案内表示(入口 ── 1.5.104。前は日報の中にあった)
 
-  1分ごとの見張り(`shift_end.js` の tick)で `/api/notice/due` を聞き、案内があれば出す。
-  **出すかどうか・何を出すかはサーバが決める**(`logic/guide_notice.py`)── ここは写すだけ。
+    日報をアクセス権限で表示していないラインにたいして何も表示できなくなっている
+    日報の機能ではなく all-tools 全体の機能として扱って
+
+  入口(大きなタブの画面)の1分ごとの見張り(`shell.js`)で `/api/notice/due` を聞き、案内があれば
+  **どのツールの画面の上にも**重ねて出す(日報のタブを出していない PC でも出る)。
+  **出すかどうか・何を出すかはサーバが決める**(`portal/guide_notice.py`)── ここは写すだけ。
 
     大 … 画面いっぱい(既定)/ 中 … 真ん中の窓 / 小 … 上の帯
     **押すまで閉じない**(×も Esc も無い)。名前を選ぶ案内は、名前を選ぶまで押せない。
     押したら `/api/notice/ack`。サーバがその直・その案内を覚えるので、次からは出ない。
   **押されないまま直が終わった案内**は、あとの直で「◯直に確認されていません」を添えて出る(v4.47.2)。
 
-  名前は班員名簿(`/api/staff/members`)から選ぶ。その直の作業者がもう選ばれていれば、
-  最初からその人を選んでおく。名簿に無い人は下の欄に打てる。
+  名前は班員名簿(共有の DB。`/api/notice/due` が一緒に返す)から選ぶ。名簿に無い人は下の欄に打てる。
 */
-import { background } from "./api.js";
+import { api } from "./api.js";
 import { toast } from "./toast.js";
 
 const BOX_ID = "guide-notice";
 let shown = null;          // いま出している案内 {id, report_date, shift}
-let roster = null;         // 班員名簿(1度だけ読む)
-
-async function loadRoster() {
-  if (roster) return roster;
-  try {
-    const body = await background.get("/api/staff/members");
-    roster = body.teams || [];
-  } catch (err) {
-    roster = [];
-  }
-  return roster;
-}
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -72,7 +63,7 @@ async function paint(body) {
     pick.append(el("p", "gnote__label", "押す人"));
     const names = el("div", "gnote__names");
     const all = [];
-    for (const team of await loadRoster()) {
+    for (const team of body.roster || []) {
       for (const name of team.names || []) {
         const b = el("button", "btn gnote__name", name);
         b.type = "button";
@@ -105,7 +96,7 @@ async function paint(body) {
     if (button.disabled) return;
     button.disabled = true;
     try {
-      const res = await background.post("/api/notice/ack", {
+      const res = await api.post("/api/notice/ack", {
         id: notice.id, worker: chosen, report_date: body.report_date, shift: body.shift });
       close();
       toast(res.message || "記録しました", "ok");
@@ -129,7 +120,7 @@ async function paint(body) {
 export async function check() {
   let body;
   try {
-    body = await background.get("/api/notice/due");
+    body = await api.get("/api/notice/due");
   } catch (err) {
     return;                                     // 繋がらないのは health.js が知らせる
   }

@@ -164,9 +164,6 @@ TABLE_NOTES: dict[str, str] = {
                           "停止内訳.csv に 3 の行があればそちらが勝ちます",
     "時間用": "直の境界時刻。直は 1・2・3・昼、開始と終了は 07:00 の形。"
               "直すと直の時間にすぐ効きます",
-    # v4.47.0(`logic/guide_notice.py`)
-    "案内表示": "条件に合えば画面に出す案内(押すまで閉じない)。ライン・直は空なら全部、"
-                "タイミングは 直の始まり/時刻/直の終わり前、大きさは 大/中/小。30秒ほどで効きます",
     "注意_包装仕様": "包装仕様NOごとの注意。フラグ(用途コード/寸法/納入先)で"
                      "出す条件が決まる。コイルは画面に出す",
     "資材重量": "資材ごとの単位質量と係数(GW計算)",
@@ -356,8 +353,8 @@ def columns(path: Path, table: str) -> list[Column]:
         return []
 
     added = set(added_columns(Path(path), table))
-    from .logic import guide_notice
-    hints = guide_notice.COLUMN_HINTS if table == guide_notice.TABLE else {}
+    #: 列ごとの説明と選べる値(いまは無い ── 案内表示は 1.5.104 から入口の大設定で直す)
+    hints: dict[str, tuple[str, tuple[str, ...]]] = {}
     out: list[Column] = []
     for row in rows:
         kind = _kind_of(str(row["type"]))
@@ -498,11 +495,6 @@ def page(file_key: str, table: str, *, query: str = "", sort: str = "",
         if view.checks:
             view.checks_head = (f"読めない行が{len(view.checks)}行あります"
                                 "(このままでは、そのPCのラインに効きません)")
-    elif is_guide_table(file_key, view.table):
-        view.checks = _guide_checks(path, view.table)
-        if view.checks:
-            view.checks_head = (f"出せない案内が{len(view.checks)}行あります"
-                                "(直すまで画面に出ません)")
     elif is_staff_table(file_key, view.table):
         view.checks = _staff_checks(path, view.table)
         if view.checks:
@@ -1127,27 +1119,6 @@ def _staff_checks(path: Path, table: str) -> list[str]:
     return [f.describe() for f in operator.inspect(rows, operator_column=column)]
 
 
-def is_guide_table(file_key: str, table: str) -> bool:
-    """案内表示の表か(伝送用ファイルの「案内表示」── v4.47.0)。"""
-    from .logic import guide_notice
-    return file_key == "transmission" and table == guide_notice.TABLE
-
-
-def _guide_checks(path: Path, table: str) -> list[str]:
-    """案内表示の、読めない欄のある行(画面に出さない行)。"""
-    from .logic import guide_notice
-
-    try:
-        rows = source_db.read_table(path, table)
-    except source_db.SourceError:
-        return []
-    out = []
-    for notice in guide_notice.parse(rows):
-        if notice.problems:
-            out.append(f"{notice.id}: {' / '.join(notice.problems)}")
-    return out
-
-
 def is_shift_table(file_key: str, table: str) -> bool:
     """直の境界時刻の表か(伝送用ファイルの「時間用」)。"""
     from .config import SETTINGS
@@ -1164,9 +1135,6 @@ def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
     """
     if file_key == "vc":
         return _vc_problem(src, table, clean, row_key=row_key)
-    if is_guide_table(file_key, table):
-        from .logic import guide_notice
-        return guide_notice.problem_of(clean)
     if is_access_table(table):
         return _access_problem(clean)
     if not is_shift_table(file_key, table):

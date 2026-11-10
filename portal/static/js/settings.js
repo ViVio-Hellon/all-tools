@@ -6,6 +6,7 @@
   2人が同時に同じ行を直したときは、あとの人に「読み直してから」を出す(409)。
 */
 import { api } from "./api.js";
+import * as noticeSettings from "./notice_settings.js";
 import { toast, toastError } from "./toast.js";
 
 const MARK = { nippou: "日", kanban: "看", calendar: "暦", inspection: "点" };
@@ -28,6 +29,7 @@ const $ = (id) => document.getElementById(id);
 
 export function install(options) {
   ctx = { ...ctx, ...options };
+  noticeSettings.install();
   $("lock-open").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -294,6 +296,8 @@ function paint(body, options = {}) {
   paintTools();
   paintDistribution();
   paintApp();
+  // 案内表示(1.5.104)。表は別に読む(共有の DB の別の表)
+  noticeSettings.refresh(body.admin);
   // 表の行の「直す」「消す」も含めるので、描いたあとで付ける
   for (const node of document.querySelectorAll("[data-admin]")) {
     node.setAttribute("aria-disabled", body.admin ? "false" : "true");

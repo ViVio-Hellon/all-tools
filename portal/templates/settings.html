@@ -89,6 +89,50 @@
       </div>
     </article>
 
+    <!-- 案内表示(1.5.104 ── 日報から入口へ。portal/guide_notice.py・guide_store.py・js/notice_settings.js) -->
+    <article class="card" id="notice-card">
+      <div class="card__head">
+        <h2>案内表示 <small>(共有の DB の表「案内表示」)</small></h2>
+        <div class="card__tools">
+          <button type="button" class="btn" id="notice-reload">読み直す</button>
+          <button type="button" class="btn btn--primary" id="notice-add" data-notice-admin>+ 行を足す</button>
+        </div>
+      </div>
+      <p class="lead">
+        条件(ライン・直・曜日・期間)とタイミングに当たると、<strong>どのツールの画面の上にも</strong>大きく出します
+        (日報のタブを出していない PC にも出ます)。<strong>押すまで閉じません。</strong>その直に押されなければ、
+        次に同じ直が始まるまで、あとの直で出します。
+      </p>
+      <dl class="facts" id="notice-facts">
+        <dt>この端末のライン</dt>
+        <dd><span id="notice-line"></span>
+          <span class="pair">
+            <select id="notice-line-choice" aria-label="この端末のライン(案内表示)"></select>
+            <button type="button" class="btn btn--small" id="notice-line-save" data-notice-admin>決める</button>
+          </span></dd>
+        <dt>直の時刻</dt><dd id="notice-times"></dd>
+        <dt>押した記録</dt><dd><code id="notice-records"></code></dd>
+      </dl>
+      <div class="msg msg--warn" id="notice-error" hidden></div>
+      <ul class="problems" id="notice-problems" hidden></ul>
+      <div class="tablewrap">
+        <table class="grid" id="notice-grid">
+          <thead><tr>
+            <th>ID</th><th>有効</th><th>ライン</th><th>直</th><th>曜日</th><th>タイミング</th><th>大きさ</th><th>色</th><th>表示文</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h3>案内の確認 <small>(この端末のライン・14日。押されないまま過ぎた回は赤)</small></h3>
+      <p class="msg msg--warn" id="notice-missed" hidden></p>
+      <div class="tablewrap">
+        <table class="grid" id="notice-checks">
+          <thead><tr><th>報告日</th><th>直</th><th>案内</th><th>押した人</th><th>押した時刻</th><th>押した直</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </article>
+
     <!-- アクセス権限の早見表(梱包資材マスタの「アクセス権限」。説明だけ。portal/access_guide.py) -->
     {% if access_guide %}
     <article class="card" id="access-guide">
@@ -291,6 +335,18 @@
       <div class="dialog__act">
         <button type="button" class="btn" id="row-cancel">やめる</button>
         <button type="submit" class="btn btn--primary" id="row-save">保存する</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="dialog dialog--form" id="notice-dialog">
+    <form method="dialog" id="notice-form">
+      <h2 id="notice-title">案内表示の行</h2>
+      <div class="fields" id="notice-fields"></div>
+      <p class="msg msg--warn" id="notice-form-error" hidden></p>
+      <div class="dialog__act">
+        <button type="button" class="btn btn--danger" id="notice-delete">消す</button>
+        <button type="button" class="btn" id="notice-cancel">やめる</button>
+        <button type="submit" class="btn btn--primary" id="notice-save">保存する</button>
       </div>
     </form>
   </dialog>

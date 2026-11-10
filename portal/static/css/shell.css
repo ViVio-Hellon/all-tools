@@ -324,3 +324,57 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .rs-state.is-warn{background:var(--warn-bg);color:var(--warn-fg)}
 #rs-pcs tr.is-stale td{color:var(--state-error)}
 
+
+/* ==================================================================
+   案内表示(1.5.104 ── 日報から入口へ。`js/guide_notice.js`)
+   表「案内表示」の大きさ: 大 = 画面いっぱい / 中 = 真ん中の窓 / 小 = 上の帯。
+   **押すまで閉じない**(閉じるボタンを持たない)。色は 注意(黄)/警告(赤)/案内(青)。
+   どのツールの画面(iframe)よりも上、管理者以外停止の帯(40)よりも上
+   ================================================================== */
+.gnote{
+  --gnote-fg:var(--state-warn);
+  --gnote-bg:color-mix(in srgb, var(--state-warn) 12%, var(--surface));
+  --gnote-line:color-mix(in srgb, var(--state-warn) 45%, var(--surface));
+  position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+  background:rgb(16 23 32 / 55%);padding:16px;
+}
+.gnote--warning{--gnote-fg:var(--state-error);--gnote-bg:color-mix(in srgb, var(--state-error) 12%, var(--surface));
+  --gnote-line:color-mix(in srgb, var(--state-error) 45%, var(--surface))}
+.gnote--info{--gnote-fg:var(--state-info);--gnote-bg:color-mix(in srgb, var(--state-info) 12%, var(--surface));
+  --gnote-line:color-mix(in srgb, var(--state-info) 45%, var(--surface))}
+.gnote__panel{display:flex;flex-direction:column;align-items:center;gap:12px;
+  width:min(760px,100%);max-height:calc(100vh - 48px);overflow:auto;
+  background:var(--surface);color:var(--ink);
+  border:4px solid var(--gnote-line);border-top:14px solid var(--gnote-fg);
+  border-radius:var(--radius);box-shadow:var(--shadow-md);padding:16px;text-align:center}
+.gnote__carried{margin:0;padding:4px 12px;border-radius:var(--radius-sm);
+  background:var(--warn-bg);color:var(--warn-fg);border:2px solid var(--state-error);font-weight:700;font-size:1.15rem}
+.gnote__text{margin:0;white-space:pre-line;font-weight:700;color:var(--gnote-fg);font-size:1.6rem;line-height:1.4}
+.gnote__question{margin:0;font-size:1.25rem;font-weight:700}
+.gnote__pick{display:flex;flex-direction:column;gap:8px;width:100%}
+.gnote__label{margin:0;color:var(--muted);font-size:1rem}
+.gnote__names{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.gnote .btn.gnote__name{font-size:1.1rem;min-width:5em}
+.gnote .btn.gnote__name[aria-pressed="true"]{background:var(--gnote-fg);border-color:var(--gnote-fg);color:var(--surface);font-weight:700}
+.gnote__typed{align-self:center;width:min(320px,100%);height:38px;padding:0 10px;
+  border:1px solid var(--field-line);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font:inherit}
+.gnote__note{margin:0;min-height:1.4em;color:var(--muted);font-size:1rem}
+.gnote__ok{font-size:1.25rem;height:auto;padding:8px 32px;min-width:12em}
+.gnote--large{padding:0}
+.gnote--large .gnote__panel{width:100%;height:100%;max-height:none;border-radius:0;justify-content:center;background:var(--gnote-bg)}
+.gnote--large .gnote__text{font-size:clamp(2rem,5vw,3.6rem)}
+.gnote--large .gnote__question{font-size:clamp(1.4rem,3vw,2.2rem)}
+.gnote--large .gnote__carried{font-size:clamp(1.2rem,2.4vw,1.8rem)}
+.gnote--large .gnote__ok{font-size:1.6rem}
+.gnote--small{inset:0 0 auto 0;place-items:stretch;background:transparent;padding:0}
+.gnote--small .gnote__panel{width:100%;flex-direction:row;flex-wrap:wrap;justify-content:center;align-items:center;
+  border-radius:0;border-width:0 0 4px 0;background:var(--gnote-bg);padding:8px 12px;gap:8px}
+.gnote--small .gnote__text,.gnote--small .gnote__question{font-size:1.05rem}
+.gnote--small .gnote__pick{width:auto;flex-direction:row;align-items:center}
+/* 大設定「案内表示」(1.5.104) */
+.grid tr.is-bad td{background:var(--warn-bg);color:var(--warn-fg)}
+#notice-dialog .fields{max-height:62vh;overflow:auto;padding-right:4px}
+.notice-field{display:grid;gap:4px;font-size:var(--fs-md);color:var(--muted)}
+.notice-field input,.notice-field textarea{height:auto;min-height:34px;padding:6px 10px;border:1px solid var(--field-line);
+  border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font:inherit}
+.notice-field__hint{color:var(--muted);font-size:var(--fs-sm);line-height:1.5}

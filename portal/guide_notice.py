@@ -1,13 +1,19 @@
-"""案内表示 ── 条件に合ったら画面いっぱいに出す案内 (v4.47.0)
+"""案内表示 ── 条件に合ったら画面いっぱいに出す案内(**日報複合ツール全体の機能** ── 1.5.104)
 
     ライン設定が機側の時に限り 2直の始まりに「計量器の点検を行ってください 点検済みですか？」を
     大きく表示したい。ただ汎用的に使いたいので テーブル:案内表示 の作成。
     テーブル内に案内を出す条件、出すタイミング、大きさをいれたい(ヒットで表示)
 
-**決めるのはここだけ**(表の1行をどう読むか・いま出すか)。読む・覚える・書くは
-`services/guide_notice.py`、出すのは画面(`static/js/guide_notice.js`)。
+    日報をアクセス権限で表示していないラインにたいして何も表示できなくなっている
+    日報の機能ではなく all-tools 全体の機能として扱って。大設定で案内表示マスタの編集をできるように
 
-【表「案内表示」の列】(伝送用ファイル。マスタ管理で直す)
+1.5.103 までは日報の中の機能で、日報のタブを出していない PC には出せなかった。いまは**入口(大きなタブ
+の画面)**が出す ── どのツールのタブを出していても、出していなくても出る。
+
+**決めるのはここだけ**(表の1行をどう読むか・いま出すか)。読む・覚える・書くは `guide_store.py`、
+出すのは入口の画面(`static/js/guide_notice.js`)、直すのは大設定(`static/js/settings.js`)。
+
+【表「案内表示」の列】(**共有の DB**(タブ表示権限と同じ。既定 梱包資材マスタ)。大設定で直す)
 
     ID          案内の名前(押した記録に残る。空なら行の番号)
     有効        1 で出す・0 で出さない(空は出す)
@@ -30,7 +36,7 @@
     並び        いくつも当たったときに先に出す順(小さいほど先)
 
 【いつ出すか】**1つの直で、押すまで1回。** 押すまで閉じない。押した記録はその直・その案内で
-1つ(`services/guide_notice` が覚える)。直の時間に入ったあと最初の見張り(1分ごと)で出す ──
+1つ(`guide_store` が覚える)。直の時間に入ったあと最初の見張り(1分ごと)で出す ──
 直の途中で PC を立ち上げても、まだ押していなければ出る。
 
 【押されなかったら、あとの直で出す(v4.47.2)】
@@ -41,7 +47,7 @@
 「過ぎても出す」(空は出す)の案内は、その直(例: 2直)のあいだに押されないまま直が終わると、**次に
 同じ直が始まるまで、あとの直(3直・翌日の1直…)で出す**。出すのはいちばん近い回のぶんだけ。押した
 記録は元の直(2直)のぶんとして残り、押した直(3直)も残す。押したかは日報の保存では見ない(日報は
-管理者があとから作ることもある)── **押した記録そのもの**で決める(`services/guide_notice.acked_keys`)。
+管理者があとから作ることもある)── **押した記録そのもの**で決める(`guide_store.acks`)。
 直を決めていない案内(直が空)は、どの直にも自分の回があるので、あとの直へは回さない。
 """
 from __future__ import annotations
@@ -303,37 +309,6 @@ def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
     return out
 
 
-def _in_window(notice: Notice, now: datetime, shift_start: datetime, shift_end: datetime) -> bool:
-    if notice.timing == TIMING_START:
-        return True
-    if notice.timing == TIMING_AT and notice.at is not None:
-        at = datetime.combine(shift_start.date(), notice.at)
-        if at < shift_start:                      # 日をまたぐ直の、翌日側の時刻
-            at += timedelta(days=1)
-        return at <= now
-    if notice.timing == TIMING_BEFORE_END and notice.minutes is not None:
-        return now >= shift_end - timedelta(minutes=notice.minutes)
-    return False
-
-
-def due(notices: Iterable[Notice], *, line: str, shift: str, business_date: date,
-        now: datetime, shift_start: datetime, shift_end: datetime,
-        acked: Iterable[str] = ()) -> list[Notice]:
-    """いま出す案内(並び順)。**その直のあいだだけ**・押したものは出さない。"""
-    if not line or not (shift_start <= now < shift_end):
-        return []
-    done = set(acked)
-    hits = [n for n in notices
-            if not n.problems and n.id not in done
-            and (not n.lines or line in n.lines)
-            and (not n.shifts or shift in n.shifts)
-            and (not n.weekdays or business_date.weekday() in n.weekdays)
-            and (n.start is None or business_date >= n.start)
-            and (n.end is None or business_date <= n.end)
-            and _in_window(n, now, shift_start, shift_end)]
-    return sorted(hits, key=lambda n: (n.order, n.id))
-
-
 # ----------------------------------------------------------------------
 # 直の1回ぶん(v4.47.2)── いまの直と、過ぎた直をまとめて見る
 # ----------------------------------------------------------------------
@@ -385,28 +360,35 @@ def _known(notice: Notice, slot: Slot, since: Optional[dict[str, datetime]]) -> 
     return first is None or first < slot.end
 
 
-def due_slots(notices: Iterable[Notice], *, line: str, now: datetime, current: Optional[Slot],
-              past: Iterable[Slot], acked: Iterable[tuple[str, str, str]] = (),
-              since: Optional[dict[str, datetime]] = None) -> list[Hit]:
-    """いま出す案内。`acked` は押した (案内ID, 報告日, 直)。
+def due_all(notices: Iterable[Notice], *, line: str, now: datetime, slots: Iterable[Slot],
+            acked: Iterable[tuple[str, str, str]] = (),
+            since: Optional[dict[str, datetime]] = None) -> list[Hit]:
+    """いま出す案内。`slots` はいまの前後の直の回(`shift_slots`)、`acked` は押した (案内ID, 報告日, 直)。
 
-    いまの直のぶん(時刻が来ていて、押していない)と、**過ぎた直のぶん**(「過ぎても出す」で、
-    その直を決めてある案内の、いちばん近い過ぎた回が押されていない)。過ぎたぶんを先に出す
-    (古いほうから片付ける)。いまの直が、その案内の直そのもののときは回さない(いまの回を押せば済む)。
+    案内ごとに見る:
+        その案内の直の回のうち、いまがその中にある回 → その回のぶん(時刻が来ていて、押していなければ)
+        いまがどの回の中でもない(「過ぎても出す」・直を決めてある案内だけ)
+            → いちばん近い**過ぎた**回のぶん(押されていなければ。案内を作る前の回は数えない)
+    過ぎたぶんを先に出す(古いほうから片付ける)。
     """
     done = set(acked)
-    past = sorted((s for s in past if s.end <= now), key=lambda s: s.start)
+    slots = list(slots)
     hits: list[Hit] = []
     for notice in notices:
-        if current is not None and applies(notice, line, current):
-            if point(notice, current) <= now and (notice.id, *current.key) not in done:
-                hits.append(Hit(notice, current))
+        names = notice.shifts or MAIN_SHIFTS
+        mine = [s for s in slots if s.shift in names and applies(notice, line, s)]
+        now_in = [s for s in mine if s.start <= now < s.end]
+        if now_in:
+            slot = max(now_in, key=lambda s: s.start)
+            if point(notice, slot) <= now and (notice.id, *slot.key) not in done:
+                hits.append(Hit(notice, slot))
             continue
         if not notice.carry or not notice.shifts:
             continue
-        mine = [s for s in past if applies(notice, line, s) and _known(notice, s, since)]
-        if mine and (notice.id, *mine[-1].key) not in done:
-            hits.append(Hit(notice, mine[-1], carried=True))
+        past = sorted((s for s in mine if s.end <= now and _known(notice, s, since)),
+                      key=lambda s: s.start)
+        if past and (notice.id, *past[-1].key) not in done:
+            hits.append(Hit(notice, past[-1], carried=True))
     return sorted(hits, key=lambda h: (not h.carried, h.notice.order, h.slot.start, h.notice.id))
 
 
@@ -419,4 +401,50 @@ def windows(notices: Iterable[Notice], *, line: str, now: datetime,
            if applies(n, line, s) and s.start <= now and point(n, s) <= now
            and _known(n, s, since)]
     return sorted(out, key=lambda x: (x[1].start, x[0].order), reverse=True)
+
+
+# ----------------------------------------------------------------------
+# 直の時刻(伝送用ファイルの「時間用」。読めなければ既定)
+# ----------------------------------------------------------------------
+#: 直を決めていない案内が見る直(日勤は1直・2直と重なるので入れない)
+MAIN_SHIFTS = frozenset({"1直", "2直", "3直"})
+#: 「時間用」の 直 の欄 → 直の名前
+SHIFT_KEYS = {"1": "1直", "2": "2直", "3": "3直", "昼": "日勤"}
+#: 既定の直の時刻(日報の既定と同じ)
+DEFAULT_TIMES: dict[str, tuple[time, time]] = {
+    "1直": (time(7, 0), time(15, 0)), "2直": (time(15, 0), time(22, 50)),
+    "3直": (time(22, 50), time(7, 0)), "日勤": (time(7, 0), time(17, 0)),
+}
+
+
+def shift_times(rows: Iterable[dict[str, Any]]) -> dict[str, tuple[time, time]]:
+    """「時間用」の行(直・開始・終了)→ 直の時刻。読めない直は既定のまま。"""
+    out = dict(DEFAULT_TIMES)
+    for row in rows:
+        get = {_text(k): v for k, v in row.items()}
+        name = SHIFT_KEYS.get(_text(get.get("直")))
+        start, end = _time(get.get("開始")), _time(get.get("終了"))
+        if name and start is not None and end is not None:
+            out[name] = (start, end)
+    return out
+
+
+def report_date(day: date) -> str:
+    """日報の報告日の書き方(2026年11月9日)。押した記録は日報と同じ字で残す。"""
+    return f"{day.year}年{day.month}月{day.day}日"
+
+
+def shift_slots(times: dict[str, tuple[time, time]], now: datetime, *, back_days: int = 8,
+                ahead_days: int = 1) -> list[Slot]:
+    """いまの前後の直の回。報告日は**始めた日**(3直は日をまたいでも始めた日 ── 日報と同じ)。"""
+    out: list[Slot] = []
+    for offset in range(-back_days, ahead_days + 1):
+        day = now.date() + timedelta(days=offset)
+        for name, (start_t, end_t) in times.items():
+            start = datetime.combine(day, start_t)
+            end = datetime.combine(day, end_t)
+            if end <= start:
+                end += timedelta(days=1)
+            out.append(Slot(report_date(day), day, name, start, end))
+    return out
 

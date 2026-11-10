@@ -675,6 +675,166 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         return write(lambda path: shared_db.delete(path, key, was), "タブ表示権限から1行消しました")
 
     # ------------------------------------------------------------------
+    # 案内表示(1.5.104 ── 日報から入口へ。どのタブを出していても出る。`guide_store`)
+    # ------------------------------------------------------------------
+    @app.get("/api/notice/due")
+    def notice_due():                             # noqa: ANN202
+        """いま出す案内(無ければ notice=null)。画面の1分ごとの見張りが聞く。"""
+        from . import guide_store
+
+        try:
+            got = guide_store.due_now()
+        except Exception:                         # noqa: BLE001 - 案内が出ないだけ
+            log.exception("案内表示を確かめられませんでした")
+            return jsonify({"ok": True, "notice": None})
+        body = {"ok": True, **got.as_dict()}
+        if got.notice is not None and got.notice.pick_worker:
+            body["roster"] = guide_store.roster()
+        return jsonify(body)
+
+    @app.post("/api/notice/ack")
+    def notice_ack():                             # noqa: ANN202
+        """押した。**いま出している案内と同じ回**のときだけ受ける。名前を選ぶ案内は名前が要る。"""
+        from . import guide_store
+
+        body = request.get_json(silent=True) or {}
+        notice_id = str(body.get("id", "")).strip()
+        worker = " ".join(str(body.get("worker", "")).split())
+        got = guide_store.due_now()
+        if got.notice is None or got.notice.id != notice_id or \
+                (str(body.get("report_date", "")), str(body.get("shift", ""))) != (got.report_date, got.shift):
+            return _error("moved", "案内が変わりました。出し直します", 409)
+        if got.notice.pick_worker and not worker:
+            return _error("no_worker", "押した人の名前を選んでください", 422)
+        shared, message = guide_store.record(got.notice, report_date=got.report_date, line=got.line,
+                                             shift=got.shift, worker=worker, acked_shift=got.now_shift)
+        return jsonify({"ok": True, "shared": shared, "message": message})
+
+    @app.get("/api/notice/checks")
+    def notice_checks():                          # noqa: ANN202
+        """押した/押されていない一覧(この端末のライン。大設定)。"""
+        from . import guide_store
+
+        try:
+            days = max(1, min(62, int(request.args.get("days", 14))))
+        except ValueError:
+            days = 14
+        choice = guide_store.terminal_line()
+        rows = guide_store.checks(line=choice.line, days=days) if choice.line else []
+        return jsonify({"ok": True, "line": choice.to_dict(), "days": days, "rows": rows,
+                        "missed": sum(1 for r in rows if not r["acked"] and not r["now"])})
+
+    def notice_view() -> dict:
+        from . import guide_notice as rule, guide_store
+
+        rows, error = [], ""
+        try:
+            path = guide_store.shared_path()
+            guide_store.ensure_table(path)
+            rows = guide_store.read_rows(path)
+        except shared_db.SourceError as exc:
+            error = str(exc)
+        problems = []
+        for notice, row in zip(rule.parse(rows), [r for r in rows if rule._flag(r.get("有効"), True)]):
+            if notice.problems:
+                problems.append(f"{notice.id}: {' / '.join(notice.problems)}")
+        times, where = guide_store.shift_times()
+        return {
+            "rows": [{k: ("" if v is None else v) for k, v in r.items()} for r in rows],
+            "columns": [{"name": n, "kind": k, "hint": rule.COLUMN_HINTS.get(n, ("", ()))[0],
+                         "choices": list(rule.COLUMN_HINTS.get(n, ("", ()))[1])} for n, k in rule.COLUMNS],
+            "row_key": shared_db.ROW_KEY, "problems": problems, "error": error,
+            "line": guide_store.terminal_line().to_dict(), "lines": list(guide_store.LINE_NAMES),
+            "times": {k: f"{a:%H:%M}〜{b:%H:%M}" for k, (a, b) in times.items()}, "times_from": where,
+            "records": str(guide_store.record_folder() or ""),
+        }
+
+    @app.get("/api/notice/settings")
+    def notice_settings():                        # noqa: ANN202
+        return jsonify({"ok": True, **notice_view()})
+
+    def notice_write(action: Callable[[Path], Any], done: str):
+        from . import guide_store
+
+        refused = need_admin()
+        if refused:
+            return refused
+        try:
+            path = shared_db.location(strict=True).path
+        except shared_db.SourceError as exc:
+            return _error(exc.code, str(exc), 503)
+        if not shared_db.reachable(path):
+            return _error("no_source", f"共有の DB に届きません: {path}", 422)
+        try:
+            action(path)
+        except shared_db.SourceError as exc:
+            status = {"stale_row": 409, "no_row": 409}.get(exc.code, 422)
+            return jsonify({"ok": False, "error": {"code": exc.code, "message": str(exc)},
+                            **notice_view()}), status
+        guide_store.reset()
+        log.info("%s(%s)", done, identity_mod.current().label())
+        return jsonify({"ok": True, "message": done, **notice_view()})
+
+    def notice_values(body: dict) -> tuple[dict, str]:
+        from . import guide_store
+
+        values = {k: v for k, v in (body.get("values") or {}).items() if k in guide_store.EDIT_COLUMNS}
+        return values, guide_store.check_values(values)
+
+    @app.post("/api/notice/add")
+    def notice_add():                             # noqa: ANN202
+        from . import guide_store
+
+        values, bad = notice_values(request.get_json(silent=True) or {})
+        if bad:
+            return _error("bad_value", bad, 400)
+        return notice_write(lambda path: guide_store.insert(path, values), "案内表示に1行足しました")
+
+    @app.post("/api/notice/save")
+    def notice_save():                            # noqa: ANN202
+        from . import guide_store
+
+        body = request.get_json(silent=True) or {}
+        values, bad = notice_values(body)
+        if bad:
+            return _error("bad_value", bad, 400)
+        try:
+            key = int(body.get("key"))
+        except (TypeError, ValueError):
+            return _error("bad_value", "どの行かが分かりません", 400)
+        was = body.get("was") if isinstance(body.get("was"), dict) else {}
+        return notice_write(lambda path: guide_store.update(path, key, values, was), "案内表示を直しました")
+
+    @app.post("/api/notice/delete")
+    def notice_delete():                          # noqa: ANN202
+        from . import guide_store
+
+        body = request.get_json(silent=True) or {}
+        try:
+            key = int(body.get("key"))
+        except (TypeError, ValueError):
+            return _error("bad_value", "どの行かが分かりません", 400)
+        was = body.get("was") if isinstance(body.get("was"), dict) else {}
+        return notice_write(lambda path: guide_store.delete(path, key, was), "案内表示から1行消しました")
+
+    @app.post("/api/notice/line")
+    def notice_line():                            # noqa: ANN202
+        """この端末のライン(案内表示に使う)。空にするとアクセス権限の表から。"""
+        from . import guide_store
+
+        refused = need_admin()
+        if refused:
+            return refused
+        line = str((request.get_json(silent=True) or {}).get("line", "")).strip()
+        if line and not guide_store._line_of(line):
+            return _error("bad_value", f"ライン名は {'・'.join(guide_store.LINE_NAMES)}(中板は 中板3 のように)"
+                                       "のどれかで入れてください", 400)
+        user_settings.update({guide_store.KEY_LINE: line or None})
+        guide_store.reset()
+        return jsonify({"ok": True, "message": f"この端末のラインを {line or '(アクセス権限の表から)'} にしました",
+                        **notice_view()})
+
+    # ------------------------------------------------------------------
     # ブラウザ版: 各ツールのブラウザ版を起こす
     # ------------------------------------------------------------------
     @app.post("/api/tools/<tool_id>/open")

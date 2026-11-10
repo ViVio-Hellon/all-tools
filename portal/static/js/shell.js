@@ -18,6 +18,7 @@ import { api } from "./api.js";
 import { toast, toastError } from "./toast.js";
 import * as settingsView from "./settings.js";
 import * as remoteStop from "./remote_stop.js";
+import { check as guideCheck } from "./guide_notice.js";
 
 const S = window.SHELL || {};
 const desktop = S.edition === "desktop";
@@ -1172,6 +1173,10 @@ timers.push(remoteStop.startBand({
 }));
 heartbeat();
 start();
+// 案内表示(1.5.104 ── 日報から入口へ)。どのツールのタブを出していても、出していなくても出す。
+// 出すかはサーバ(`portal/guide_notice.py`)。1分ごと
+guideCheck();
+every(guideCheck, 60_000);
 // デスクトップ版は外枠に訊く(安い)。ブラウザ版は入口がツールの待ち受けを叩くので間を空ける
 pollStatus();
 every(pollStatus, desktop ? (S.statusPollMs || 2000) : 5000);
