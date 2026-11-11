@@ -109,12 +109,16 @@ async function paintChecks() {
   }
   const missed = $("notice-missed");
   missed.hidden = !got.missed;
-  missed.textContent = got.missed ? `押されていない案内が ${got.missed}件 あります(赤い行)。あとの直で出ています` : "";
+  // どのラインのぶんか(1.5.113 ──「押されていない案内: どのラインか出してください」)
+  const where = got.line?.line || (got.rows || [])[0]?.line || "";
+  missed.textContent = got.missed
+    ? `押されていない案内が ${got.missed}件 あります(ライン: ${where || "決まっていません"}・赤い行)。あとの直で出ています`
+    : "";
   const rows = got.rows || [];
   if (!rows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.className = "empty";
     td.textContent = got.line?.line ? "この14日に出した案内はありません" : "この端末のラインが決まっていません";
     tr.append(td);
@@ -125,7 +129,7 @@ async function paintChecks() {
     const tr = document.createElement("tr");
     if (!r.acked && !r.now) tr.className = "is-bad";
     const status = r.acked ? (r.worker || "(名前なし)") : (r.now ? "まだ(いまの直)" : "押されていません");
-    for (const text of [r.report_date, r.shift, r.notice, status, r.acked ? r.acked_at : "",
+    for (const text of [r.report_date, r.shift, r.line || "", r.notice, status, r.acked ? r.acked_at : "",
                         r.acked ? r.acked_shift : ""]) {
       const td = document.createElement("td");
       td.textContent = text;

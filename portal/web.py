@@ -720,7 +720,7 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         except ValueError:
             days = 14
         choice = guide_store.terminal_line()
-        rows = guide_store.checks(line=choice.line, days=days) if choice.line else []
+        rows = guide_store.checks(line=choice.line, days=days)   # ラインが無くても PC名の案内は出す
         return jsonify({"ok": True, "line": choice.to_dict(), "days": days, "rows": rows,
                         "missed": sum(1 for r in rows if not r["acked"] and not r["now"])})
 
