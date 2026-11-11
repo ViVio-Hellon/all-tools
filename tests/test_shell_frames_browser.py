@@ -284,5 +284,23 @@ class DialogTests(DesktopShellBrowserCase):
         self.assertTrue(shown.endswith("[確認ダイアログ: replaced]"), shown)
 
 
+class NoticeFrontTests(DesktopShellBrowserCase):
+    """案内表示が出たら**窓を前に出す**(1.5.112 ──「裏に完全に回っていても勝手に開きます？」)。"""
+
+    def test_案内が出たら外枠に前に出すよう頼む(self) -> None:
+        from unittest import mock
+
+        from portal import guide_notice as rule, guide_store
+
+        notice = rule.parse([{"ID": "点検", "表示文": "計量器の点検を行ってください", "名前を選ぶ": 0}])[0]
+        due = guide_store.Due(notice, "2026年11月9日", "コイル", "2直", False, "2直", "")
+        with mock.patch.object(guide_store, "due_now", return_value=due):
+            page = self.open_shell(first="kanban")
+            page.wait_for_selector("#guide-notice")
+            self.wait_until(page, lambda: self.invokes("shell_bring_front"), "前に出す頼み")
+            page.wait_for_timeout(300)
+        self.assertEqual(len(self.invokes("shell_bring_front")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

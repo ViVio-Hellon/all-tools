@@ -86,7 +86,8 @@ FIRST_ROW: dict[str, Any] = {
 COLUMN_HINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "ID": ("案内の名前。押した記録に残ります(空なら行の番号)", ()),
     "有効": ("1 で出す・0 で出さない(空は出す)", ("1", "0")),
-    "ライン": ("空なら全ライン。「機側,NS1」のように , で並べてもよい(中板 と書けば 中板1〜7 のどれでも)", ()),
+    "ライン": ("空なら全ライン。「機側,NS1」のように , で並べてもよい(中板 と書けば 中板1〜7 のどれでも)。"
+               "アクセス権限の「PC名」を書けばその PC だけ(ラインが決まらない PC にも出る)", ()),
     "直": ("空なら 1直・2直・3直(日勤だけのライン トット・バランサー・中板 は日勤)。"
            "「2直」「1直,3直」「日勤」のように", ()),
     "曜日": ("空なら毎日。「月」「月,水,金」「平日」(月〜金)「土日」のように。報告日の曜日で見る"
@@ -109,7 +110,7 @@ COLUMN_HINTS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
-def problem_of(values: dict[str, Any]) -> str:
+def problem_of(values: dict[str, Any], pcs: Iterable[str] = ()) -> str:
     """マスタ管理で書く前の確かめ。**選べる値以外・読めない形**を、選べる値を添えて断る。"""
     for name, value in values.items():
         text = _text(value)
@@ -127,10 +128,11 @@ def problem_of(values: dict[str, Any]) -> str:
                     "(例: 月,水,金)。")
         if name in ("分", "並び") and _int(text) is None:
             return f"「{name}」は数で入れてください。"
-        if name == "ライン" and _bad_lines(text):
-            return (f"「ライン」の {'・'.join(_bad_lines(text))} はライン名として読めません。"
-                    f"{'・'.join(LINE_NAMES)} のどれかで入れてください(中板は 中板 か 中板3。"
-                    "複数は , で並べる)。書き間違えると、その案内は黙って出ません。")
+        if name == "ライン" and _bad_lines(text, pcs):
+            return (f"「ライン」の {'・'.join(_bad_lines(text, pcs))} はライン名としても、"
+                    "アクセス権限の表の PC 名としても読めません。"
+                    f"{'・'.join(LINE_NAMES)}(中板は 中板 か 中板3)か、アクセス権限の「PC名」の欄の名前で"
+                    "入れてください(複数は , で並べる)。書き間違えると、その案内は黙って出ません。")
         if name == "直" and _bad_shifts(text):
             return (f"「直」の {'・'.join(_bad_shifts(text))} は使えません。{'・'.join(SHIFT_NAMES)}"
                     " のどれかで入れてください(4直・5直の案内はまだ出せません)。")
@@ -300,18 +302,26 @@ def shifts_of(notice: "Notice", line: str) -> frozenset[str]:
     return frozenset({"日勤"}) if line_family(line) in DAY_LINES else MAIN_SHIFTS
 
 
-def _bad_lines(value: Any) -> list[str]:
-    return [p for p in _list(value) if not is_line_name(p)]
+def pc_key(text: Any) -> str:
+    """PC 名の比べる形(全角半角・大文字小文字・前後の空白を問わない)。"""
+    return _text(text).casefold()
+
+
+def _bad_lines(value: Any, pcs: Iterable[str] = ()) -> list[str]:
+    """ライン名でも、アクセス権限の表の PC 名(`pcs`)でもない書き方。"""
+    known = {pc_key(p) for p in pcs}
+    return [p for p in _list(value) if not is_line_name(p) and pc_key(p) not in known]
 
 
 def _bad_shifts(value: Any) -> list[str]:
     return [p for p in _list(value) if _shift(p) not in SHIFT_NAMES]
 
 
-def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
+def parse(rows: Iterable[dict[str, Any]], pcs: Iterable[str] = ()) -> list[Notice]:
     """表の行 → 案内。**有効でない行は入れない。** 読めない欄がある行は `problems` 付きで返す
     (`due` は出さない。設定の画面などで知らせる)。"""
     out: list[Notice] = []
+    pcs = list(pcs)
     for index, row in enumerate(rows, start=1):
         get = {(_text(k)): v for k, v in row.items()}
         if not _flag(get.get("有効"), True):
@@ -338,9 +348,9 @@ def parse(rows: Iterable[dict[str, Any]]) -> list[Notice]:
             problems.append("開始日が 2026-11-09 の形ではありません")
         if _text(end) and _date(end) is None:
             problems.append("終了日が 2026-11-09 の形ではありません")
-        bad = _bad_lines(get.get("ライン"))
+        bad = _bad_lines(get.get("ライン"), pcs)
         if bad:
-            problems.append(f"ライン「{'・'.join(bad)}」はライン名ではありません"
+            problems.append(f"ライン「{'・'.join(bad)}」はライン名でもアクセス権限の PC 名でもありません"
                             f"({'・'.join(LINE_NAMES)}。中板は 中板3 も)")
         bad = _bad_shifts(get.get("直"))
         if bad:
@@ -383,10 +393,23 @@ class Slot:
         return (self.report_date, self.shift)
 
 
-def applies(notice: Notice, line: str, slot: Slot) -> bool:
+def for_me(notice: Notice, line: str, pc: str = "") -> bool:
+    """この端末(ライン `line`・PC 名 `pc`)に出す案内か。
+
+    「ライン」が空ならラインの決まった端末みんな。ライン名ならそのライン(中板 なら 中板1〜7)。
+    **アクセス権限の PC 名なら、その PC**(1.5.112 ──「ライン名をアクセス権限でのPC名にしたい。
+    そのライン名は登録できませんとなるラインもあるので」)。PC 名の案内は、ラインが決まらない PC にも出る。
+    """
+    if not notice.lines:
+        return bool(line)
+    if line and (line in notice.lines or line_family(line) in notice.lines):
+        return True
+    return bool(pc_key(pc)) and pc_key(pc) in {pc_key(n) for n in notice.lines}
+
+
+def applies(notice: Notice, line: str, slot: Slot, pc: str = "") -> bool:
     """その直のその回に、この案内を出す決まりか(押したかは見ない)。"""
-    return (not notice.problems and bool(line)
-            and (not notice.lines or line in notice.lines or line_family(line) in notice.lines)
+    return (not notice.problems and for_me(notice, line, pc)
             and slot.shift in shifts_of(notice, line)
             and (not notice.weekdays or slot.business.weekday() in notice.weekdays)
             and (notice.start is None or slot.business >= notice.start)
@@ -419,7 +442,7 @@ def _known(notice: Notice, slot: Slot, since: Optional[dict[str, datetime]]) -> 
 
 def due_all(notices: Iterable[Notice], *, line: str, now: datetime, slots: Iterable[Slot],
             acked: Iterable[tuple[str, str, str]] = (),
-            since: Optional[dict[str, datetime]] = None) -> list[Hit]:
+            since: Optional[dict[str, datetime]] = None, pc: str = "") -> list[Hit]:
     """いま出す案内。`slots` はいまの前後の直の回(`shift_slots`)、`acked` は押した (案内ID, 報告日, 直)。
 
     案内ごとに見る:
@@ -432,7 +455,7 @@ def due_all(notices: Iterable[Notice], *, line: str, now: datetime, slots: Itera
     slots = list(slots)
     hits: list[Hit] = []
     for notice in notices:
-        mine = [s for s in slots if applies(notice, line, s)]
+        mine = [s for s in slots if applies(notice, line, s, pc)]
         now_in = [s for s in mine if s.start <= now < s.end]
         if now_in:
             slot = max(now_in, key=lambda s: s.start)
@@ -449,12 +472,12 @@ def due_all(notices: Iterable[Notice], *, line: str, now: datetime, slots: Itera
 
 
 def windows(notices: Iterable[Notice], *, line: str, now: datetime,
-            slots: Iterable[Slot], since: Optional[dict[str, datetime]] = None
+            slots: Iterable[Slot], since: Optional[dict[str, datetime]] = None, pc: str = ""
             ) -> list[tuple[Notice, Slot]]:
     """その期間に出した(出すはずだった)案内の回。押されていない一覧のもと(新しい回が先)。
     案内を作る前の回は入れない(`since`)。"""
     out = [(n, s) for s in slots for n in notices
-           if applies(n, line, s) and s.start <= now and point(n, s) <= now
+           if applies(n, line, s, pc) and s.start <= now and point(n, s) <= now
            and _known(n, s, since)]
     return sorted(out, key=lambda x: (x[1].start, x[0].order), reverse=True)
 

@@ -166,6 +166,25 @@ pub fn shell_close(app: AppHandle, shell: State<'_, Arc<Shell>>) {
     crate::closing::request_close(shell.inner().clone(), app, None);
 }
 
+/// 案内表示が出たとき、**窓を前に出す**(1.5.112)。
+///
+///     裏に完全に回っていても勝手に開きます？(コイルラインだけ開いてくれてない)
+///
+/// 案内は大きなタブの画面の中に重ねて出すので、窓がほかの窓の裏・最小化だと見えなかった。
+/// 最小化を戻し、いったん最前面にしてから戻す(ほかの窓の上に来て、そのあとは普通の窓)。
+/// Windows が前へ出すのを許さないときも、タスクバーで知らせる
+#[tauri::command]
+pub fn shell_bring_front(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+        let _ = window.set_always_on_top(false);
+        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+    }
+}
+
 /// 終える前の「打ちかけを置いて」の返事(大きなタブの画面の `prepareClose` から)。
 /// `waiting: true` は「待っています」(本人に訊いている・ツールの画面の返事を待っている)。
 /// これを受けたら、外枠は短い上限で見切らない([`crate::shell::wait_prepared`])

@@ -736,7 +736,8 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
         except shared_db.SourceError as exc:
             error = str(exc)
         problems = []
-        for notice, row in zip(rule.parse(rows), [r for r in rows if rule._flag(r.get("有効"), True)]):
+        for notice, row in zip(rule.parse(rows, guide_store.known_pcs()),
+                               [r for r in rows if rule._flag(r.get("有効"), True)]):
             if notice.problems:
                 problems.append(f"{notice.id}: {' / '.join(notice.problems)}")
         times, where = guide_store.shift_times(guide_store.terminal_line().line or "")

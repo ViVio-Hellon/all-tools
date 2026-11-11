@@ -247,6 +247,19 @@ class StoreTests(StoreCase):
         self.when = at(MON, 7, 1)
         self.assertIsNotNone(self.shown(at(MON, 7, 1)), "中板 の案内は 中板3 の PC にも出る")
 
+    def test_ラインにPC名を書けばそのPCだけ_ラインが決まらなくても出る(self) -> None:
+        """「ライン名をアクセス権限でのPC名にしたい。そのライン名は登録できませんとなるラインもあるので」(1.5.112)"""
+        self.access(("TEST-PC", "mode:field"), ("OTHER-PC", "L-1"))
+        self.assertEqual(guide_store.terminal_line().line, "")          # この PC のラインは決まらない
+        self.assertEqual(guide_store.check_values({"表示文": "x", "ライン": "test-pc"}), "")
+        self.assertIn("PC 名", guide_store.check_values({"表示文": "x", "ライン": "NO-SUCH-PC"}))
+        self.rows({"ID": "点検", "ライン": "TEST-PC", "直": ""})
+        got = self.shown(at(MON, 7, 1))
+        self.assertIsNotNone(got)
+        self.assertEqual(guide_store.due_now(now=at(MON, 7, 1)).line, "TEST-PC")   # 記録はPC名のフォルダ
+        self.rows({"ID": "点検", "ライン": "OTHER-PC", "直": ""})
+        self.assertIsNone(self.shown(at(MON, 7, 1)), "ほかの PC の案内は出さない")
+
     def test_ラインが決まらなければ出さず_わけを出す(self) -> None:
         user_settings.update({guide_store.KEY_LINE: None})
         guide_store.reset()
@@ -553,7 +566,7 @@ class LineAndShiftRuleTests(unittest.TestCase):
                             {"ID": "b", "表示文": "x", "ライン": "NS1", "直": "4直"}])
         self.assertTrue(found[0].problems and "NS-1" in found[0].problems[0])
         self.assertTrue(found[1].problems and "4直" in found[1].problems[0])
-        self.assertIn("ライン名として読めません", rule.problem_of({"ライン": "LS"}))
+        self.assertIn("PC 名としても読めません", rule.problem_of({"ライン": "LS"}))
         self.assertIn("4直", rule.problem_of({"直": "4直"}))
         self.assertEqual(rule.problem_of({"ライン": "中板,中板3,コイル", "直": "2,日勤"}), "")
 

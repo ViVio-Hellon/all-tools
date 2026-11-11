@@ -106,6 +106,7 @@ fn main() {
             services::shell_close,
             services::shell_prepared,
             services::shell_restart_tool,
+            services::shell_bring_front,
             drops::shell_dropped_file
         ])
         .on_window_event(move |window, event| match event {

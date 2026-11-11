@@ -237,7 +237,7 @@ def notices() -> tuple[list[rule.Notice], str]:
                 import_old(path, only_if_untouched=True)
             except shared_db.SourceError as exc:
                 log.warning("前の版の表を写せませんでした: %s", exc)
-            return rule.parse(read_rows(path)), ""
+            return rule.parse(read_rows(path), known_pcs()), ""
         except shared_db.SourceError as exc:
             return [], str(exc)
     return _cached("notices", make)
@@ -260,11 +260,22 @@ def _clean(values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def known_pcs() -> list[str]:
+    """アクセス権限の PC 名(30秒は読み直さない)。"""
+    return _cached("access_pcs", access_pcs)
+
+
+def this_pc() -> str:
+    from . import remote_stop
+
+    return remote_stop.identity()[0]
+
+
 def check_values(values: dict[str, Any]) -> str:
     """書く前の確かめ。**選べる値以外・読めない形**を、選べる値を添えて断る。"""
     if not str(values.get("表示文") or "").strip():
         return "「表示文」を入れてください(大きく出す文)。"
-    return rule.problem_of(values)
+    return rule.problem_of(values, known_pcs())
 
 
 def _same(row: dict[str, Any], was: dict[str, Any]) -> bool:
@@ -350,15 +361,14 @@ def _access_sources() -> list[Path]:
     return out
 
 
-def access_lines() -> tuple[list[str], str]:
-    """「アクセス権限」の表で、この端末の行にあるライン名(並び順)。(ライン, 読めなかった理由)。"""
-    from . import remote_stop, stop_mode
+def _access_table() -> tuple[Optional[list], list, str]:
+    """アクセス権限の表の (行, 列, 読めなかった理由)。読めなければ行は None。"""
+    from . import stop_mode
 
-    pc, login = remote_stop.identity()
     try:
         sources = _access_sources()
     except shared_db.SourceError as exc:
-        return [], f"共有の DB を読めません: {exc}"
+        return None, [], f"共有の DB を読めません: {exc}"
     rows: Optional[list] = None
     columns: list = []
     unread: list[str] = []
@@ -384,8 +394,40 @@ def access_lines() -> tuple[list[str], str]:
             conn.close()
     if rows is None:
         if unread:
-            return [], f"アクセス権限の表を読めません({' / '.join(unread)})"
-        return [], f"共有の DB(と同じフォルダの伝送用ファイル)に「{ACCESS_TABLE}」の表がありません"
+            return None, [], f"アクセス権限の表を読めません({' / '.join(unread)})"
+        return None, [], f"共有の DB(と同じフォルダの伝送用ファイル)に「{ACCESS_TABLE}」の表がありません"
+    return rows, columns, ""
+
+
+def access_pcs() -> list[str]:
+    """アクセス権限の表にある PC 名(有効な行。並び順)。案内の「ライン」に PC 名を書けるように(1.5.112)。"""
+    from . import stop_mode
+
+    rows, columns, _problem = _access_table()
+    if not rows:
+        return []
+    pc_col = next((c for c in columns if stop_mode.fold(c) in stop_mode.PC_COLUMNS), None)
+    valid_col = next((c for c in columns if stop_mode.fold(c) == stop_mode.fold(stop_mode.VALID_COLUMN)), None)
+    if pc_col is None:
+        return []
+    out: list[str] = []
+    for row in rows:
+        if valid_col is not None and stop_mode.fold(row.get(valid_col)) in stop_mode._OFF:
+            continue
+        name = rule._text(row.get(pc_col))
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def access_lines() -> tuple[list[str], str]:
+    """「アクセス権限」の表で、この端末の行にあるライン名(並び順)。(ライン, 読めなかった理由)。"""
+    from . import remote_stop, stop_mode
+
+    pc, login = remote_stop.identity()
+    rows, columns, problem = _access_table()
+    if rows is None:
+        return [], problem
     login_col = next((c for c in columns if stop_mode.fold(c) in stop_mode.LOGIN_COLUMNS), None)
     pc_col = next((c for c in columns if stop_mode.fold(c) in stop_mode.PC_COLUMNS), None)
     rights_col = next((c for c in columns if stop_mode.fold(c) == stop_mode.fold(stop_mode.RIGHTS_COLUMN)), None)
@@ -743,7 +785,9 @@ def due_now(now: Optional[datetime] = None, *, line: Optional[str] = None) -> Du
     """この端末のラインで、いま出す案内(1つ。押せば次)。"""
     now = now or datetime.now()
     line = terminal_line().line if line is None else line
-    if not line:
+    pc = this_pc()
+    key = line or pc                              # 押した記録の「ライン」(ラインが決まらない PC は PC 名)
+    if not key:
         return Due(None)
     try:
         share_pending()
@@ -752,14 +796,14 @@ def due_now(now: Optional[datetime] = None, *, line: Optional[str] = None) -> Du
     found, problem = notices()
     times, _where = shift_times(line)
     slots = rule.shift_slots(times, now)
-    done = set(acks(line, _months(slots, now)))
+    done = set(acks(key, _months(slots, now)))
     hits = rule.due_all(found, line=line, now=now, slots=slots, acked=done,
-                        since=first_seen(found, now))
+                        since=first_seen(found, now), pc=pc)
     current = _now_shift(times, now, line)
     if not hits:
-        return Due(None, line=line, now_shift=current, problem=problem)
+        return Due(None, line=key, now_shift=current, problem=problem)
     hit = hits[0]
-    return Due(hit.notice, hit.slot.report_date, line, hit.slot.shift, hit.carried, current, problem)
+    return Due(hit.notice, hit.slot.report_date, key, hit.slot.shift, hit.carried, current, problem)
 
 
 def find(notice_id: str) -> Optional[rule.Notice]:
@@ -795,19 +839,21 @@ def checks(*, line: Optional[str] = None, days: int = 14, now: Optional[datetime
     """押した/押されていない一覧(新しい回が先)。"""
     now = now or datetime.now()
     line = terminal_line().line if line is None else line
-    if not line:
+    pc = this_pc()
+    key = line or pc
+    if not key:
         return []
     found, _problem = notices()
     times, _where = shift_times(line)
     slots = [s for s in rule.shift_slots(times, now, back_days=days, ahead_days=0)]
-    done = acks(line, _months(slots, now))
+    done = acks(key, _months(slots, now))
     out: list[dict[str, Any]] = []
     for notice, slot in rule.windows(found, line=line, now=now, slots=slots,
-                                     since=first_seen(found, now)):
+                                     since=first_seen(found, now), pc=pc):
         got = done.get((notice.id, slot.report_date, slot.shift))
         out.append({
             "notice": notice.id, "text": notice.text, "report_date": slot.report_date,
-            "shift": slot.shift, "line": line, "acked": got is not None,
+            "shift": slot.shift, "line": key, "acked": got is not None,
             "worker": (got or {}).get("worker", ""),
             "acked_at": str((got or {}).get("acked_at", "") or "").replace("T", " ")[:16],
             "acked_shift": (got or {}).get("acked_shift", "") or (slot.shift if got else ""),

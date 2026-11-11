@@ -114,6 +114,18 @@ async function paint(body) {
   box.addEventListener("keydown", (e) => { if (e.key === "Escape") e.stopPropagation(); });
   document.body.append(box);
   (notice.pick_worker && !chosen ? box.querySelector(".gnote__name, .gnote__typed") : button)?.focus();
+  bringFront();
+}
+
+/**
+ * **窓を前に出す**(1.5.112)。案内はこの画面の中に出るので、窓がほかの窓の裏・最小化だと見えない
+ * (「裏に完全に回っていても勝手に開きます？」「コイルラインだけ開いてくれてない」)。
+ * デスクトップ版だけ(外枠 `shell_bring_front`)。ブラウザ版は窓を動かせないので何もしない。
+ */
+function bringFront() {
+  const internals = window.__TAURI_INTERNALS__;
+  if (!internals || typeof internals.invoke !== "function") return;
+  Promise.resolve(internals.invoke("shell_bring_front")).catch(() => {});
 }
 
 /** 見張りから呼ぶ。出すものが変わったときだけ描き直す(選んでいる名前を消さない)。 */
