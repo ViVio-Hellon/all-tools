@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from . import view_rights
 from . import access_control, config, sources, terminals
 from .logging_utils import get_logger
 
@@ -50,6 +51,7 @@ ROW_KEY = "管理番号"
 #: 表がどちらの取り込み元にあるか
 WHERE_MASTER = "master"     # マスタDB (梱包資材マスタ)
 WHERE_DATA = "data"         # 保存用DB (連絡帳)
+WHERE_CALENDAR = "calendar" # カレンダーマスタ(閲覧権限。マスタDBと同じフォルダ)
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,38 @@ MANAGED: tuple[Managed, ...] = (
               "行を足す・直す・消すには管理者パスワードが要ります。"),
     ),
     Managed(
+        table=view_rights.TABLE,
+        label="閲覧権限",
+        columns=view_rights.COLUMNS,
+        where=WHERE_CALENDAR,
+        row_key="管理番号",
+        auto_key=True,
+        editable_columns=view_rights.COLUMNS[1:],
+        create_columns=view_rights.COLUMNS[1:],
+        requires_table=False,
+        guard_as="view",
+        guard_all=True,
+        validate=lambda values, creating: _check_view(values, creating),
+        placeholders=(
+            ("ログインID", "この端末だけの行にするとき(空ならラインの行)"),
+            ("PC名", "この端末だけの行にするとき(空ならラインの行)"),
+            ("ライン", "ラインの行のとき: この端末のライン。「その他」は ほかの全部"),
+            ("休みを見るライン", "全部 / 自分 / コイル,HVC / コイル以外"),
+            ("連絡を見るライン", "全部 / 自分 / コイル,HVC / コイル以外"),
+            ("宛先を選べる", "1 = 連絡の宛先ラインを選べる(作業長と同じ)"),
+            ("有効", "1=有効 / 0=無効(空なら1)"),
+        ),
+        suggestions=(("ライン", (*config.ALL_LINE_NAMES, view_rights.OTHER)),
+                     ("休みを見るライン", (view_rights.ALL, view_rights.SELF, "コイル以外", *config.ALL_LINE_NAMES)),
+                     ("連絡を見るライン", (view_rights.ALL, view_rights.SELF, *config.ALL_LINE_NAMES)),
+                     ("宛先を選べる", ("1", "0")), ("有効", ("1", "0"))),
+        note=("どの端末に、どのラインの休み・連絡を見せるかを決める表です(カレンダーマスタ.sqlite3。"
+              "マスタDBと同じフォルダ。無ければいままでの決まりの3行で作ります)。"
+              "効く順: この端末の行(ログインID・PC名)→ この端末のラインの行 → 「その他」の行。"
+              "見るラインは「全部」「自分」・ライン名・「コイル以外」を , で並べます。"
+              "直すと数秒で効きます。行を足す・直す・消すには管理者パスワードが要ります。"),
+    ),
+    Managed(
         table=config.TABLE_DEL_HISTORY,
         label="削除履歴",
         # 消した中身が先。**いつ消したか**より**何が消えたか**を先に読む
@@ -278,6 +312,13 @@ def readiness(table: str = "") -> Readiness:
     if where == WHERE_DATA:
         finder = sources.find_data_db
         label = f"保存用DB({config.SOURCE_FILE_DATA})"
+    elif where == WHERE_CALENDAR:
+        def finder():
+            target = view_rights.path()
+            if target is not None:
+                view_rights.ensure(target)        # 無ければ、いままでの決まりで作る
+            return target if target is not None and target.exists() else None
+        label = f"カレンダーマスタ({view_rights.FILE})"
     else:
         finder = sources.find_master_db
         label = f"マスタDB({config.SOURCE_FILE_MASTER})"
@@ -820,6 +861,8 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str,
     """
     from .importer import import_master_table, is_importable
 
+    if table == view_rights.TABLE:
+        view_rights.reset()                       # 手元に写しは無い。読み直させる
     if not is_importable(table):
         log.info("%s", message)
         return Result(True, message)
@@ -953,6 +996,33 @@ def _clean(table: str, values: dict[str, Any], present: list[str], *,
         if problem:
             return {}, Result(False, problem, REFUSE_BAD_VALUE)
     return cleaned, None
+
+
+def _check_view(values: dict[str, Any], creating: bool) -> str:
+    """閲覧権限の行を確かめる(読めない見るラインの書き方・ラインを断る)。"""
+    for name in ("有効", "宛先を選べる"):
+        if name in values:
+            text = str(values.get(name, "")).strip()
+            if text == "" :
+                values[name] = 1 if name == "有効" else 0
+            elif text in ("0", "1"):
+                values[name] = int(text)
+            else:
+                return f"{name}は 1 か 0 で入れてください。"
+    for name in ("休みを見るライン", "連絡を見るライン"):
+        if name in values:
+            problem = view_rights.spec_problem(values[name])
+            if problem:
+                return f"{name}: {problem}"
+    if "ライン" in values:
+        line = str(values["ライン"] or "").strip()
+        if line and line not in (*config.ALL_LINE_NAMES, view_rights.OTHER):
+            return f"ラインは {'・'.join(config.ALL_LINE_NAMES)}・{view_rights.OTHER} のどれかで入れてください。"
+        login = str(values.get("ログインID", "") or "").strip()
+        pc = str(values.get("PC名", "") or "").strip()
+        if creating and not line and not login and not pc:
+            return "ログインID・PC名(この端末の行)か、ライン(ラインの行)のどちらかを入れてください。"
+    return ""
 
 
 def _check_access(values: dict[str, Any], creating: bool) -> str:

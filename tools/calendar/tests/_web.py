@@ -199,6 +199,10 @@ def with_source(case: unittest.TestCase, *, master: bool = False) -> Path:
     user_settings.set_value(user_settings.KEY_MASTER_DB_DIR, str(folder))
     case.addCleanup(user_settings.set_value, user_settings.KEY_DATA_DB_DIR, "")
     case.addCleanup(user_settings.set_value, user_settings.KEY_MASTER_DB_DIR, "")
+    # 閲覧権限(カレンダーマスタ)の覚えは取り込み元ごと。前の試験のぶんを持ち越さない
+    from calendar_app import view_rights
+    view_rights.reset()
+    case.addCleanup(view_rights.reset)
 
     # 送信ID列を作れたかどうかの覚えは**取り込み元ごと**。
     # 試験のたびに作り直すので、前の試験の結果を持ち越さない

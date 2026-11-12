@@ -451,8 +451,11 @@ NO_TIME = "時刻の記録なし"
 
 
 def _comment_shown(rec: DayRecord, my_line: str) -> bool:
-    """その連絡をこの端末のマス目に出すか。作業長は全ライン、ほかは自分のライン宛だけ。"""
-    return my_line == config.LINE_SUPERVISOR or rec.line == my_line
+    """その連絡をこの端末のマス目に出すか。決まりはカレンダーマスタの閲覧権限(`view_rights`)。
+    表が無ければいままでどおり(作業長は全ライン、ほかは自分のライン宛だけ)。"""
+    from . import view_rights
+
+    return view_rights.current(my_line).comment_shown(rec.line, my_line)
 
 
 def record_shown(rec: DayRecord, my_line: str) -> bool:
@@ -466,11 +469,10 @@ def record_shown(rec: DayRecord, my_line: str) -> bool:
     出していた(マス目に無いほかのラインの登録が見え、消せた)。
     """
     if rec.is_rest:
-        if my_line == config.LINE_SUPERVISOR:
-            return True
-        if my_line == config.LINE_COIL:
-            return rec.line == config.LINE_COIL
-        return rec.line != config.LINE_COIL
+        # 決まりはカレンダーマスタの閲覧権限(`view_rights`。表が無ければいままでの決まり)
+        from . import view_rights
+
+        return view_rights.current(my_line).rest_shown(rec.line, my_line)
     return _comment_shown(rec, my_line)
 
 

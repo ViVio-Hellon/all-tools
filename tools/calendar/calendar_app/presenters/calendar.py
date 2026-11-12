@@ -344,7 +344,9 @@ def can_choose_comment_line(my_line: str) -> bool:
     作業長は全ラインを見るので、どのラインへも書ける。作業長かどうかは
     この端末のライン設定(アクセス権限・管理者パスワードで決まる)で見る。
     """
-    return my_line == config.LINE_SUPERVISOR
+    from .. import view_rights
+
+    return view_rights.current(my_line).choose
 
 
 def comment_line_refusal(my_line: str, line: str) -> str:
@@ -355,7 +357,7 @@ def comment_line_refusal(my_line: str, line: str) -> str:
         return ("この端末のラインが決まっていないため、連絡を登録できません。\n"
                 "設定画面でこの端末のラインを選んでください。")
     return (f"この端末({my_line})からは、ほかのライン({line})へ連絡を登録できません。\n"
-            "ラインを選べるのは作業長の端末だけです。")
+            "ラインを選べるのは作業長の端末(カレンダーマスタの閲覧権限で「宛先を選べる」の端末)だけです。")
 
 
 def comment_targets(conn: sqlite3.Connection) -> dict[str, Any]:
