@@ -571,6 +571,28 @@ class LineAndShiftRuleTests(unittest.TestCase):
         self.assertEqual(rule.problem_of({"ライン": "中板,中板3,コイル", "直": "2,日勤"}), "")
 
 
+class TimingTests(unittest.TestCase):
+    """「セットは15:30だけなのに毎直起動してる」(1.5.116)── タイミングが空で時刻が入っていれば時刻。"""
+
+    def shown(self, row: dict, when: datetime) -> list[str]:
+        notices = rule.parse([{"ID": "TEST", "表示文": "x", "ライン": "L-1", "直": "", **row}])
+        slots = rule.shift_slots(dict(rule.DEFAULT_TIMES), when)
+        return [h.slot.shift for h in rule.due_all(notices, line="L-1", now=when, slots=slots)]
+
+    def test_タイミングが空でも時刻に1日1回(self) -> None:
+        row = {"タイミング": "", "時刻": "15:30"}
+        for hour, minute, want in ((7, 5, []), (9, 30, []), (15, 20, []), (15, 30, ["2直"]),
+                                   (23, 26, [])):
+            with self.subTest(at=f"{hour}:{minute}"):
+                self.assertEqual(self.shown(row, datetime(2026, 11, 11, hour, minute)), want)
+
+    def test_直の始まりと時刻の食い違いは出せない案内として断る(self) -> None:
+        found = rule.parse([{"ID": "a", "表示文": "x", "タイミング": "直の始まり", "時刻": "15:30"}])
+        self.assertTrue(found[0].problems)
+        self.assertIn("直の始まり", rule.problem_of({"タイミング": "直の始まり", "時刻": "15:30"}))
+        self.assertEqual(rule.problem_of({"タイミング": "", "時刻": "15:30"}), "")
+
+
 class LineShiftTimesTests(unittest.TestCase):
     """時間用の**対象ライン**(日報 1.5.108〜)。ラインの行はそのラインだけ、4直・5直は見ない。"""
 

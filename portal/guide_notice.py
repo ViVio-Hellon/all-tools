@@ -92,9 +92,9 @@ COLUMN_HINTS: dict[str, tuple[str, tuple[str, ...]]] = {
            "「2直」「1直,3直」「日勤」のように", ()),
     "曜日": ("空なら毎日。「月」「月,水,金」「平日」(月〜金)「土日」のように。報告日の曜日で見る"
            "(3直は始めた日 ── 月曜の3直は翌朝まで「月」)", ()),
-    "タイミング": ("直の始まり(空も同じ)/ 時刻(「時刻」の欄の時刻から)/ 直の終わり前(「分」の欄の分前から)",
+    "タイミング": ("直の始まり(空も同じ。ただし「時刻」の欄が入っていれば時刻)/ 時刻(「時刻」の欄の時刻から)/ 直の終わり前(「分」の欄の分前から)",
                ("直の始まり", "時刻", "直の終わり前")),
-    "時刻": ("タイミングが「時刻」のとき。14:30 の形", ()),
+    "時刻": ("タイミングが「時刻」(か空)のとき。14:30 の形。直を空にすれば、その時刻を含む直で1日1回", ()),
     "分": ("タイミングが「直の終わり前」のとき。終わりの何分前から", ()),
     "表示文": ("大きく出す文", ()),
     "確認の文": ("その下に出す問い(例: 点検済みですか？)", ()),
@@ -121,6 +121,9 @@ def problem_of(values: dict[str, Any], pcs: Iterable[str] = ()) -> str:
             return f"「{name}」は {' ・ '.join(choices)} のどれかで入れてください({hint})。"
         if name == "時刻" and _time(text) is None:
             return "「時刻」は 14:30 のように 時:分 で入れてください。"
+        if (name == "時刻" and _text(values.get("タイミング")) == TIMING_START):
+            return ("時刻が入っているのに、タイミングが「直の始まり」です。時刻に出すなら"
+                    "タイミングを「時刻」にしてください(空でも時刻で出します)。")
         if name in ("開始日", "終了日") and _date(text) is None:
             return f"「{name}」は 2026-11-09 の形で入れてください。"
         if name == "曜日" and _weekdays(text) is None:
@@ -330,10 +333,15 @@ def parse(rows: Iterable[dict[str, Any]], pcs: Iterable[str] = ()) -> list[Notic
         problems: list[str] = []
         if not text:
             problems.append("表示文が空です")
-        timing = _text(get.get("タイミング")) or TIMING_START
+        at = _time(get.get("時刻"))
+        # **タイミングが空で時刻が入っていれば「時刻」**(1.5.116)。前は空を「直の始まり」と読み、
+        # 時刻を黙って捨てていた ──「セットは15:30だけなのに毎直起動してる」
+        timing = _text(get.get("タイミング")) or (TIMING_AT if at is not None else TIMING_START)
         if timing not in TIMINGS:
             problems.append(f"タイミング「{timing}」は使えません({' / '.join(TIMINGS)})")
-        at = _time(get.get("時刻"))
+        if timing == TIMING_START and at is not None:
+            problems.append("時刻が入っているのに、タイミングが「直の始まり」です"
+                            "(時刻に出すならタイミングを「時刻」か空に)")
         minutes = _int(get.get("分"))
         if timing == TIMING_AT and at is None:
             problems.append("タイミングが「時刻」なのに、時刻が 14:30 の形で入っていません")
