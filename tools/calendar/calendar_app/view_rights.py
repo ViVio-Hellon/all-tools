@@ -180,8 +180,9 @@ def path() -> Optional[Path]:
         master = sources.find_master_db()
     except Exception:                             # noqa: BLE001 - 届かない
         return None
-    folder = master.parent if master is not None else config.master_db_dir()
-    return Path(folder) / FILE
+    # **マスタDBが見つかったときだけ**(参照パスが未設定のときに、既定のフォルダへ勝手に作らない。
+    # 作ると保存用DBを探す所が「マスタ以外の sqlite3」としてこれを拾ってしまう)
+    return None if master is None else master.parent / FILE
 
 
 def ensure(target: Optional[Path] = None) -> bool:

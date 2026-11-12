@@ -64,7 +64,7 @@ class RuleTests(unittest.TestCase):
 class FileTests(unittest.TestCase):
     def setUp(self) -> None:
         _web.reset_sync()
-        _web.with_source(self)
+        _web.with_source(self, master=True)
         self.conn = _web.bind_db(self)
         self.addCleanup(user_settings.save_my_line, "")
 
@@ -90,6 +90,24 @@ class FileTests(unittest.TestCase):
         got = {r.naiyou for r in records() if record_shown(r, "コイル")}
         self.assertEqual(got, {r[0] for r in ROWS})
         self.assertTrue(presenter.can_choose_comment_line("コイル"))
+
+    def test_参照パスが無ければ作らない(self) -> None:
+        """未設定のまま既定のフォルダへ作ると、保存用DBを探す所がこれを拾う(VER4.3.0 で一度起きた)。"""
+        from calendar_app import sources
+
+        with mock.patch.object(sources, "find_master_db", return_value=None):
+            view_rights.reset()
+            self.assertIsNone(view_rights.path())
+            self.assertEqual({r.naiyou for r in records() if record_shown(r, "コイル")}, EXPECTED["コイル"])
+
+    def test_保存用DBとして拾わない(self) -> None:
+        from calendar_app import sources
+
+        view_rights.ensure()
+        folder = view_rights.path().parent
+        (folder / config.SOURCE_FILE_DATA).rename(folder / "退避.bak")
+        self.assertNotEqual(sources.find_data_db(folder).name if sources.find_data_db(folder) else "",
+                            view_rights.FILE)
 
     def test_マスタ管理で直す_読めない書き方は断る(self) -> None:
         from calendar_app import master_admin

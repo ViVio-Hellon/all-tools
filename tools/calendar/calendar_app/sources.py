@@ -103,8 +103,10 @@ def find_data_db(directory: Optional[Path] = None) -> Optional[Path]:
         return named
 
     master_stem = Path(MASTER_DB_NAME).stem.casefold()
+    # カレンダーマスタ(閲覧権限。VER4.3.0)も保存用DBではない
+    not_data = {master_stem, "カレンダーマスタ"}
     for path in _listed(folder):
-        if path.stem.casefold() == master_stem:
+        if path.stem.casefold() in not_data:
             continue
         log.info("保存用DBとして %s を使います", path.name)
         return path
