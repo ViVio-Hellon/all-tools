@@ -185,6 +185,40 @@ class ScreenTests(WebTestCase):
         self.assertFalse(any("SIKALOT.sqlite3" in p and "ありません" in p
                              for p in state["problems"]), state["problems"])
 
+    def test_マスタの一覧も確かめられないときはありませんと出さず_ログに残す(self) -> None:
+        """「絶対に存在するはずなんですが初回はほぼ読まない。エラーなのにログにも残らない」(v4.49.2)"""
+        import sqlite3
+        from nippou import user_settings
+        from nippou.config import KEY_WIP_DIR
+        folder = self.tmp / "台帳"
+        folder.mkdir()
+        lot = folder / "SIKALOT.sqlite3"
+        conn = sqlite3.connect(str(lot))
+        conn.execute("VACUUM")
+        conn.close()
+        user_settings.save(KEY_WIP_DIR, str(folder))
+        with stat_refused(lot), self.assertLogs("nippou", level="WARNING") as logs:
+            page = self.get("/settings").get_data(as_text=True)
+        rows = page[page.index('id="master-rows"'):]
+        row = rows[rows.index("SIKALOT.sqlite3"):][:1500]
+        self.assertIn("いま確かめられません(", row)
+        self.assertIn("data-recheck", row)
+        self.assertIn('id="master-recheck"', page)
+        self.assertTrue(any("確かめられませんでした" in line for line in logs.output), logs.output)
+
+    def test_参照パスの欄も確かめられないときはありませんと出さない(self) -> None:
+        from nippou.db.connection import SharedUnreadable
+
+        def refused(path, **_kw):
+            raise SharedUnreadable("共有フォルダを読めませんでした: [WinError 5] アクセスが拒否されました")
+
+        with patch("nippou.db.connection.file_state", side_effect=refused):
+            views = presenter.path_views()
+        live = [v for v in views if not v.off]
+        self.assertTrue(live)
+        self.assertTrue(all(v.unreadable and not v.exists for v in live))
+        self.assertIn("WinError 5", live[0].error)
+
 
 if __name__ == "__main__":
     unittest.main()

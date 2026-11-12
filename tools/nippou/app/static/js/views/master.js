@@ -588,14 +588,15 @@ export function start() {
   load({ ...kept, q: "", sort: "", sort_dir: "asc" });
 
   // 「ファイルの状態」の面から「表を見る」で飛んでくる
-  for (const btn of document.querySelectorAll("[data-master]")) {
-    btn.addEventListener("click", () => {
-      load({ file: btn.dataset.master, table: "", q: "", sort: "", sort_dir: "asc" });
-      // 面を切り替えないと、読み込んだ先が見えない
-      const bar = document.querySelector('[data-tabs="settings.master"]');
-      bar?.querySelector('.tab[data-key="tables"]')?.click();
-    });
-  }
+  // **一覧ごとに受ける**(v4.49.2。「もう一度確かめる」で行を描き直しても効くように)
+  document.getElementById("master-rows")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-master]");
+    if (!btn) return;
+    load({ file: btn.dataset.master, table: "", q: "", sort: "", sort_dir: "asc" });
+    // 面を切り替えないと、読み込んだ先が見えない
+    const bar = document.querySelector('[data-tabs="settings.master"]');
+    bar?.querySelector('.tab[data-key="tables"]')?.click();
+  });
 
   byId("tbl-reload")?.addEventListener("click", () => load({}));
   // 絞り込みは打ち終わってから引く(1文字ごとに共有を読みに行かない)

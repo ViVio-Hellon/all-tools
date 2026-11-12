@@ -2104,6 +2104,51 @@ export function start() {
   }
   recheckFiles();
 
+  /*
+    **マスタの一覧・参照パスの欄も確かめ直す**(v4.49.2)。
+
+        絶対に存在するはずなんですが初回はほぼ読まない。再確認かリロードボタンを置いて読み直したい
+
+    共有に最初に触れたとき、Windows が一瞬アクセス拒否(WinError 5)を返す。「いま確かめられません」の
+    札が出ていれば数秒おいて3回まで、この画面を取り直して札だけ差し替える。「もう一度確かめる」で手でも。
+  */
+  async function refreshStatus() {
+    const res = await fetch(location.href, { credentials: "same-origin" });
+    const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    const rows = doc.getElementById("master-rows");
+    const mine = document.getElementById("master-rows");
+    if (rows && mine) mine.innerHTML = rows.innerHTML;
+    for (const now of document.querySelectorAll(".path[data-path-key] .path__now")) {
+      const key = now.closest(".path").dataset.pathKey;
+      const fresh = doc.querySelector(`.path[data-path-key="${CSS.escape(key)}"] .path__now`);
+      if (!fresh) continue;
+      // **札だけ差し替える**(「辿る…」のボタンは押したときの動きを持っているので残す)
+      for (const badge of now.querySelectorAll(".badge")) badge.remove();
+      const before = now.querySelector("button");
+      for (const badge of fresh.querySelectorAll(".badge")) now.insertBefore(badge.cloneNode(true), before);
+    }
+  }
+  async function recheckStatus(left = 3) {
+    if (!document.querySelector("#master-rows [data-recheck], .path__now [data-recheck]")) return;
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    try { await refreshStatus(); } catch { /* 取り直せなければ、出ているまま */ }
+    if (left > 1) recheckStatus(left - 1);
+  }
+  recheckStatus();
+  document.getElementById("master-recheck")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await refreshStatus();
+      toast(document.querySelector("#master-rows [data-recheck]")
+        ? "まだ確かめられないファイルがあります(札に理由)" : "確かめ直しました", "ok");
+    } catch (err) {
+      toastError(err);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   function repaintPath(row, view) {
     if (!row || !view) return;
     const now = row.querySelector(".path__now");

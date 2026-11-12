@@ -435,6 +435,8 @@
           <div class="card__head">
             <h2>マスタ管理</h2>
             <span class="lead">参照するファイルの状態。中身も見られます(sqlite3 のみ)</span>
+            {# 共有に最初に触れたときは一瞬読めないことがある(v4.49.2)。自動でも確かめ直す #}
+            <button class="btn btn--sm" type="button" id="master-recheck">もう一度確かめる</button>
           </div>
           <table class="list">
             <thead>
@@ -457,6 +459,10 @@
                 <td>
                   {% if f.is_write_target and not f.exists and f.writable %}
                     <span class="badge">初回の保存で作られます</span>
+                  {% elif f.unreadable %}<span class="badge badge--alert" data-recheck
+                    title="{{ f.error }}。数秒後に確かめ直します">いま確かめられません({{ f.checked_at }})</span>
+                  {% elif not f.exists and f.recheck %}<span class="badge badge--alert" data-recheck
+                    title="フォルダはあるのに、ファイルだけ見えませんでした。数秒後に確かめ直します">いま見つかりません({{ f.checked_at }})</span>
                   {% elif not f.exists %}<span class="badge badge--alert">ありません</span>
                   {% elif f.readable %}<span class="badge badge--done">読めます</span>
                   {% else %}<span class="badge badge--alert">{{ f.error }}</span>{% endif %}

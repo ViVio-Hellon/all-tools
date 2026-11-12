@@ -49,6 +49,8 @@
     {% elif p.is_default %}<span class="badge">既定</span>{% endif %}
     {% if p.is_relative %}<span class="badge badge--todo">相対(アプリのフォルダから)</span>{% endif %}
     {% if p.exists %}<span class="badge badge--done">{{ p.found_text }}</span>
+    {% elif p.unreadable %}<span class="badge badge--alert" data-recheck
+      title="{{ p.error }}。数秒後に確かめ直します">いま確かめられません({{ p.checked_at }})</span>
     {% else %}<span class="badge badge--alert">{{ p.missing_text }}</span>{% endif %}
     {% endif %}
     {% if not p.is_file %}

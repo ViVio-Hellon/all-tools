@@ -515,6 +515,11 @@ class PathView:
     #: 欄が空のときに薄く出す文。**空が何を意味するか**は欄で違う
     #: (既定を使う / 出さない)
     empty_text: str = "既定を使います"
+    #: **あるか無いかを確かめられなかった**(共有に最初に触れたときの WinError 5 など。v4.49.2)。
+    #: 「ありません」とは出さず「いま確かめられません(時刻)」と出し、数秒後に確かめ直す
+    unreadable: bool = False
+    error: str = ""
+    checked_at: str = ""
 
 
 @dataclass
@@ -613,19 +618,30 @@ def path_views() -> list[PathView]:
             empty_text=EMPTY_TEXT.get(key, "既定を使います"),
             found_text=f"この{looking_for}はあります",
             missing_text=f"この{looking_for}がありません")
+        # **「無い」は確かめたうえで無いときだけ**(`file_state`。v4.49.2)。前は `is_file()` が
+        # 共有に最初に触れたときの WinError 5(アクセス拒否)も False にしたので「このファイルが
+        # ありません」と出て、ログにも残らなかった(「絶対に存在するはずなんですが初回はほぼ読まない」)
+        from datetime import datetime as _datetime
+
+        from ..db.connection import SharedUnreadable, file_state
+
+        view.checked_at = _datetime.now().strftime("%H:%M:%S")
         try:
             if key in READ_FILE_KEYS:      # `FIXED_NAME_KEYS` もここに入る
                 # **読むだけのファイルは、そのファイルがあるかで見る。**
                 # 置き場所だけ合っていても、CSVが無ければ目標線は出ない
-                view.exists = resolved.is_file()
+                view.exists = file_state(resolved)
             elif is_file:
                 # ファイル名の欄は、**書き先が用意できるか**で見る。sqlite3 は
                 # まだ無くてよい(初回の反映で作られる)ので、フォルダを見る
-                view.exists = resolved.parent.is_dir()
+                view.exists = file_state(resolved.parent)
             else:
-                view.exists = resolved.is_dir()
-        except OSError:                              # 共有に届かない
+                view.exists = file_state(resolved)
+        except (OSError, SharedUnreadable) as exc:   # 共有に届かない・権限
             view.exists = False
+            view.unreadable = True
+            view.error = str(exc)
+            log.warning("参照パス %s を確かめられませんでした(数秒後に確かめ直します): %s", label, exc)
         out.append(view)
     return out
 
@@ -841,6 +857,8 @@ def _file_view(key: str, label: str, getter) -> FileView:
         view.unreadable = True
         view.recheck = True
         view.error = str(exc)
+        # **ログにも残す**(v4.49.2 ──「エラーなのにログにも残らない」)
+        log.warning("%s を確かめられませんでした(数秒後に確かめ直します): %s", label, exc)
         return view
     if not view.exists and not view.is_write_target:
         try:
