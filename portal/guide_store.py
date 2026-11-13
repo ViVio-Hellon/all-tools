@@ -275,7 +275,14 @@ def check_values(values: dict[str, Any]) -> str:
     """書く前の確かめ。**選べる値以外・読めない形**を、選べる値を添えて断る。"""
     if not str(values.get("表示文") or "").strip():
         return "「表示文」を入れてください(大きく出す文)。"
-    return rule.problem_of(values, known_pcs())
+    problem = rule.problem_of(values, known_pcs())
+    if problem:
+        return problem
+    notice = rule.parse([{**values, "有効": 1}], known_pcs())
+    if notice:
+        times, _where = shift_times("")
+        return rule.time_outside(notice[0], times)
+    return ""
 
 
 def _same(row: dict[str, Any], was: dict[str, Any]) -> bool:

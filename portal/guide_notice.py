@@ -543,6 +543,27 @@ def shift_times(rows: Iterable[dict[str, Any]], line: str = "") -> dict[str, tup
     return out
 
 
+def time_outside(notice: "Notice", times: dict[str, tuple[time, time]]) -> str:
+    """時刻の案内で、決めた直のどれにもその時刻が無ければ、その文(1.5.116)。無ければ空。
+
+    直「2」・時刻 11:00 のように**直の外の時刻**だと、その直の中では出ず、あとで過ぎた回として出る。
+    """
+    if notice.timing != TIMING_AT or notice.at is None or not notice.shifts:
+        return ""
+    at = notice.at.hour * 60 + notice.at.minute
+    for shift in notice.shifts:
+        span = times.get(shift)
+        if span is None:
+            return ""
+        start = span[0].hour * 60 + span[0].minute
+        end = span[1].hour * 60 + span[1].minute
+        if (at - start) % (24 * 60) < (end - start) % (24 * 60) or start == end:
+            return ""
+    names = "・".join(sorted(notice.shifts))
+    return (f"時刻 {notice.at:%H:%M} は {names} の中にありません(その直の中では出ません)。"
+            "時刻を含む直にするか、直を空にしてください")
+
+
 def report_date(day: date) -> str:
     """日報の報告日の書き方(2026年11月9日)。押した記録は日報と同じ字で残す。"""
     return f"{day.year}年{day.month}月{day.day}日"

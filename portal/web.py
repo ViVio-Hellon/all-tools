@@ -741,6 +741,19 @@ def create_app(*, token: Optional[str] = None, bridge: bool = False) -> Flask:
             if notice.problems:
                 problems.append(f"{notice.id}: {' / '.join(notice.problems)}")
         times, where = guide_store.shift_times(guide_store.terminal_line().line or "")
+        # 直の外の時刻(1.5.116)・同じ ID の行(押した記録を ID で分けるので、同じ端末に当たると
+        # 片方を押せばもう片方も押したことになる)を、出せない/気をつける案内として上に出す
+        seen: dict[str, int] = {}
+        for notice in rule.parse(rows, guide_store.known_pcs()):
+            text = rule.time_outside(notice, times)
+            if text:
+                problems.append(f"{notice.id}({'・'.join(sorted(notice.lines)) or '全ライン'}): {text}")
+            seen[notice.id] = seen.get(notice.id, 0) + 1
+        for notice_id, count in seen.items():
+            if count > 1:
+                problems.append(f"{notice_id}: 同じ ID の行が {count}行あります。押した記録は ID で分けるので、"
+                                "同じ PC に当たる行どうしは片方を押すともう片方も押したことになります"
+                                "(行ごとに違う ID にしてください)")
         return {
             "rows": [{k: ("" if v is None else v) for k, v in r.items()} for r in rows],
             "columns": [{"name": n, "kind": k, "hint": rule.COLUMN_HINTS.get(n, ("", ()))[0],

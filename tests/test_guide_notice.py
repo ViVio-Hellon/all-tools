@@ -593,6 +593,16 @@ class TimingTests(unittest.TestCase):
         self.assertEqual(rule.problem_of({"タイミング": "", "時刻": "15:30"}), "")
 
 
+class TimeOutsideTests(unittest.TestCase):
+    def test_直の外の時刻を知らせる(self) -> None:
+        bad = rule.parse([{"ID": "a", "表示文": "x", "直": "2", "時刻": "11:00"}])[0]
+        self.assertIn("2直 の中にありません", rule.time_outside(bad, dict(rule.DEFAULT_TIMES)))
+        ok = rule.parse([{"ID": "a", "表示文": "x", "直": "2", "時刻": "15:30"}])[0]
+        self.assertEqual(rule.time_outside(ok, dict(rule.DEFAULT_TIMES)), "")
+        night = rule.parse([{"ID": "a", "表示文": "x", "直": "3", "時刻": "02:00"}])[0]
+        self.assertEqual(rule.time_outside(night, dict(rule.DEFAULT_TIMES)), "")
+
+
 class LineShiftTimesTests(unittest.TestCase):
     """時間用の**対象ライン**(日報 1.5.108〜)。ラインの行はそのラインだけ、4直・5直は見ない。"""
 
