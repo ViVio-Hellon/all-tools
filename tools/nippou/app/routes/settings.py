@@ -1350,9 +1350,16 @@ def rebuild_summary():
     # ラインを跨がない。**他ラインの集計まで作り直す理由がない**
     log_button_click("rebuild_summary", line=ctx.line, extra=f"{start}~{end}")
     try:
+        from nippou.services import agg_exclude, day_csv
+
+        agg_exclude.load(force=True)              # 「集計から除く」を直したすぐあとでも効かせる
         with running.running("集計の作り直し"):
             result = summary_service.rebuild(get_repo(), start, end,
                                              line=ctx.line)
+            # **集計CSVも書き直す**(v4.50.0。除く人を足したあと、前に出したCSVに残らないように)
+            keys = get_repo().shift_keys_between(start, end, line=ctx.line)
+            for note in day_csv.settle(get_repo(), keys, factors=False):
+                log.info("集計の作り直し: %s", note)
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log.exception("集計の作り直しに失敗しました")
         return jsonify(error_body(

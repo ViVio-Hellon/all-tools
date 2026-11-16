@@ -189,6 +189,10 @@ def refresh_shift(repo: NippouRepository, work_date: str, line: str,
             log.info("テストの直なので集計を消しました %s/%s/%s", work_date, line, shift)
         return None
     pages = _shift_pages(repo, work_date, line, shift)
+    # **集計から除く作業者・班のページを外す**(v4.50.0 `services/agg_exclude`)。日報のページはそのまま
+    from . import agg_exclude
+
+    pages = agg_exclude.keep(pages, where=f"{work_date}/{line}/{shift}")
     if not pages:
         # **ページが1つも残っていない直の集計は消す**(v4.46.3)。前は何もしなかったので、
         # 最後のページを片付けた直・行をぜんぶ3直へ移した2直の集計が残り、グラフ・集計CSV・
