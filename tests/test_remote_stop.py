@@ -1213,13 +1213,22 @@ class BandBrowserTests(_browser_case()):
         page = self.open_shell(first="nippou")
         page.wait_for_selector("#stopband:not([hidden])", timeout=10000)
         text = page.inner_text("#stopband")
-        self.assertIn("管理者が更新のため停止を求めています", text)
+        # **画面いっぱいに大きく**(1.5.118 ──「停止の案内が小さくて気が付かない」)
+        self.assertIn("入力をやめてください", text)
+        self.assertIn("管理者が更新のため", text)
+        self.assertIn("で止まります", page.inner_text("#stopband-count"))
         self.assertIn("版の入れ替え", text)
         self.assertIn("看板: 送っていない操作 2 件", text)
         self.assertIn("強制で止めます", text)
-        # タブを替えても帯は消えない(全ツールの画面の上)
-        page.click("#tab-settings")
-        self.assertTrue(page.is_visible("#stopband"))
+        box = page.locator("#stopband").bounding_box()
+        size = page.viewport_size
+        self.assertGreaterEqual(box["width"], size["width"] - 1)
+        self.assertGreaterEqual(box["height"], size["height"] - 1)
+        # 後ろの画面(タブ)は押せない
+        hit = page.evaluate("(() => { const b = document.getElementById('tab-settings').getBoundingClientRect();"
+                            " return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)"
+                            ".closest('#stopband') !== null; })()")
+        self.assertTrue(hit, "後ろのタブが押せてしまう")
 
         # 期限: 止めると決まる → 各ツールの画面に「閉じる前」の頼み → 入口へ「置きました」
         self.now[0] += remote_stop.GRACE_SEC + 1

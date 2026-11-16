@@ -59,9 +59,26 @@ function paintBand(state) {
     return;
   }
   if (typeof band.now_ms === "number") offset = band.now_ms - Date.now();
-  const paint = () => { $("stopband-line").textContent = bandLine(); };
+  const paint = () => {
+    $("stopband-line").textContent = bandLine();
+    // **残りは大きく1行で**(1.5.118。長い文は読まれない)
+    const count = $("stopband-count");
+    if (count && band) {
+      count.textContent = band.stopping ? "いま止めています"
+        : (band.writing || []).length ? "書き終わるのを待っています"
+        : `あと ${rest(band.deadline_ms - (Date.now() + offset))} で止まります`;
+    }
+  };
   paint();
-  box.hidden = false;
+  if (box.hidden) {
+    box.hidden = false;
+    // 窓が裏に回っていても前に出す(案内表示と同じ。デスクトップ版だけ)
+    const internals = window.__TAURI_INTERNALS__;
+    if (internals && typeof internals.invoke === "function") {
+      Promise.resolve(internals.invoke("shell_bring_front")).catch(() => {});
+    }
+    $("stopband-quit")?.focus();
+  }
   if (!tick) tick = setInterval(paint, 1000);
 }
 

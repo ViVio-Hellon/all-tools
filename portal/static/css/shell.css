@@ -309,12 +309,19 @@ input[type=text],input[type=password],select{height:38px;padding:0 10px;border:1
 .guide__rules li{margin:2px 0}
 
 /* 管理者以外停止のお願いの帯(`js/remote_stop.js`)。全ツールの画面の上に重ねる(タブを替えても消えない) */
-.stopband{position:fixed;top:var(--bar-h);left:0;right:0;z-index:40;display:flex;flex-wrap:wrap;align-items:center;
-  gap:8px 14px;padding:10px 16px;background:var(--warn-bg);color:var(--warn-fg);
-  border-bottom:3px solid var(--state-error);box-shadow:0 2px 8px #0003;font-size:var(--fs-md)}
+/* 管理者以外停止モード: 画面いっぱいに重ね、後ろは触らせない(1.5.118) */
+.stopband{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:#000a}
 .stopband[hidden]{display:none}
-.stopband__text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 360px}
-.stopband__text b{font-size:var(--fs-lg, 1.05em)}
+.stopband__panel{width:min(920px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;
+  align-items:center;gap:14px;padding:36px 32px;text-align:center;border-radius:16px;
+  background:var(--warn-bg);color:var(--warn-fg);border:8px solid var(--state-error);box-shadow:0 8px 40px #0008}
+.stopband__panel p{margin:0}
+.stopband__big{font-size:clamp(2.4rem,6vw,4.4rem);font-weight:800;line-height:1.15;color:var(--state-error)}
+.stopband__sub{font-size:clamp(1.3rem,2.6vw,2rem);font-weight:700}
+.stopband__count{font-size:clamp(2rem,5vw,3.6rem);font-weight:800;font-variant-numeric:tabular-nums}
+.stopband__line{font-size:var(--fs-md);max-width:60em}
+.stopband__quit{font-size:1.3rem;padding:12px 28px}
 /* 大設定の「管理者以外停止モード」 */
 .rs-form{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:8px 0}
 .rs-form label{display:flex;flex-direction:column;gap:4px;font-size:var(--fs-sm);color:var(--muted)}

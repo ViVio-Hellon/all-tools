@@ -37,15 +37,23 @@
 
   function ensureBox() {
     if (box) return;
-    box = el("div", "position:fixed;top:0;left:0;right:0;z-index:2147483000;display:none;gap:4px 12px;"
-      + "flex-wrap:wrap;align-items:center;padding:10px 16px;background:#fdf0f0;color:#982326;"
-      + "border-bottom:3px solid #c62828;box-shadow:0 2px 8px rgba(0,0,0,.25);font:14px/1.5 sans-serif");
+    // **画面いっぱいに大きく**(1.5.118 ──「停止の案内が小さくて気が付かない」)。後ろは触らせない
+    box = el("div", "position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;"
+      + "justify-content:center;padding:24px;background:rgba(0,0,0,.65);font:16px/1.5 sans-serif");
     box.id = "remote-stop-band";
-    box.setAttribute("role", "alert");
-    var title = el("b", "font-size:15px;flex:0 0 auto", "管理者が更新のため停止を求めています");
-    line = el("span", "flex:1 1 360px;min-width:0");
-    box.appendChild(title);
-    box.appendChild(line);
+    box.setAttribute("role", "alertdialog");
+    box.setAttribute("aria-modal", "true");
+    var panel = el("div", "width:min(920px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;"
+      + "align-items:center;gap:14px;padding:36px 32px;text-align:center;border-radius:16px;background:#fdf0f0;"
+      + "color:#982326;border:8px solid #c62828;box-shadow:0 8px 40px rgba(0,0,0,.5)");
+    var title = el("b", "font-size:clamp(2.4rem,6vw,4.4rem);line-height:1.15;color:#c62828",
+                   "入力をやめてください");
+    var sub = el("b", "font-size:clamp(1.3rem,2.6vw,2rem)", "管理者が更新のため、止めます");
+    line = el("span", "font-size:16px;max-width:60em");
+    panel.appendChild(title);
+    panel.appendChild(sub);
+    panel.appendChild(line);
+    box.appendChild(panel);
     document.body.appendChild(box);
   }
 

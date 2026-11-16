@@ -345,7 +345,7 @@ class BandBrowserTests(_Child):
         self.issue()
         page.wait_for_selector("#remote-stop-band", state="visible", timeout=20000)
         text = page.inner_text("#remote-stop-band")
-        self.assertIn("管理者が更新のため停止を求めています", text)
+        self.assertIn("入力をやめてください", text)   # 画面いっぱいに大きく(1.5.118)
         self.assertIn("試験の打ちかけ", text)
         self.assertIn("強制で止めます", text)
         self.left_file.unlink()                       # 片付いた → まもなく止まる

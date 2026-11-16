@@ -25,12 +25,16 @@
 </header>
 
 <!-- 管理者以外停止のお願い(`portal/remote_stop.py`・`js/remote_stop.js`)。全ツールの画面の上に重ねる -->
-<div class="stopband" id="stopband" hidden role="alert">
-  <div class="stopband__text">
-    <b id="stopband-title">管理者が更新のため停止を求めています</b>
-    <span id="stopband-line"></span>
+{# 管理者以外停止モード。**画面いっぱいに大きく**(1.5.118 ──「停止の案内が小さくて気が付かない。
+   バックエンドのまま入力を続けてトーストも無視して最後まで入力していた」)。後ろの画面は触れない #}
+<div class="stopband" id="stopband" hidden role="alertdialog" aria-modal="true" aria-labelledby="stopband-title">
+  <div class="stopband__panel">
+    <p class="stopband__big" id="stopband-title">入力をやめてください</p>
+    <p class="stopband__sub">管理者が更新のため、日報複合ツールを止めます</p>
+    <p class="stopband__count" id="stopband-count"></p>
+    <p class="stopband__line" id="stopband-line"></p>
+    <button type="button" class="btn btn--danger stopband__quit" id="stopband-quit">保存を確かめて終了する</button>
   </div>
-  <button type="button" class="btn btn--danger" id="stopband-quit">保存を確かめて終了する</button>
 </div>
 
 <main class="stage" id="stage">
