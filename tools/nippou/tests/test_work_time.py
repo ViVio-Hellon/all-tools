@@ -204,11 +204,27 @@ class ComputeTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.times, {})
 
-    def test_停止だけの行はマイナスになる(self) -> None:
-        """作業時間が無いのに停止だけ入っている ── VBA も同じ扱い。"""
-        result = work_time.compute(rows(r4={"TH": "30"}))
+    def test_停止だけの行は打っている途中ではマイナスと言わない(self) -> None:
+        """LOTで時間を割り振る前に停止を先に打つ ── 何行も音が鳴らないように(v4.49.3)。
+        開始だけ・終了だけの行も同じ。保存(確定)では `save_checks.check_negative_time` が止める。"""
+        for row in ({"S": "ｲ", "TH": "30"}, {"KZ": "08", "KH": "00", "S": "ｲ", "TH": "30"},
+                    {"SZ": "09", "SH": "00", "S": "ｲ", "TH": "30"}):
+            with self.subTest(row=row):
+                result = work_time.compute(rows(r4=row))
+                self.assertIsNone(result.problem)
+                self.assertNotIn(4, result.times)
+                self.assertEqual(work_time.problems(rows(r4=row)), [])
+
+    def test_開始終了がそろった行はいままでどおりマイナスを言う(self) -> None:
+        result = work_time.compute(rows(r4={"KZ": "08", "KH": "00", "SZ": "08", "SH": "20", "TH": "30"}))
         self.assertEqual(result.problem.reason, work_time.REFUSE_NEGATIVE)
-        self.assertEqual(result.problem.row, 4)
+
+    def test_保存では停止だけの行も止める(self) -> None:
+        from nippou.db.models import DetailRecord
+        from nippou.logic import save_checks
+
+        d = DetailRecord(report_date="x", line="L-1", shift="1直", page=1, row_no=4, lot="A", th="30")
+        self.assertTrue(save_checks.check_negative_time([d]))
 
     def test_複数行(self) -> None:
         result = work_time.compute(rows(
@@ -234,3 +250,22 @@ class StopPairProblemTests(unittest.TestCase):
                          [(1, work_time.REFUSE_STOP_PAIR, "TH"), (2, work_time.REFUSE_STOP_PAIR, "SS"),
                           (3, work_time.REFUSE_STOP_PAIR, "TH4")])
         self.assertIn("作業停止①「イ」の時間が入っていません", found[0].message)
+
+
+from tests._web import HAS_FLASK, SKIP_REASON  # noqa: E402
+from tests import test_scenario_shift_flow as flow  # noqa: E402
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class StopFirstScreenTests(flow.ScenarioCase):
+    """停止を先に打った行(v4.49.3): 打っている途中は音も断りも出さない・保存(確定)では止める。"""
+
+    def test_打っている途中は黙り_保存では止める(self) -> None:
+        self.start_shift("2026-10-05 07:05", "山田")
+        rows = flow.rows_of(flow.row("A01", "07:00", "08:00"), {"LOT": "A02", "S": "2", "TH": "20"})
+        state = self.post("/api/entry/state", self.sheet(rows)).get_json()
+        text = str(state)
+        self.assertNotIn("作業時間がマイナス", text)
+        res = self.save(rows)
+        self.assertNotEqual(res.status_code, 200)
+        self.assertIn("マイナス", str(res.get_json()))

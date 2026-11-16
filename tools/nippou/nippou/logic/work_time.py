@@ -237,8 +237,10 @@ def compute(rows: dict[int, dict[str, str]], *,
                 "開始時間と終了時間が同じになっています。"))
         times[row] = Decimal(minutes)
 
-    # 作業停止分を引く。**停止だけ入っている行も通る**(VBA と同じ)ので、
-    # 作業時間が無ければ 0 から引いてマイナスになる ── それも断りの対象
+    # 作業停止分を引く。**停止だけ入っている行も通る**(VBA と同じ)。
+    # **ただし開始・終了がそろっていない行は、打っている途中ではマイナスと言わない**(v4.49.3)。
+    #     LOTで時間を割り振る場合に停止を先に入れることになるが、何行にもわたってエラー音声が流れてしまう
+    # 保存(確定)では止める(`save_checks.check_negative_time` が停止だけの行も見る)
     for row in sorted(rows):
         values = rows[row]
         stops = [(values.get(f) or "").strip() for f in STOP_TIME_FAMILIES]
@@ -246,6 +248,8 @@ def compute(rows: dict[int, dict[str, str]], *,
             continue
         minutes = times.get(row, Decimal(0))
         minutes -= sum(stop_minutes(text) for text in stops)
+        if minutes < 0 and row not in times:
+            continue                              # 作業時間はまだ出せない(欄は空のまま)
         if minutes < 0:
             return TimeResult(problem=TimeProblem(
                 row, REFUSE_NEGATIVE,
@@ -311,7 +315,8 @@ def problems(rows: dict[int, dict[str, str]], *,
                     "開始時間と終了時間が同じになっています。"))
                 continue
 
-        if any(stops):
+        if any(stops) and kz and kh and sz and sh:
+            # 開始・終了がそろっていない行は、打っている途中ではマイナスと言わない(v4.49.3)
             if minutes - sum(stop_minutes(text) for text in stops) < 0:
                 found.append(TimeProblem(
                     row, REFUSE_NEGATIVE,

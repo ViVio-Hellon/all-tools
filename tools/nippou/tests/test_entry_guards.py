@@ -110,13 +110,14 @@ class AllProblemsTests(unittest.TestCase):
         }))
         self.assertEqual([p.row for p in found], [2, 7])
 
-    def test_a_stop_without_a_work_time_is_negative(self):
-        # 停止だけ入っている行は 0 から引くのでマイナス(VBA と同じ)
-        found = work_time.problems(self.rows({1: {"TH": "20"}}))
-        self.assertEqual([p.reason for p in found], [work_time.REFUSE_NEGATIVE])
+    def test_a_stop_without_a_work_time_is_not_negative_while_typing(self):
+        # 停止だけの行は、打っている途中ではマイナスと言わない(v4.49.3。LOTで割り振る前に停止を先に打つ)。
+        # 保存(確定)では save_checks.check_negative_time が止める
+        found = work_time.problems(self.rows({1: {"S": "ｲ", "TH": "20"}}))
+        self.assertNotIn(work_time.REFUSE_NEGATIVE, [p.reason for p in found])
 
     def test_the_wording_is_plain(self):
-        found = work_time.problems(self.rows({1: {"TH": "20"}}))
+        found = work_time.problems(self.rows({1: {"KZ": "08", "KH": "00", "SZ": "08", "SH": "10", "TH": "20"}}))
         self.assertNotIn("**", found[0].message)
 
 
