@@ -75,3 +75,128 @@ class SummaryTests(flow.ScenarioCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class RepeatTests(flow.ScenarioCase):
+    """除く・戻すを繰り返しても集計と集計CSVが壊れない・班と個人を組み合わせても正しい。
+
+        集計データが除く、戻すを繰り返しても問題がないかチェックしてください
+        班と個人の複合の場合も正しいかのチェック
+    """
+
+    #: (報告日, 直, ページ, 作業者, 枚数)。班: 山田・田中=A、佐藤=B、鈴木=C
+    PAGES = (("2026年10月5日", "1直", 1, "山田", 10), ("2026年10月5日", "1直", 2, "佐藤", 20),
+             ("2026年10月5日", "2直", 1, "田中 佐藤", 40), ("2026年10月6日", "1直", 1, "鈴木", 80),
+             ("2026年10月6日", "2直", 1, "田中", 160))
+
+    def setUp(self) -> None:
+        super().setUp()
+        agg_exclude.reset()
+        self.addCleanup(agg_exclude.reset)
+        from nippou.config import SETTINGS
+        from nippou.db.models import DetailRecord, HeaderRecord
+
+        self.master = SETTINGS.gw_material_master_path
+        self.master.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.master)
+        conn.execute('CREATE TABLE IF NOT EXISTS "班員名簿" ("名前" TEXT, "班" TEXT, "読み" TEXT)')
+        conn.executemany('INSERT INTO "班員名簿" VALUES (?,?,"")',
+                         [("山田", "A"), ("田中", "A"), ("佐藤", "B"), ("鈴木", "C")])
+        conn.execute(agg_exclude.SCHEMA)
+        conn.commit()
+        conn.close()
+        for day, shift, page, worker, count in self.PAGES:
+            key = dict(report_date=day, line="L-1", shift=shift, page=page)
+            start = "07" if shift == "1直" else "15"
+            self.repo().save(HeaderRecord(**key, worker=worker),
+                             [DetailRecord(**key, row_no=1, lot=f"L{page}{shift[0]}", kz=start, kh="00",
+                                           sz=str(int(start) + 1), sh="00", mai=str(count), tut="1",
+                                           con=str(count), wei="100")])
+        self.rules()                              # 何も除かない
+
+    def rules(self, *rows: dict) -> dict:
+        conn = sqlite3.connect(self.master)
+        conn.execute(f'DELETE FROM "{agg_exclude.TABLE}"')
+        for r in rows:
+            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","有効") VALUES (?,?,?)',
+                         (r.get("作業者", ""), r.get("班", ""), r.get("有効", 1)))
+        conn.commit()
+        conn.close()
+        res = self.post("/api/settings/rebuild-summary", {"start": "2026-10-05", "end": "2026-10-06"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        return self.snapshot()
+
+    def snapshot(self) -> dict:
+        """集計(直ごとの枚数とロット)と、出力先の集計CSVの中身ぜんぶ。"""
+        out: dict = {"reports": {}, "csv": {}}
+        for day in ("2026年10月5日", "2026年10月6日"):
+            for shift in ("1直", "2直"):
+                report = self.repo().load_packing_report(day, "L-1", shift)
+                if report is not None:
+                    out["reports"][(day, shift)] = (round(float(report.total_quantity or 0), 3), report.pages, report.worker_name)
+        root = self.tmp / "出力"
+        for path in sorted(root.rglob("*.csv")) if root.exists() else []:
+            out["csv"][str(path.relative_to(root))] = path.read_bytes()
+        return out
+
+    def counts(self, snap: dict) -> dict:
+        return {k: v[0] for k, v in snap["reports"].items()}
+
+    def test_個人と班の組み合わせが正しい(self) -> None:
+        base = self.counts(self.snapshot())
+        self.assertEqual(base, {("2026年10月5日", "1直"): 30.0, ("2026年10月5日", "2直"): 40.0,
+                                ("2026年10月6日", "1直"): 80.0, ("2026年10月6日", "2直"): 160.0})
+        cases = (
+            ([{"作業者": "山田"}], {("2026年10月5日", "1直"): 20.0, ("2026年10月5日", "2直"): 40.0,
+                                   ("2026年10月6日", "1直"): 80.0, ("2026年10月6日", "2直"): 160.0}),
+            # 佐藤(B班)は 1直2ページ目と、田中との混ざった 2直
+            ([{"班": "B"}], {("2026年10月5日", "1直"): 10.0, ("2026年10月6日", "1直"): 80.0,
+                             ("2026年10月6日", "2直"): 160.0}),
+            # 個人と班の組み合わせ: 山田 + B班 → 10/5 は全部外れる
+            ([{"作業者": "山田"}, {"班": "B"}], {("2026年10月6日", "1直"): 80.0, ("2026年10月6日", "2直"): 160.0}),
+            # A班(山田・田中)+ 鈴木 → 残るのは佐藤だけのページ
+            ([{"班": "A班"}, {"作業者": "鈴木"}], {("2026年10月5日", "1直"): 20.0}),
+            # 有効 0 の行は効かない
+            ([{"作業者": "山田", "有効": 0}], base),
+        )
+        # 1日ぶん全部を除いた日の集計CSVに、除いたページのロットが残らない
+        snap = self.rules({"作業者": "山田"}, {"班": "B"})
+        text = b"".join(v for k, v in snap["csv"].items() if "1005" in k.replace("-", "").replace("/", "")
+                        or "10月5日" in k or "20261005" in k)
+        for lot in ("L11", "L21", "L12"):
+            self.assertNotIn(lot.encode("cp932"), text, f"除いたロット {lot} が集計CSVに残っている")
+            self.assertNotIn(lot.encode("utf-8"), text)
+        # 除いた人の名前が集計の作業者に残らない
+        self.rules({"作業者": "山田"})
+        self.assertEqual(self.repo().load_packing_report("2026年10月5日", "L-1", "1直").worker_name, "佐藤")
+        for rows, want in cases:
+            with self.subTest(rows=rows):
+                self.assertEqual(self.counts(self.rules(*rows)), want)
+
+    def test_除く戻すを繰り返しても元どおり(self) -> None:
+        first = self.snapshot()
+        self.assertTrue(first["csv"], "集計CSVが出ていない")
+        seen: dict = {}
+        for _round in range(3):
+            for rows in ([{"作業者": "山田"}], [{"班": "B"}], [{"作業者": "山田"}, {"班": "B"}],
+                         [{"班": "A"}, {"作業者": "鈴木"}]):
+                got = self.rules(*rows)
+                key = repr(rows)
+                if key in seen:
+                    self.assertEqual(got, seen[key], f"同じ決まりなのに結果が変わった: {rows}")
+                seen[key] = got
+                back = self.rules()
+                self.assertEqual(back["reports"], first["reports"], f"戻したのに集計が元と違う: {rows}")
+                self.assertEqual(set(back["csv"]), set(first["csv"]), "集計CSVのファイルが変わった")
+                for name in first["csv"]:
+                    self.assertEqual(self._body(back["csv"][name]), self._body(first["csv"][name]),
+                                     f"戻したのに集計CSVが元と違う: {name} {rows}")
+        # 日報のページは一度も消えていない
+        for day, shift, page, _w, _c in self.PAGES:
+            self.assertIn(page, self.repo().saved_pages(day, "L-1", shift))
+
+    @staticmethod
+    def _body(data: bytes) -> bytes:
+        """書いた時刻の列があれば外す(中身だけ比べる)。"""
+        return data
