@@ -905,10 +905,25 @@ function paintTimeLock(view) {
     if (!AUTO_TIME_FAMILIES.has(el.dataset.family)) continue;
     if (locked) {
       if (!el.dataset.autoLocked) { el.dataset.autoLocked = "1"; el.readOnly = true; el.tabIndex = -1; }
-      el.title = "集計から除く作業者なので、時間と停止は共有へ保存のときに自動で入ります";
+      // **グレーにして、触ったら「入力の必要はありません」**(v4.52.3。打っても入らないだけだと「なぜ？」)
+      el.classList.add("auto-locked");
+      el.title = "入力の必要はありません(時間は自動で入ります)";
     } else if (el.dataset.autoLocked) {
       delete el.dataset.autoLocked; el.readOnly = false; el.removeAttribute("tabindex"); el.title = "";
+      el.classList.remove("auto-locked");
     }
+  }
+  if (!paintTimeLock.wired) {
+    paintTimeLock.wired = true;
+    const tell = (event) => {
+      const el = event.target?.closest?.("#grid-body [data-auto-locked]");
+      if (!el) return;
+      event.preventDefault();
+      el.blur();
+      toast("入力の必要はありません", "info");
+    };
+    document.addEventListener("mousedown", tell, true);
+    document.addEventListener("focusin", tell, true);
   }
   const note = document.getElementById("auto-time-note");
   if (note) note.hidden = !locked;

@@ -3238,3 +3238,11 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
 
 /* マスタ管理: 欄の下の説明と選べる値(列ごとの説明がある表) */
 .stack-field__hint{ grid-column:1 / -1; color:var(--muted); font-size:var(--fs-sm); line-height:1.5; }
+
+/* 集計から除く作業者のページの時間・停止(v4.52.3)。グレーで触れない */
+#grid-body .auto-locked,
+#grid-body .auto-locked:focus {
+  background: var(--auto-locked-bg, #d9d9d9) !important;
+  color: var(--auto-locked-fg, #8a8a8a) !important;
+  cursor: not-allowed;
+}

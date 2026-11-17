@@ -78,6 +78,12 @@ class AutoTimeBrowserTests(WebTestCase):
         for field in ("KZ1", "KH1", "SZ1", "SH1", "S1", "TH1", "SS1", "THS1"):
             with self.subTest(field=field):
                 self.assertEqual(self.typed(page, field, "12"), "", f"{field} に打てた")
+        # グレーで、触ると「入力の必要はありません」
+        self.assertEqual(page.evaluate("getComputedStyle(document.getElementById('KZ1')).cursor"), "not-allowed")
+        bg = page.evaluate("getComputedStyle(document.getElementById('TH1')).backgroundColor")
+        self.assertEqual(bg, "rgb(217, 217, 217)")
+        page.click("#KZ1", force=True)
+        page.wait_for_selector("#toasts .toast:has-text('入力の必要はありません')", timeout=3000)
         # ロット・枚数はふつうに打てる
         self.assertEqual(self.typed(page, "MAI1", "5"), "5")
         # 開き直しても打てない
@@ -91,4 +97,5 @@ class AutoTimeBrowserTests(WebTestCase):
         page = self.open()
         self.choose(page, "佐藤")
         self.assertFalse(page.is_visible("#auto-time-note"))
+        self.assertEqual(page.evaluate("document.querySelectorAll('#grid-body .auto-locked').length"), 0)
         self.assertEqual(self.typed(page, "KZ1", "07"), "07")
