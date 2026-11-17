@@ -278,6 +278,9 @@ def _view(state, ctx, calc, *, message: str = "", focus: str = "",
     body["needs_worker"] = bool(
         not body["read_only"] and not body["needs_line"] and not ctx.recall.active
         and not str(state.header.get("worker", "")).strip())
+    # **集計から除く人のページは、時間・停止を打たない**(v4.51.0。共有へ保存のときに自動で入る)
+    from .. import auto_time
+    body["time_locked"] = auto_time.locked(state.header.get("worker", ""))
     # **4直・5直のあるラインで、重なる時間なら先に直を選ぶ**(v4.49.0)。選ぶまでは
     # 作業者も選ばせない(選んだ直の紙に作業者を入れるため)
     pick = [] if body["read_only"] or body["needs_line"] else shift_pick(ctx, calc)
@@ -756,6 +759,32 @@ def anchor_standing(ctx, calc, now: Optional[datetime] = None):
     return shift_anchor.decide(
         ctx.anchor, now=now, shift_end=end,
         grace_minutes=SETTINGS.shift_grace_minutes, close_at=close_at)
+
+
+def _keep_auto_times(state, ctx, calc, payload) -> None:
+    """集計から除く人のページは、**時間・停止を画面から受け取らない**(v4.51.0 `app/auto_time`)。
+
+    欄は画面で止めてあるが、古い画面・自動保存が空の欄で上書きしないよう、保存済みの値に戻す
+    (共有へ保存のときに自動で割り振った時間を消さない)。
+    """
+    from .. import auto_time
+
+    if not auto_time.locked(state.header.get("worker", "")):
+        return
+    try:
+        report_date, line, shift, page = _target(ctx, calc)
+        opened = payload.get("opened") if isinstance(payload.get("opened"), dict) else {}
+        if opened.get("page"):
+            page = int(opened.get("page"))
+        saved = _load_state(report_date, line, shift, page)
+    except Exception:                             # noqa: BLE001 - 戻せなければ空のまま(送るときに入る)
+        log.exception("自動割り振りの時間を保存済みから戻せませんでした")
+        return
+    families = (*auto_time.TIME_FAMILIES, *auto_time._stop_families())
+    for row in state.rows:
+        before = saved.rows.get(row, {})
+        for family in families:
+            state.set(row, family, str(before.get(family, "") or ""))
 
 
 def shift_pick(ctx, calc, now: Optional[datetime] = None) -> list:
@@ -1919,6 +1948,7 @@ def save():
     from nippou.logic import shift_boundary
 
     state = presenter.parse_state(payload)
+    _keep_auto_times(state, ctx, calc, payload)
     # **この端末のラインが決まるまで書かない**(v4.3.0)。画面は伏せて
     # ありますが(`needs_line`)、断るのはここです ── 古い画面や別の
     # タブから来たぶんまで止めないと、別のラインの日報が L1 に混ざります。
@@ -2616,6 +2646,21 @@ def close_shift():
             log.info("集計CSV: %s", note)
     except Exception:                             # noqa: BLE001 - 締めは続ける
         log.exception("書けなかった集計CSVの書き直しで失敗しました")
+    # **集計から除く人の直は、確定・送る前に時間を自動で割り振る**(v4.51.0 `app/auto_time`)。
+    # 5分前の自動確定(いまの直)と、終わった直の拾い(このラインの未送信の直)
+    if not ctx.recall.active:
+        from .. import auto_time
+        try:
+            # **いまの直は締める間際(残り5分〜)だけ**(毎分書き直すと、打っている画面と取り合う)
+            clock = ctx.clock_key(calc)
+            near = calc.minutes_until_shift_end(datetime.now(), ctx.force_day_shift()) \
+                <= SETTINGS.auto_print_minutes
+            due = [(h.report_date, h.line, h.shift) for h in get_repo().pending_sync_headers()
+                   if h.line == ctx.line and (near or (h.report_date, h.shift) != tuple(clock))]
+            for note in auto_time.fill(due):
+                log.info("自動確定: %s", note)
+        except Exception:                         # noqa: BLE001 - 締めは続ける
+            log.exception("時間の自動割り振りで失敗しました")
     result = shift_close.run(get_repo(), calc,
                              line=ctx.line,
                              force_day_shift=ctx.force_day_shift(),

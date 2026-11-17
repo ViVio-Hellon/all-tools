@@ -945,6 +945,12 @@ def _push(ctx):
         keys = _scope_keys(scope, mine)
     else:
         keys = _scope_keys(scope, mine)
+    # **集計から除く人の直は、確かめる前に時間を自動で割り振る**(v4.51.0 `app/auto_time`)
+    from .. import auto_time
+    auto_notes = auto_time.fill(keys if keys is not None else
+                                [(h.report_date, h.line, h.shift) for h in get_repo().pending_sync_headers()])
+    for note in auto_notes:
+        log.info("共有へ保存: %s", note)
     reports = shift_check.run_pending(get_repo(), skip=skip, admin=ctx.editor,
                                       skip_only=mine, keys=keys)
     # **押したことを残す**(時刻・いまの直・担当者・どちらのボタンか)。止めたときも

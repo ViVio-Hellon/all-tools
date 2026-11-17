@@ -200,3 +200,53 @@ class RepeatTests(flow.ScenarioCase):
     def _body(data: bytes) -> bytes:
         """書いた時刻の列があれば外す(中身だけ比べる)。"""
         return data
+
+
+@unittest.skipUnless(HAS_FLASK, SKIP_REASON)
+class AutoTimeTests(flow.ScenarioCase):
+    """集計から除く作業者は時間・停止を打てず、共有へ保存のときに自動で割り振る(v4.51.0)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        agg_exclude.reset()
+        self.addCleanup(agg_exclude.reset)
+        from nippou.config import SETTINGS
+        path = SETTINGS.gw_material_master_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(path)
+        conn.execute(agg_exclude.SCHEMA)
+        conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","有効") VALUES ("山田", 1)')
+        conn.commit()
+        conn.close()
+        agg_exclude.reset()
+
+    ROWS = {"1": {"LOT": "A01", "MAI": "10", "TUT": "1", "WEI": "100", "KZ": "07", "KH": "00",
+                  "SZ": "09", "SH": "00", "S": "2", "TH": "30"},
+            "2": {"LOT": "A02", "MAI": "10", "TUT": "1", "WEI": "100"}}
+
+    def test_打てず_送るときに自動で入り_印刷に印(self) -> None:
+        self.start_shift("2026-10-05 07:05", "山田")
+        state = self.post("/api/entry/state", self.sheet(self.ROWS, worker="山田")).get_json()
+        self.assertTrue(state["time_locked"])
+        self.assertEqual(self.save(self.ROWS, worker="山田").status_code, 200)
+        header, details = self.repo().load("2026年10月5日", "L-1", "1直", 1)
+        self.assertEqual((details[0].kz, details[0].th), ("", ""), "打った時間・停止は受け取らない")
+        self.at("2026-10-05 14:30")
+        res = self.push_now()
+        self.assertEqual(res.status_code, 200, res.get_json())
+        header, details = self.repo().load("2026年10月5日", "L-1", "1直", 1)
+        filled = [d for d in details if (d.lot or "").strip()]
+        self.assertEqual(f"{filled[0].kz}:{filled[0].kh}", "07:00")
+        self.assertEqual(f"{filled[-1].sz}:{filled[-1].sh}", "15:00", "直の終わりまで割り振る")
+        self.assertTrue(any((s.stop_code or "") == "0" for d in filled for s in getattr(d, "stops", [])) or
+                        any((d.s or "") == "0" or (d.ss or "") == "0" for d in filled), "休憩を足す")
+        page = self.get("/report/nippou?report_date=2026年10月5日&line=L-1&shift=1直&page=1").get_data(as_text=True)
+        self.assertIn("自動(時間は自動割り振り", page)
+
+    def test_ふつうの作業者は今までどおり(self) -> None:
+        self.start_shift("2026-10-05 07:05", "田中")
+        state = self.post("/api/entry/state", self.sheet(self.ROWS, worker="田中")).get_json()
+        self.assertFalse(state["time_locked"])
+        self.assertEqual(self.save(self.ROWS, worker="田中").status_code, 200)
+        header, details = self.repo().load("2026年10月5日", "L-1", "1直", 1)
+        self.assertEqual(details[0].kz, "07")

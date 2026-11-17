@@ -893,7 +893,29 @@ function paintHandover(handover) {
  * 選んだ時点で `settle` がサーバへ行き、`needs_worker` が下りて
  * ここが呼ばれ直します ── 画面側で解除を判断しません。
  */
+/**
+ * 集計から除く作業者・班のページは、**梱包作業時間と作業停止を打たない**(v4.51.0)。
+ * 共有へ保存するときに「時間を割り振る」と同じ計算で自動で入る(`app/auto_time.py`)。
+ */
+const AUTO_TIME_FAMILIES = new Set(["KZ", "KH", "SZ", "SH", "S", "TH", "SS", "THS", "STH", "THT",
+                                    "S4", "TH4", "S5", "TH5"]);
+function paintTimeLock(view) {
+  const locked = !!view?.time_locked;
+  for (const el of document.querySelectorAll("#grid-body [data-family]")) {
+    if (!AUTO_TIME_FAMILIES.has(el.dataset.family)) continue;
+    if (locked) {
+      if (!el.dataset.autoLocked) { el.dataset.autoLocked = "1"; el.readOnly = true; el.tabIndex = -1; }
+      el.title = "集計から除く作業者なので、時間と停止は共有へ保存のときに自動で入ります";
+    } else if (el.dataset.autoLocked) {
+      delete el.dataset.autoLocked; el.readOnly = false; el.removeAttribute("tabindex"); el.title = "";
+    }
+  }
+  const note = document.getElementById("auto-time-note");
+  if (note) note.hidden = !locked;
+}
+
 function paintNeedsWorker(view) {
+  paintTimeLock(view);
   // **伏せる理由は2つあります。** 作業者がまだ決まっていない(こちら)と、
   // 前の直が片付いていない(`handover.blocked`)── どちらでも表は伏せ
   // ますが、出す帯と押させるボタンが違います

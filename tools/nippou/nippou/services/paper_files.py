@@ -49,6 +49,10 @@ def aggregate_of(repo: Any, report_date: str, line: str, shift: str) -> dict:
         return {}
 
 
+#: 集計から除く作業者のページの印(v4.51.0)
+AUTO_STAMP = "自動(時間は自動割り振り・集計から除く作業者)"
+
+
 def backfill_stamps(repo: Any, report_date: str, line: str, shift: str) -> dict[int, str]:
     """その直で後から作ったページの印(ページ → 字)。**紙にも残す**(v4.0.0)。
 
@@ -62,6 +66,18 @@ def backfill_stamps(repo: Any, report_date: str, line: str, shift: str) -> dict[
         log.exception("後日作成の印を読めませんでした")
         found = {}
     stamps = {key[3]: backfill_rule.stamp_text(info) for key, info in found.items()}
+    # 集計から除く作業者のページは時間を自動で割り振っている(v4.51.0 `app/auto_time`)
+    try:
+        from ..services import agg_exclude
+
+        rules = agg_exclude.load()
+        if rules:
+            for page in repo.saved_pages(report_date, line, shift):
+                loaded = repo.load(report_date, line, shift, page)
+                if loaded is not None and rules.why(getattr(loaded[0], "worker", "")):
+                    stamps[int(page)] = " / ".join(t for t in (AUTO_STAMP, stamps.get(int(page), "")) if t)
+    except Exception:                             # noqa: BLE001 - 印が出ないだけ
+        log.exception("自動割り振りの印を付けられませんでした")
     if _is_test(repo, report_date, line, shift):
         for page in repo.saved_pages(report_date, line, shift):
             stamps[int(page)] = " / ".join(t for t in (TEST_STAMP, stamps.get(int(page), "")) if t)
