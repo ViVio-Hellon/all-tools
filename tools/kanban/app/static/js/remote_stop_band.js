@@ -27,6 +27,10 @@
   var box = null;
   var line = null;
   var notes = null;
+  // **アプリに届かない**(1.5.125)。最小化していてお願いを受け取る前に止まったときも、大きく出して入力させない
+  var offline = false;
+  var title = null;
+  var sub = null;
 
   function el(tag, css, text) {
     var node = document.createElement(tag);
@@ -46,13 +50,18 @@
     var panel = el("div", "width:min(920px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;"
       + "align-items:center;gap:14px;padding:36px 32px;text-align:center;border-radius:16px;background:#fdf0f0;"
       + "color:#982326;border:8px solid #c62828;box-shadow:0 8px 40px rgba(0,0,0,.5)");
-    var title = el("b", "font-size:clamp(2.4rem,6vw,4.4rem);line-height:1.15;color:#c62828",
+    title = el("b", "font-size:clamp(2.4rem,6vw,4.4rem);line-height:1.15;color:#c62828",
                    "入力をやめてください");
-    var sub = el("b", "font-size:clamp(1.3rem,2.6vw,2rem)", "管理者が更新のため、止めます");
+    sub = el("b", "font-size:clamp(1.3rem,2.6vw,2rem)", "管理者が更新のため、止めます");
     line = el("span", "font-size:16px;max-width:60em");
+    var again = el("button", "font-size:18px;padding:8px 24px;cursor:pointer;display:none", "開き直す");
+    again.type = "button";
+    again.id = "remote-stop-reload";
+    again.addEventListener("click", function () { location.reload(); });
     panel.appendChild(title);
     panel.appendChild(sub);
     panel.appendChild(line);
+    panel.appendChild(again);
     box.appendChild(panel);
     document.body.appendChild(box);
   }
@@ -100,8 +109,22 @@
       + " で強制で止めます(止める前に打ちかけを手元に置き、残っていたものは次の起動で知らせます)。";
   }
 
+  function showOffline(known) {
+    ensureBox();
+    offline = true;
+    title.textContent = "入力をやめてください";
+    sub.textContent = known ? "管理者が更新のため止めました" : "アプリが止まっています";
+    line.textContent = known
+      ? "管理者以外停止モードで止めました。更新が終わるまで起動できません。しばらくしてから開き直してください。"
+      : "いま打っても保存されません(管理者の更新で止めたか、アプリが終わっています)。"
+        + "しばらくしてから「開き直す」を押してください。";
+    document.getElementById("remote-stop-reload").style.display = "";
+    box.style.display = "flex";
+  }
+
   function paint() {
     if (!box) return;
+    if (offline) { box.style.display = "flex"; return; }
     if (!state || (state.hosted && inFrame)) { box.style.display = "none"; return; }
     line.textContent = text();
     box.style.display = "flex";
@@ -140,6 +163,11 @@
     }
     fetch(url, { cache: "no-store" }).then(function (res) { return res.json(); }).then(function (body) {
       misses = 0;
+      if (offline) {
+        // また届いた(アプリが起き直した)。前の画面のままでは打てないので、開き直してもらう
+        line.textContent = "アプリはまた動いています。「開き直す」を押してから入力してください。";
+        return;
+      }
       var rs = body && body.remote_stop;
       ((rs && rs.notes) || []).forEach(showNote);
       state = rs && rs.state && rs.state.id ? rs.state : null;
@@ -156,13 +184,11 @@
       // お願いを受けているあいだに続けて届かなくなった = 止まった(止めると決まってから止まるまでは短く、
       // 問い合わせの間に収まることが多い)。「接続できません」ではなく理由を出す。1回の取りこぼしでは出さない
       misses += 1;
-      if ((stopping || state) && misses >= 2 && box && !(state && state.hosted && inFrame)) {
-        line.textContent = "管理者が更新のため止めました(管理者以外停止モード)。更新が終わるまで起動できません。"
-          + "しばらくしてから開き直してください。";
-        box.style.display = "flex";
+      if (misses >= 2 && !offline && !(state && state.hosted && inFrame)) {
+        // お願いを見ていなくても(最小化していて問い合わせが間引かれた)、届かなければ大きく出して止める
+        showOffline(!!(stopping || state));
         stopping = false;
         state = null;
-        clearInterval(painter);
       }
     });
   }
@@ -175,11 +201,15 @@
     } catch (err) { /* 届かなくても、しばらくで忘れる */ }
   });
 
-  var painter = null;
   function start() {
     poll();
     setInterval(poll, POLL_MS);
-    painter = setInterval(paint, 1000);
+    setInterval(paint, 1000);
+    // 最小化・裏から戻ったら**すぐ**問い合わせる(裏ではタイマーが1分に1回まで間引かれる)
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") poll();
+    });
+    window.addEventListener("focus", poll);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

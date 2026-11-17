@@ -366,6 +366,27 @@ class BandBrowserTests(_Child):
                                timeout=20000)
         self.assertEqual(errors, [], "画面の誤り")
 
+    def test_お願いを見る前に止まっても大きく出して入力させない(self) -> None:
+        """最小化していてお願いを受け取る前に止まった(1.5.125)。届かなくなったら大きく出し、後ろを触らせない。"""
+        proc = self.start()
+        port = self.port(proc)
+        self.wait_ready(proc, port)
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        page.goto(f"http://127.0.0.1:{port}/?t={self.token(proc)}", wait_until="load")
+        page.wait_for_timeout(1500)
+        proc.kill()                                   # お願いの帯を見ないまま止まった
+        proc.wait(timeout=30)
+        page.wait_for_selector("#remote-stop-band", state="visible", timeout=30000)
+        text = page.inner_text("#remote-stop-band")
+        self.assertIn("入力をやめてください", text)
+        self.assertIn("アプリが止まっています", text)
+        self.assertTrue(page.is_visible("#remote-stop-reload"))
+        # 画面いっぱいに覆っている(後ろの欄を押せない)
+        hit = page.evaluate("(() => { const e = document.elementFromPoint(innerWidth/2, innerHeight/2);"
+                            " return !!e.closest('#remote-stop-band'); })()")
+        self.assertTrue(hit)
+
     def test_置く先の無い打ちかけは_残っているものに数えて待つ(self) -> None:
         """出る前の確かめを持たない画面(GW計算など)で打った欄は、置く先が無く止めると消える。
         何も無いとして帯を見せる間(現場 30 秒)で止めない(帯に出して利用者を待つ。期限で強制)。

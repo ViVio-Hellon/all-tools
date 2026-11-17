@@ -117,6 +117,23 @@ export class ApiError extends Error {
   }
 }
 
+/*
+  **アプリに届かない**(fetch が TypeError「Failed to fetch」を投げる)を、分かる言葉の ApiError にする
+  (1.5.125「Failed to fetch とトーストで何個も出ますが、意味わからないですよね」)。
+*/
+export const OFFLINE_MESSAGE = "日報のアプリにつながりません(止まっているかもしれません)";
+
+async function fetchOrOffline(path, init) {
+  try {
+    return await fetch(path, init);
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new ApiError(0, { error: { code: "offline", message: OFFLINE_MESSAGE } });
+    }
+    throw err;
+  }
+}
+
 async function request(path, options = {}, { quiet = false, mute = false } = {}) {
   /*
     **押した本人に、いま待っていることを伝える。**
@@ -129,7 +146,7 @@ async function request(path, options = {}, { quiet = false, mute = false } = {})
   */
   const done = quiet ? () => {} : busy.mark(busy.pressed());
   try {
-    const res = await fetch(path, {
+    const res = await fetchOrOffline(path, {
       ...options,
       cache: "no-store",
       headers: {

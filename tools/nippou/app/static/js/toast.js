@@ -19,9 +19,15 @@ function box() {
 export function toast(text, kind = "info") {
   const host = box();
   if (!host) return;
+  // **同じ知らせは1つだけ**(1.5.125。つながらないあいだ、同じ失敗が何個も積み重なっていた)
+  for (const old of host.querySelectorAll(".toast")) {
+    if (old.dataset.text === text && old.dataset.kind === kind) old.remove();
+  }
 
   const node = document.createElement("div");
   node.className = `toast toast--${kind}`;
+  node.dataset.text = text;
+  node.dataset.kind = kind;
   // 重い知らせは読み上げにも割り込ませる
   node.setAttribute("role", kind === "error" ? "alert" : "status");
 
