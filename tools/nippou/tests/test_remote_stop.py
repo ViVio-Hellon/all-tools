@@ -375,8 +375,9 @@ class BandBrowserTests(_Child):
         self.addCleanup(page.close)
         page.goto(f"http://127.0.0.1:{port}/?t={self.token(proc)}", wait_until="load")
         page.wait_for_timeout(1500)
-        proc.kill()                                   # お願いの帯を見ないまま止まった
-        proc.wait(timeout=30)
+        # お願いの帯を見ないまま止まった(届かない)。**プロセスを殺すのではなく通信を断つ** ──
+        # Windows では起動役を殺してもサーバの子が残り、答え続けることがあった(CI で揺れた)
+        page.route("**/api/**", lambda route: route.abort("connectionrefused"))
         page.wait_for_selector("#remote-stop-band", state="visible", timeout=30000)
         text = page.inner_text("#remote-stop-band")
         self.assertIn("入力をやめてください", text)
