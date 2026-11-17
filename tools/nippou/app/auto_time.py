@@ -20,7 +20,7 @@ from nippou.logging_setup import get_logger
 log = get_logger("app.auto_time")
 
 #: 印刷の目印(`services/paper_files.backfill_stamps`)
-STAMP = "時間は自動割り振り(集計から除く)"
+STAMP = "自動"
 #: 消す欄(梱包作業時間・作業停止①〜⑤・休憩の時刻)
 TIME_FAMILIES = ("KZ", "KH", "SZ", "SH")
 

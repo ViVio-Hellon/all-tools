@@ -258,7 +258,7 @@ class AutoTimeTests(flow.ScenarioCase):
         self.assertTrue(any((s.stop_code or "") == "0" for d in filled for s in getattr(d, "stops", [])) or
                         any((d.s or "") == "0" or (d.ss or "") == "0" for d in filled), "休憩を足す")
         page = self.get("/report/nippou?report_date=2026年10月5日&line=L-1&shift=1直&page=1").get_data(as_text=True)
-        self.assertIn("自動(時間は自動割り振り", page)
+        self.assertIn(">自動<", page.replace(" ", ""))
 
     def test_ふつうの作業者は今までどおり(self) -> None:
         self.start_shift("2026-10-05 07:05", "田中")

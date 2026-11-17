@@ -50,7 +50,7 @@ def aggregate_of(repo: Any, report_date: str, line: str, shift: str) -> dict:
 
 
 #: 集計から除く作業者のページの印(v4.51.0)
-AUTO_STAMP = "自動(時間は自動割り振り・集計から除く作業者)"
+AUTO_STAMP = "自動"
 
 
 def backfill_stamps(repo: Any, report_date: str, line: str, shift: str) -> dict[int, str]:
