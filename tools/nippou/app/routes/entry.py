@@ -2639,6 +2639,12 @@ def close_shift():
             local_backup.pull_if_due(get_repo(), ctx.terminal_line)
         except Exception:                         # noqa: BLE001 - 締めは続ける
             log.exception("控えからの取り込み(動いているあいだ)で失敗しました")
+        # **管理者のPCが頼んだ全ラインの集計の作り直し**(v4.52.0 `services/rebuild_all`。5分ごとに見る)
+        try:
+            from nippou.services import rebuild_all
+            rebuild_all.run_if_asked(get_repo(), ctx.terminal_line)
+        except Exception:                         # noqa: BLE001 - 締めは続ける
+            log.exception("頼まれた集計の作り直しで失敗しました")
     # **書けなかった集計CSVを書き直す**(v4.46.11。取り込んだあと共有に届かなかった日など)
     try:
         from nippou.services import day_csv

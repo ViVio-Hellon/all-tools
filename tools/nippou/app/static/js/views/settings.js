@@ -1730,6 +1730,58 @@ export function start() {
     }
   });
 
+  // ---- 全ラインで作り直す(v4.52.0。管理者が頼み、各ラインのPCが作る) ----
+  const allBox = document.getElementById("rebuild-all-box");
+  const allNote = document.getElementById("rebuild-all-note");
+  const allTable = document.getElementById("rebuild-all-table");
+  const showAll = (body, text, kind) => {
+    if (allNote) {
+      allNote.hidden = !text;
+      allNote.textContent = text || "";
+      allNote.className = `msg msg--${kind || "info"}`;
+    }
+    if (!allTable || !body) return;
+    const req = body.request;
+    allTable.hidden = !req;
+    const tbody = allTable.querySelector("tbody");
+    tbody.replaceChildren();
+    if (!req) return;
+    for (const row of body.lines || []) {
+      const tr = document.createElement("tr");
+      const state = row.error ? `失敗: ${row.error}` : (row.done ? "済み" : "まだ");
+      for (const v of [row.line, state, row.at || "", row.done ? String(row.shifts) : ""]) {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.append(td);
+      }
+      tbody.append(tr);
+    }
+    if (!text) {
+      const left = (body.lines || []).filter((r) => !r.done).length;
+      showAll(null, `頼み: ${req.start}〜${req.end}(${req.at})。まだのライン ${left}`, left ? "info" : "ok");
+    }
+  };
+  const loadAll = async () => {
+    try {
+      showAll(await api.get("/api/settings/rebuild-all"));
+    } catch (err) {
+      showAll(null, err.message, "error");
+    }
+  };
+  if (allBox && !allBox.hidden) loadAll();
+  document.getElementById("rebuild-all-refresh")?.addEventListener("click", loadAll);
+  document.getElementById("rebuild-all")?.addEventListener("click", async () => {
+    try {
+      const body = await api.post("/api/settings/rebuild-all", {
+        start: rebuildStart?.value || "",
+        end: rebuildEnd?.value || "",
+      });
+      showAll(body, body.message, "ok");
+    } catch (err) {
+      showAll(null, err.message, "error");
+    }
+  });
+
   /* ================================================================
      中身の無い紙を片付ける
 

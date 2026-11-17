@@ -1373,6 +1373,41 @@ def rebuild_summary():
     return jsonify(result.as_dict())
 
 
+
+@bp.get("/api/settings/rebuild-all")
+def rebuild_all_status():
+    """全ラインの作り直しの頼みと、ラインごとに終わったか(v4.52.0)。"""
+    from nippou.services import rebuild_all
+
+    return jsonify(rebuild_all.status())
+
+
+@bp.post("/api/settings/rebuild-all")
+def rebuild_all_request():
+    """**管理者だけ**: 全ラインの集計の作り直しを頼む。作るのは各ラインのPC(v4.52.0)。"""
+    from nippou.services import rebuild_all
+
+    ctx = work_context.get_context()
+    if not ctx.editor:
+        return jsonify(error_body("not_admin", "全ラインの作り直しは管理者だけが頼めます")), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        start = date.fromisoformat(str(payload.get("start", "")))
+        end = date.fromisoformat(str(payload.get("end", "")))
+    except ValueError:
+        return jsonify(error_body("bad_date", "日付は yyyy-mm-dd の形式で入れてください")), 400
+    if start > end:
+        return jsonify(error_body("bad_range", "開始日は終了日以前にしてください", field="start")), 422
+    log_button_click("rebuild_all", line=ctx.line, extra=f"{start}~{end}")
+    try:
+        rebuild_all.request(start, end, by=ctx.terminal_line or "管理者")
+    except OSError as exc:
+        return jsonify(error_body("unreachable", f"頼めませんでした: {exc}")), 503
+    body = rebuild_all.status()
+    body["message"] = ("頼みました。各ラインのPCが5分以内に作り直します"
+                       "(止まっているPCは次に起動したとき)。")
+    return jsonify(body)
+
 def _line_rename_refusal():
     """コンバートは**管理者だけ**(管理者モードか、アクセス権限の表で Administrator)。"""
     if work_context.get_context().editor:

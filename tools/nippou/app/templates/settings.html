@@ -1390,6 +1390,21 @@ LVC,119
         <button class="btn" type="button" id="rebuild-summary">作り直す</button>
       </div>
       <div class="msg msg--info" id="rebuild-note" hidden style="margin-top:var(--sp-2)"></div>
+
+      {# 全ラインの作り直し(v4.52.0)。作るのは各ラインのPC(明細と集計CSVを直ぜんぶ持っているので) #}
+      <div id="rebuild-all-box" {% if not admin %}hidden{% endif %} style="margin-top:var(--sp-4)">
+        <h3>全ラインで作り直す(管理者)</h3>
+        <p class="lead">上の期間で、<b>各ラインのPCに作り直しを頼みます。</b>動いているPCは5分以内、
+          止まっているPCは次に起動したときに作り直し、集計CSVも書き直します。</p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="rebuild-all">全ラインで作り直す</button>
+          <button class="btn btn--ghost" type="button" id="rebuild-all-refresh">終わったか見る</button>
+        </div>
+        <div class="msg msg--info" id="rebuild-all-note" hidden style="margin-top:var(--sp-2)"></div>
+        <div class="scroll-x"><table class="list" id="rebuild-all-table" hidden>
+          <thead><tr><th>ライン</th><th>状態</th><th>時刻</th><th>直の数</th></tr></thead>
+          <tbody></tbody></table></div>
+      </div>
     </div>
 
     {# ------------------------------------------------------------
