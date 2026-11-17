@@ -271,8 +271,7 @@
 
 {# 集計から除く作業者のページ(v4.51.0)。時間と停止は打てない・共有へ保存のときに自動で入る #}
 <div class="msg msg--info" id="auto-time-note" {% if not view.time_locked %}hidden{% endif %} role="status">
-  <b>この作業者は集計から除く対象です。</b>梱包作業時間と作業停止は打てません。
-  共有へ保存するときに、直の始めから終わりまでを自動で割り振ります(印刷に「自動」の印が付きます)。
+  時間は自動で入ります
 </div>
 <div class="msg msg--todo start-shift" id="start-shift"
      {% if not view.needs_worker %}hidden{% endif %} role="status">
