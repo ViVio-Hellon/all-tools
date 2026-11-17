@@ -13224,3 +13224,9 @@ v4.44.15・v4.44.16 の点検の第2弾。現場の声:「無い、とするの�
 - `app/auto_time.py`: 共有へ保存(`settings._push`)・5分前の自動確定と終わった直の拾い(`/api/entry/close`。いまの直は残り5分から)の前に、直のページぜんぶが除く人のページの直だけ、打ってあった時間・停止を消し、「時間を割り振る」と同じ計算(`_add_breaks` ほか同じ部品)で入れ直して保存・集計を作り直す。ふつうの人のページが混ざった直は割り振らない。
 - 印刷: `paper_files.backfill_stamps` に「自動(時間は自動割り振り・集計から除く作業者)」。
 - 試験: `tests/test_agg_exclude.py` AutoTimeTests。
+
+## 「集計から除く」に理由を必ず入れる (v4.51.1)
+
+- 「テーブルの集計から除くに理由列を追加して理由を強制としてください(個人の感情ではない理由を入れます)」
+- 列「理由」(前の版の表には `ensure_table` が足す)。マスタ管理は理由が空なら保存を断る(`master_admin._exclude_problem`)。理由の無い行は読まない(`agg_exclude.parse`。集計から除かない・時間も自動にしない・記録に残す)。
+- 試験: `tests/test_agg_exclude.py` ReasonTests・OldTableTests。

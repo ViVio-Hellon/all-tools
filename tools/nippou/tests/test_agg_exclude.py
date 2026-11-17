@@ -18,9 +18,25 @@ from tests._web import HAS_FLASK, SKIP_REASON  # noqa: E402
 from tests import test_scenario_shift_flow as flow  # noqa: E402
 
 
+class ReasonTests(unittest.TestCase):
+    """理由は必ず(v4.51.1 ──「理由列を追加して理由を強制」)。"""
+
+    def test_理由の無い行は効かない(self) -> None:
+        rules = agg_exclude.parse([{"作業者": "山田", "理由": ""}, {"作業者": "田中", "理由": "  "}])
+        self.assertFalse(rules)
+
+    def test_マスタ管理は理由が無ければ断る(self) -> None:
+        from nippou import master_admin
+        self.assertIn("理由", master_admin._exclude_problem({"作業者": "山田", "理由": ""}, creating=True))
+        self.assertIn("作業者", master_admin._exclude_problem({"理由": "応援"}, creating=True))
+        self.assertEqual(master_admin._exclude_problem({"作業者": "山田", "理由": "応援のため"}, creating=True), "")
+        self.assertIn("理由", master_admin._exclude_problem({"理由": ""}, creating=False))
+
+
 class RuleTests(unittest.TestCase):
     def test_作業者と班(self) -> None:
-        rules = agg_exclude.parse([{"作業者": "山田", "有効": 1}, {"班": "B班"}, {"作業者": "鈴木", "有効": 0}])
+        rules = agg_exclude.parse([{"作業者": "山田", "有効": 1, "理由": "r"}, {"班": "B班", "理由": "r"},
+                                   {"作業者": "鈴木", "有効": 0, "理由": "r"}])
         rules.roster = {"佐藤": "B", "田中": "A"}
         self.assertIn("山田", rules.why("山田"))
         self.assertIn("山田", rules.why("田中 山田"), "混ざっていても除く")
@@ -44,8 +60,8 @@ class SummaryTests(flow.ScenarioCase):
         conn.execute(agg_exclude.SCHEMA)
         conn.execute(f'DELETE FROM "{agg_exclude.TABLE}"')
         for r in rows:
-            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","有効") VALUES (?,?,1)',
-                         (r.get("作業者", ""), r.get("班", "")))
+            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","理由","有効") VALUES (?,?,?,1)',
+                         (r.get("作業者", ""), r.get("班", ""), r.get("理由", "試験の理由")))
         conn.commit()
         conn.close()
         agg_exclude.reset()
@@ -70,6 +86,7 @@ class SummaryTests(flow.ScenarioCase):
         sqlite3.connect(path).execute("CREATE TABLE IF NOT EXISTS t (a)").connection.close()
         rules = agg_exclude.load(force=True)
         self.assertFalse(rules)
+        self.assertIn("理由", source_db.columns(path, agg_exclude.TABLE))
         self.assertIn(agg_exclude.TABLE, source_db.list_tables(SETTINGS.gw_material_master_path))
 
 
@@ -119,8 +136,8 @@ class RepeatTests(flow.ScenarioCase):
         conn = sqlite3.connect(self.master)
         conn.execute(f'DELETE FROM "{agg_exclude.TABLE}"')
         for r in rows:
-            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","有効") VALUES (?,?,?)',
-                         (r.get("作業者", ""), r.get("班", ""), r.get("有効", 1)))
+            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","理由","有効") VALUES (?,?,?,?)',
+                         (r.get("作業者", ""), r.get("班", ""), r.get("理由", "試験の理由"), r.get("有効", 1)))
         conn.commit()
         conn.close()
         res = self.post("/api/settings/rebuild-summary", {"start": "2026-10-05", "end": "2026-10-06"})
@@ -215,7 +232,7 @@ class AutoTimeTests(flow.ScenarioCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path)
         conn.execute(agg_exclude.SCHEMA)
-        conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","有効") VALUES ("山田", 1)')
+        conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","理由","有効") VALUES ("山田", "試験の理由", 1)')
         conn.commit()
         conn.close()
         agg_exclude.reset()
@@ -250,3 +267,18 @@ class AutoTimeTests(flow.ScenarioCase):
         self.assertEqual(self.save(self.ROWS, worker="田中").status_code, 200)
         header, details = self.repo().load("2026年10月5日", "L-1", "1直", 1)
         self.assertEqual(details[0].kz, "07")
+
+
+class OldTableTests(unittest.TestCase):
+    def test_前の版の表に理由の列を足す(self) -> None:
+        import tempfile
+        from nippou import source_db
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "梱包資材マスタ.sqlite3"
+            conn = sqlite3.connect(path)
+            conn.execute(f'CREATE TABLE "{agg_exclude.TABLE}" ("管理番号" INTEGER PRIMARY KEY, "作業者" TEXT,'
+                         ' "班" TEXT, "有効" INTEGER, "備考" TEXT)')
+            conn.commit()
+            conn.close()
+            agg_exclude.ensure_table(path)
+            self.assertIn("理由", source_db.columns(path, agg_exclude.TABLE))

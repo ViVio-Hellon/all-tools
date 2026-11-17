@@ -9,6 +9,7 @@
 
     作業者   除く人の名前(班員名簿の名前)。空なら班の行
     班       除く班(班員名簿の班)。空なら作業者の行
+    理由     **必ず入れる**(v4.51.1。個人の感情ではない理由)。空の行は効かない・マスタ管理で保存を断る
     有効     0 なら読まない
     備考
 
@@ -34,7 +35,9 @@ log = get_logger("services.agg_exclude")
 
 TABLE = "集計から除く"
 SCHEMA = (f'CREATE TABLE IF NOT EXISTS "{TABLE}" ("管理番号" INTEGER PRIMARY KEY, '
-          '"作業者" TEXT DEFAULT \'\', "班" TEXT DEFAULT \'\', "有効" INTEGER DEFAULT 1, "備考" TEXT DEFAULT \'\')')
+          '"作業者" TEXT DEFAULT \'\', "班" TEXT DEFAULT \'\', "理由" TEXT DEFAULT \'\', '
+          '"有効" INTEGER DEFAULT 1, "備考" TEXT DEFAULT \'\')')
+REASON = "理由"
 #: 読み直すまでの秒(直の集計を何度も作るので、毎回共有を読まない)
 CHECK_EVERY = 30.0
 
@@ -75,6 +78,11 @@ def parse(rows: Iterable[dict]) -> Rules:
     for row in rows:
         if not _enabled(row.get("有効")):
             continue
+        if not str(row.get(REASON) or "").strip():
+            # **理由の無い行は効かない**(v4.51.1)。マスタ管理では保存を断る
+            log.warning("「%s」の理由が空の行は使いません: 作業者=%s 班=%s", TABLE,
+                        row.get("作業者", ""), row.get("班", ""))
+            continue
         for name in names_of(row.get("作業者")):
             out.workers.add(name)
         team = str(row.get("班") or "").strip().removesuffix("班")
@@ -88,6 +96,11 @@ def ensure_table(path) -> None:
     from .. import source_db
 
     if TABLE in source_db.list_tables(path):
+        if REASON not in source_db.columns(path, TABLE):
+            # 前の版(v4.50.0〜)で作った表に「理由」の列を足す
+            with source_db.connect(path) as conn:
+                conn.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "{REASON}" TEXT DEFAULT \'\'')
+            log.info("「%s」に「%s」の列を足しました", TABLE, REASON)
         return
     with source_db.connect(path) as conn:
         conn.execute(SCHEMA)
@@ -115,11 +128,13 @@ def load(*, force: bool = False) -> Rules:
             return got
     path = SETTINGS.gw_material_master_path
     try:
-        if TABLE not in source_db.list_tables(path, strict=True):
+        if TABLE not in source_db.list_tables(path, strict=True) or \
+                REASON not in source_db.columns(path, TABLE):
             try:
                 ensure_table(path)
             except Exception:                     # noqa: BLE001 - 作れなくても集計は作る
                 log.exception("「%s」の表を作れませんでした", TABLE)
+        if TABLE not in source_db.list_tables(path, strict=True):
             rules = Rules()
         else:
             rules = parse(source_db.read_table(path, TABLE))

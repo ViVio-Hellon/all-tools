@@ -176,7 +176,8 @@ TABLE_NOTES: dict[str, str] = {
     "VC重量": "VCフィルムの品名ごとの単位質量",
     "班員名簿": "作業者の名前と班(作業者を選ぶ)",
     # v4.50.0 `services/agg_exclude`
-    "集計から除く": "集計(画面・グラフ・集計CSV)に数えない作業者・班。1行に「作業者」か「班」のどちらか。"
+    "集計から除く": "集計(画面・グラフ・集計CSV)に数えない作業者・班。1行に「作業者」か「班」のどちらかと、"
+                    "必ず「理由」(個人の感情ではない理由。空の行は効かない)。"
                     "作業者欄にその人(班はその班の人)が1人でもいるページを数えない(日報のページは消さない)。"
                     "今までの分は設定・管理者の「集計を作り直す」で外れます(集計CSVも書き直す)",
     # **ここだけ「勝ち負けがある」と書いてあります。**
@@ -1135,6 +1136,19 @@ def is_shift_table(file_key: str, table: str) -> bool:
     return file_key == "transmission" and table == SETTINGS.shift_time_table
 
 
+def _exclude_problem(clean: dict[str, Any], *, creating: bool) -> str:
+    """「集計から除く」(v4.51.1): **理由は必ず**・作業者か班のどちらか。"""
+    from .services import agg_exclude
+
+    if creating or agg_exclude.REASON in clean:
+        if not str(clean.get(agg_exclude.REASON) or "").strip():
+            return ("「理由」を入れてください(個人の感情ではない理由)。"
+                    "理由の無い行は集計から除きません。")
+    if creating and not str(clean.get("作業者") or "").strip() and not str(clean.get("班") or "").strip():
+        return "「作業者」か「班」のどちらかを入れてください。"
+    return ""
+
+
 def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
                    clean: dict[str, Any], *, row_key: Optional[int]) -> str:
     """表ごとの決まりに合うか。合わなければ断りの文。**`clean` は揃える。**
@@ -1145,6 +1159,8 @@ def _table_problem(src: source_db.SourceConnection, file_key: str, table: str,
     """
     if file_key == "vc":
         return _vc_problem(src, table, clean, row_key=row_key)
+    if table == "集計から除く":
+        return _exclude_problem(clean, creating=row_key is None)
     if is_access_table(table):
         return _access_problem(clean)
     if not is_shift_table(file_key, table):
