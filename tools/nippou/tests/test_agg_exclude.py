@@ -249,9 +249,9 @@ class RepeatTests(flow.ScenarioCase):
 
         root = self.tmp / "LocalBackup"
         (root / "L-1").mkdir(parents=True)
-        for p in (patch.object(local_backup, "root", return_value=root),
-                  patch.object(local_backup, "reachable", return_value=True),
-                  patch.object(local_backup, "lines_available", return_value=["L-1"])):
+        lb = "nippou.services.local_backup."
+        for p in (patch(lb + "root", return_value=root), patch(lb + "reachable", return_value=True),
+                  patch(lb + "lines_available", return_value=["L-1"])):
             p.start()
             self.addCleanup(p.stop)
         first = self.snapshot()

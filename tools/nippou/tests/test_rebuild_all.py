@@ -17,10 +17,12 @@ class RebuildAllTests(unittest.TestCase):
         self.root = Path(tmp.name) / "LocalBackup"
         for line in ("L-1", "機側"):
             (self.root / line).mkdir(parents=True)
-        for p in (patch.object(local_backup, "root", return_value=self.root),
-                  patch.object(local_backup, "reachable", return_value=True),
-                  patch.object(local_backup, "lines_available", return_value=["L-1", "機側"]),
-                  patch.object(local_backup, "_safe", side_effect=lambda s: s)):
+        # **名前で当てる**(ほかの試験がモジュールを読み直していても、いまのモジュールに当たるように)
+        lb = "nippou.services.local_backup."
+        for p in (patch(lb + "root", return_value=self.root),
+                  patch(lb + "reachable", return_value=True),
+                  patch(lb + "lines_available", return_value=["L-1", "機側"]),
+                  patch(lb + "_safe", side_effect=lambda s: s)):
             p.start()
             self.addCleanup(p.stop)
         rebuild_all.reset()
