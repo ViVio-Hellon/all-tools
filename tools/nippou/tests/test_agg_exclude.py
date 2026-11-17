@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 import sys
 import unittest
 from pathlib import Path
@@ -212,6 +213,66 @@ class RepeatTests(flow.ScenarioCase):
         # 日報のページは一度も消えていない
         for day, shift, page, _w, _c in self.PAGES:
             self.assertIn(page, self.repo().saved_pages(day, "L-1", shift))
+
+    #: 決まりごとの正しい集計(直ごとの枚数)
+    WANT = {
+        "なし": {("2026年10月5日", "1直"): 30.0, ("2026年10月5日", "2直"): 40.0,
+                 ("2026年10月6日", "1直"): 80.0, ("2026年10月6日", "2直"): 160.0},
+        "班B": {("2026年10月5日", "1直"): 10.0, ("2026年10月6日", "1直"): 80.0,
+                ("2026年10月6日", "2直"): 160.0},
+        "山田": {("2026年10月5日", "1直"): 20.0, ("2026年10月5日", "2直"): 40.0,
+                 ("2026年10月6日", "1直"): 80.0, ("2026年10月6日", "2直"): 160.0},
+        "田中": {("2026年10月5日", "1直"): 30.0, ("2026年10月6日", "1直"): 80.0},
+        "班A": {("2026年10月5日", "1直"): 20.0, ("2026年10月6日", "1直"): 80.0},
+    }
+    RULES = {"なし": [], "班B": [{"班": "B"}], "山田": [{"作業者": "山田"}],
+             "田中": [{"作業者": "田中"}], "班A": [{"班": "A"}]}
+
+    def test_班と個人を交互に_戻さずに切り替えても正しい(self) -> None:
+        """班→戻す、個人→班→戻す(戻さずに個人から班へ)を何度か。毎回の集計と、戻したときの集計CSV。"""
+        first = self.snapshot()
+        steps = ("班B", "なし", "山田", "班B", "なし", "田中", "班A", "山田", "班B", "田中", "なし",
+                 "班A", "なし")
+        for step in steps:
+            with self.subTest(step=step):
+                got = self.rules(*self.RULES[step])
+                self.assertEqual(self.counts(got), self.WANT[step], f"{step} の集計が違う")
+                if step == "なし":
+                    self.assertEqual(got["reports"], first["reports"], "戻したのに集計が元と違う")
+                    self.assertEqual(got["csv"], first["csv"], "戻したのに集計CSVが元と違う")
+
+    def test_全ラインの作り直し_頼み_でも同じ(self) -> None:
+        """管理者が頼み、ラインのPCが作り直す道(v4.52.0 `rebuild_all`)でも、班→個人→戻すが正しい。"""
+        from unittest.mock import patch
+
+        from nippou.services import local_backup, rebuild_all
+
+        root = self.tmp / "LocalBackup"
+        (root / "L-1").mkdir(parents=True)
+        for p in (patch.object(local_backup, "root", return_value=root),
+                  patch.object(local_backup, "reachable", return_value=True),
+                  patch.object(local_backup, "lines_available", return_value=["L-1"])):
+            p.start()
+            self.addCleanup(p.stop)
+        first = self.snapshot()
+        for step in ("班B", "山田", "班A", "なし"):
+            with self.subTest(step=step):
+                self.set_rows(*self.RULES[step])
+                rebuild_all.request(date(2026, 10, 5), date(2026, 10, 6))
+                self.assertIsNotNone(rebuild_all.run_if_asked(self.repo(), "L-1", force=True))
+                self.assertTrue(rebuild_all.status()["lines"][0]["done"])
+                got = self.snapshot()
+                self.assertEqual(self.counts(got), self.WANT[step])
+        self.assertEqual(got["csv"], first["csv"], "戻したのに集計CSVが元と違う")
+
+    def set_rows(self, *rows: dict) -> None:
+        conn = sqlite3.connect(self.master)
+        conn.execute(f'DELETE FROM "{agg_exclude.TABLE}"')
+        for r in rows:
+            conn.execute(f'INSERT INTO "{agg_exclude.TABLE}" ("作業者","班","理由","有効") VALUES (?,?,?,1)',
+                         (r.get("作業者", ""), r.get("班", ""), "試験の理由"))
+        conn.commit()
+        conn.close()
 
     @staticmethod
     def _body(data: bytes) -> bytes:
