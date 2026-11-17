@@ -2947,6 +2947,9 @@ export function start() {
   paintNeedsWorker({
     needs_worker: !document.getElementById("start-shift")?.hidden,
     needs_line: !document.getElementById("terminal-line-note")?.hidden,
+    // **開いた直後から**、集計から除く人のページの時間・停止を止める(v4.52.2。前は渡しておらず、
+    // 開いた・開き直したページで打てていた。止まるのは作業者を選び直したときだけだった)
+    time_locked: !document.getElementById("auto-time-note")?.hidden,
     handover: { blocked: handoverBox?.dataset.blocked === "1" },
     shift_pick: pickBox && !pickBox.hidden ? {
       message: document.getElementById("shift-pick-why")?.textContent || "",

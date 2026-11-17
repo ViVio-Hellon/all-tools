@@ -13248,3 +13248,7 @@ v4.44.15・v4.44.16 の点検の第2弾。現場の声:「無い、とするの�
 
 - 最小化中に管理者以外停止で止まると、帯を見ないまま入力を続けられた。`remote_stop_band.js` は2回続けて届かなければ全画面で止める。
 - `api.js` の `fetchOrOffline`、`toast.js` は同じ知らせを重ねない。試験: `tests/test_remote_stop.py`。
+
+## 開いた直後から時間・停止を止める (v4.52.2)
+
+- 「除いた人で入力テストをしてみたが作業時間も停止時間も打てますけど？」。画面を開いたときの `paintNeedsWorker` に `time_locked` を渡していなかった。試験: `tests/test_agg_exclude_browser.py`(本物のブラウザ)。
