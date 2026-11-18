@@ -70,10 +70,12 @@ def _history(start: date, end: date, line: str, repo=None) -> dict:
     """
     from nippou.logic import line_target
 
-    rows = summary.period_rows(repo or get_repo(), start, end, line)
+    repo = repo or get_repo()
+    rows = summary.period_rows(repo, start, end, line)
     labels = [r.report_date for r in rows]
     target = line_target.flat_line(_target_of(line), len(rows))
-    return {
+    parts = _by_shift(summary.shift_rows(repo, start, end, line), labels)
+    body = {
         "start": start.isoformat(),
         "end": end.isoformat(),
         "line": line,
@@ -88,6 +90,45 @@ def _history(start: date, end: date, line: str, repo=None) -> dict:
              "values": [round(r.operating_rate_pct, 1) for r in rows]},
         ],
     }
+    # **1直・2直・3直で見せる**(v4.52.4「日別枚数推移が積み上げになっていない」「日量・稼働率とも
+    # 1,2,3直で表示しないと比較対象がなくわかりにくい」)。枚数・重量は直の積み上げ棒、稼働率は直の線
+    if parts:
+        for series in body["series"]:
+            key = series["key"]
+            if key == "rate":
+                series["parts"] = [dict(p, key=f"rate_{p['title']}", kind="line", unit="%",
+                                        values=p["rate"]) for p in parts]
+            else:
+                unit = "t" if key == "weight" else "枚"
+                series["parts"] = [dict(p, key=f"{key}_{p['title']}", kind="bar", unit=unit,
+                                        stack="day", values=p[key]) for p in parts]
+                if key == "count":
+                    series["parts"].append({"key": "target", "title": "目標", "kind": "line",
+                                            "unit": "枚", "values": series["target"]})
+            for part in series["parts"]:
+                for k in ("weight", "count", "rate"):
+                    part.pop(k, None)
+    return body
+
+
+def _by_shift(rows, labels: list[str]) -> list[dict]:
+    """直ごとの日別の値(下から 1直 → 2直 → 3直 → 日勤 → 4直 …)。出てこない直は作らない。"""
+    from nippou.presenters.dashboard import SHIFT_QTY_CLASSES, SHIFT_STACK_ORDER
+
+    at = {d: i for i, d in enumerate(labels)}
+    found: dict[str, dict] = {}
+    for r in rows:
+        i = at.get(r.report_date)
+        if i is None:
+            continue
+        part = found.setdefault(r.shift, {"title": r.shift, "mark": SHIFT_QTY_CLASSES.get(r.shift, "cat-6"),
+                                          "weight": [0.0] * len(labels), "count": [0.0] * len(labels),
+                                          "rate": [None] * len(labels)})
+        part["weight"][i] = round(part["weight"][i] + r.weight_ton, 3)
+        part["count"][i] = round(part["count"][i] + r.sheet_count, 1)
+        part["rate"][i] = round(r.operating_rate_pct, 1)
+    order = [*SHIFT_STACK_ORDER, *sorted(set(found) - set(SHIFT_STACK_ORDER))]
+    return [found[s] for s in order if s in found]
 
 
 def _today_shifts(report_date: str, line: str) -> dict:

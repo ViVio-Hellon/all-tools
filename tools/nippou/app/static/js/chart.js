@@ -131,7 +131,9 @@ function chart(series, labels, size = null) {
    軸をどちらにするかは**サーバが決めます**(`series[].axis`)。JSは
    座標へ写すだけ、という決まりをここでも守ります。
    ================================================================== */
-function combo(tile) {
+function combo(tile, size = null) {
+  const W = size?.width || CHART_W;
+  const H = size?.height || CHART_H;
   const labels = tile.labels || [];
   const series = tile.series || [];
   const svg = el("svg", {
@@ -248,8 +250,18 @@ function combo(tile) {
       // する。実績と同じ色にすると、目標も実績に見える
       const target = s.key === "target";
       const cls = target ? "line line--target" : `line ${markOf(s)}`;
-      const points = values.map((v, i) =>
-        `${PAD.left + step * (i + 0.5)},${y(v, axis)}`).join(" ");
+      // **値の無い日(その直が無かった日)は点を打たず、線を切る**(v4.52.4 直ごとの稼働率)
+      const runs = [[]];
+      values.forEach((v, i) => {
+        if (v === null || v === undefined) { if (runs[runs.length - 1].length) runs.push([]); return; }
+        runs[runs.length - 1].push(`${PAD.left + step * (i + 0.5)},${y(v, axis)}`);
+      });
+      const points = runs[0].join(" ");
+      for (const run of runs.slice(1)) {
+        if (!run.length) continue;
+        svg.appendChild(el("polyline", { class: "line line--halo", points: run.join(" ") }));
+        svg.appendChild(el("polyline", { class: cls, points: run.join(" ") }));
+      }
       // **線を2回描く。** 1本目は地の色で太く(縁取り)、2本目が本体。
       //
       // SVG の線には外側の縁取りが無いので、こうするしかありません。
@@ -259,6 +271,7 @@ function combo(tile) {
       svg.appendChild(el("polyline", { class: cls, points }));
       if (target) return;                 // 目標に点は打たない(実績と紛れる)
       values.forEach((v, i) => {
+        if (v === null || v === undefined) return;
         // 点にも地の色の縁を付ける(理由は線と同じ)。**大きめ**に取るのは
         // 指定(marker size 8)で、直径8 ≒ 半径4
         svg.appendChild(el("circle", { class: `dot ${markOf(s)}`, r: DOT_R,
@@ -315,7 +328,9 @@ function comboLegend(tile) {
     const text = document.createElement("span");
     text.className = "dlg__text";
     const side = (s.axis || "left") === "right" ? "右目盛り" : "左目盛り";
-    text.textContent = `${s.title}(${s.unit}・${side})`;
+    // 目盛りが左だけの絵(締めの直ごと v4.52.4)では、どちらの目盛りかは書かない
+    const both = (tile.series || []).some((x) => (x.axis || "left") === "right");
+    text.textContent = both ? `${s.title}(${s.unit}・${side})` : s.title;
     item.append(swatch, text);
     list.append(item);
   });
@@ -341,6 +356,28 @@ export function paintCharts(host, history, { fit = false } = {}) {
   for (const series of history.series || []) {
     const head = document.createElement("h3");
     head.textContent = `${series.title}(${series.unit})`;
+    // **直ごと**(v4.52.4)。枚数・重量は直の積み上げ棒、稼働率は直の線。凡例つき
+    if (series.parts && series.parts.length) {
+      const tile = { title: series.title, unit: series.unit, labels: history.labels || [],
+                     series: series.parts };
+      const box = document.createElement("figure");
+      box.dataset.parts = series.key;
+      if (!fit) {
+        head.style.marginTop = "var(--sp-3)";
+        box.append(head, combo(tile), comboLegend(tile));
+        host.append(box);
+        continue;
+      }
+      box.className = "fit-chart";
+      const plot = document.createElement("div");
+      plot.className = "fit-chart__plot";
+      const legend = comboLegend(tile);
+      legend.classList.add("fit-chart__legend");
+      box.append(head, plot, legend);
+      host.append(box);
+      fitChart(plot, (size) => combo(tile, size));
+      continue;
+    }
     if (!fit) {
       head.style.marginTop = "var(--sp-3)";
       host.append(head, chart(series, history.labels || []));

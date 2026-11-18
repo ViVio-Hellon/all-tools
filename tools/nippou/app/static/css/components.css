@@ -3246,3 +3246,6 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
   color: var(--auto-locked-fg, #8a8a8a) !important;
   cursor: not-allowed;
 }
+
+/* 締めの推移の直ごとの凡例(v4.52.4)。1行に詰める */
+.fit-chart__legend{ display:flex; flex-wrap:wrap; gap:2px 12px; margin:2px 0 0; font-size:var(--fs-xs, 12px); }

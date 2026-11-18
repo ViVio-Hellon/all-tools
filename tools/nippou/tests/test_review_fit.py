@@ -204,6 +204,28 @@ class ReviewFitTests(WebTestCase):
         finally:
             res.close()                     # 静的ファイルは開いたまま返ってくる
 
+    def test_推移は1直2直3直で見せる(self) -> None:
+        """日別枚数は直の積み上げ棒+目標、日量も直の積み上げ、稼働率は直ごとの線(v4.52.4)。"""
+        page = self.open(1920, 969)
+        got = page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#review-charts [data-parts]')]
+          .map(f => [f.dataset.parts, {bars: f.querySelectorAll('rect.bar--seg').length,
+                                       lines: f.querySelectorAll('polyline.line:not(.line--halo):not(.line--target)').length,
+                                       target: f.querySelectorAll('polyline.line--target').length,
+                                       legend: f.querySelector('.dlg')?.textContent || ''}]))""")
+        self.assertEqual(set(got), {"weight", "count", "rate"})
+        days = date.today().day
+        for key in ("weight", "count"):
+            self.assertGreaterEqual(got[key]["bars"], 2 * days, key)   # 高さ0の段は描かない
+            for shift in ("1直", "2直", "3直"):
+                self.assertIn(shift, got[key]["legend"])
+        self.assertEqual(got["count"]["target"], 1)
+        self.assertEqual(got["rate"]["lines"], 3)
+        self.assertEqual(got["rate"]["bars"], 0)
+        import os
+        shot = os.environ.get("ALLTOOLS_SHOT")
+        if shot:
+            page.screenshot(path=shot)
+
     def test_画面最大化で1画面に収まる(self) -> None:
         for width, height in self.MAXIMIZED:
             with self.subTest(size=f"{width}x{height}"):
