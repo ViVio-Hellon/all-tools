@@ -13260,3 +13260,7 @@ v4.44.15・v4.44.16 の点検の第2弾。現場の声:「無い、とするの�
 - 「日別枚数推移グラフが積み上げになっていない」「日量・稼働率とも1,2,3直で表示しないと比較対象がなくわかりにくい」。`routes/graph._history` が `series[].parts`(直ごと)を足し、`chart.paintCharts` が積み上げ棒・直の線で描く。試験: `tests/test_review_fit.py`。
 
 ## 稼働率の直ごとの線を直の色に (v4.52.5)
+
+## 締めの今月の推移を案B に (v4.53.0)
+
+- 「グラフの視認性改善案を3案」→ 案B(分析・比較重視)。`chart.paintReview`(`views/review.js` から)。サーバは `routes/graph._history` の `summary`(達成)と `series[].parts`(直ごと)。集計は変えない。試験: `tests/test_review_fit.py`・`test_review_switch_browser.py`。

@@ -15,7 +15,7 @@
 
 import { api } from "../api.js";
 import { toast, toastError } from "../toast.js";
-import { paintCharts, paintTile } from "../chart.js";
+import { paintReview, paintTile } from "../chart.js";
 import { confirmPush, watch as watchJob } from "../progress.js";
 import { cue } from "../sound.js";
 
@@ -28,8 +28,8 @@ export function start() {
   if (seed) {
     try {
       // **枠の大きさで描く** ── 幅いっぱいに伸ばすと、1枚で画面の半分を超える
-      paintCharts(document.getElementById("review-charts"),
-                  JSON.parse(seed.textContent), { fit: true });
+      // 案B(v4.53.0): 達成の帯・枚数(大)と重量・直ごとの稼働率・数値の表
+      paintReview(document.getElementById("review-charts"), JSON.parse(seed.textContent));
     } catch { /* 絵が出なくても、表は出ている */ }
   }
 

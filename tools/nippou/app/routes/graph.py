@@ -108,6 +108,16 @@ def _history(start: date, end: date, line: str, repo=None) -> dict:
             for part in series["parts"]:
                 for k in ("weight", "count", "rate"):
                     part.pop(k, None)
+    # **今月の達成**(v4.53.0 案B)。累計・目標(データのある日数ぶん)・達成率・目標に届いた日
+    goal = _target_of(line)
+    totals = [round(r.sheet_count, 1) for r in rows]
+    cum = round(sum(totals), 1)
+    body["summary"] = {
+        "cumulative": cum, "days": len(rows), "target": goal,
+        "target_total": round(goal * len(rows), 1) if goal else None,
+        "rate_pct": round(cum / (goal * len(rows)) * 100, 1) if goal and rows else None,
+        "hit_days": sum(1 for v in totals if goal and v >= goal) if goal else None,
+    }
     return body
 
 

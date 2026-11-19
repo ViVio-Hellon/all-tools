@@ -175,8 +175,11 @@ function combo(tile, size = null) {
     : PAD.right;
   const plotW = W - PAD.left - rightPad;
   const plotH = H - PAD.top - PAD.bottom;
-  const y = (v, axis) =>
-    PAD.top + plotH - (Math.max(0, v) / ((axis === "right") ? right : left)) * plotH;
+  // 左の目盛りの下(稼働率は 0 からでなくデータに合わせる ── 70〜90% の差を見せる。v4.53.0)
+  const floor = tile.min || 0;
+  const y = (v, axis) => (axis === "right")
+    ? PAD.top + plotH - (Math.max(0, v) / right) * plotH
+    : PAD.top + plotH - ((Math.max(floor, v) - floor) / Math.max(1e-9, left - floor)) * plotH;
 
   // 目盛り。**左右とも数字を出す** ── 片方しか無いと、折れ線がどの
   // 大きさなのか読めない
@@ -186,7 +189,7 @@ function combo(tile, size = null) {
                                  x2: W - rightPad, y1: yy, y2: yy }));
     svg.appendChild(el("text", { class: "label", x: PAD.left - 6, y: yy + 3,
                                  "text-anchor": "end" },
-                       String(Math.round((left / 4) * i))));
+                       String(Math.round(floor + ((left - floor) / 4) * i))));
     if (pick("right").length) {
       svg.appendChild(el("text", { class: "label", x: W - rightPad + 6,
                                    y: yy + 3, "text-anchor": "start" },
@@ -229,7 +232,7 @@ function combo(tile, size = null) {
     const axis = s.axis || "left";
     const values = s.values || [];
     if (s.kind === "bar") {
-      const width = Math.min(48, step * 0.6);
+      const width = tile.wide ? Math.min(80, step * 0.62) : Math.min(48, step * 0.6);
       values.forEach((v, i) => {
         const cx = PAD.left + step * (i + 0.5);
         const from = baseOf(s, i);
@@ -273,6 +276,12 @@ function combo(tile, size = null) {
       if (target) return;                 // 目標に点は打たない(実績と紛れる)
       values.forEach((v, i) => {
         if (v === null || v === undefined) return;
+        if (tile.points && (step >= 46 || i === lastOf(values))) {
+          // 点の真上に置く(右端の点でも絵の外へはみ出さない)
+          svg.appendChild(el("text", { class: `value ${markOf(s)}`, x: PAD.left + step * (i + 0.5),
+                                       y: y(v, axis) - 9, "text-anchor": i === count - 1 ? "end" : "middle" },
+                             `${v}${s.unit === "%" ? "%" : ""}`));
+        }
         // 点にも地の色の縁を付ける(理由は線と同じ)。**大きめ**に取るのは
         // 指定(marker size 8)で、直径8 ≒ 半径4
         svg.appendChild(el("circle", { class: `dot ${markOf(s)}`, r: DOT_R,
@@ -282,7 +291,24 @@ function combo(tile, size = null) {
     }
   });
 
-  const every = Math.ceil(count / 12) || 1;
+  // **その日の合計を棒の上に**(v4.53.0)。目標があれば届いた日は緑・届かない日は赤
+  if (tile.totals) {
+    const goal = tile.goal || 0;
+    // 間が狭いときは重ならないよう、最後の日だけ出す(合計は表で見られる)
+    const roomy = step >= 34;
+    for (let i = 0; i < count; i += 1) {
+      if (!roomy && i !== count - 1) continue;
+      const sums = [...base.values()].map((arr) => arr[i] || 0);
+      const total = sums.length ? Math.max(...sums) : 0;
+      if (!total) continue;
+      const judge = goal ? (total >= goal ? " value--hit" : " value--miss") : "";
+      svg.appendChild(el("text", { class: `value${judge}`, x: PAD.left + step * (i + 0.5),
+                                   y: y(total, "left") - 5, "text-anchor": "middle" },
+                         String(Math.round(total * 10) / 10)));
+    }
+  }
+  // 日付は**字の幅ぶん間を空けて**間引く(狭い絵で「11月1日11月3日…」と詰まらないように)
+  const every = Math.max(Math.ceil(count / 12) || 1, Math.ceil(58 / Math.max(1, step)));
   labels.forEach((text, i) => {
     if (i % every !== 0) return;
     svg.appendChild(el("text", {
@@ -291,6 +317,14 @@ function combo(tile, size = null) {
     }, String(text).replace(/^\d+年/, "")));
   });
   return svg;
+}
+
+/** 値のある最後の添字(無ければ -1)。 */
+function lastOf(values) {
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    if (values[i] !== null && values[i] !== undefined) return i;
+  }
+  return -1;
 }
 
 /**
@@ -744,4 +778,111 @@ export function paintTimingChart(host, chart) {
   head.textContent = chart.title || "";
   head.style.marginTop = "var(--sp-2)";
   host.append(head, timingSvg(chart), timingLegend(chart));
+}
+
+
+/* ==================================================================
+   締めの「今月の推移」(v4.53.0 案B「分析・比較重視」)
+
+       上: 今月の達成(累計・目標・達成率・目標に届いた日)
+       中: 日別枚数(大・合計を緑/赤)| 日別重量(小)
+       下: 稼働率を直ごとに3枚(線が重ならない・目盛りはデータに合わせる)
+       表: 直×日の枚数・稼働率(たたんである)
+
+   数字・集計はサーバのまま(`routes/graph._history`)。ここは並べて描くだけ。
+   ================================================================== */
+export function paintReview(host, history) {
+  if (!host) return;
+  const bySeries = Object.fromEntries((history.series || []).map((s) => [s.key, s]));
+  if (!bySeries.count?.parts?.length) { paintCharts(host, history, { fit: true }); return; }
+  host.replaceChildren();
+  host.classList.add("chart-skin", "review-b");
+  const labels = history.labels || [];
+  const sum = history.summary || {};
+  const fmt = (v, unit) => (v === null || v === undefined) ? "—" : `${Number(v).toLocaleString("ja-JP")}${unit}`;
+
+  const band = document.createElement("div");
+  band.className = "review-b__band";
+  const goodBad = sum.rate_pct === null || sum.rate_pct === undefined ? "" : (sum.rate_pct >= 100 ? "is-hit" : "is-miss");
+  for (const [name, value, cls] of [
+    ["今月の累計", fmt(sum.cumulative, " 枚"), ""],
+    [`目標(${sum.days || 0}日分)`, fmt(sum.target_total, " 枚"), ""],
+    ["達成率", fmt(sum.rate_pct, " %"), goodBad],
+    ["目標に届いた日", sum.hit_days === null || sum.hit_days === undefined ? "—" : `${sum.hit_days} / ${sum.days} 日`, ""],
+  ]) {
+    const cell = document.createElement("div");
+    cell.className = `review-b__kpi ${cls}`;
+    const a = document.createElement("span"); a.textContent = name;
+    const b = document.createElement("b"); b.textContent = value;
+    cell.append(a, b);
+    band.append(cell);
+  }
+
+  const figure = (series, opts, cls) => {
+    const tile = { title: series.title, unit: series.unit, labels, series: series.parts, ...opts };
+    const box = document.createElement("figure");
+    box.className = `fit-chart ${cls}`;
+    box.dataset.parts = opts.key || series.key;
+    const head = document.createElement("h3");
+    head.textContent = opts.head || `${series.title}(${series.unit})`;
+    const plot = document.createElement("div");
+    plot.className = "fit-chart__plot";
+    const legend = comboLegend(tile);
+    legend.classList.add("fit-chart__legend");
+    box.append(head, plot, legend);
+    fitChart(plot, (size) => combo(tile, size));
+    return box;
+  };
+
+  const goal = sum.target || 0;
+  const main = document.createElement("div");
+  main.className = "review-b__main";
+  main.append(
+    figure(bySeries.count, { wide: true, totals: true, goal,
+                             head: `${bySeries.count.title}(枚)  合計: 緑=目標に届いた 赤=届かない` }, "review-b__count"),
+    figure(bySeries.weight, { wide: true, totals: true }, "review-b__weight"));
+
+  const rates = document.createElement("div");
+  rates.className = "review-b__rates";
+  const rateParts = bySeries.rate?.parts || [];
+  const all = rateParts.flatMap((p) => p.values || []).filter((v) => Number.isFinite(v));
+  const low = all.length ? Math.max(0, Math.floor((Math.min(...all) - 5) / 10) * 10) : 0;
+  for (const part of rateParts) {
+    rates.append(figure({ title: `稼働率 ${part.title}`, unit: "%", parts: [part] },
+                        { key: `rate_${part.title}`, min: low, max: 100, points: true, wide: true },
+                        "review-b__rate"));
+  }
+
+  // 直×日の表(たたむ。開くと下へ伸びる)
+  const details = document.createElement("details");
+  details.className = "review-b__table";
+  const summary = document.createElement("summary");
+  summary.textContent = "直ごとの数値を表で見る";
+  const wrap = document.createElement("div");
+  wrap.className = "scroll-x";
+  const table = document.createElement("table");
+  table.className = "list";
+  const head = document.createElement("tr");
+  for (const t of ["", ...labels.map((d) => String(d).replace(/^\d+年/, ""))]) {
+    const th = document.createElement("th"); th.textContent = t; head.append(th);
+  }
+  const thead = document.createElement("thead"); thead.append(head);
+  const tbody = document.createElement("tbody");
+  const rowOf = (name, values, unit) => {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th"); th.textContent = name; tr.append(th);
+    for (const v of values) {
+      const td = document.createElement("td"); td.className = "num";
+      td.textContent = (v === null || v === undefined || v === 0 && unit === "%") ? "—" : `${v}${unit}`;
+      tr.append(td);
+    }
+    tbody.append(tr);
+  };
+  for (const p of bySeries.count.parts) if (p.key !== "target") rowOf(`${p.title} 枚数`, p.values || [], "");
+  for (const p of rateParts) rowOf(`${p.title} 稼働率`, p.values || [], "%");
+  table.append(thead, tbody);
+  wrap.append(table);
+  details.append(summary, wrap);
+
+  host.append(band, main, rates, details);
 }

@@ -260,7 +260,7 @@ class SwitchBrowserTests(WebTestCase):
         self.assertTrue(got["figures"] and got["trend"])
         self.assertFalse(got["stops"] or got["stopCharts"])
         self.assertEqual(got["tiles"], FIGURES)
-        self.assertEqual(got["trendSvg"], 3)
+        self.assertEqual(got["trendSvg"], 5)   # 案B: 枚数・重量・稼働率3直
         self.assert_seventy(got)
         # 札の値は、サーバが描いたまま(集計・グラフと同じ字)
         weight = page.inner_text('#review-tiles [data-tile="today_weight"] .tile__value')
@@ -282,7 +282,7 @@ class SwitchBrowserTests(WebTestCase):
         got = self.layout(page)
         self.assertTrue(got["figures"] and got["trend"])
         self.assertFalse(got["stops"] or got["stopCharts"])
-        self.assertEqual(got["trendSvg"], 3)
+        self.assertEqual(got["trendSvg"], 5)   # 案B: 枚数・重量・稼働率3直
 
     def test_切り替えの上に締めくくりと知らせが残る(self) -> None:
         page = self.open(self.context(1366, 657))
@@ -330,7 +330,7 @@ class SwitchBrowserTests(WebTestCase):
         third = self.open(ctx)
         got = self.layout(third)
         self.assertEqual(got["view"], "figures")
-        self.assertEqual(got["trendSvg"], 3, "隠れていた推移が描けていません")
+        self.assertEqual(got["trendSvg"], 5, "隠れていた推移が描けていません")
 
     def test_覚えられない端末でも切り替わる(self) -> None:
         broken = """

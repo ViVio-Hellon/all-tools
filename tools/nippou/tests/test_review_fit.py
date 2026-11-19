@@ -205,31 +205,43 @@ class ReviewFitTests(WebTestCase):
             res.close()                     # 静的ファイルは開いたまま返ってくる
 
     def test_推移は1直2直3直で見せる(self) -> None:
-        """日別枚数は直の積み上げ棒+目標、日量も直の積み上げ、稼働率は直ごとの線(v4.52.4)。"""
+        """案B(v4.53.0): 達成の帯・枚数(積み上げ+目標・合計を緑/赤)・重量・稼働率を直ごとに3枚・数値の表。"""
         page = self.open(1920, 969)
         got = page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#review-charts [data-parts]')]
           .map(f => [f.dataset.parts, {bars: f.querySelectorAll('rect.bar--seg').length,
-                                       lines: f.querySelectorAll('polyline.line:not(.line--halo):not(.line--target)').length,
+                                       lines: [...f.querySelectorAll('polyline.line:not(.line--halo):not(.line--target)')]
+                                              .map(l => getComputedStyle(l).stroke),
                                        target: f.querySelectorAll('polyline.line--target').length,
+                                       values: f.querySelectorAll('text.value').length,
+                                       ticks: [...f.querySelectorAll('text.label')].map(t => t.textContent),
                                        legend: f.querySelector('.dlg')?.textContent || ''}]))""")
-        self.assertEqual(set(got), {"weight", "count", "rate"})
+        self.assertEqual(set(got), {"weight", "count", "rate_1直", "rate_2直", "rate_3直"})
         days = date.today().day
         for key in ("weight", "count"):
             self.assertGreaterEqual(got[key]["bars"], 2 * days, key)   # 高さ0の段は描かない
+            self.assertGreaterEqual(got[key]["values"], 1, f"{key} の合計が棒の上に出ていない")
             for shift in ("1直", "2直", "3直"):
                 self.assertIn(shift, got[key]["legend"])
         self.assertEqual(got["count"]["target"], 1)
-        self.assertEqual(got["rate"]["lines"], 3)
-        self.assertEqual(got["rate"]["bars"], 0)
-        # 線は直ごとに**違う色**(「線が全部同じ色」v4.52.5)・稼働率の目盛りは 0〜100
-        colors = page.evaluate("""() => [...document.querySelectorAll('[data-parts=rate] polyline.line:not(.line--halo)')]
-          .map(l => getComputedStyle(l).stroke)""")
-        self.assertEqual(len(set(colors)), 3, colors)
-        legend = page.evaluate("""() => [...document.querySelectorAll('[data-parts=rate] .dlg__swatch')]
-          .map(l => getComputedStyle(l).borderTopColor)""")
-        self.assertEqual(len(set(legend)), 3, legend)
-        ticks = page.evaluate("() => [...document.querySelectorAll('[data-parts=rate] text.label')].map(t => t.textContent)")
-        self.assertIn("100", ticks)
+        self.assertEqual(got["count"]["values"], days, "広い枚数の絵は毎日の合計")
+        colors = set()
+        for shift in ("1直", "2直", "3直"):
+            rate = got[f"rate_{shift}"]
+            self.assertEqual(len(rate["lines"]), 1)
+            colors |= set(rate["lines"])
+            self.assertGreaterEqual(rate["values"], 1, "点の値が出ていない")
+            self.assertIn("100", rate["ticks"])
+            self.assertNotIn("0", rate["ticks"][:1], "稼働率の目盛りはデータに合わせる(0からでない)")
+        self.assertEqual(len(colors), 3, "直ごとに違う色")
+        band = page.inner_text(".review-b__band")
+        for word in ("今月の累計", "目標", "達成率", "目標に届いた日"):
+            self.assertIn(word, band)
+        # 表はたたんである・開くと直×日の値
+        self.assertFalse(page.evaluate("document.querySelector('.review-b__table').open"))
+        rows = page.evaluate("[...document.querySelectorAll('.review-b__table tbody tr')].length")
+        self.assertEqual(rows, 6)
+        # 発光なし
+        self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.review-b rect.bar')).filter"), "none")
         import os
         shot = os.environ.get("ALLTOOLS_SHOT")
         if shot:
@@ -242,7 +254,8 @@ class ReviewFitTests(WebTestCase):
                 got = page.evaluate(_MEASURE)
                 self.assertLessEqual(got["scroll"], got["client"] + 1,
                                      "中身が画面の高さを超えています(画面ごと動かさない)")
-                self.assertEqual(len(got["charts"]), 3)
+                # 案B(v4.53.0): 枚数・重量 + 稼働率を直ごとに3枚
+                self.assertEqual(len(got["charts"]), 5)
                 for chart in got["charts"]:
                     self.assertLessEqual(chart["bottom"], height + 0.5)
                     self.assertLessEqual(chart["right"], width + 0.5)
