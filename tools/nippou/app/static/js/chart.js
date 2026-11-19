@@ -259,6 +259,15 @@ function combo(tile, size = null) {
       // する。実績と同じ色にすると、目標も実績に見える
       const target = s.key === "target";
       const cls = target ? "line line--target" : `line ${markOf(s)}`;
+      // 締めの推移(案B v4.53.1): 目標は**枠いっぱいの横線**と「目標 119」の字
+      if (target && tile.goal) {
+        const yy = y(tile.goal, axis);
+        svg.appendChild(el("line", { class: "line line--target goal-line", x1: PAD.left, x2: W - rightPad,
+                                     y1: yy, y2: yy }));
+        svg.appendChild(el("text", { class: "value goal-label", x: W - rightPad - 2, y: yy - 5,
+                                     "text-anchor": "end" }, `目標 ${tile.goal}`));
+        return;
+      }
       // **値の無い日(その直が無かった日)は点を打たず、線を切る**(v4.52.4 直ごとの稼働率)
       const runs = [[]];
       values.forEach((v, i) => {
@@ -844,7 +853,9 @@ export function paintReview(host, history) {
   main.className = "review-b__main";
   main.append(
     figure(bySeries.count, { wide: true, totals: true, inner: true, goal,
-                             head: `${bySeries.count.title}(枚)  合計: 緑=目標に届いた 赤=届かない` }, "review-b__count"),
+                             head: goal ? `${bySeries.count.title}(枚)  合計: 緑=目標に届いた 赤=届かない`
+                               : `${bySeries.count.title}(枚)  ※このラインの目標が設定されていません(ライン毎目標のCSV)` },
+           "review-b__count"),
     figure(bySeries.weight, { wide: true, totals: true, inner: true }, "review-b__weight"));
 
   const rates = document.createElement("div");

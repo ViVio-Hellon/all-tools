@@ -3351,3 +3351,7 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
 .review-b .review-b__table th, .review-b .review-b__table td{
   color:#18212b !important; background:#ffffff !important; border-bottom:1px solid #e3e7ec !important; }
 .review-b .review-b__table thead th{ color:#56616d !important; }
+
+/* 締めの目標線(v4.53.1)。枠いっぱいの赤の破線と「目標 119」 */
+.review-b .chart .goal-line{ stroke:#c62828 !important; stroke-width:2; stroke-dasharray:6 4; fill:none; }
+.review-b .chart .goal-label{ fill:#c62828 !important; font-size:12px; font-weight:700; paint-order:stroke; stroke:#ffffff; stroke-width:4px; stroke-linejoin:round; }

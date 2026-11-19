@@ -254,6 +254,28 @@ class ReviewFitTests(WebTestCase):
         if shot:
             page.screenshot(path=shot)
 
+    def test_目標線は枠いっぱいに引き_届いた日は緑(self) -> None:
+        """「目標線も入れてください」(v4.53.1)。目標のCSVがあれば、枠いっぱいの線と「目標 N」。"""
+        from unittest.mock import patch
+
+        with patch("nippou.services.targets.of", return_value=2000.0):
+            page = self.open(1920, 969)
+        got = page.evaluate("""() => { const f = document.querySelector('[data-parts=count]');
+          const l = f.querySelector('line.goal-line'); const svg = f.querySelector('svg');
+          return {line: !!l, x1: l && +l.getAttribute('x1'), x2: l && +l.getAttribute('x2'),
+                  w: svg.viewBox.baseVal.width, label: f.querySelector('text.goal-label')?.textContent || '',
+                  hit: f.querySelectorAll('text.value--hit').length,
+                  band: document.querySelector('.review-b__band').innerText}; }""")
+        self.assertTrue(got["line"], "目標線が無い")
+        self.assertGreater(got["x2"] - got["x1"], got["w"] * 0.8, "枠いっぱいに引いていない")
+        self.assertEqual(got["label"], "目標 2000")
+        self.assertGreater(got["hit"], 0, "目標に届いた日が緑になっていない")
+        self.assertIn("達成率", got["band"])
+        self.assertNotIn("—", got["band"].split("達成率")[1][:12])
+        import os
+        if os.environ.get("ALLTOOLS_SHOT_GOAL"):
+            page.screenshot(path=os.environ["ALLTOOLS_SHOT_GOAL"])
+
     def test_画面最大化で1画面に収まる(self) -> None:
         for width, height in self.MAXIMIZED:
             with self.subTest(size=f"{width}x{height}"):
