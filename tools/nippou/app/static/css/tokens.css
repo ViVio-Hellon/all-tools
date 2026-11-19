@@ -305,9 +305,9 @@
 
      札(表・帯)の地色も、同じ色の薄いものへ揃えます ── 表で1直が青、
      グラフで1直が別の色、では結び付きません。 */
-  --shift-1:#4F81BD; --shift-1-bg:#eaf0f8;   /* blue   */
-  --shift-2:#C0504D; --shift-2-bg:#f9ecec;   /* red    */
-  --shift-3:#9BBB59; --shift-3-bg:#f1f6e8;   /* green  */
+  --shift-1:#3b6db3; --shift-1-bg:#eaf0f8;   /* blue   */
+  --shift-2:#d9822b; --shift-2-bg:#fbf0e4;   /* orange (v4.53.1 直の色をそろえる: 青・橙・緑) */
+  --shift-3:#4f9a5a; --shift-3-bg:#eef6ef;   /* green  */
   --shift-day:#8064A2; --shift-day-bg:#f1edf6; /* purple */
 
   /* ---- 状態 ------------------------------------------------------- */
@@ -406,9 +406,9 @@
     /* 直。**色相はライトと同じ**(青・赤・緑・紫)で、暗い地に載るよう
        明るさだけ上げます ── 色が変わると、明るい画面と暗い画面で
        「1直は何色か」が違うことになります */
-    --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
-    --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;
-    --shift-3:#B4D47C; --shift-3-bg:#1f2a17;
+    --shift-1:#5b93e0; --shift-1-bg:#1b2540;
+    --shift-2:#f0973c; --shift-2-bg:#2a2117;
+    --shift-3:#5fbf6e; --shift-3-bg:#1a2a1d;
     --shift-day:#A98CC6; --shift-day-bg:#231c2e;
 
     --state-ok:#7fd8a8; --state-ok-bg:#14291f; --state-ok-line:#2c5a41;
@@ -465,9 +465,9 @@
   --fig-angle:#8a6228; --fig-band:#6b7f8a;
   --fig-band-pet:#4cc27a; --fig-band-steel:#5b93ee;
 
-  --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
-  --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;
-  --shift-3:#B4D47C; --shift-3-bg:#1f2a17;
+  --shift-1:#5b93e0; --shift-1-bg:#1b2540;
+  --shift-2:#f0973c; --shift-2-bg:#2a2117;
+  --shift-3:#5fbf6e; --shift-3-bg:#1a2a1d;
   --shift-day:#A98CC6; --shift-day-bg:#231c2e;
 
   --state-ok:#7fd8a8; --state-ok-bg:#14291f; --state-ok-line:#2c5a41;
@@ -543,16 +543,17 @@
 
   /* 直(積み上げの段)。**枠線の色は本体より明るいもの**で、段の境を
      はっきりさせます(指定の `marker_line`) */
-  --shift-1:#6b2fd6; --shift-1-edge:#a26eff;
-  --shift-2:#38b6ff; --shift-2-edge:#80d4ff;
-  --shift-3:#00e699; --shift-3-edge:#66ffcc;
+  /* v4.53.1: **どの画面でも直は 青・橙・緑**(似た色相にしない)。段の境は地の色で切る */
+  --shift-1:#5b93e0; --shift-1-edge:#060a1e;
+  --shift-2:#f0973c; --shift-2-edge:#060a1e;
+  --shift-3:#5fbf6e; --shift-3-edge:#060a1e;
   /* 日勤は指定にありません。3つと並ぶ蛍光色から、いちばん離れている
      ピンク寄りを当てます(日勤のラインに1〜3直は出てこないので、
      累積のマゼンタとだけ離れていれば足ります) */
   --shift-day:#ffb300; --shift-day-edge:#ffd966;
 
   --cumulative:#ff007f;
-  --goal:#ff6600;
+  --goal:#f2f5ff;   /* v4.53.1 白の破線(2直の橙・累積のマゼンタと混ざらない) */
 
   /* 2大分類と停止。**暗い地むけの値**(`:root` の暗い画面と同じ) */
   --qty:#12a07d; --dur:#6b8ce8; --stop:#c4703a;
@@ -597,7 +598,7 @@
   --neon-stop-sudden:#a26eff;    /* 段取り・突発     パープル       */
 
   /* 発光の強さ。**ほのかに**(指定は 0 0 6px) */
-  --glow:6px;
+  --glow:2px;   /* v4.53.1 弱く(色どうしが混ざらないように) */
 }
 
 /* ======================================================================

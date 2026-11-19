@@ -409,7 +409,8 @@ class AfterPushFlowTests(AfterPushBrowserCase):
         look = page.evaluate(self._LOOK)
         self.assertEqual(look["page"], "graph")
         self.assertEqual(look["tile"], "rgb(6, 10, 30)", "札が濃紺の島になっていません")
-        self.assertEqual(look["h3"], "rgb(232, 240, 255)", "推移の題が地に沈んでいます")
+        # 推移は案B の明るい地(v4.53.1)。題は濃い字で読める
+        self.assertEqual(look["h3"], "rgb(24, 33, 43)", "推移の題が地に沈んでいます")
         self.assertIn("1直 を共有へ渡しました", page.inner_text("#closing-headline"))
         titles = page.locator("#review-tiles .tile__title").all_inner_texts()
         self.assertEqual([t.strip() for t in titles], FIGURES)

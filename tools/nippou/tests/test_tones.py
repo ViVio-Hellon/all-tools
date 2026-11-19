@@ -394,9 +394,9 @@ class TokenTests(unittest.TestCase):
                 ("--stop-sudden", "#b5202c"),
                 # 直。**Excelのグラフと同じ 青・赤・緑・紫**(v3.51.0)
                 # ── 時間の青の濃淡4段では、並べて見分けられませんでした
-                ("--shift-1", "#4F81BD"),
-                ("--shift-2", "#C0504D"),
-                ("--shift-3", "#9BBB59"),
+                ("--shift-1", "#3b6db3"),
+                ("--shift-2", "#d9822b"),
+                ("--shift-3", "#4f9a5a"),
                 ("--shift-day", "#8064A2")):
             self.assertIn(f"{name}:{value}", text.replace(" ", ""), name)
 
@@ -412,8 +412,8 @@ class TokenTests(unittest.TestCase):
         グラフがそのまま使う並び)を採ります。
         """
         text = self.css("tokens.css").replace(" ", "")
-        for name, want in (("--shift-1", "#4F81BD"), ("--shift-2", "#C0504D"),
-                           ("--shift-3", "#9BBB59"), ("--shift-day", "#8064A2")):
+        for name, want in (("--shift-1", "#3b6db3"), ("--shift-2", "#d9822b"),
+                           ("--shift-3", "#4f9a5a"), ("--shift-day", "#8064A2")):
             with self.subTest(name=name):
                 self.assertIn(f"{name}:{want};", text)
         # 時間の青の濃淡ではなくなったこと(戻すと同じ失敗をします)
@@ -765,8 +765,8 @@ class StackedShiftBarTests(unittest.TestCase):
         self.assertEqual(list(dash.SHIFT_QTY_CLASSES.values()),
                          ["shift-1", "shift-2", "shift-3", "shift-day", "cat-7", "cat-9"])
         css = self.css("tokens.css").replace(" ", "")
-        for name, want in (("--shift-1", "#4F81BD"), ("--shift-2", "#C0504D"),
-                           ("--shift-3", "#9BBB59"), ("--shift-day", "#8064A2")):
+        for name, want in (("--shift-1", "#3b6db3"), ("--shift-2", "#d9822b"),
+                           ("--shift-3", "#4f9a5a"), ("--shift-day", "#8064A2")):
             with self.subTest(name=name):
                 self.assertIn(f"{name}:{want};", css)
         # 前の2回のぶんは消えていること(残すと「どちらが本当か」が出ます)
@@ -801,7 +801,7 @@ class StackedShiftBarTests(unittest.TestCase):
         self.assertIn("--cumulative:#AA4499;", css)
         self.assertNotIn("--cumulative:#44AA99;", css)
         # 段が使う4色のどれとも違うこと
-        used = {"#4F81BD", "#C0504D", "#9BBB59", "#8064A2"}
+        used = {"#3b6db3", "#d9822b", "#4f9a5a", "#8064A2"}
         self.assertNotIn("#AA4499", used)
 
     def test_段のあいだに境を入れる(self) -> None:
@@ -901,11 +901,11 @@ class NeonSkinTests(WebTestCase):
         css = self.css("tokens.css").replace(" ", "")
         for name, want in (
                 ("--chart-bg", "#060a1e"),      # 深みのある濃紺
-                ("--shift-1", "#6b2fd6"),       # 1直 紫・バイオレット
-                ("--shift-2", "#38b6ff"),       # 2直 スカイブルー
-                ("--shift-3", "#00e699"),       # 3直 ネオングリーン
+                ("--shift-1", "#5b93e0"),       # 1直 青(v4.53.1 どの画面も青・橙・緑)
+                ("--shift-2", "#f0973c"),       # 2直 橙
+                ("--shift-3", "#5fbf6e"),       # 3直 緑
                 ("--cumulative", "#ff007f"),    # 累積 蛍光マゼンタ
-                ("--goal", "#ff6600"),          # 目標 蛍光オレンジ
+                ("--goal", "#f2f5ff"),          # 目標 白の破線(2直の橙と混ざらない)
                 ("--neon-qty", "#00ffcc"),
                 ("--neon-dur", "#00bfff"),
                 ("--neon-stop", "#ff6600")):
@@ -929,7 +929,7 @@ class NeonSkinTests(WebTestCase):
         """
         css = self.css("components.css").replace(" ", "")
         self.assertIn("filter:drop-shadow(00var(--glow)currentColor);", css)
-        self.assertIn("--glow:6px;", self.css("tokens.css").replace(" ", ""))
+        self.assertIn("--glow:2px;", self.css("tokens.css").replace(" ", ""))   # v4.53.1 弱く
         # 縁取りは光らせない(光ると縁の意味が消えます)
         self.assertIn(".line--halo{filter:none;}", css)
 

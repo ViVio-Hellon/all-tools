@@ -13264,3 +13264,7 @@ v4.44.15・v4.44.16 の点検の第2弾。現場の声:「無い、とするの�
 ## 締めの今月の推移を案B に (v4.53.0)
 
 - 「グラフの視認性改善案を3案」→ 案B(分析・比較重視)。`chart.paintReview`(`views/review.js` から)。サーバは `routes/graph._history` の `summary`(達成)と `series[].parts`(直ごと)。集計は変えない。試験: `tests/test_review_fit.py`・`test_review_switch_browser.py`。
+
+## 案Bの見本どおり・直の色を青橙緑にそろえる (v4.53.1)
+
+- 「案Bと全然違うじゃん」。`.review-b` を明るい地に。直の色は `tokens.css` の `--shift-1..3` を全画面で青・橙・緑。棒の発光なし・`--glow` 2px。試験: `test_tones`・`test_review_fit`。

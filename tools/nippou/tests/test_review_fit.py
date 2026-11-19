@@ -212,7 +212,7 @@ class ReviewFitTests(WebTestCase):
                                        lines: [...f.querySelectorAll('polyline.line:not(.line--halo):not(.line--target)')]
                                               .map(l => getComputedStyle(l).stroke),
                                        target: f.querySelectorAll('polyline.line--target').length,
-                                       values: f.querySelectorAll('text.value').length,
+                                       values: f.querySelectorAll('text.value:not(.value--in)').length,
                                        ticks: [...f.querySelectorAll('text.label')].map(t => t.textContent),
                                        legend: f.querySelector('.dlg')?.textContent || ''}]))""")
         self.assertEqual(set(got), {"weight", "count", "rate_1直", "rate_2直", "rate_3直"})
@@ -236,8 +236,15 @@ class ReviewFitTests(WebTestCase):
         band = page.inner_text(".review-b__band")
         for word in ("今月の累計", "目標", "達成率", "目標に届いた日"):
             self.assertIn(word, band)
-        # 表はたたんである・開くと直×日の値
-        self.assertFalse(page.evaluate("document.querySelector('.review-b__table').open"))
+        # 表は開いて置く(案Bの見本どおり)・直×日の値
+        self.assertTrue(page.evaluate("document.querySelector('.review-b__table').open"))
+        # 見本の色: 明るい地・1直は青(ネオンの紫ではない)
+        self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.review-b')).backgroundColor"),
+                         "rgb(238, 241, 244)")
+        self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.review-b rect.bar.mark-shift-1')).fill"),
+                         "rgb(59, 109, 179)")
+        self.assertGreater(page.evaluate("document.querySelectorAll('.review-b text.value--in').length"), 0,
+                           "段の中に直の値")
         rows = page.evaluate("[...document.querySelectorAll('.review-b__table tbody tr')].length")
         self.assertEqual(rows, 6)
         # 発光なし

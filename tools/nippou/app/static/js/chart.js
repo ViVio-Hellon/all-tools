@@ -248,6 +248,11 @@ function combo(tile, size = null) {
         svg.appendChild(el("rect", { class: `bar ${markOf(s)}${seg}`,
                                      x: cx - width / 2, y: yy, width,
                                      height }));
+        // 段の中に直の値(v4.53.1 案B)。入る高さと幅があるときだけ
+        if (tile.inner && height >= 14 && width >= 18) {
+          svg.appendChild(el("text", { class: "value value--in", x: cx, y: yy + height / 2 + 4,
+                                       "text-anchor": "middle" }, String(Math.round(v * 10) / 10)));
+        }
       });
     } else {
       // 45度線は実績のなかま色ではなく**目標の見た目**(灰の破線)に
@@ -838,9 +843,9 @@ export function paintReview(host, history) {
   const main = document.createElement("div");
   main.className = "review-b__main";
   main.append(
-    figure(bySeries.count, { wide: true, totals: true, goal,
+    figure(bySeries.count, { wide: true, totals: true, inner: true, goal,
                              head: `${bySeries.count.title}(枚)  合計: 緑=目標に届いた 赤=届かない` }, "review-b__count"),
-    figure(bySeries.weight, { wide: true, totals: true }, "review-b__weight"));
+    figure(bySeries.weight, { wide: true, totals: true, inner: true }, "review-b__weight"));
 
   const rates = document.createElement("div");
   rates.className = "review-b__rates";
@@ -856,6 +861,7 @@ export function paintReview(host, history) {
   // 直×日の表(たたむ。開くと下へ伸びる)
   const details = document.createElement("details");
   details.className = "review-b__table";
+  details.open = true;                       // 見本どおり開いて置く(閉じることもできる)
   const summary = document.createElement("summary");
   summary.textContent = "直ごとの数値を表で見る";
   const wrap = document.createElement("div");

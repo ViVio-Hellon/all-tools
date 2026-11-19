@@ -3298,3 +3298,56 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
 .chart .value.mark-shift-2{ fill:var(--shift-2); }
 .chart .value.mark-shift-3{ fill:var(--shift-3); }
 .chart .value.mark-shift-day{ fill:var(--shift-day); }
+
+/* 案B の見た目(v4.53.1「案Bと全然違うじゃん」)。**見本どおり明るい地・白い札・青/橙/緑**。
+   ネオンの肌(`data-skin="neon"`)の中でも、締めの推移だけはこの色で描く */
+.review-b, :root[data-skin] .chart-skin.review-b{
+  --chart-bg:#eef1f4; --surface:#ffffff; --raised:#ffffff;
+  --hairline:#e3e7ec; --grid-line:#c9d0d8; --rule:#d9dee4;
+  --ink:#18212b; --muted:#56616d; --faint:#8a949e; --line:#d9dee4;
+  --shift-1:#3b6db3; --shift-1-edge:#ffffff;
+  --shift-2:#d9822b; --shift-2-edge:#ffffff;
+  --shift-3:#4f9a5a; --shift-3-edge:#ffffff;
+  --shift-day:#8064a2; --shift-day-edge:#ffffff;
+  --goal:#c62828; --state-ok:#2e7d32; --state-error:#c62828;
+  background:#eef1f4 !important; color:var(--ink); border-radius:8px; padding:10px;
+}
+.review-b .review-b__kpi, .review-b .fit-chart, .review-b .review-b__table{
+  background:#ffffff; border:0; border-radius:6px; padding:8px 10px;
+}
+.review-b .review-b__kpi b{ font-size:1.6rem; }
+.review-b .fit-chart h3{ color:var(--ink); }
+.review-b .chart .label{ font-size:12px; fill:var(--muted); }
+.review-b .chart .line--target{ stroke:var(--goal); stroke-width:2; stroke-dasharray:6 4; }
+.review-b .chart .line--halo{ stroke:#ffffff; }
+.review-b .dlg{ color:var(--ink); }
+.review-b .chart .value{ fill:var(--ink); font-size:13px; }
+.review-b .chart .value--hit{ fill:var(--state-ok); }
+.review-b .chart .value--miss{ fill:var(--state-error); }
+.review-b .chart .value--in{ fill:#ffffff; font-size:10px; font-weight:700; }
+.review-b .review-b__table table{ width:100%; }
+.review-b .review-b__table th, .review-b .review-b__table td{ color:var(--ink); border-color:var(--line); }
+@media (min-width:1100px) and (min-height:540px){
+  .review-b .review-b__table{ flex:none; max-height:24vh; overflow:auto; }
+}
+
+/* v4.53.1 棒は光らせない(段の色が混ざる)。段の境は地の色の線で 2px */
+:root[data-skin="neon"] .chart-skin .chart .bar{ filter:none !important; }
+.chart .bar.bar--seg{ stroke-width:2; }
+/* 案B: 明るい地の上の字。ほかの画面の濃紺むけの字の色に負けないよう強く当てる */
+.review-b, .review-b h3, .review-b .dlg, .review-b .dlg__text, .review-b summary,
+.review-b .review-b__kpi b{ color:#18212b !important; }
+.review-b .review-b__kpi span{ color:#56616d !important; }
+.review-b .review-b__kpi.is-hit b{ color:#2e7d32 !important; }
+.review-b .review-b__kpi.is-miss b{ color:#c62828 !important; }
+.review-b .chart .label{ fill:#56616d !important; }
+.review-b .chart .value{ fill:#18212b !important; }
+.review-b .chart .value--hit{ fill:#2e7d32 !important; }
+.review-b .chart .value--miss{ fill:#c62828 !important; }
+.review-b .chart .value--in{ fill:#ffffff !important; }
+.review-b .chart .value.mark-shift-1{ fill:var(--shift-1) !important; }
+.review-b .chart .value.mark-shift-2{ fill:var(--shift-2) !important; }
+.review-b .chart .value.mark-shift-3{ fill:var(--shift-3) !important; }
+.review-b .review-b__table th, .review-b .review-b__table td{
+  color:#18212b !important; background:#ffffff !important; border-bottom:1px solid #e3e7ec !important; }
+.review-b .review-b__table thead th{ color:#56616d !important; }
