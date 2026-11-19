@@ -165,7 +165,8 @@ function combo(tile, size = null) {
     }
     return ceiling([...loose, ...[...stacked.values()].flat()]);
   };
-  const left = topOf("left");
+  // 頭が決まっている絵(稼働率 0〜100%)は、その頭で描く(目盛りが 23・45・68 にならない)
+  const left = tile.max || topOf("left");
   const right = topOf("right");
   // 右に数字を出すぶん、右の余白を広げる。**桁数ぶんだけ** ──
   // 固定値だと、累積が5桁になった日に数字が切れる(実際に切れた)
@@ -359,7 +360,7 @@ export function paintCharts(host, history, { fit = false } = {}) {
     // **直ごと**(v4.52.4)。枚数・重量は直の積み上げ棒、稼働率は直の線。凡例つき
     if (series.parts && series.parts.length) {
       const tile = { title: series.title, unit: series.unit, labels: history.labels || [],
-                     series: series.parts };
+                     series: series.parts, max: series.key === "rate" ? 100 : 0 };
       const box = document.createElement("figure");
       box.dataset.parts = series.key;
       if (!fit) {

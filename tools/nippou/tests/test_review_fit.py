@@ -221,6 +221,15 @@ class ReviewFitTests(WebTestCase):
         self.assertEqual(got["count"]["target"], 1)
         self.assertEqual(got["rate"]["lines"], 3)
         self.assertEqual(got["rate"]["bars"], 0)
+        # 線は直ごとに**違う色**(「線が全部同じ色」v4.52.5)・稼働率の目盛りは 0〜100
+        colors = page.evaluate("""() => [...document.querySelectorAll('[data-parts=rate] polyline.line:not(.line--halo)')]
+          .map(l => getComputedStyle(l).stroke)""")
+        self.assertEqual(len(set(colors)), 3, colors)
+        legend = page.evaluate("""() => [...document.querySelectorAll('[data-parts=rate] .dlg__swatch')]
+          .map(l => getComputedStyle(l).borderTopColor)""")
+        self.assertEqual(len(set(legend)), 3, legend)
+        ticks = page.evaluate("() => [...document.querySelectorAll('[data-parts=rate] text.label')].map(t => t.textContent)")
+        self.assertIn("100", ticks)
         import os
         shot = os.environ.get("ALLTOOLS_SHOT")
         if shot:

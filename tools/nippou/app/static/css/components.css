@@ -3249,3 +3249,23 @@ table.list tr.is-over td:first-child{ box-shadow:inset 3px 0 0 var(--state-warn-
 
 /* 締めの推移の直ごとの凡例(v4.52.4)。1行に詰める */
 .fit-chart__legend{ display:flex; flex-wrap:wrap; gap:2px 12px; margin:2px 0 0; font-size:var(--fs-xs, 12px); }
+
+/* 直ごとの線(締めの稼働率 v4.52.5)。線も点も凡例も直の色 ──「線が全部同じ色」だった */
+.chart .line.mark-shift-1, .tile[data-tone] .chart .line.mark-shift-1{ stroke:var(--shift-1); }
+.chart .line.mark-shift-2, .tile[data-tone] .chart .line.mark-shift-2{ stroke:var(--shift-2); }
+.chart .line.mark-shift-3, .tile[data-tone] .chart .line.mark-shift-3{ stroke:var(--shift-3); }
+.chart .line.mark-shift-day, .tile[data-tone] .chart .line.mark-shift-day{ stroke:var(--shift-day); }
+.chart .line.mark-cat-7{ stroke:var(--cat-7); }
+.chart .line.mark-cat-9{ stroke:var(--cat-9); }
+.chart .dot.mark-shift-1{ fill:var(--shift-1); }
+.chart .dot.mark-shift-2{ fill:var(--shift-2); }
+.chart .dot.mark-shift-3{ fill:var(--shift-3); }
+.chart .dot.mark-shift-day{ fill:var(--shift-day); }
+.chart .dot.mark-cat-7{ fill:var(--cat-7); }
+.chart .dot.mark-cat-9{ fill:var(--cat-9); }
+.dlg__swatch--line.mark-shift-1, .chart .mark-shift-1{ color:var(--shift-1); }
+.dlg__swatch--line.mark-shift-2, .chart .mark-shift-2{ color:var(--shift-2); }
+.dlg__swatch--line.mark-shift-3, .chart .mark-shift-3{ color:var(--shift-3); }
+.dlg__swatch--line.mark-shift-day, .chart .mark-shift-day{ color:var(--shift-day); }
+.dlg__swatch--line.mark-cat-7{ color:var(--cat-7); }
+.dlg__swatch--line.mark-cat-9{ color:var(--cat-9); }
