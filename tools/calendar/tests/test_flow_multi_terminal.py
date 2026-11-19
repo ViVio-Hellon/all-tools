@@ -1135,7 +1135,8 @@ class OpenScreenBrowserTests(_Flow):
         self.errors: list[str] = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.goto(f"http://127.0.0.1:{self.b.port}/calendar?t={_web.TOKEN}")
-        self.page.wait_for_selector(f'button.day[data-date="{self.key}"]')
+        # 最初の1枚は起動直後で遅い(Windows CI で 15 秒を超えたことがある)。最初だけ長く待つ
+        self.page.wait_for_selector(f'button.day[data-date="{self.key}"]', timeout=45000)
 
     def cell_text(self) -> str:
         return self.page.locator(f'button.day[data-date="{self.key}"]').inner_text()
