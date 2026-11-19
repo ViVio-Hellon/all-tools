@@ -751,12 +751,12 @@ class _RoundTrip(_BrowserMixedCase):
         day = future_workday(5)
         # 共有フォルダが見えないあいだに、両方で同じ人(加藤眞一)の同じ日を登録する
         hidden = self.shared.with_name("共有_見えない")
-        self.shared.rename(hidden)
+        _rename_when_free(self.shared, hidden)   # Windows で共有のファイルがつかまれていても待つ
         renamed = [True]
 
         def back() -> None:
             if renamed[0]:
-                hidden.rename(self.shared)
+                _rename_when_free(hidden, self.shared)
                 renamed[0] = False
         self.addCleanup(back)
         self.rest(self.pc_a, day, "103", "加藤眞一")
@@ -860,8 +860,8 @@ class RibbonTests(_BrowserMixedCase):
             page.wait_for_function("document.getElementById('rb-sync').textContent.startsWith('同期済み')")
         day = future_workday(10)
         hidden = self.shared.with_name("共有_見えない")
-        self.shared.rename(hidden)
-        self.addCleanup(lambda: hidden.exists() and hidden.rename(self.shared))
+        _rename_when_free(self.shared, hidden)   # Windows で共有のファイルがつかまれていても待つ
+        self.addCleanup(lambda: hidden.exists() and _rename_when_free(hidden, self.shared))
         self.ui_rest(pages["vbs"], day, "佐藤花子")
         self.ui_rest(pages["exe"], day, "伊藤五郎")
         for edition, page in pages.items():
@@ -873,7 +873,7 @@ class RibbonTests(_BrowserMixedCase):
             with self.subTest(edition=edition):
                 page.wait_for_function("document.getElementById('rb-sync').textContent.includes('未送信 2 件')")
         # 共有が戻った → 送って取り込む。帯は「同期済み」に戻り、相手の分がマスに出る
-        hidden.rename(self.shared)
+        _rename_when_free(hidden, self.shared)
         for _ in range(2):
             for page in pages.values():
                 self.ui_sync(page)
