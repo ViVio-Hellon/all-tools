@@ -76,6 +76,19 @@ class FlashReportTests(flow.ScenarioCase):
         self.assertEqual(got["shift_count"], 30.0)
         self.assertEqual(got["day_total"], 90.0)
 
+    def test_入力を取り消すと減る_ページを消すと0(self) -> None:
+        """足し算で積むのではなく、**保存のたびに集計から数え直す**ので、取り消せば減る。"""
+        user_settings.save(config.KEY_FLASH_DIR, str(self.out))
+        self.page("2026年11月26日", "1直", 1, "山田", 60)
+        self.page("2026年11月26日", "1直", 2, "山田", 40)
+        self.assertEqual(self.read()["shift_count"], 100.0)
+        self.page("2026年11月26日", "1直", 2, "山田", 15)      # 40 → 15 に打ち直した
+        self.assertEqual(self.read()["shift_count"], 75.0)
+        self.repo().delete_page("2026年11月26日", "L-1", "1直", 2)
+        summary.refresh_shift(self.repo(), "2026年11月26日", "L-1", "1直")
+        got = self.read()
+        self.assertEqual((got["shift_count"], got["day_total"]), (60.0, 60.0))
+
     def test_古い日の直しで今日を上書きしない(self) -> None:
         user_settings.save(config.KEY_FLASH_DIR, str(self.out))
         self.page("2026年11月26日", "1直", 1, "山田", 60)
