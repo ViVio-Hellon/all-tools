@@ -223,7 +223,8 @@ class ReviewFitTests(WebTestCase):
             for shift in ("1直", "2直", "3直"):
                 self.assertIn(shift, got[key]["legend"])
         self.assertEqual(got["count"]["target"], 1)
-        self.assertEqual(got["count"]["values"], days, "広い枚数の絵は毎日の合計")
+        # 毎日の合計(日が多くて棒の間が狭い月末は、重ならないよう最後の日だけ)
+        self.assertIn(got["count"]["values"], (days, 1), "枚数の絵の合計")
         colors = set()
         for shift in ("1直", "2直", "3直"):
             rate = got[f"rate_{shift}"]
@@ -243,8 +244,14 @@ class ReviewFitTests(WebTestCase):
                          "rgb(238, 241, 244)")
         self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.review-b rect.bar.mark-shift-1')).fill"),
                          "rgb(59, 109, 179)")
-        self.assertGreater(page.evaluate("document.querySelectorAll('.review-b text.value--in').length"), 0,
-                           "段の中に直の値")
+        # 段の中に直の値(棒の幅が足りるときだけ。月末で日が多いと棒が細く、入れない)
+        wide = page.evaluate("Math.max(...[...document.querySelectorAll('.review-b [data-parts=count] rect.bar')]"
+                             ".map(r => +r.getAttribute('width')))")
+        inner = page.evaluate("document.querySelectorAll('.review-b text.value--in').length")
+        if wide >= 18:
+            self.assertGreater(inner, 0, "段の中に直の値")
+        else:
+            self.assertEqual(inner, 0, "細い棒に値を詰め込まない")
         rows = page.evaluate("[...document.querySelectorAll('.review-b__table tbody tr')].length")
         self.assertEqual(rows, 6)
         # 発光なし

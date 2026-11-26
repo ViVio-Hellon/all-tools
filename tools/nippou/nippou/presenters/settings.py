@@ -122,6 +122,10 @@ PATH_FIELDS = (
      "(手元と両方)。手元に無いページはここから戻します。アクセス権限の表で"
      " Administrator のPCは、ここにある全ラインの日報を「記録を見る」で見て直せます"
      "(既定: 共有の日報管理のパスと同じフォルダ)"),
+    (config.KEY_FLASH_DIR, "ライン速報の置き場所",
+     "保存のたびに、このラインの今の直の枚数・今日の合計・目標との差を <ライン>.json に書きます"
+     "(事務所のモニターが全ラインのぶんを読みます)。集計から除く作業者は数えません"
+     "(空なら書きません)"),
     (config.KEY_LINE_TARGET_FILE, "ライン毎目標の置き場所",
      "グラフの45度線に使う目標枚数のCSV(ライン毎目標.csv)を置くフォルダ。"
      "共有のフォルダを指せば、全端末が同じ目標を読みます"
@@ -259,6 +263,7 @@ PATH_TAB: dict[str, str] = {
     config.KEY_STANDARD_TIME_OUT_DIR: "paths",
     config.KEY_LOG_DIR: "paths",
     config.KEY_BACKUP_DIR: "paths",
+    config.KEY_FLASH_DIR: "paths",
     # ファイル名の2つは**画面に出しません**(`SHOWN_PATH_KEYS`)。
     # それでも困りごとはどこかの面で言う必要があるので、面は決めます
     # ── 言わないと、見出しの数と下に並ぶ文言が食い違います
@@ -319,6 +324,7 @@ SHOWN_PATH_KEYS: tuple[str, ...] = (
     config.KEY_STANDARD_TIME_OUT_DIR,
     config.KEY_LOG_DIR,
     config.KEY_BACKUP_DIR,
+    config.KEY_FLASH_DIR,
 )
 
 #: **フォルダだけを見せて、名前はこちらで付ける欄。**
@@ -348,7 +354,7 @@ PATH_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
      (config.KEY_ACCESS_DIR, config.KEY_MONTHLY_DIR,
       config.KEY_REPORT_OUT_DIR, config.KEY_REPORT_OUT_DIR2,
       config.KEY_STANDARD_TIME_OUT_DIR, config.KEY_LOG_DIR,
-      config.KEY_BACKUP_DIR)),
+      config.KEY_BACKUP_DIR, config.KEY_FLASH_DIR)),
 )
 
 #: 画面が参照パスを名指しするときの短い名前。
@@ -379,6 +385,7 @@ PATH_KEY_NAMES: dict[str, str] = {
     "vc_master_dir": config.KEY_VC_MASTER_DIR,
     "log_dir": config.KEY_LOG_DIR,
     "local_backup_dir": config.KEY_BACKUP_DIR,
+    "flash_report_dir": config.KEY_FLASH_DIR,
 }
 
 #: ファイルの状態を、どの面で出すか(困りごとの数を面へ割り振るため)
@@ -721,6 +728,7 @@ def _resolved_dir(key: str) -> Path:
         config.KEY_LOG_DIR: lambda: SETTINGS.log_dir,
         # **LocalBackup まで**出す(実際に書く先)
         config.KEY_BACKUP_DIR: lambda: SETTINGS.local_backup_root,
+        config.KEY_FLASH_DIR: lambda: SETTINGS.flash_report_dir or Path(""),
         # これだけはフォルダではなくファイル。**実際に書く先**を出す
         config.KEY_ACCESS_DB_FILE: lambda: SETTINGS.access_db_path,
         config.KEY_LINE_TARGET_FILE: lambda: SETTINGS.line_target_path,
@@ -776,6 +784,8 @@ OPTIONAL_PATH_KEYS = (config.KEY_LINE_TARGET_FILE,
                       config.KEY_LOG_DIR,
                       # LocalBackup は写すときに作る(親が無ければ待つ)
                       config.KEY_BACKUP_DIR,
+                      # ライン速報は書くときに作る。空なら書かない(困りごとに数えない)
+                      config.KEY_FLASH_DIR,
                       # 2つ目のファイル名。2つ目は1つ目で見つからないときの控えなので、
                       # 無くても困りごとに数えない(欄には「ありません」を出す)
                       *config.WIP2_FILE_KEYS,
@@ -801,6 +811,7 @@ EMPTY_TEXT: dict[str, str] = {
     config.KEY_STANDARD_TIME_OUT_DIR: "空なら集計CSVと同じ先",
     config.KEY_LOG_DIR: "空ならこの端末の logs",
     config.KEY_BACKUP_DIR: "空なら共有の日報管理のパスと同じフォルダ",
+    config.KEY_FLASH_DIR: "空なら書きません",
 }
 
 # そのファイルを**読むだけ**の欄。あるかどうかはファイル自身で見る

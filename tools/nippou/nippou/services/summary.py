@@ -174,6 +174,17 @@ def _as_detail(row: LotRow) -> PackingDetail:
 def refresh_shift(repo: NippouRepository, work_date: str, line: str,
                   shift: str, labels: Optional[dict[str, str]] = None
                   ) -> Optional[PackingReport]:
+    """1直ぶんを作り直す(`_refresh_shift`)。**作り直したらライン速報も書く**(v4.54.0 `flash_report`)。"""
+    report = _refresh_shift(repo, work_date, line, shift, labels)
+    from . import flash_report
+
+    flash_report.write_quietly(repo, work_date, line, shift)
+    return report
+
+
+def _refresh_shift(repo: NippouRepository, work_date: str, line: str,
+                   shift: str, labels: Optional[dict[str, str]] = None
+                   ) -> Optional[PackingReport]:
     """1直ぶんを作り直して残す。**ページが1つも無ければ、その直の集計を消します**(v4.46.3)。
 
     **停止内訳を読めなかったとき**(`StopLabels.problem`)は、その直の前の集計にあった名前

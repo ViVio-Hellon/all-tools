@@ -235,6 +235,10 @@ KEY_LOG_DIR = "log_dir"
 # 届くようになったら写します(`services/local_backup`)
 KEY_BACKUP_DIR = "local_backup_dir"
 
+# **ライン速報**の置き場所(v4.54.0 `services/flash_report`)。保存のたびに `<ライン>.json` を書く。
+# 空なら書かない(事務所のモニターが全ラインのぶんを読む)
+KEY_FLASH_DIR = "flash_report_dir"
+
 
 # 音声ファイルの名前。鍵ごとに1つ(`logic/sound.SOUND_KEYS`)。
 # **名前をコードに持たない** ── 現場で音を差し替えたいときに、
@@ -249,7 +253,7 @@ PATH_KEYS = (KEY_ACCESS_DIR, KEY_REFERENCE_DIR, KEY_WIP_DIR, KEY_COIL_DIR, KEY_C
              KEY_MONTHLY_DIR, KEY_REPORT_OUT_DIR, KEY_REPORT_OUT_DIR2,
              KEY_STANDARD_TIME_OUT_DIR,
              KEY_ACCESS_DB_FILE, KEY_LINE_TARGET_FILE, KEY_STOP_REASON_FILE,
-             KEY_VC_MASTER_DIR, KEY_LOG_DIR, KEY_BACKUP_DIR,
+             KEY_VC_MASTER_DIR, KEY_LOG_DIR, KEY_BACKUP_DIR, KEY_FLASH_DIR,
              *WIP2_FILE_KEYS)
 
 
@@ -877,6 +881,15 @@ class Settings:
         configured = user_settings.get(KEY_BACKUP_DIR)
         text = configured.strip() if isinstance(configured, str) else ""
         return resolve_dir(text) if text else self.access_dir
+
+    @property
+    def flash_report_dir(self) -> Optional[Path]:
+        """ライン速報の置き場所。**空なら None(書かない)。**"""
+        from . import user_settings
+
+        configured = user_settings.get(KEY_FLASH_DIR)
+        text = configured.strip() if isinstance(configured, str) else ""
+        return resolve_dir(text) if text else None
 
     @property
     def local_backup_root(self) -> Path:
